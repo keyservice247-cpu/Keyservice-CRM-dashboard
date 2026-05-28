@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Keyservice CRM — Inloggen</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body class="login-body">
+  <form id="loginForm" class="login-card">
+    <div class="logo">🔑 Keyservice</div>
+    <h1>CRM Dashboard</h1>
+    <p class="muted">Log in om verder te gaan</p>
+    <label>E-mailadres
+      <input type="email" name="email" autocomplete="username" required placeholder="naam@keyservice.nl" />
+    </label>
+    <label>Wachtwoord
+      <input type="password" name="password" autocomplete="current-password" required placeholder="••••••••" />
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">Inloggen</button>
+    <p id="loginError" class="error" hidden></p>
+    <p class="muted small">Demo-account: <strong>admin@keyservice.nl</strong> / <strong>admin123</strong></p>
+  </form>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const errEl = document.getElementById('loginError');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.hidden = true;
+      const body = { email: form.email.value, password: form.password.value };
+      const res = await fetch('/api/login', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        window.location.href = '/';
+      } else {
+        const data = await res.json().catch(() => ({}));
+        errEl.textContent = data.error || 'Inloggen mislukt';
+        errEl.hidden = false;
+      }
+    });
+  </script>
+</body>
+</html>
