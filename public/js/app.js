@@ -483,12 +483,13 @@ function openUserModal() {
 // ---------- Simulate test message ----------
 function openSimulateModal() {
   modal(`
-    <h2>🧪 Testbericht simuleren</h2>
-    <p class="muted small">Doe alsof er een e-mail of WhatsApp binnenkomt, zodat je ziet hoe de AI categoriseert.</p>
+    <h2>➕ Bericht handmatig toevoegen</h2>
+    <p class="muted small">Handig om een bericht uit je <strong>WhatsApp-groep</strong> door te zetten: kopieer het en plak het hieronder. De AI deelt het daarna in. (Ook handig om de AI te testen.)</p>
     <label>Kanaal <select id="s-channel">
-      <option value="email">✉️ E-mail</option><option value="whatsapp">💬 WhatsApp</option>
+      <option value="whatsapp">💬 WhatsApp</option><option value="email">✉️ E-mail</option>
     </select></label>
-    <label>Afzender (naam / nummer / e-mail) <input id="s-sender" placeholder="Jan Jansen <jan@example.nl> of 06-12345678"></label>
+    <label>Afzender (naam / nummer / e-mail) <input id="s-sender" placeholder="Jan Jansen of 06-12345678"></label>
+    <label>Groep (optioneel) <input id="s-group" placeholder="bv. Klussen Groep"></label>
     <label>Onderwerp (bij e-mail) <input id="s-subject" placeholder="Offerte aanvraag voordeurslot"></label>
     <label>Bericht <textarea id="s-body" rows="4" placeholder="Hoi, ik ben buitengesloten en kom mijn huis niet in. Kunnen jullie snel langskomen?"></textarea></label>
     <div class="modal-actions"><span></span><div class="right">
@@ -496,7 +497,7 @@ function openSimulateModal() {
     </div></div>`);
   $('#s-cancel').onclick = closeModal;
   $('#s-save').onclick = async () => {
-    const payload = { channel: $('#s-channel').value, sender: $('#s-sender').value, subject: $('#s-subject').value, body: $('#s-body').value };
+    const payload = { channel: $('#s-channel').value, sender: $('#s-sender').value, group: $('#s-group').value, subject: $('#s-subject').value, body: $('#s-body').value };
     if (!payload.body) return toast('Bericht verplicht', true);
     try { await api('/api/simulate', 'POST', payload); closeModal(); toast('Bericht ontvangen — zie Inbox'); refreshInboxBadge(); if (state.view === 'inbox') loadInbox(); }
     catch (err) { toast(err.message, true); }

@@ -48,10 +48,11 @@ De AI deelt het bericht in, jij ziet de suggestie in de inbox en keurt hem goed 
 
 ## Hoe komt het echt aan het werk?
 
-Het dashboard heeft **webhooks** (ontvangstadressen) klaarstaan:
+De veiligste en simpelste koppelingen zitten **ingebouwd**:
 
-- E-mail → `POST /api/ingest/email`
-- WhatsApp → `POST /api/ingest/whatsapp`
+- **E-mail (TransIP):** het dashboard checkt zelf je mailbox via IMAP. Vul `IMAP_*` in `.env` in — geen Zapier of derde partij nodig.
+- **WhatsApp 1-op-1:** officiële Meta Cloud API-webhook (`/api/ingest/whatsapp/cloud`) — kan je nummer niet laten blokkeren.
+- **WhatsApp-groep:** veilig handmatig doorzetten via de knop **➕ Bericht handmatig toevoegen** (de officiële API kan geen groepen lezen; een onofficiële bot zou je nummer kunnen blokkeren).
 
 In **[docs/INTEGRATIES.md](docs/INTEGRATIES.md)** staat **stap voor stap** wat jij moet regelen om:
 1. je **TransIP-e-mail** automatisch binnen te laten komen,
@@ -77,11 +78,14 @@ In **[docs/INTEGRATIES.md](docs/INTEGRATIES.md)** staat **stap voor stap** wat j
 
 ```
 server/
-  index.js          # API + server
-  db.js             # JSON-opslag
-  auth.js           # inloggen, sessies, rollen
-  seed.js           # eerste accounts + voorbeelddata
-  ai/categorizer.js # AI-categorisatie (demo-regels + Claude)
-public/             # de webpagina's (login + dashboard)
-docs/INTEGRATIES.md # koppelingen: e-mail, WhatsApp, AI, hosting
+  index.js              # API + server
+  db.js                 # JSON-opslag
+  auth.js               # inloggen, sessies, rollen
+  seed.js               # eerste accounts + voorbeelddata
+  pipeline.js           # verwerking van inkomende berichten (gedeeld)
+  ai/categorizer.js     # AI-categorisatie (demo-regels + Claude)
+  connectors/
+    email-imap.js       # ingebouwde TransIP/IMAP e-mailkoppeling
+public/                 # de webpagina's (login + dashboard)
+docs/INTEGRATIES.md     # koppelingen: e-mail, WhatsApp, AI, hosting
 ```

@@ -13,6 +13,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "imapflow": "^1.0.171",
+    "mailparser": "^3.7.1"
   }
 }

@@ -9,6 +9,10 @@ import {
 } from './auth.js';
 import { classify, aiMode, STATUSES, STATUS_LABELS } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
+import {
+  autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
+} from './pipeline.js';
+import { startEmailPoller } from './connectors/email-imap.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -20,145 +24,6 @@ ensureSeed();
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(attachUser);
-
-// ---------- Helpers ----------
-function autoApproveThreshold() {
-  const s = db().settings || {};
-  if (s.aiAutoApproveThreshold != null) return Number(s.aiAutoApproveThreshold);
-  const env = Number(process.env.AI_AUTO_APPROVE_THRESHOLD);
-  return Number.isFinite(env) ? env : 0;
-}
-
-function findCustomer({ name, phone, email }) {
-  const customers = db().customers;
-  const norm = (v) => (v || '').toLowerCase().replace(/[\s().-]/g, '');
-  if (email) {
-    const m = customers.find((c) => c.email && c.email.toLowerCase() === email.toLowerCase());
-    if (m) return m;
-  }
-  if (phone) {
-    const p = norm(phone);
-    const m = customers.find((c) => c.phone && norm(c.phone) === p);
-    if (m) return m;
-  }
-  if (name) {
-    const m = customers.find((c) => c.name && c.name.toLowerCase() === name.toLowerCase());
-    if (m) return m;
-  }
-  return null;
-}
-
-function upsertCustomer({ name, phone, email, source }) {
-  let c = findCustomer({ name, phone, email });
-  if (c) {
-    // vul ontbrekende gegevens aan
-    if (!c.phone && phone) c.phone = phone;
-    if (!c.email && email) c.email = email;
-    if (c.type === 'lead') c.type = 'klant';
-    return { customer: c, created: false };
-  }
-  c = {
-    id: id('cust'),
-    name: name || 'Onbekende klant',
-    phone: phone || '',
-    email: email || '',
-    address: '',
-    type: 'lead',
-    source: source || 'handmatig',
-    notes: '',
-    createdAt: now(),
-  };
-  db().customers.push(c);
-  return { customer: c, created: true };
-}
-
-function withRelations(order) {
-  const customer = db().customers.find((c) => c.id === order.customerId) || null;
-  const monteur = db().monteurs.find((m) => m.id === order.monteurId) || null;
-  return { ...order, customer, monteur };
-}
-
-// Verwerk een binnenkomend bericht: opslaan -> AI categoriseren -> review aanmaken
-// -> eventueel automatisch goedkeuren bij hoge zekerheid.
-async function ingestMessage({ channel, sender, subject, body, group, externalId }) {
-  const message = {
-    id: id('msg'),
-    channel,
-    sender: sender || '',
-    subject: subject || '',
-    body: body || '',
-    group: group || '',
-    externalId: externalId || '',
-    receivedAt: now(),
-  };
-  db().messages.push(message);
-
-  const suggestion = await classify({ channel, sender, subject, body });
-
-  const review = {
-    id: id('rev'),
-    messageId: message.id,
-    channel,
-    suggestion,
-    status: 'pending', // pending | approved | rejected | auto_approved
-    finalStatus: null,
-    orderId: null,
-    correctedStatus: null, // gevuld als mens iets anders koos dan de AI
-    reviewedBy: null,
-    reviewedAt: null,
-    createdAt: now(),
-  };
-  db().reviews.push(review);
-
-  const threshold = autoApproveThreshold();
-  if (threshold > 0 && suggestion.confidence >= threshold) {
-    applyReview(review, { actorName: 'AI (automatisch)', auto: true });
-  }
-
-  saveSoon();
-  logActivity('systeem', 'bericht ontvangen', `${channel} van ${sender || 'onbekend'}`);
-  return { message, review };
-}
-
-// Maak van een (goedgekeurde) review een echte opdracht + klant.
-function applyReview(review, { actorName, overrides = {}, auto = false }) {
-  const s = review.suggestion;
-  const status = overrides.status || s.status;
-  const { customer } = upsertCustomer({
-    name: overrides.customerName ?? s.customerName,
-    phone: overrides.customerPhone ?? s.customerPhone,
-    email: overrides.customerEmail ?? s.customerEmail,
-    source: review.channel,
-  });
-
-  const order = {
-    id: id('ord'),
-    title: overrides.title || s.title || 'Nieuwe opdracht',
-    description: '',
-    status,
-    source: review.channel,
-    customerId: customer.id,
-    monteurId: overrides.monteurId || null,
-    appointmentAt: null,
-    price: '',
-    urgent: !!s.urgent,
-    notes: '',
-    messageId: review.messageId,
-    createdAt: now(),
-    updatedAt: now(),
-  };
-  db().orders.push(order);
-
-  review.status = auto ? 'auto_approved' : 'approved';
-  review.finalStatus = status;
-  review.orderId = order.id;
-  review.correctedStatus = status !== s.status ? status : null;
-  review.reviewedBy = actorName;
-  review.reviewedAt = now();
-  saveSoon();
-  logActivity(actorName, auto ? 'opdracht automatisch aangemaakt' : 'review goedgekeurd', order.title);
-  return order;
-}
 
 // ---------- Auth-routes ----------
 app.post('/api/login', (req, res) => {
@@ -300,7 +165,6 @@ app.delete('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) =>
   const monteurs = db().monteurs;
   const i = monteurs.findIndex((x) => x.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
-  // Koppel opdrachten los
   db().orders.forEach((o) => { if (o.monteurId === req.params.id) o.monteurId = null; });
   const [removed] = monteurs.splice(i, 1);
   logActivity(req.user.name, 'monteur verwijderd', removed.name);
@@ -427,29 +291,72 @@ function checkIngestToken(req, res, next) {
 }
 
 app.post('/api/ingest/email', checkIngestToken, async (req, res) => {
-  const { from, sender, subject, body, text, html } = req.body || {};
+  const { from, sender, subject, body, text, html, externalId } = req.body || {};
   const result = await ingestMessage({
     channel: 'email',
     sender: from || sender,
     subject,
     body: body || text || html || '',
+    externalId,
   });
-  res.json({ ok: true, reviewId: result.review.id, status: result.review.status });
+  res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
 });
 
 app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
-  const { from, sender, name, body, text, message, group } = req.body || {};
+  const { from, sender, name, body, text, message, group, externalId } = req.body || {};
   const result = await ingestMessage({
     channel: 'whatsapp',
     sender: name || from || sender,
     subject: group ? `WhatsApp-groep: ${group}` : '',
     body: body || text || message || '',
     group,
+    externalId,
   });
-  res.json({ ok: true, reviewId: result.review.id, status: result.review.status });
+  res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
 });
 
-// Handmatig een bericht simuleren vanuit het dashboard (om te testen).
+// --- Officiële WhatsApp Cloud API (Meta) ---
+// Verificatie van de webhook (Meta doet eerst een GET-aanroep).
+app.get('/api/ingest/whatsapp/cloud', (req, res) => {
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && verifyToken && token === verifyToken) {
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
+});
+
+// Inkomende berichten van de WhatsApp Cloud API. Meta's formaat wordt hier
+// vertaald naar ons standaardformaat.
+app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
+  try {
+    const entries = req.body?.entry || [];
+    for (const entry of entries) {
+      for (const change of entry.changes || []) {
+        const value = change.value || {};
+        const contacts = value.contacts || [];
+        for (const msg of value.messages || []) {
+          if (msg.type !== 'text') continue; // voorlopig alleen tekstberichten
+          const contact = contacts.find((c) => c.wa_id === msg.from) || contacts[0];
+          await ingestMessage({
+            channel: 'whatsapp',
+            sender: contact?.profile?.name || msg.from,
+            subject: '',
+            body: msg.text?.body || '',
+            externalId: msg.id, // ontdubbelen via Meta's bericht-id
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('WhatsApp Cloud webhook fout:', err.message);
+  }
+  res.sendStatus(200); // Meta verwacht altijd 200
+});
+
+// Handmatig een bericht doorzetten/simuleren vanuit het dashboard.
 app.post('/api/simulate', requireRole('admin', 'assistent'), async (req, res) => {
   const { channel, sender, subject, body, group } = req.body || {};
   if (!body) return res.status(400).json({ error: 'Bericht (body) verplicht' });
@@ -457,7 +364,7 @@ app.post('/api/simulate', requireRole('admin', 'assistent'), async (req, res) =>
     channel: channel === 'whatsapp' ? 'whatsapp' : 'email',
     sender, subject, body, group,
   });
-  res.json({ ok: true, reviewId: result.review.id, status: result.review.status });
+  res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status });
 });
 
 // ---------- Instellingen / statistieken / activiteit ----------
@@ -510,5 +417,7 @@ app.use(express.static(PUBLIC_DIR));
 
 app.listen(PORT, () => {
   console.log(`\n  Keyservice CRM draait op  http://localhost:${PORT}`);
-  console.log(`  AI-modus: ${aiMode() === 'ai' ? 'AI (Claude)' : 'DEMO (regels)'}\n`);
+  console.log(`  AI-modus: ${aiMode() === 'ai' ? 'AI (Claude)' : 'DEMO (regels)'}`);
+  startEmailPoller();
+  console.log('');
 });

@@ -26,70 +26,62 @@ Om de koppelingen écht live te zetten, heb ik het volgende van jou nodig. Stuur
 
 ---
 
-## 1. E-mail koppelen (TransIP)
+## 1. E-mail koppelen (TransIP) — INGEBOUWD, geen extra dienst nodig ✅
 
-Je offerteaanvragen komen via je website binnen in een TransIP-mailbox. Er zijn twee manieren om die in het dashboard te krijgen:
+Dit is de veiligste en simpelste manier: het dashboard **checkt zelf je TransIP-mailbox** (via IMAP) en haalt nieuwe e-mails op. Geen Zapier of derde partij — je mail blijft in je eigen systeem.
 
-### Optie A — Doorsturen via een "e-mail-naar-webhook" dienst (makkelijkst)
-Diensten zoals **Zapier**, **Make.com** of **n8n** kunnen je mailbox in de gaten houden (via IMAP) en elke nieuwe mail doorzetten naar het dashboard.
+**Wat jij doet:** vul in het bestand `.env` deze regels in:
 
-1. Maak in Zapier/Make een scenario: *Trigger = nieuwe e-mail (IMAP)*, met je TransIP-gegevens:
-   - IMAP-server: `imap.transip.email` (controleer dit in je TransIP-webmailinstellingen)
-   - Poort: `993` (SSL)
-   - Gebruikersnaam: je volledige e-mailadres
-   - Wachtwoord: je mailboxwachtwoord
-2. *Actie = Webhook (POST)* naar `https://JOUW-DASHBOARD/api/ingest/email`
-   - Header: `x-ingest-token: <jouw INGEST_TOKEN>`
-   - Body (JSON):
-     ```json
-     {
-       "from": "{{afzender}}",
-       "subject": "{{onderwerp}}",
-       "body": "{{platte tekst van de mail}}"
-     }
-     ```
-
-### Optie B — Een klein IMAP-script dat ik voor je kan schrijven
-Ik kan een klein scriptje toevoegen (`server/connectors/email-imap.js`) dat zelf periodiek je TransIP-mailbox checkt en nieuwe mails naar de verwerking stuurt. Dan heb je geen Zapier nodig. Geef me de IMAP-gegevens (of zet ze in `.env`) en ik bouw het.
-
-### Even testen zonder echte mail
-```bash
-curl -X POST https://JOUW-DASHBOARD/api/ingest/email \
-  -H "x-ingest-token: JOUW_TOKEN" -H "content-type: application/json" \
-  -d '{"from":"Jan <jan@example.nl>","subject":"Offerte aanvraag","body":"Wat kost een nieuw cilinderslot?"}'
 ```
+IMAP_HOST=imap.transip.email
+IMAP_PORT=993
+IMAP_USER=jouwadres@jouwdomein.nl
+IMAP_PASSWORD=het-wachtwoord-van-die-mailbox
+IMAP_POLL_SECONDS=60
+```
+
+> Controleer de juiste IMAP-server in je TransIP-webmailinstellingen (meestal `imap.transip.email`).
+> Tip: maak hier het beste een **apart mailbox-wachtwoord** voor aan in TransIP, in plaats van je hoofdwachtwoord.
+
+Herstart daarna het dashboard. In de opstartregels zie je dan: `E-mail (IMAP): actief`. Vanaf dat moment verschijnen nieuwe (ongelezen) e-mails automatisch in de **Inbox** ter controle. Verwerkte mails worden als "gelezen" gemarkeerd zodat ze niet dubbel binnenkomen.
+
+> Werkt het IMAP-checken niet in jouw situatie? Dan kun je als alternatief alsnog een dienst als Zapier/Make naar `POST /api/ingest/email` laten sturen (header `x-ingest-token`). Maar voor de meeste gevallen heb je dat niet nodig.
 
 ---
 
 ## 2. WhatsApp koppelen
 
-Je gebruikt WhatsApp op twee manieren: **1-op-1 berichten** én **één zeer actieve groep**. Dat zijn technisch twee verschillende dingen — lees dit goed.
+Je gebruikt WhatsApp op twee manieren: **1-op-1 berichten** én **één zeer actieve groep**. Voor allebei kies ik de **veiligste** route.
 
-### 2a. 1-op-1 berichten → officiële WhatsApp Business API (aanbevolen, betrouwbaar)
-Dit is de nette, toegestane manier voor berichten naar jouw zakelijke nummer.
+### 2a. 1-op-1 berichten → officiële WhatsApp Cloud API (INGEBOUWD ✅)
+Dit is de nette, toegestane manier voor berichten naar jouw zakelijke nummer. Dit kan **niet** leiden tot blokkade van je nummer. De webhook zit al kant-en-klaar in het dashboard.
 
-1. Kies een aanbieder: **Meta (WhatsApp Cloud API)** direct, of via **Twilio** / **360dialog** (eenvoudiger op te zetten).
-2. Je krijgt een zakelijk WhatsApp-nummer / Business-account (eenmalige verificatie nodig).
-3. Stel in het dashboard van die aanbieder een **inkomende webhook** in die naar
-   `https://JOUW-DASHBOARD/api/ingest/whatsapp` wijst, met de header `x-ingest-token`.
-4. Stuur per bericht JSON zoals:
-   ```json
-   { "from": "31612345678", "name": "Klantnaam", "body": "berichttekst" }
+**Wat jij doet (eenmalig):**
+1. Maak een gratis **Meta for Developers**-account aan (developers.facebook.com) en zet een **WhatsApp**-product op met de **Cloud API**. Je koppelt hier een zakelijk telefoonnummer.
+2. Verzin een verify-token en zet het in `.env`:
    ```
-   (De exacte vorm verschilt per aanbieder; ik kan een kleine "vertaler" toevoegen die het formaat van Twilio/Meta omzet naar dit formaat — laat me weten welke aanbieder je kiest.)
+   WHATSAPP_VERIFY_TOKEN=een-zelfverzonnen-geheim
+   ```
+3. Stel in het Meta-dashboard de **webhook** in:
+   - Callback-URL: `https://JOUW-DASHBOARD/api/ingest/whatsapp/cloud`
+   - Verify token: dezelfde waarde als hierboven
+   - Abonneer op het veld **messages**.
 
-### 2b. De actieve WhatsApp-groep → let op: dit kan de officiële API NIET
-> **Belangrijk om te weten:** de officiële WhatsApp Business API kan **geen groepsberichten** lezen of ontvangen. Dat is een bewuste beperking van Meta. Voor jouw "zeer actieve groep" heb je dus een andere aanpak nodig. De opties, met eerlijke voor- en nadelen:
+Meta controleert de URL automatisch (het dashboard beantwoordt die controle). Daarna komen 1-op-1 berichten vanzelf in de **Inbox**. Dubbele berichten worden er automatisch uitgefilterd.
 
-| Optie | Hoe | Voordeel | Nadeel / risico |
-|-------|-----|----------|------------------|
-| **1. Onofficiële groeps-bot** (bv. een gekoppeld toestel via een bibliotheek zoals `whatsapp-web.js` / Baileys) | Een telefoon/sessie blijft ingelogd en stuurt elk groepsbericht door naar de webhook | Werkt mét groepen, geen kosten per bericht | Tegen WhatsApp's voorwaarden → kans op blokkade van het nummer. Gebruik een **apart nummer**, geen hoofdnummer. |
-| **2. Handmatig doorzetten** | Assistente plakt belangrijke groepsberichten in *Inbox → Testbericht simuleren* | Veilig, simpel, nul techniek | Kost handwerk |
-| **3. Workflow uit de groep halen** | Vraag klanten in de groep om voor opdrachten je zakelijke nummer/website te gebruiken | Netjes en toekomstvast | Vereist gedragsverandering |
+> Liever via **Twilio** of **360dialog** (vaak iets makkelijker op te zetten)? Laat het weten, dan voeg ik een kleine "vertaler" voor dat formaat toe. Het algemene adres `POST /api/ingest/whatsapp` (met header `x-ingest-token`) staat ook klaar.
 
-**Mijn advies:** gebruik voor opdrachten zoveel mogelijk **2a** (officieel, 1-op-1) en zet de groep desnoods via **optie 1 op een apart, "wegwerpbaar" nummer** of via **optie 2 (handmatig)**. Zeg me welke optie je wilt, dan bouw ik de bijbehorende koppeling (voor optie 1 maak ik een los `connectors/whatsapp-group.js`-script met duidelijke waarschuwingen).
+### 2b. De zeer actieve WhatsApp-groep → handmatig doorzetten (veiligst ✅)
+> **Belangrijk:** de officiële WhatsApp API kan **geen groepsberichten** lezen — dat is een bewuste beperking van Meta. De enige manier om dat automatisch te doen is een *onofficiële* bot, en die **kan je nummer laten blokkeren**. Daarom kies ik dat bewust **niet**.
+
+De veilige aanpak die ik heb ingebouwd: in **Inbox → ➕ Bericht handmatig toevoegen** kan je assistente een belangrijk groepsbericht **kopiëren en plakken**. De AI deelt het daarna gewoon in, net als bij e-mail/WhatsApp. Kost een paar seconden, nul risico.
+
+**Tip om handwerk te verminderen:** vraag klanten in de groep om voor échte opdrachten je zakelijke (1-op-1) nummer of website te gebruiken. Dan loopt het meeste automatisch en gebruik je de groep alleen voor uitzonderingen.
+
+> Wil je tóch een (onofficiële) automatische groeps-koppeling, met alle risico's van dien op een **apart wegwerp-nummer**? Zeg het expliciet, dan kan ik een los script toevoegen mét duidelijke waarschuwingen. Standaard doe ik dit niet.
 
 ### Even testen zonder echte WhatsApp
+Gebruik in het dashboard de knop **➕ Bericht handmatig toevoegen**, of via de webhook:
 ```bash
 curl -X POST https://JOUW-DASHBOARD/api/ingest/whatsapp \
   -H "x-ingest-token: JOUW_TOKEN" -H "content-type: application/json" \
@@ -146,7 +138,8 @@ Op je eigen laptop is het alleen lokaal bereikbaar. Om je assistentes en monteur
 - [ ] Dashboard ergens online zetten met een vast adres + HTTPS
 - [ ] Eigen `SESSION_SECRET` en `INGEST_TOKEN` invullen in `.env`
 - [ ] Eigen gebruikers aanmaken en demo-wachtwoorden verwijderen
-- [ ] E-mail koppelen (Zapier/Make óf het IMAP-script dat ik kan toevoegen)
-- [ ] WhatsApp-keuze maken (Business API voor 1-op-1; aparte aanpak voor de groep)
+- [ ] E-mail koppelen: `IMAP_*` invullen in `.env` (ingebouwd, geen extra dienst)
+- [ ] WhatsApp 1-op-1: Meta Cloud API-webhook instellen naar `/api/ingest/whatsapp/cloud`
+- [ ] WhatsApp-groep: assistente belangrijke berichten laten doorzetten via "➕ Bericht handmatig toevoegen"
 - [ ] Eventueel een Claude API-sleutel invullen voor de slimme AI
 - [ ] Drempel voor automatisch goedkeuren instellen (begin op 0%)
