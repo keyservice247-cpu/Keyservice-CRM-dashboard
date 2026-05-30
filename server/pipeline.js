@@ -2,6 +2,7 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify } from './ai/categorizer.js';
+import { normalizeStatus } from './settings.js';
 
 export function autoApproveThreshold() {
   const s = db().settings || {};
@@ -61,7 +62,7 @@ export function withRelations(order) {
 // Maak van een (goedgekeurde) review een echte opdracht + klant.
 export function applyReview(review, { actorName, overrides = {}, auto = false }) {
   const s = review.suggestion;
-  const status = overrides.status || s.status;
+  const status = normalizeStatus(overrides.status || s.status);
   const { customer } = upsertCustomer({
     name: overrides.customerName ?? s.customerName,
     phone: overrides.customerPhone ?? s.customerPhone,
@@ -69,12 +70,16 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     source: review.channel,
   });
 
+  const defaultSource = review.channel === 'whatsapp' ? 'Keyservice WhatsApp'
+    : review.channel === 'email' ? 'Keyservice e-mail'
+    : 'Handmatig';
+
   const order = {
     id: id('ord'),
     title: overrides.title || s.title || 'Nieuwe opdracht',
     description: '',
     status,
-    source: review.channel,
+    source: overrides.source || defaultSource,
     customerId: customer.id,
     monteurId: overrides.monteurId || null,
     appointmentAt: null,
@@ -120,6 +125,8 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   db().messages.push(message);
 
   const suggestion = await classify({ channel, sender, subject, body });
+  // Leg de AI-suggestie op een bestaande kolom (gebruiker kan kolommen aanpassen).
+  suggestion.status = normalizeStatus(suggestion.status);
 
   const review = {
     id: id('rev'),

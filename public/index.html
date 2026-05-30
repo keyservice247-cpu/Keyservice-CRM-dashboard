@@ -7,100 +7,103 @@
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">🔑 Keyservice <span class="muted">CRM</span></div>
-    <nav class="tabs">
-      <button class="tab active" data-view="board">📋 Opdrachten</button>
-      <button class="tab" data-view="inbox">📥 Inbox / AI <span id="inboxBadge" class="badge" hidden>0</span></button>
-      <button class="tab" data-view="customers">👥 Klanten &amp; Leads</button>
-      <button class="tab" data-view="monteurs">🔧 Monteurs</button>
-      <button class="tab admin-only" data-view="control">🤖 AI-controle</button>
-      <button class="tab admin-only" data-view="users">⚙️ Gebruikers</button>
-    </nav>
-    <div class="user-area">
-      <span id="aiMode" class="pill"></span>
-      <span id="userName" class="muted"></span>
-      <button id="logoutBtn" class="btn btn-ghost">Uitloggen</button>
-    </div>
-  </header>
-
-  <main id="app">
-    <!-- Opdrachten (kanban) -->
-    <section id="view-board" class="view">
-      <div class="view-head">
-        <div>
-          <h2>Opdrachten</h2>
-          <div id="boardStats" class="muted small"></div>
-        </div>
-        <div class="view-actions">
-          <input id="boardSearch" type="search" placeholder="Zoek opdracht of klant…" />
-          <select id="boardMonteurFilter"><option value="">Alle monteurs</option></select>
-          <button id="newOrderBtn" class="btn btn-primary perm-write">+ Nieuwe opdracht</button>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">🔑 <span>Keyservice</span> <em>CRM</em></div>
+      <nav class="nav">
+        <button class="nav-item active" data-view="board"><span class="ic">📋</span> Opdrachten</button>
+        <button class="nav-item" data-view="inbox"><span class="ic">📥</span> Inbox / AI <span id="inboxBadge" class="badge" hidden>0</span></button>
+        <button class="nav-item" data-view="customers"><span class="ic">👥</span> Klanten &amp; Leads</button>
+        <button class="nav-item" data-view="monteurs"><span class="ic">🔧</span> Monteurs</button>
+        <div class="nav-sep admin-only">Beheer</div>
+        <button class="nav-item admin-only" data-view="control"><span class="ic">🤖</span> AI-controle</button>
+        <button class="nav-item admin-only" data-view="settings"><span class="ic">⚙️</span> Instellingen</button>
+        <button class="nav-item admin-only" data-view="users"><span class="ic">👤</span> Gebruikers</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="aiMode" class="pill"></span>
+        <div class="who"><span class="avatar" id="avatar"></span><span id="userName" class="muted small"></span></div>
+        <div class="foot-actions">
+          <button id="accountBtn" class="btn btn-ghost btn-sm">Account</button>
+          <button id="logoutBtn" class="btn btn-ghost btn-sm">Uitloggen</button>
         </div>
       </div>
-      <div id="board" class="board"></div>
-    </section>
+    </aside>
 
-    <!-- Inbox / AI -->
-    <section id="view-inbox" class="view" hidden>
-      <div class="view-head">
-        <div><h2>Inbox — te controleren</h2>
-          <div class="muted small">De AI heeft inkomende e-mails/WhatsApp ingedeeld. Controleer en keur goed of wijs af.</div>
+    <main class="content">
+      <!-- Opdrachten (kanban) -->
+      <section id="view-board" class="view">
+        <div class="view-head">
+          <div><h2>Opdrachten</h2><div id="boardStats" class="muted small"></div></div>
+          <div class="view-actions">
+            <input id="boardSearch" type="search" placeholder="🔍 Zoek opdracht of klant…" />
+            <select id="boardMonteurFilter"><option value="">Alle monteurs</option></select>
+            <button id="newOrderBtn" class="btn btn-primary perm-write">+ Nieuwe opdracht</button>
+          </div>
         </div>
-        <div class="view-actions">
-          <button id="simulateBtn" class="btn btn-primary perm-write">➕ Bericht handmatig toevoegen</button>
+        <div id="board" class="board"></div>
+      </section>
+
+      <!-- Inbox / AI -->
+      <section id="view-inbox" class="view" hidden>
+        <div class="view-head">
+          <div><h2>Inbox — te controleren</h2>
+            <div class="muted small">De AI heeft inkomende e-mails/WhatsApp ingedeeld. Controleer en keur goed of wijs af.</div></div>
+          <div class="view-actions"><button id="simulateBtn" class="btn btn-primary perm-write">➕ Bericht handmatig toevoegen</button></div>
         </div>
-      </div>
-      <div id="reviewList" class="review-list"></div>
-    </section>
+        <div id="reviewList" class="review-list"></div>
+      </section>
 
-    <!-- Klanten -->
-    <section id="view-customers" class="view" hidden>
-      <div class="view-head">
-        <div><h2>Klanten &amp; Leads</h2></div>
-        <div class="view-actions">
-          <input id="customerSearch" type="search" placeholder="Zoek klant…" />
-          <button id="newCustomerBtn" class="btn btn-primary perm-write">+ Nieuwe klant</button>
+      <!-- Klanten -->
+      <section id="view-customers" class="view" hidden>
+        <div class="view-head">
+          <div><h2>Klanten &amp; Leads</h2></div>
+          <div class="view-actions">
+            <input id="customerSearch" type="search" placeholder="🔍 Zoek klant…" />
+            <button id="newCustomerBtn" class="btn btn-primary perm-write">+ Nieuwe klant</button>
+          </div>
         </div>
-      </div>
-      <div id="customerList" class="table-wrap"></div>
-    </section>
+        <div id="customerList" class="table-wrap"></div>
+      </section>
 
-    <!-- Monteurs -->
-    <section id="view-monteurs" class="view" hidden>
-      <div class="view-head">
-        <div><h2>Monteurs</h2></div>
-        <div class="view-actions">
-          <button id="newMonteurBtn" class="btn btn-primary perm-write">+ Nieuwe monteur</button>
+      <!-- Monteurs -->
+      <section id="view-monteurs" class="view" hidden>
+        <div class="view-head">
+          <div><h2>Monteurs</h2></div>
+          <div class="view-actions"><button id="newMonteurBtn" class="btn btn-primary perm-write">+ Nieuwe monteur</button></div>
         </div>
-      </div>
-      <div id="monteurList" class="card-grid"></div>
-    </section>
+        <div id="monteurList" class="card-grid"></div>
+      </section>
 
-    <!-- AI-controle (admin) -->
-    <section id="view-control" class="view" hidden>
-      <div class="view-head"><div><h2>AI-controle &amp; betrouwbaarheid</h2>
-        <div class="muted small">Bewaak hoe goed de AI presteert en stel in hoeveel hij zelf mag doen.</div></div>
-      </div>
-      <div id="controlPanel"></div>
-    </section>
+      <!-- AI-controle (admin) -->
+      <section id="view-control" class="view" hidden>
+        <div class="view-head"><div><h2>AI-controle &amp; betrouwbaarheid</h2>
+          <div class="muted small">Bewaak hoe goed de AI presteert en stel in hoeveel hij zelf mag doen.</div></div></div>
+        <div id="controlPanel"></div>
+      </section>
 
-    <!-- Gebruikers (admin) -->
-    <section id="view-users" class="view" hidden>
-      <div class="view-head">
-        <div><h2>Gebruikers &amp; toegang</h2></div>
-        <div class="view-actions"><button id="newUserBtn" class="btn btn-primary">+ Nieuwe gebruiker</button></div>
-      </div>
-      <div id="userList" class="table-wrap"></div>
-    </section>
-  </main>
+      <!-- Instellingen (admin) -->
+      <section id="view-settings" class="view" hidden>
+        <div class="view-head"><div><h2>Instellingen</h2>
+          <div class="muted small">Pas zelf de kolommen en de herkomst-bronnen aan.</div></div></div>
+        <div id="settingsPanel"></div>
+      </section>
 
-  <!-- Modal -->
+      <!-- Gebruikers (admin) -->
+      <section id="view-users" class="view" hidden>
+        <div class="view-head">
+          <div><h2>Gebruikers &amp; toegang</h2></div>
+          <div class="view-actions"><button id="newUserBtn" class="btn btn-primary">+ Nieuwe gebruiker</button></div>
+        </div>
+        <div id="userList" class="table-wrap"></div>
+      </section>
+    </main>
+  </div>
+
   <div id="modalRoot" class="modal-root" hidden>
     <div class="modal-backdrop"></div>
     <div class="modal" id="modal"></div>
   </div>
-
   <div id="toast" class="toast" hidden></div>
 
   <script src="/js/app.js"></script>

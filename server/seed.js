@@ -41,10 +41,11 @@ export function ensureSeed() {
     createdAt: now(), updatedAt: now(), ...o,
   });
   data.orders.push(
-    ord({ title: 'Buitengesloten — voordeurslot', status: 'open', customerId: c3.id, source: 'telefoon', urgent: true }),
-    ord({ title: 'Offerte: cilindersloten vervangen (3x)', status: 'offerte_verzonden', customerId: c1.id, source: 'email', price: '€ 240' }),
-    ord({ title: 'Inbraakschade herstellen achterdeur', status: 'afspraak_ingepland', customerId: c2.id, source: 'whatsapp', monteurId: mAhmed.id, appointmentAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16) }),
-    ord({ title: 'Extra sleutels bijmaken', status: 'geannuleerd', customerId: c2.id, source: 'whatsapp' }),
+    ord({ title: 'Buitengesloten — voordeurslot', status: 'open', customerId: c3.id, source: 'Telefoon', urgent: true }),
+    ord({ title: 'Offerte: cilindersloten vervangen (3x)', status: 'offerte_verzonden', customerId: c1.id, source: 'Keyservice e-mail', price: '€ 240' }),
+    ord({ title: 'Inbraakschade herstellen achterdeur', status: 'afspraak_ingepland', customerId: c2.id, source: 'DRS WhatsApp groep', monteurId: mAhmed.id, appointmentAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16) }),
+    ord({ title: 'Slot gerepareerd kantoordeur', status: 'afgerond', customerId: c1.id, source: 'Keyservice WhatsApp', monteurId: mPiet.id, price: '€ 95' }),
+    ord({ title: 'Extra sleutels bijmaken', status: 'geannuleerd', customerId: c2.id, source: 'Keyservice WhatsApp' }),
   );
 
   data._seeded = true;

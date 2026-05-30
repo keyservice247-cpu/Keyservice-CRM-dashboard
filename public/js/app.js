@@ -24,22 +24,36 @@ function toast(msg, isError = false) {
   toast._t = setTimeout(() => (t.hidden = true), 3000);
 }
 
-const SRC_ICON = { email: '✉️', whatsapp: '💬', telefoon: '📞', handmatig: '✍️' };
+// Herkomst-bron: icoon + kleurklasse op basis van trefwoorden in de naam.
+function sourceMeta(label) {
+  const l = (label || '').toLowerCase();
+  if (l.includes('groep')) return { icon: '👥', cls: 'src-groep' };
+  if (l.includes('whatsapp') || l.includes('app')) return { icon: '💬', cls: 'src-whatsapp' };
+  if (l.includes('mail')) return { icon: '✉️', cls: 'src-email' };
+  if (l.includes('telefoon') || l.includes('bel')) return { icon: '📞', cls: 'src-telefoon' };
+  return { icon: '🏷️', cls: '' };
+}
 
 // ---------- State ----------
 const state = { me: null, meta: null, monteurs: [], orders: [], view: 'board' };
 
+const statusLabel = (key) => (state.meta.statusLabels && state.meta.statusLabels[key]) || key;
+const statusColor = (key) => {
+  const s = (state.meta.statuses || []).find((x) => x.key === key);
+  return s ? s.color : '#94a3b8';
+};
+
 // ---------- Init ----------
 (async function init() {
-  const { user, meta } = await api('/api/me');
-  if (!user) { window.location.href = '/'; return; }
-  state.me = user; state.meta = meta;
-  $('#userName').textContent = `${user.name} · ${user.role}`;
-  $('#aiMode').textContent = meta.aiMode === 'ai' ? 'AI actief' : 'AI: demo-modus';
+  const me = await api('/api/me');
+  if (!me || !me.user) { window.location.href = '/'; return; }
+  state.me = me.user; state.meta = me.meta;
+  $('#userName').textContent = `${me.user.name} · ${me.user.role}`;
+  $('#avatar').textContent = (me.user.name || '?').trim().charAt(0).toUpperCase();
+  $('#aiMode').textContent = me.meta.aiMode === 'ai' ? '🤖 AI actief' : '⚙️ AI: demo';
 
-  // Rechten toepassen
-  if (user.role !== 'admin') $$('.admin-only').forEach((el) => el.remove());
-  if (user.role === 'monteur') $$('.perm-write').forEach((el) => (el.hidden = true));
+  if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => el.remove());
+  if (me.user.role === 'monteur') $$('.perm-write').forEach((el) => (el.hidden = true));
 
   bindNav();
   bindButtons();
@@ -47,16 +61,22 @@ const state = { me: null, meta: null, monteurs: [], orders: [], view: 'board' };
   setInterval(refreshInboxBadge, 20000);
 })();
 
+async function refreshMeta() {
+  const me = await api('/api/me');
+  if (me && me.meta) state.meta = me.meta;
+}
+
 function bindNav() {
-  $$('.tab').forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view)));
+  $$('.nav-item').forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view)));
   $('#logoutBtn').addEventListener('click', async () => { await api('/api/logout', 'POST'); window.location.href = '/'; });
+  $('#accountBtn').addEventListener('click', openAccountModal);
 }
 
 function showView(view) {
   state.view = view;
-  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
+  $$('.nav-item').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
-  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, monteurs: loadMonteurs, control: loadControl, users: loadUsers };
+  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, monteurs: loadMonteurs, control: loadControl, settings: loadSettings, users: loadUsers };
   (map[view] || (() => {}))();
 }
 
@@ -67,10 +87,32 @@ async function refreshAll() {
   await refreshInboxBadge();
 }
 
-// ---------- Board ----------
-const COLUMNS = ['open', 'offerte_verzonden', 'afspraak_ingepland', 'geannuleerd'];
-const COL_COLOR = { open: 'var(--open)', offerte_verzonden: 'var(--offerte)', afspraak_ingepland: 'var(--afspraak)', geannuleerd: 'var(--geannuleerd)' };
+// ---------- Source <select> (met 'andere bron toevoegen') ----------
+function sourceSelect(selected, extraClass = '') {
+  const sources = state.meta.sources || [];
+  const has = selected && sources.includes(selected);
+  const opts = sources.map((s) => `<option value="${esc(s)}" ${selected === s ? 'selected' : ''}>${esc(s)}</option>`).join('');
+  const custom = !has && selected ? `<option value="${esc(selected)}" selected>${esc(selected)}</option>` : '';
+  return `<select class="${extraClass}" data-source>${opts}${custom}<option value="__new__">➕ Andere bron…</option></select>`;
+}
+function bindSourceSelect(sel) {
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    if (sel.value === '__new__') {
+      const naam = prompt('Naam van de nieuwe herkomst-bron (bv. "DRS WhatsApp groep"):');
+      if (naam && naam.trim()) {
+        const opt = document.createElement('option');
+        opt.value = naam.trim(); opt.textContent = naam.trim();
+        sel.insertBefore(opt, sel.querySelector('option[value="__new__"]'));
+        sel.value = naam.trim();
+      } else {
+        sel.selectedIndex = 0;
+      }
+    }
+  });
+}
 
+// ---------- Board ----------
 function fillMonteurFilter() {
   const sel = $('#boardMonteurFilter');
   sel.innerHTML = '<option value="">Alle monteurs</option>' +
@@ -90,7 +132,7 @@ function filteredOrders() {
   return state.orders.filter((o) => {
     if (mont && o.monteurId !== mont) return false;
     if (q) {
-      const hay = `${o.title} ${o.customer?.name || ''} ${o.notes || ''}`.toLowerCase();
+      const hay = `${o.title} ${o.customer?.name || ''} ${o.notes || ''} ${o.source || ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -100,17 +142,18 @@ function filteredOrders() {
 function renderBoard() {
   const board = $('#board');
   const orders = filteredOrders();
-  board.innerHTML = COLUMNS.map((status) => {
-    const items = orders.filter((o) => o.status === status);
+  const statuses = state.meta.statuses || [];
+  board.innerHTML = statuses.map((st) => {
+    const items = orders.filter((o) => o.status === st.key);
     return `
-      <div class="column" data-status="${status}">
+      <div class="column" data-status="${esc(st.key)}">
         <div class="column-head">
-          <span class="column-dot" style="background:${COL_COLOR[status]}"></span>
-          ${esc(state.meta.statusLabels[status])}
+          <span class="column-dot" style="background:${esc(st.color)}"></span>
+          ${esc(st.label)}
           <span class="count">${items.length}</span>
         </div>
-        <div class="column-cards" data-status="${status}">
-          ${items.map(cardHTML).join('') || '<div class="empty small">Leeg</div>'}
+        <div class="column-cards" data-status="${esc(st.key)}">
+          ${items.map(cardHTML).join('') || '<div class="empty">Leeg</div>'}
         </div>
       </div>`;
   }).join('');
@@ -141,15 +184,13 @@ function renderBoard() {
 }
 
 function cardHTML(o) {
-  const canDrag = state.me.role !== 'monteur' || true; // iedereen mag verslepen (status wijzigen)
-  const src = o.source || 'handmatig';
-  const meta = [];
-  meta.push(`<span class="chip src-${src}">${SRC_ICON[src] || ''} ${esc(src)}</span>`);
+  const sm = sourceMeta(o.source);
+  const meta = [`<span class="chip ${sm.cls}">${sm.icon} ${esc(o.source || 'Handmatig')}</span>`];
   if (o.monteur) meta.push(`<span class="chip mont">🔧 ${esc(o.monteur.name)}</span>`);
   if (o.urgent) meta.push('<span class="chip urgent">⚡ spoed</span>');
   if (o.appointmentAt) meta.push(`<span class="chip">📅 ${fmtDate(o.appointmentAt)}</span>`);
   return `
-    <div class="card ${o.urgent ? 'urgent' : ''}" data-id="${o.id}" draggable="${canDrag}">
+    <div class="card ${o.urgent ? 'urgent' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
       <div class="card-title">${esc(o.title)}</div>
       ${o.customer ? `<div class="card-customer">👤 ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
       <div class="card-meta">${meta.join('')}</div>
@@ -163,6 +204,10 @@ function fmtDate(s) {
   return d.toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function statusOptionsHTML(selected) {
+  return (state.meta.statuses || []).map((s) => `<option value="${esc(s.key)}" ${selected === s.key ? 'selected' : ''}>${esc(s.label)}</option>`).join('');
+}
+
 // ---------- Order modal ----------
 function openOrderModal(id) {
   const o = id ? state.orders.find((x) => x.id === id) : null;
@@ -170,7 +215,6 @@ function openOrderModal(id) {
   const isMonteur = state.me.role === 'monteur';
   const monteurOpts = '<option value="">— geen monteur —</option>' +
     state.monteurs.map((m) => `<option value="${m.id}" ${o?.monteurId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
-  const statusOpts = state.meta.statuses.map((s) => `<option value="${s}" ${o?.status === s ? 'selected' : ''}>${esc(state.meta.statusLabels[s])}</option>`).join('');
 
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2>
@@ -183,14 +227,14 @@ function openOrderModal(id) {
       <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label>
     ` : `<label>Klant <input value="${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}" disabled></label>`}
     <div class="row">
-      <label>Status <select id="f-status">${statusOpts}</select></label>
+      <label>Status <select id="f-status">${statusOptionsHTML(o?.status)}</select></label>
       <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label>
     </div>
     <div class="row">
       <label>Afspraak (datum/tijd) <input id="f-appt" type="datetime-local" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label>
       <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label>
     </div>
-    ${canWrite ? `<label>Bron <select id="f-source">${['handmatig','email','whatsapp','telefoon'].map((s)=>`<option value="${s}" ${o?.source===s?'selected':''}>${s}</option>`).join('')}</select></label>` : ''}
+    ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label>
     ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}> Spoed</label>` : ''}
     <div class="modal-actions">
@@ -201,6 +245,7 @@ function openOrderModal(id) {
       </div>
     </div>
   `);
+  bindSourceSelect($('[data-source]'));
 
   $('#f-cancel').onclick = closeModal;
   $('#f-save').onclick = async () => {
@@ -213,7 +258,7 @@ function openOrderModal(id) {
       payload.title = $('#f-title').value;
       payload.monteurId = $('#f-monteur').value || null;
       payload.price = $('#f-price').value;
-      payload.source = $('#f-source')?.value || 'handmatig';
+      payload.source = $('[data-source]')?.value || 'Handmatig';
       payload.urgent = $('#f-urgent')?.checked || false;
     }
     try {
@@ -257,32 +302,30 @@ function reviewHTML(r) {
   const s = r.suggestion || {};
   const m = r.message || {};
   const conf = Math.round((s.confidence || 0) * 100);
-  const statusOpts = state.meta.statuses.map((st) => `<option value="${st}" ${s.status === st ? 'selected' : ''}>${esc(state.meta.statusLabels[st])}</option>`).join('');
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
+  const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}">
+    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}">
       <div class="review-top">
         <div>
-          <strong>${SRC_ICON[r.channel] || ''} ${esc(m.sender || 'Onbekend')}</strong>
-          ${m.group ? `<span class="chip src-whatsapp">groep: ${esc(m.group)}</span>` : ''}
+          <strong>${sourceMeta(r.channel).icon} ${esc(m.sender || 'Onbekend')}</strong>
+          ${m.group ? `<span class="chip src-groep">👥 ${esc(m.group)}</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div>
         </div>
         <div class="small muted" style="text-align:right">
           AI-zekerheid ${conf}%<br>
-          <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'var(--afspraak)':conf>=40?'var(--offerte)':'var(--geannuleerd)'}"></div></span>
+          <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span>
           <div>${esc(s.engine || '')}</div>
         </div>
       </div>
       <div class="review-msg">${esc(m.body || '')}</div>
       <div class="small"><strong>AI-uitleg:</strong> ${esc(s.reasoning || '')}</div>
       <div class="review-actions">
-        <label class="small" style="margin:0">Status
-          <select class="r-status" style="margin-top:2px">${statusOpts}</select></label>
-        <label class="small" style="margin:0">Klant
-          <input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:2px"></label>
-        <label class="small" style="margin:0">Monteur
-          <select class="r-monteur" style="margin-top:2px">${monteurOpts}</select></label>
-        <button class="btn btn-success r-approve">✓ Goedkeuren → opdracht</button>
+        <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label>
+        <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label>
+        <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label>
+        <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label>
+        <button class="btn btn-success r-approve">✓ Goedkeuren</button>
         <button class="btn btn-danger r-reject">✕ Afwijzen</button>
       </div>
     </div>`;
@@ -290,11 +333,13 @@ function reviewHTML(r) {
 
 function bindReview(r) {
   const el = $(`.review[data-id="${r.id}"]`);
+  bindSourceSelect($('[data-source]', el));
   $('.r-approve', el).onclick = async () => {
     try {
       await api(`/api/reviews/${r.id}/approve`, 'POST', {
         status: $('.r-status', el).value,
         customerName: $('.r-cname', el).value,
+        source: $('[data-source]', el).value,
         monteurId: $('.r-monteur', el).value || null,
       });
       toast('Opdracht aangemaakt'); loadInbox(); refreshInboxBadge();
@@ -308,8 +353,7 @@ function bindReview(r) {
 
 // ---------- Customers ----------
 async function loadCustomers() {
-  const customers = await api('/api/customers');
-  state._customers = customers;
+  state._customers = await api('/api/customers');
   renderCustomers();
 }
 function renderCustomers() {
@@ -318,16 +362,16 @@ function renderCustomers() {
   const canWrite = state.me.role !== 'monteur';
   $('#customerList').innerHTML = `
     <table><thead><tr>
-      <th>Naam</th><th>Type</th><th>Telefoon</th><th>E-mail</th><th>Bron</th><th>Opdrachten</th>${canWrite ? '<th></th>' : ''}
+      <th>Naam</th><th>Type</th><th>Telefoon</th><th>E-mail</th><th>Herkomst</th><th>Opdrachten</th>${canWrite ? '<th></th>' : ''}
     </tr></thead><tbody>
-    ${list.map((c) => `<tr>
+    ${list.map((c) => { const sm = sourceMeta(c.source); return `<tr>
       <td><strong>${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}</td>
       <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td>
       <td>${esc(c.phone || '')}</td><td>${esc(c.email || '')}</td>
-      <td><span class="chip">${SRC_ICON[c.source] || ''} ${esc(c.source || '')}</span></td>
+      <td><span class="chip ${sm.cls}">${sm.icon} ${esc(c.source || '')}</span></td>
       <td>${c.orderCount}</td>
       ${canWrite ? `<td><button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
-    </tr>`).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
+    </tr>`; }).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
     </tbody></table>`;
   $$('[data-edit]').forEach((b) => b.onclick = () => openCustomerModal(state._customers.find((c) => c.id === b.dataset.edit)));
 }
@@ -375,8 +419,8 @@ async function loadMonteurs() {
     <div class="info-card">
       <h3>🔧 ${esc(m.name)}</h3>
       <div class="muted small">${esc(m.phone || '')}${m.email ? ' · ' + esc(m.email) : ''}</div>
-      <div style="margin-top:8px"><span class="chip">${m.activeCount} actieve opdrachten</span></div>
-      ${canWrite ? `<div style="margin-top:10px"><button class="btn btn-sm" data-medit="${m.id}">Bewerk</button> <button class="btn btn-sm btn-danger" data-mdel="${m.id}">Verwijder</button></div>` : ''}
+      <div style="margin-top:10px"><span class="chip">${m.activeCount} actieve opdrachten</span></div>
+      ${canWrite ? `<div style="margin-top:12px"><button class="btn btn-sm" data-medit="${m.id}">Bewerk</button> <button class="btn btn-sm btn-danger" data-mdel="${m.id}">Verwijder</button></div>` : ''}
     </div>`).join('') || '<div class="empty">Nog geen monteurs</div>';
   $$('[data-medit]').forEach((b) => b.onclick = () => openMonteurModal(state.monteurs.find((m) => m.id === b.dataset.medit)));
   $$('[data-mdel]').forEach((b) => b.onclick = async () => {
@@ -426,17 +470,77 @@ async function loadControl() {
       <h3>Controle-instelling</h3>
       <p class="muted small">Hoe zeker moet de AI zijn voordat een bericht <strong>automatisch</strong> een opdracht wordt (zonder handmatige controle)? Zet op 0% om <strong>alles</strong> handmatig te controleren (veiligst).</p>
       <label>Drempel voor automatisch goedkeuren: <strong id="threshLbl">${pct}%</strong>
-        <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}">
-      </label>
+        <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}"></label>
       <button class="btn btn-primary" id="saveThreshold">Opslaan</button>
     </div>
-    ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">ℹ️ De AI draait nu in <strong>demo-modus</strong> (regels/keywords). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code> in het <code>.env</code>-bestand) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : ''}
+    ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">ℹ️ De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : ''}
   `;
   const range = $('#threshold');
   range.oninput = () => ($('#threshLbl').textContent = range.value + '%');
   $('#saveThreshold').onclick = async () => {
     await api('/api/settings', 'PATCH', { aiAutoApproveThreshold: Number(range.value) / 100 });
     toast('Instelling opgeslagen');
+  };
+}
+
+// ---------- Instellingen (kolommen + bronnen) ----------
+async function loadSettings() {
+  const s = await api('/api/settings');
+  $('#settingsPanel').innerHTML = `
+    <div class="settings-grid">
+      <div class="info-card">
+        <h3>📋 Kolommen (statussen)</h3>
+        <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p>
+        <div id="statusRows"></div>
+        <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button>
+        <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div>
+      </div>
+      <div class="info-card">
+        <h3>🏷️ Herkomst-bronnen</h3>
+        <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p>
+        <div id="sourceRows"></div>
+        <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button>
+        <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div>
+      </div>
+    </div>`;
+
+  const statusRows = $('#statusRows');
+  const renderStatusRow = (st = { key: '', label: '', color: '#64748b' }) => {
+    const row = document.createElement('div');
+    row.className = 'editor-row';
+    row.dataset.key = st.key || '';
+    row.innerHTML = `<input type="color" value="${esc(st.color || '#64748b')}"><input type="text" value="${esc(st.label || '')}" placeholder="Kolomnaam"><button class="btn btn-sm btn-danger" title="Verwijderen">✕</button>`;
+    row.querySelector('button').onclick = () => row.remove();
+    statusRows.appendChild(row);
+  };
+  (s.statuses || []).forEach(renderStatusRow);
+  $('#addStatus').onclick = () => renderStatusRow();
+  $('#saveStatuses').onclick = async () => {
+    const statuses = $$('#statusRows .editor-row').map((row) => ({
+      key: row.dataset.key || undefined,
+      label: row.querySelector('input[type=text]').value,
+      color: row.querySelector('input[type=color]').value,
+    })).filter((x) => x.label.trim());
+    if (!statuses.length) return toast('Minimaal één kolom nodig', true);
+    try { await api('/api/settings', 'PATCH', { statuses }); await refreshMeta(); toast('Kolommen opgeslagen'); loadSettings(); }
+    catch (err) { toast(err.message, true); }
+  };
+
+  const sourceRows = $('#sourceRows');
+  const renderSourceRow = (val = '') => {
+    const row = document.createElement('div');
+    row.className = 'editor-row';
+    row.innerHTML = `<input type="text" value="${esc(val)}" placeholder="Bijv. DRS WhatsApp groep"><button class="btn btn-sm btn-danger">✕</button>`;
+    row.querySelector('button').onclick = () => row.remove();
+    sourceRows.appendChild(row);
+  };
+  (s.sources || []).forEach(renderSourceRow);
+  $('#addSource').onclick = () => renderSourceRow();
+  $('#saveSources').onclick = async () => {
+    const sources = $$('#sourceRows .editor-row input').map((i) => i.value).filter((v) => v.trim());
+    if (!sources.length) return toast('Minimaal één bron nodig', true);
+    try { await api('/api/settings', 'PATCH', { sources }); await refreshMeta(); toast('Bronnen opgeslagen'); loadSettings(); }
+    catch (err) { toast(err.message, true); }
   };
 }
 
@@ -480,16 +584,38 @@ function openUserModal() {
   };
 }
 
-// ---------- Simulate test message ----------
+// ---------- Account / wachtwoord ----------
+function openAccountModal() {
+  modal(`
+    <h2>Mijn account</h2>
+    <p class="muted small">${esc(state.me.name)} · ${esc(state.me.email)} · rol: ${esc(state.me.role)}</p>
+    <h3 style="margin:16px 0 10px;font-size:15px">Wachtwoord wijzigen</h3>
+    <label>Huidig wachtwoord <input id="p-cur" type="password"></label>
+    <label>Nieuw wachtwoord <input id="p-new" type="password" placeholder="minimaal 6 tekens"></label>
+    <label>Herhaal nieuw wachtwoord <input id="p-new2" type="password"></label>
+    <div class="modal-actions"><span></span><div class="right">
+      <button class="btn" id="p-cancel">Sluiten</button><button class="btn btn-primary" id="p-save">Wijzigen</button>
+    </div></div>`);
+  $('#p-cancel').onclick = closeModal;
+  $('#p-save').onclick = async () => {
+    const cur = $('#p-cur').value, n1 = $('#p-new').value, n2 = $('#p-new2').value;
+    if (n1.length < 6) return toast('Nieuw wachtwoord minimaal 6 tekens', true);
+    if (n1 !== n2) return toast('Wachtwoorden komen niet overeen', true);
+    try { await api('/api/me/password', 'POST', { currentPassword: cur, newPassword: n1 }); closeModal(); toast('Wachtwoord gewijzigd'); }
+    catch (err) { toast(err.message, true); }
+  };
+}
+
+// ---------- Bericht handmatig toevoegen ----------
 function openSimulateModal() {
   modal(`
     <h2>➕ Bericht handmatig toevoegen</h2>
-    <p class="muted small">Handig om een bericht uit je <strong>WhatsApp-groep</strong> door te zetten: kopieer het en plak het hieronder. De AI deelt het daarna in. (Ook handig om de AI te testen.)</p>
+    <p class="muted small">Handig om een bericht uit je <strong>WhatsApp-groep</strong> door te zetten: kopieer het en plak het hieronder. De AI deelt het daarna in.</p>
     <label>Kanaal <select id="s-channel">
       <option value="whatsapp">💬 WhatsApp</option><option value="email">✉️ E-mail</option>
     </select></label>
     <label>Afzender (naam / nummer / e-mail) <input id="s-sender" placeholder="Jan Jansen of 06-12345678"></label>
-    <label>Groep (optioneel) <input id="s-group" placeholder="bv. Klussen Groep"></label>
+    <label>Groep (optioneel) <input id="s-group" placeholder="bv. DRS WhatsApp groep"></label>
     <label>Onderwerp (bij e-mail) <input id="s-subject" placeholder="Offerte aanvraag voordeurslot"></label>
     <label>Bericht <textarea id="s-body" rows="4" placeholder="Hoi, ik ben buitengesloten en kom mijn huis niet in. Kunnen jullie snel langskomen?"></textarea></label>
     <div class="modal-actions"><span></span><div class="right">

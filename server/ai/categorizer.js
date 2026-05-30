@@ -9,12 +9,16 @@
 // De uitvoer is altijd hetzelfde formaat, zodat de rest van de app er niet om geeft
 // welke modus actief is.
 
-export const STATUSES = ['open', 'offerte_verzonden', 'afspraak_ingepland', 'geannuleerd'];
+// De vaste "denkcategorieën" die de AI gebruikt. De échte kolommen in het
+// dashboard zijn instelbaar (zie server/settings.js); na categorisatie wordt
+// de keuze daar zo nodig op teruggelegd.
+export const CANONICAL_STATUSES = ['open', 'offerte_verzonden', 'afspraak_ingepland', 'afgerond', 'geannuleerd'];
 
-export const STATUS_LABELS = {
-  open: 'Open',
+const CANONICAL_LABELS = {
+  open: 'Open / Nieuw',
   offerte_verzonden: 'Offerte verzonden',
   afspraak_ingepland: 'Afspraak ingepland',
+  afgerond: 'Afgerond',
   geannuleerd: 'Geannuleerd',
 };
 
@@ -48,6 +52,10 @@ export function classifyWithRules({ channel, sender, subject, body }) {
     status = 'geannuleerd';
     confidence = 0.8;
     reasons.push('Bericht bevat woorden die op annulering wijzen.');
+  } else if (has('afgerond', 'opgelost', 'gerepareerd', 'gefixt', 'is gemaakt', 'probleem verholpen', 'klaar gemaakt', 'betaald')) {
+    status = 'afgerond';
+    confidence = 0.75;
+    reasons.push('Bericht lijkt erop te wijzen dat de klus is afgerond.');
   } else if (has('afspraak', 'inplannen', 'ingepland', 'langskomen', 'wanneer kun', 'kunnen jullie komen', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag')) {
     status = 'afspraak_ingepland';
     confidence = 0.7;
@@ -101,6 +109,7 @@ Kies precies één status uit deze lijst:
 - "open": nieuwe aanvraag of offerteverzoek dat nog opgepakt moet worden.
 - "offerte_verzonden": er is al een offerte/prijsopgave naar de klant gestuurd.
 - "afspraak_ingepland": het gaat over het maken/bevestigen van een afspraak of langskomen.
+- "afgerond": de klus is uitgevoerd/klaar/opgelost.
 - "geannuleerd": de klant annuleert of zegt af.
 Antwoord UITSLUITEND met geldige JSON, geen extra tekst.`;
 
@@ -114,7 +123,7 @@ ${(message.body || '').slice(0, 4000)}
 
 Geef JSON met exact deze velden:
 {
-  "status": "open|offerte_verzonden|afspraak_ingepland|geannuleerd",
+  "status": "open|offerte_verzonden|afspraak_ingepland|afgerond|geannuleerd",
   "title": "korte titel voor de opdracht (max 120 tekens)",
   "customerName": "naam klant of null",
   "customerPhone": "telefoonnummer of null",
@@ -149,7 +158,7 @@ Geef JSON met exact deze velden:
   if (!match) throw new Error('Geen JSON in AI-antwoord');
   const parsed = JSON.parse(match[0]);
 
-  if (!STATUSES.includes(parsed.status)) parsed.status = 'open';
+  if (!CANONICAL_STATUSES.includes(parsed.status)) parsed.status = 'open';
   parsed.confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0.5));
   parsed.engine = `ai:${model}`;
   return parsed;

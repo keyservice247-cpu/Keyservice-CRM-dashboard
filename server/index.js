@@ -5,14 +5,18 @@ import { db, id, now, save, saveSoon, load, logActivity } from './db.js';
 import {
   attachUser, requireAuth, requireRole, publicUser,
   verifyPassword, createSession, destroySession,
-  setSessionCookie, clearSessionCookie, createUser,
+  setSessionCookie, clearSessionCookie, createUser, hashPassword,
 } from './auth.js';
-import { classify, aiMode, STATUSES, STATUS_LABELS } from './ai/categorizer.js';
+import { aiMode } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
 } from './pipeline.js';
 import { startEmailPoller } from './connectors/email-imap.js';
+import {
+  ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
+  isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
+} from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -20,6 +24,7 @@ const PORT = process.env.PORT || 3000;
 
 load();
 ensureSeed();
+ensureSettings();
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -50,11 +55,27 @@ app.get('/api/me', (req, res) => {
     user: publicUser(req.user),
     meta: {
       aiMode: aiMode(),
-      statuses: STATUSES,
-      statusLabels: STATUS_LABELS,
+      statuses: getStatuses(),
+      statusLabels: getStatusLabels(),
+      sources: getSources(),
       autoApproveThreshold: autoApproveThreshold(),
     },
   });
+});
+
+// Eigen wachtwoord wijzigen
+app.post('/api/me/password', requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!verifyPassword(currentPassword || '', req.user.passwordHash)) {
+    return res.status(400).json({ error: 'Huidig wachtwoord is onjuist' });
+  }
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: 'Nieuw wachtwoord moet minimaal 6 tekens zijn' });
+  }
+  req.user.passwordHash = hashPassword(newPassword);
+  saveSoon();
+  logActivity(req.user.name, 'wachtwoord gewijzigd');
+  res.json({ ok: true });
 });
 
 // ---------- Users (alleen admin) ----------
@@ -191,13 +212,13 @@ app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
     customerId = customer.id;
   }
   if (!customerId) return res.status(400).json({ error: 'Klant verplicht' });
-  if (!STATUSES.includes(b.status || 'open')) return res.status(400).json({ error: 'Ongeldige status' });
+  if (b.status && !isValidStatus(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
   const order = {
     id: id('ord'),
     title: b.title || 'Nieuwe opdracht',
     description: b.description || '',
-    status: b.status || 'open',
-    source: b.source || 'handmatig',
+    status: normalizeStatus(b.status || 'open'),
+    source: b.source || 'Handmatig',
     customerId,
     monteurId: b.monteurId || null,
     appointmentAt: b.appointmentAt || null,
@@ -224,7 +245,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
     ? ['status', 'appointmentAt', 'notes']
     : ['title', 'description', 'status', 'source', 'customerId', 'monteurId', 'appointmentAt', 'price', 'urgent', 'notes'];
 
-  if (b.status && !STATUSES.includes(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
+  if (b.status && !isValidStatus(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
 
   let changedStatus = false;
   for (const k of allowed) {
@@ -234,7 +255,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
     }
   }
   order.updatedAt = now();
-  if (changedStatus) logActivity(req.user.name, 'status gewijzigd', `${order.title} → ${STATUS_LABELS[order.status]}`);
+  if (changedStatus) logActivity(req.user.name, 'status gewijzigd', `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
   saveSoon();
   res.json(withRelations(order));
 });
@@ -369,22 +390,42 @@ app.post('/api/simulate', requireRole('admin', 'assistent'), async (req, res) =>
 
 // ---------- Instellingen / statistieken / activiteit ----------
 app.get('/api/settings', requireRole('admin'), (req, res) => {
-  res.json({ aiAutoApproveThreshold: autoApproveThreshold(), aiMode: aiMode() });
+  res.json({
+    aiAutoApproveThreshold: autoApproveThreshold(),
+    aiMode: aiMode(),
+    statuses: getStatuses(),
+    sources: getSources(),
+  });
 });
 
 app.patch('/api/settings', requireRole('admin'), (req, res) => {
-  if ('aiAutoApproveThreshold' in (req.body || {})) {
-    const v = Number(req.body.aiAutoApproveThreshold);
+  const b = req.body || {};
+  if ('aiAutoApproveThreshold' in b) {
+    const v = Number(b.aiAutoApproveThreshold);
     db().settings.aiAutoApproveThreshold = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
   }
+  if ('statuses' in b) {
+    const clean = sanitizeStatuses(b.statuses);
+    if (!clean) return res.status(400).json({ error: 'Minimaal één geldige kolom vereist' });
+    db().settings.statuses = clean;
+  }
+  if ('sources' in b) {
+    const clean = sanitizeSources(b.sources);
+    if (!clean) return res.status(400).json({ error: 'Minimaal één geldige bron vereist' });
+    db().settings.sources = clean;
+  }
   save();
-  res.json({ aiAutoApproveThreshold: autoApproveThreshold() });
+  res.json({
+    aiAutoApproveThreshold: autoApproveThreshold(),
+    statuses: getStatuses(),
+    sources: getSources(),
+  });
 });
 
 app.get('/api/stats', requireAuth, (req, res) => {
   const orders = db().orders;
   const byStatus = {};
-  STATUSES.forEach((s) => { byStatus[s] = orders.filter((o) => o.status === s).length; });
+  getStatusKeys().forEach((s) => { byStatus[s] = orders.filter((o) => o.status === s).length; });
   const reviews = db().reviews;
   const handled = reviews.filter((r) => ['approved', 'auto_approved', 'rejected'].includes(r.status));
   const approved = reviews.filter((r) => ['approved', 'auto_approved'].includes(r.status));
