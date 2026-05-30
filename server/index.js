@@ -16,6 +16,7 @@ import { startEmailPoller } from './connectors/email-imap.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
+  getTemplates, sanitizeTemplates,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,6 +59,7 @@ app.get('/api/me', (req, res) => {
       statuses: getStatuses(),
       statusLabels: getStatusLabels(),
       sources: getSources(),
+      templates: getTemplates(),
       autoApproveThreshold: autoApproveThreshold(),
     },
   });
@@ -395,6 +397,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     aiMode: aiMode(),
     statuses: getStatuses(),
     sources: getSources(),
+    templates: getTemplates(),
   });
 });
 
@@ -414,12 +417,23 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     if (!clean) return res.status(400).json({ error: 'Minimaal één geldige bron vereist' });
     db().settings.sources = clean;
   }
+  if ('templates' in b) {
+    const clean = sanitizeTemplates(b.templates);
+    if (!clean) return res.status(400).json({ error: 'Ongeldige sjablonen' });
+    db().settings.templates = clean;
+  }
   save();
   res.json({
     aiAutoApproveThreshold: autoApproveThreshold(),
     statuses: getStatuses(),
     sources: getSources(),
+    templates: getTemplates(),
   });
+});
+
+// Sjablonen ophalen (alle ingelogde gebruikers mogen ze gebruiken)
+app.get('/api/templates', requireAuth, (req, res) => {
+  res.json(getTemplates());
 });
 
 app.get('/api/stats', requireAuth, (req, res) => {

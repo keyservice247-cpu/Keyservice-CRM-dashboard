@@ -2,7 +2,7 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify } from './ai/categorizer.js';
-import { normalizeStatus } from './settings.js';
+import { normalizeStatus, firstStatusKey } from './settings.js';
 
 export function autoApproveThreshold() {
   const s = db().settings || {};
@@ -30,11 +30,12 @@ export function findCustomer({ name, phone, email }) {
   return null;
 }
 
-export function upsertCustomer({ name, phone, email, source }) {
+export function upsertCustomer({ name, phone, email, address, source }) {
   let c = findCustomer({ name, phone, email });
   if (c) {
     if (!c.phone && phone) c.phone = phone;
     if (!c.email && email) c.email = email;
+    if (!c.address && address) c.address = address;
     if (c.type === 'lead') c.type = 'klant';
     return { customer: c, created: false };
   }
@@ -43,7 +44,7 @@ export function upsertCustomer({ name, phone, email, source }) {
     name: name || 'Onbekende klant',
     phone: phone || '',
     email: email || '',
-    address: '',
+    address: address || '',
     type: 'lead',
     source: source || 'handmatig',
     notes: '',
@@ -67,6 +68,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     name: overrides.customerName ?? s.customerName,
     phone: overrides.customerPhone ?? s.customerPhone,
     email: overrides.customerEmail ?? s.customerEmail,
+    address: overrides.customerAddress ?? s.customerAddress,
     source: review.channel,
   });
 
@@ -77,7 +79,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
   const order = {
     id: id('ord'),
     title: overrides.title || s.title || 'Nieuwe opdracht',
-    description: '',
+    description: overrides.description ?? s.problem ?? '',
     status,
     source: overrides.source || defaultSource,
     customerId: customer.id,
@@ -125,8 +127,10 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   db().messages.push(message);
 
   const suggestion = await classify({ channel, sender, subject, body });
-  // Leg de AI-suggestie op een bestaande kolom (gebruiker kan kolommen aanpassen).
-  suggestion.status = normalizeStatus(suggestion.status);
+  // De AI-inschatting bewaren we als hint, maar alle binnenkomende klanten
+  // landen standaard in "Open / Nieuw". De assistente bepaalt de rest.
+  suggestion.aiStatus = suggestion.status;
+  suggestion.status = firstStatusKey();
 
   const review = {
     id: id('rev'),

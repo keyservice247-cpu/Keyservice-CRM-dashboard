@@ -24,10 +24,15 @@ const CANONICAL_LABELS = {
 
 const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/;
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+// Nederlands adres: straat + huisnummer (bv. "Hoofdstraat 12" of "Kerklaan 3A")
+const ADDRESS_RE = /([A-Z][a-zà-ÿ'.-]+(?:\s[A-Z]?[a-zà-ÿ'.-]+){0,3}(?:straat|laan|weg|plein|kade|dijk|gracht|hof|pad|dreef|singel|park|baan|steeg|markt|plantsoen)\s?\d{1,4}\s?[a-zA-Z]?)/;
+// Postcode + plaats (bv. "1234 AB Amsterdam"). Vereist spatie tussen cijfers en
+// letters, en geen cijfer ervoor (zodat telefoonnummers niet meetellen).
+const POSTCODE_RE = /(?<!\d)(\d{4}[ \t][A-Za-z]{2})\b(?:[ \t]+([A-Z][a-zà-ÿ-]+))?/;
 
 function pick(text, re) {
   const m = (text || '').match(re);
-  return m ? m[0].trim() : null;
+  return m ? (m[1] || m[0]).trim() : null;
 }
 
 function cleanName(sender) {
@@ -37,6 +42,83 @@ function cleanName(sender) {
   if (m) return m[1].trim();
   if (EMAIL_RE.test(sender)) return sender.split('@')[0].replace(/[._]/g, ' ').trim();
   return sender.trim();
+}
+
+// Een waarde die met een label is aangegeven, bv. "Naam: Jan", "Tel 06-..".
+// De waarde stopt bij een zin-einde, nieuwe regel of een volgend labelwoord,
+// zodat we niet de hele zin meepakken.
+const STOP_WORDS = 'telefoon|telefoonnummer|tel|mobiel|gsm|nummer|adres|straat|woonplaats|plaats|locatie|postcode|email|e-mail|naam';
+function pickLabeled(text, labels) {
+  for (const label of labels) {
+    // sta "naam is X", "naam: X", "naam X" toe; stop bij . , \n of volgend label
+    const re = new RegExp(`\\b${label}\\b\\s*(?:is|:|=|-)?\\s*([^\\n.,;]{2,80})`, 'i');
+    const m = (text || '').match(re);
+    if (m && m[1]) {
+      let v = m[1].trim();
+      // knip af bij een volgend labelwoord dat per ongeluk meeliep
+      v = v.split(new RegExp(`\\b(?:${STOP_WORDS})\\b`, 'i'))[0].trim();
+      if (v) return v.slice(0, 80);
+    }
+  }
+  return null;
+}
+
+// Naam: 1–4 woorden met hoofdletter, evt. met tussenvoegsels (de, van, der).
+function pickName(text) {
+  const m = (text || '').match(/\b(?:naam\s*(?:is|:)?\s*)?([A-Z][a-zà-ÿ]+(?:\s(?:de|van|der|den|ten|te|het|el|al)?\s?[A-Z][a-zà-ÿ]+){0,3})/);
+  return m ? m[1].trim() : null;
+}
+
+// Haalt klantgegevens uit vrije (geplakte) tekst: naam, telefoon, e-mail, adres,
+// en een korte probleemomschrijving.
+export function extractDetails(text) {
+  const t = text || '';
+
+  // Telefoon: pak de eerste reeks die op een NL-nummer lijkt en houd alleen
+  // cijfers/+ over.
+  const phoneRaw = pick(t, PHONE_RE);
+  let phone = null;
+  if (phoneRaw) {
+    const cleaned = phoneRaw.replace(/[^\d+]/g, '');
+    if (cleaned.replace(/\D/g, '').length >= 8) phone = cleaned;
+  }
+
+  const email = pick(t, EMAIL_RE);
+
+  // Naam: eerst via label, anders patroon.
+  let name = pickLabeled(t, ['naam', 'voornaam', 'achternaam']);
+  if (name) name = name.replace(/^is\s+/i, '').trim();
+  if (!name) name = pickName(t);
+
+  // Adres: straat + huisnummer en/of postcode + plaats.
+  const street = pick(t, ADDRESS_RE);
+  const pc = t.match(POSTCODE_RE);
+  let address = [street, pc ? pc[0].trim() : null].filter(Boolean).join(', ') || null;
+  if (!address) address = pickLabeled(t, ['adres', 'woonplaats', 'plaats', 'locatie']);
+
+  // Probleemomschrijving: zin met een probleem-werkwoord, anders eerste lange zin
+  // zonder pure contactgegevens.
+  const sentences = t.split(/(?<=[.!?])\s+|\n+/).map((l) => l.trim()).filter(Boolean);
+  const problemWords = /(klemt|kapot|stuk|kromt|hapert|zwaar|defect|vervang|repareer|maken|los|lekt|sluit niet|gaat niet|open|slot|sleutel|schuifpui|deur|raam|hang)/i;
+  let problem = sentences.find((s) => problemWords.test(s) && s.length >= 12);
+  if (!problem) {
+    problem = sentences.find((s) => {
+      if (/^(naam|tel|telefoon|adres|e-?mail|mobiel|postcode|plaats|woonplaats)\b/i.test(s)) return false;
+      return s.length >= 15;
+    });
+  }
+  // Haal contactgegevens uit de probleemzin weg voor de leesbaarheid.
+  if (problem) {
+    problem = problem.replace(EMAIL_RE, '').replace(PHONE_RE, '').replace(/\s{2,}/g, ' ').trim();
+  }
+
+  return {
+    customerPhone: phone,
+    customerEmail: email,
+    customerName: name,
+    customerAddress: address,
+    problem: problem ? problem.slice(0, 200) : null,
+  };
 }
 
 // --- DEMO-modus: regels ---
@@ -76,12 +158,16 @@ export function classifyWithRules({ channel, sender, subject, body }) {
   const urgent = has('spoed', 'direct', 'snel', 'noodgeval', 'buitengesloten', 'kom ik niet binnen');
   if (urgent) reasons.push('Lijkt urgent (spoed/buitengesloten).');
 
-  const customerPhone = pick(`${sender} ${body}`, PHONE_RE);
-  const customerEmail = pick(`${sender} ${body}`, EMAIL_RE);
-  const customerName = cleanName(sender);
+  // Gegevens uit de tekst halen, met de afzender als aanvulling.
+  const det = extractDetails(`${sender || ''}\n${body || ''}`);
+  const customerPhone = det.customerPhone || pick(`${sender} ${body}`, PHONE_RE);
+  const customerEmail = det.customerEmail || pick(`${sender} ${body}`, EMAIL_RE);
+  const customerName = det.customerName || cleanName(sender);
+  const customerAddress = det.customerAddress || null;
 
   const title =
     (subject && subject.trim()) ||
+    (det.problem && det.problem.slice(0, 80)) ||
     (body || '').trim().split('\n')[0].slice(0, 80) ||
     `Nieuw bericht via ${channel}`;
 
@@ -91,6 +177,8 @@ export function classifyWithRules({ channel, sender, subject, body }) {
     customerName,
     customerPhone,
     customerEmail,
+    customerAddress,
+    problem: det.problem,
     urgent,
     confidence: Math.round(confidence * 100) / 100,
     reasoning: reasons.join(' '),
@@ -128,6 +216,8 @@ Geef JSON met exact deze velden:
   "customerName": "naam klant of null",
   "customerPhone": "telefoonnummer of null",
   "customerEmail": "e-mailadres of null",
+  "customerAddress": "adres/woonplaats of null",
+  "problem": "korte probleemomschrijving of null",
   "urgent": true/false,
   "confidence": 0.0-1.0,
   "reasoning": "korte uitleg in het Nederlands waarom je deze status koos"

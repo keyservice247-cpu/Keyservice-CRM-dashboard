@@ -19,6 +19,63 @@ export const DEFAULT_SOURCES = [
   'Handmatig',
 ];
 
+// Snelle standaardantwoorden (sjablonen) die assistente/admin met één klik
+// kan kopiëren (en later, na e-mailkoppeling, direct versturen).
+export const DEFAULT_TEMPLATES = [
+  {
+    id: 'tmpl_hefschuifpui',
+    title: 'Offerte — Hefschuifpui complete reparatie (€740 excl.)',
+    body: `Hefschuifpui complete reparatie:
+• arbeid 2 monteurs
+• vervangen van loopwagens en toebehoren
+• vervangen van hefsluiting
+
+Totaal: 740,- exclusief btw
+
+Resultaat: makkelijker openen en sluiten van schuifpui met 3 jaar garantie op producten, 1 jaar op arbeid.
+
+Rails worden zelden vervangen en kunnen indien nodig voor meerprijs vervangen worden.
+
+Bij akkoord kunnen we meestal binnen 1 week een afspraak inplannen en de installatie starten.`,
+  },
+  {
+    id: 'tmpl_alu_schuifpui',
+    title: 'Offerte — Aluminium schuifpui complete reparatie (€640 excl.)',
+    body: `Aluminium schuifpui complete reparatie:
+• arbeid 2 monteurs
+• vervangen van loopwagens en toebehoren
+• afstellen van schuifpui
+• afstellen sluiting
+
+Totaal: 640,- exclusief btw
+
+Resultaat: makkelijker openen en sluiten van schuifpui met 3 jaar garantie op producten, 1 jaar op arbeid.
+
+Rails worden zelden vervangen en kunnen indien nodig voor meerprijs vervangen worden.
+
+Bij akkoord kunnen we meestal binnen 1 week een afspraak inplannen en de installatie starten.`,
+  },
+  {
+    id: 'tmpl_fotos',
+    title: 'Vraag om foto’s / info (schuifpui)',
+    body: `Graag foto’s en video’s van uw schuifpui:
+• dichtbij van de hendel
+• foto van het geheel
+• foto’s van de rail
+
+• Breedte en hoogte van het bewegende deel
+• soort materiaal schuifpui
+
+• Woonplaats (eventueel volledig adres)`,
+  },
+  {
+    id: 'tmpl_opvolging',
+    title: 'Opvolging openstaande offerte',
+    body: `Beste klant, ik zag dat de offerte voor de schuifpui-reparatie nog openstaat. Dat is helemaal prima.
+Wilt u dat ik de aanvraag nog even open laat staan, of zal ik hem later nog eens rustig opvolgen?`,
+  },
+];
+
 // Vult ontbrekende instellingen aan bij het opstarten (ook voor bestaande
 // databases die nog geen statussen/bronnen hadden). Reset niets dat al bestaat.
 export function ensureSettings() {
@@ -29,8 +86,27 @@ export function ensureSettings() {
   if (!Array.isArray(s.sources) || s.sources.length === 0) {
     s.sources = structuredClone(DEFAULT_SOURCES);
   }
+  if (!Array.isArray(s.templates) || s.templates.length === 0) {
+    s.templates = structuredClone(DEFAULT_TEMPLATES);
+  }
   if (s.aiAutoApproveThreshold === undefined) s.aiAutoApproveThreshold = null;
   save();
+}
+
+export function getTemplates() {
+  return db().settings.templates || DEFAULT_TEMPLATES;
+}
+
+export function sanitizeTemplates(input) {
+  if (!Array.isArray(input)) return null;
+  const out = [];
+  for (const t of input) {
+    const title = (t.title || '').trim();
+    const body = (t.body || '').trim();
+    if (!title && !body) continue;
+    out.push({ id: t.id || ('tmpl_' + Math.random().toString(36).slice(2, 9)), title: title || 'Sjabloon', body });
+  }
+  return out;
 }
 
 export function getStatuses() {

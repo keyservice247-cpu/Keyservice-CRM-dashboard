@@ -240,12 +240,14 @@ function openOrderModal(id) {
     <div class="modal-actions">
       ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
       <div class="right">
+        ${o ? '<button class="btn" id="f-reply">💬 Snel antwoord</button>' : ''}
         <button class="btn" id="f-cancel">Annuleren</button>
         <button class="btn btn-primary" id="f-save">Opslaan</button>
       </div>
     </div>
   `);
   bindSourceSelect($('[data-source]'));
+  if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone });
 
   $('#f-cancel').onclick = closeModal;
   $('#f-save').onclick = async () => {
@@ -319,13 +321,19 @@ function reviewHTML(r) {
         </div>
       </div>
       <div class="review-msg">${esc(m.body || '')}</div>
-      <div class="small"><strong>AI-uitleg:</strong> ${esc(s.reasoning || '')}</div>
+      <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div>
       <div class="review-actions">
         <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label>
         <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label>
+        <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label>
+        <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label>
         <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label>
         <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label>
-        <button class="btn btn-success r-approve">✓ Goedkeuren</button>
+      </div>
+      <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label>
+      <div class="review-actions" style="margin-top:10px">
+        <button class="btn r-reply">💬 Snel antwoord</button>
+        <button class="btn btn-success r-approve">✓ Goedkeuren → opdracht</button>
         <button class="btn btn-danger r-reject">✕ Afwijzen</button>
       </div>
     </div>`;
@@ -339,6 +347,9 @@ function bindReview(r) {
       await api(`/api/reviews/${r.id}/approve`, 'POST', {
         status: $('.r-status', el).value,
         customerName: $('.r-cname', el).value,
+        customerPhone: $('.r-cphone', el).value,
+        customerAddress: $('.r-caddress', el).value,
+        description: $('.r-problem', el).value,
         source: $('[data-source]', el).value,
         monteurId: $('.r-monteur', el).value || null,
       });
@@ -349,6 +360,12 @@ function bindReview(r) {
     try { await api(`/api/reviews/${r.id}/reject`, 'POST', {}); toast('Afgewezen'); loadInbox(); refreshInboxBadge(); }
     catch (err) { toast(err.message, true); }
   };
+  $('.r-reply', el).onclick = () => openReplyModal({
+    name: $('.r-cname', el).value,
+    email: r.suggestion?.customerEmail,
+    phone: $('.r-cphone', el).value,
+    channel: r.channel,
+  });
 }
 
 // ---------- Customers ----------
@@ -502,6 +519,13 @@ async function loadSettings() {
         <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button>
         <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div>
       </div>
+    </div>
+    <div class="info-card" style="margin-top:18px">
+      <h3>💬 Snelle standaardantwoorden</h3>
+      <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p>
+      <div id="tmplRows"></div>
+      <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button>
+      <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div>
     </div>`;
 
   const statusRows = $('#statusRows');
@@ -540,6 +564,30 @@ async function loadSettings() {
     const sources = $$('#sourceRows .editor-row input').map((i) => i.value).filter((v) => v.trim());
     if (!sources.length) return toast('Minimaal één bron nodig', true);
     try { await api('/api/settings', 'PATCH', { sources }); await refreshMeta(); toast('Bronnen opgeslagen'); loadSettings(); }
+    catch (err) { toast(err.message, true); }
+  };
+
+  // Sjablonen (standaardantwoorden)
+  const tmplRows = $('#tmplRows');
+  const renderTmpl = (t = { id: '', title: '', body: '' }) => {
+    const row = document.createElement('div');
+    row.className = 'tmpl-row';
+    row.dataset.id = t.id || '';
+    row.innerHTML = `
+      <div class="editor-row"><input type="text" class="t-title" value="${esc(t.title || '')}" placeholder="Titel van het antwoord"><button class="btn btn-sm btn-danger">✕</button></div>
+      <textarea class="t-body" rows="4" placeholder="De standaardtekst…">${esc(t.body || '')}</textarea>`;
+    row.querySelector('button').onclick = () => row.remove();
+    tmplRows.appendChild(row);
+  };
+  (s.templates || []).forEach(renderTmpl);
+  $('#addTmpl').onclick = () => renderTmpl();
+  $('#saveTmpls').onclick = async () => {
+    const templates = $$('#tmplRows .tmpl-row').map((row) => ({
+      id: row.dataset.id || undefined,
+      title: row.querySelector('.t-title').value,
+      body: row.querySelector('.t-body').value,
+    })).filter((t) => t.title.trim() || t.body.trim());
+    try { await api('/api/settings', 'PATCH', { templates }); await refreshMeta(); toast('Sjablonen opgeslagen'); loadSettings(); }
     catch (err) { toast(err.message, true); }
   };
 }
@@ -581,6 +629,39 @@ function openUserModal() {
     if (!payload.name || !payload.email || payload.password.length < 6) return toast('Vul alles in (wachtwoord min. 6 tekens)', true);
     try { await api('/api/users', 'POST', payload); closeModal(); toast('Gebruiker aangemaakt'); loadUsers(); }
     catch (err) { toast(err.message, true); }
+  };
+}
+
+// ---------- Snel antwoord (standaard-sjablonen) ----------
+function openReplyModal(ctx = {}) {
+  const templates = state.meta.templates || [];
+  const opts = templates.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('');
+  const mailto = ctx.email ? `mailto:${encodeURIComponent(ctx.email)}` : '';
+  modal(`
+    <h2>💬 Snel antwoord</h2>
+    <p class="muted small">Kies een standaardtekst, pas hem zo nodig aan, en kopieer of stuur hem.${ctx.name ? ' Klant: <strong>' + esc(ctx.name) + '</strong>' : ''}</p>
+    <label>Sjabloon <select id="rep-select">${opts || '<option>(geen sjablonen)</option>'}</select></label>
+    <label>Tekst <textarea id="rep-body" rows="12">${esc(templates[0]?.body || '')}</textarea></label>
+    <div class="modal-actions">
+      <span></span>
+      <div class="right">
+        <button class="btn" id="rep-close">Sluiten</button>
+        ${ctx.email ? `<a class="btn" id="rep-mail" href="${mailto}" target="_blank" rel="noopener">✉️ Open in e-mail</a>` : ''}
+        <button class="btn btn-primary" id="rep-copy">📋 Kopieer tekst</button>
+      </div>
+    </div>
+    <p class="muted small" id="rep-hint" style="margin-top:10px">${ctx.email ? '' : 'ℹ️ Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp of e-mail. (Automatisch versturen volgt zodra de e-mailkoppeling actief is.)'}</p>
+  `);
+  const sel = $('#rep-select'), body = $('#rep-body');
+  sel.onchange = () => { const t = templates[Number(sel.value)]; if (t) body.value = t.body; };
+  $('#rep-close').onclick = closeModal;
+  $('#rep-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(body.value); toast('Tekst gekopieerd'); }
+    catch { body.select(); document.execCommand('copy'); toast('Tekst gekopieerd'); }
+  };
+  const mailBtn = $('#rep-mail');
+  if (mailBtn) mailBtn.onclick = () => {
+    mailBtn.href = `mailto:${encodeURIComponent(ctx.email)}?subject=${encodeURIComponent('Keyservice — uw aanvraag')}&body=${encodeURIComponent(body.value)}`;
   };
 }
 

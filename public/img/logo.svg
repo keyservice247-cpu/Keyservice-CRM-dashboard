@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 150" role="img" aria-label="Keyservice — Service is key">
+  <!-- Huisstijl: blauw #1d4f9c, geel #f2c40f -->
+  <g>
+    <!-- Vierkant kader -->
+    <rect x="6" y="10" width="118" height="118" fill="#ffffff" stroke="#1d4f9c" stroke-width="4"/>
+    <!-- Gele sleutel-vorm (trapezium + driehoek) -->
+    <path d="M30 30 H86 L78 100 H30 Z" fill="#f2c40f"/>
+    <path d="M84 56 L98 100 H78 Z" fill="#f2c40f"/>
+  </g>
+  <text x="150" y="78" font-family="Inter, Arial, sans-serif" font-size="58" font-weight="800" letter-spacing="-1" fill="#1d4f9c">KEY<tspan fill="#1d4f9c">SERVICE</tspan></text>
+  <text x="152" y="118" font-family="Inter, Arial, sans-serif" font-size="26" font-style="italic" fill="#3a3f4a">Service is key</text>
+</svg>
