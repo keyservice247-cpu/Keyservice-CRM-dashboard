@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '..', 'data');
+// Waar de data wordt bewaard. Standaard de map data/ in het project, maar
+// online (bijv. Render) wijzen we dit via DATA_DIR naar een blijvende schijf,
+// zodat je gegevens niet verloren gaan bij een herstart of nieuwe versie.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const DEFAULT_DATA = {

@@ -39,6 +39,10 @@ Open daarna **http://localhost:3000** in je browser.
 
 > ⚠️ **Verander deze wachtwoorden** (en maak je eigen gebruikers aan via het tabblad *Gebruikers*) voordat je dit echt gebruikt.
 
+## Online zetten voor je team
+
+Wil je dat je assistentes en monteurs er vanaf hun telefoon bij kunnen? Zet het dashboard online met de **klik-voor-klik handleiding** in **[docs/HOSTING.md](docs/HOSTING.md)** (via Render, met het meegeleverde `render.yaml` — geen technische kennis nodig).
+
 ## De AI uitproberen zonder iets te koppelen
 
 Ga naar **Inbox / AI → 🧪 Testbericht simuleren** en typ bijvoorbeeld:

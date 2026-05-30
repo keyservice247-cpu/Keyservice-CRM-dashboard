@@ -1,0 +1,35 @@
+# Render Blueprint — zet het Keyservice CRM automatisch online.
+# Zie docs/HOSTING.md voor de klik-voor-klik handleiding.
+services:
+  - type: web
+    name: keyservice-crm
+    runtime: node
+    plan: starter            # 'starter' nodig voor een blijvende schijf (data bewaren). Zie HOSTING.md.
+    region: frankfurt        # dichtbij Nederland
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Geheimen worden automatisch en veilig gegenereerd:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: INGEST_TOKEN
+        generateValue: true
+      - key: WHATSAPP_VERIFY_TOKEN
+        generateValue: true
+      # Data wordt op de blijvende schijf bewaard (zie 'disk' hieronder):
+      - key: DATA_DIR
+        value: /var/data
+      # Begin veilig: alle berichten eerst handmatig controleren.
+      - key: AI_AUTO_APPROVE_THRESHOLD
+        value: "0"
+      # --- Later zelf invullen in het Render-dashboard (optioneel) ---
+      # ANTHROPIC_API_KEY  -> voor de slimme AI (laat leeg = demo-modus)
+      # IMAP_HOST / IMAP_USER / IMAP_PASSWORD -> voor de TransIP-e-mailkoppeling
+    disk:
+      name: crm-data
+      mountPath: /var/data
+      sizeGB: 1
