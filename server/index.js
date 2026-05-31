@@ -319,13 +319,38 @@ app.post('/api/reviews/:id/reject', requireRole('admin', 'assistent'), (req, res
   const review = db().reviews.find((r) => r.id === req.params.id);
   if (!review) return res.status(404).json({ error: 'Niet gevonden' });
   if (review.status !== 'pending') return res.status(400).json({ error: 'Al verwerkt' });
+  const b = req.body || {};
+  if (!b.reason) return res.status(400).json({ error: 'Geef een reden voor de afwijzing' });
   review.status = 'rejected';
   review.reviewedBy = req.user.name;
   review.reviewedAt = now();
-  review.rejectReason = (req.body && req.body.reason) || '';
-  logActivity(req.user.name, 'review afgewezen', review.suggestion?.title || '');
+  review.rejectReason = b.reason;            // korte categorie
+  review.rejectNote = b.note || '';          // vrije uitleg
+  review.rejectShouldBe = b.shouldBe || '';  // wat had het moeten zijn
+
+  // Bewaar als leervoorbeeld zodat de AI hiervan leert bij volgende berichten.
+  const msg = db().messages.find((m) => m.id === review.messageId);
+  db().feedback.unshift({
+    id: id('fb'),
+    at: now(),
+    by: req.user.name,
+    channel: review.channel,
+    reason: b.reason,
+    note: b.note || '',
+    shouldBe: b.shouldBe || '',
+    aiStatus: review.suggestion?.aiStatus || review.suggestion?.status,
+    sample: (msg?.body || '').slice(0, 400),
+  });
+  if (db().feedback.length > 500) db().feedback.length = 500;
+
+  logActivity(req.user.name, 'review afgewezen', `${review.suggestion?.title || ''} — ${b.reason}`);
   saveSoon();
   res.json({ review });
+});
+
+// Feedback-overzicht (waarom werden berichten afgewezen) — voor assistente/eigenaar.
+app.get('/api/feedback', requireAuth, (req, res) => {
+  res.json((db().feedback || []).slice(0, 100));
 });
 
 // ---------- Inkomende koppelingen (webhooks) ----------

@@ -135,7 +135,9 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   };
   db().messages.push(message);
 
-  const suggestion = await classify({ channel, sender, subject, body });
+  // Geef de AI de laatste teamcorrecties mee zodat hij ervan leert.
+  const learnings = (db().feedback || []).slice(0, 8);
+  const suggestion = await classify({ channel, sender, subject, body, learnings });
   // De AI-inschatting bewaren we als hint, maar alle binnenkomende klanten
   // landen standaard in "Open / Nieuw". De assistente bepaalt de rest.
   suggestion.aiStatus = suggestion.status;

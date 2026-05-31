@@ -414,10 +414,7 @@ function bindReview(r) {
       toast('Opdracht aangemaakt'); loadInbox(); refreshInboxBadge();
     } catch (err) { toast(err.message, true); }
   };
-  $('.r-reject', el).onclick = async () => {
-    try { await api(`/api/reviews/${r.id}/reject`, 'POST', {}); toast('Afgewezen'); loadInbox(); refreshInboxBadge(); }
-    catch (err) { toast(err.message, true); }
-  };
+  $('.r-reject', el).onclick = () => openRejectModal(r);
   $('.r-reply', el).onclick = () => openReplyModal({
     name: $('.r-cname', el).value,
     email: $('.r-cemail', el).value,
@@ -554,7 +551,13 @@ async function loadControl() {
       <p class="muted small">Gebeurt automatisch elke zondag na 23:59. Opdrachten van de afgelopen week worden ingeklapt onder een agenda-bundel — behalve openstaande/nieuwe opdrachten en afspraken die ná die week vallen. Je kunt het ook nu handmatig uitvoeren.</p>
       <button class="btn" id="runArchive">📦 Nu de afgelopen week inklappen</button>
     </div>
+    <div class="info-card" style="max-width:680px;margin-top:16px">
+      <h3>📝 Afwijzingen & feedback (waar de AI van leert)</h3>
+      <p class="muted small">De laatste afwijzingen met reden. De AI krijgt deze mee om dezelfde fouten te vermijden.</p>
+      <div id="feedbackList" class="feedback-list">Laden…</div>
+    </div>
   `;
+  loadFeedbackList();
   const range = $('#threshold');
   range.oninput = () => ($('#threshLbl').textContent = range.value + '%');
   $('#saveThreshold').onclick = async () => {
@@ -565,6 +568,20 @@ async function loadControl() {
     const r = await api('/api/archives/run', 'POST');
     toast(r.archived > 0 ? `${r.archived} opdrachten ingeklapt onder "${r.week.label}"` : 'Niets om in te klappen (al gedaan of niets passend)');
   };
+}
+
+async function loadFeedbackList() {
+  const el = $('#feedbackList');
+  if (!el) return;
+  const fb = await api('/api/feedback');
+  if (!fb.length) { el.innerHTML = '<div class="muted small">Nog geen afwijzingen.</div>'; return; }
+  el.innerHTML = fb.map((f) => `
+    <div class="feedback-item">
+      <div><strong>${esc(f.reason)}</strong>${f.shouldBe ? ` <span class="chip">→ ${esc(f.shouldBe)}</span>` : ''}
+        <span class="muted small">· ${esc(f.by)} · ${fmtDateShort(f.at)}</span></div>
+      ${f.note ? `<div class="small">${esc(f.note)}</div>` : ''}
+      ${f.sample ? `<div class="muted small" style="margin-top:3px">“${esc(f.sample.slice(0, 120))}…”</div>` : ''}
+    </div>`).join('');
 }
 
 // ---------- Instellingen (kolommen + bronnen) ----------
@@ -696,6 +713,40 @@ function openUserModal() {
     if (!payload.name || !payload.email || payload.password.length < 6) return toast('Vul alles in (wachtwoord min. 6 tekens)', true);
     try { await api('/api/users', 'POST', payload); closeModal(); toast('Gebruiker aangemaakt'); loadUsers(); }
     catch (err) { toast(err.message, true); }
+  };
+}
+
+// ---------- Afwijzen met feedback (AI laten leren) ----------
+const REJECT_REASONS = [
+  'Geen echte opdracht (spam/reclame)',
+  'Dubbel — bestaat al',
+  'Verkeerde categorie ingeschat',
+  'Klantgegevens niet kloppend',
+  'Geen klantaanvraag (intern/leverancier)',
+  'Anders',
+];
+function openRejectModal(r) {
+  const statusOpts = '<option value="">— n.v.t. —</option>' + statusOptionsHTML('');
+  modal(`
+    <h2>✕ Afwijzen + feedback</h2>
+    <p class="muted small">Je uitleg helpt de AI leren en is zichtbaar voor het team. Waarom wijs je dit af?</p>
+    <label>Reden <select id="rj-reason">${REJECT_REASONS.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
+    <label>Had eigenlijk moeten zijn (optioneel) <select id="rj-should">${statusOpts}</select></label>
+    <label>Uitleg (optioneel, maar helpt de AI) <textarea id="rj-note" rows="3" placeholder="Bv. dit was een nieuwsbrief van een leverancier, geen klant."></textarea></label>
+    <div class="modal-actions"><span></span><div class="right">
+      <button class="btn" id="rj-cancel">Annuleren</button>
+      <button class="btn btn-danger" id="rj-save">Afwijzen</button>
+    </div></div>`);
+  $('#rj-cancel').onclick = closeModal;
+  $('#rj-save').onclick = async () => {
+    try {
+      await api(`/api/reviews/${r.id}/reject`, 'POST', {
+        reason: $('#rj-reason').value,
+        shouldBe: $('#rj-should').value ? statusLabel($('#rj-should').value) : '',
+        note: $('#rj-note').value,
+      });
+      closeModal(); toast('Afgewezen — feedback opgeslagen'); loadInbox(); refreshInboxBadge();
+    } catch (err) { toast(err.message, true); }
   };
 }
 

@@ -212,6 +212,20 @@ export function classifyWithRules({ channel, sender, subject, body }) {
   };
 }
 
+// Korte samenvatting van recente afwijzingen, zodat de AU ervan "leert".
+// (Wordt door classify() meegegeven; categorizer kent de db niet zelf.)
+function learningsBlock(learnings) {
+  if (!learnings || !learnings.length) return '';
+  const lines = learnings.slice(0, 8).map((f, i) => {
+    const bits = [`${i + 1}. Reden: ${f.reason}`];
+    if (f.shouldBe) bits.push(`had moeten zijn: ${f.shouldBe}`);
+    if (f.note) bits.push(`uitleg: ${f.note}`);
+    if (f.sample) bits.push(`voorbeeldtekst: "${(f.sample || '').slice(0, 120)}"`);
+    return bits.join(' | ');
+  });
+  return `\n\nLeer van eerdere correcties door het team (vermijd dezelfde fouten):\n${lines.join('\n')}`;
+}
+
 // --- AI-modus: Claude ---
 async function classifyWithClaude(message) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -233,7 +247,7 @@ BELANGRIJK bij de klantgegevens:
   als 085-..., en negeer doorstuur-/website-systeemteksten.
 - Velden met labels ("Naam:", "Email:", "Telefoon:", "Adres:") zijn leidend.
 - Maak een korte, duidelijke probleemomschrijving in 1 zin.
-Antwoord UITSLUITEND met geldige JSON, geen extra tekst.`;
+Antwoord UITSLUITEND met geldige JSON, geen extra tekst.${learningsBlock(message.learnings)}`;
 
   const user = `Bericht-kanaal: ${message.channel}
 Afzender: ${message.sender || '(onbekend)'}

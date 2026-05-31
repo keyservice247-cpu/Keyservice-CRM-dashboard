@@ -19,6 +19,7 @@ const DEFAULT_DATA = {
   monteurs: [],
   messages: [],
   reviews: [],
+  feedback: [],
   sessions: [],
   activity: [],
   settings: { aiAutoApproveThreshold: null },
