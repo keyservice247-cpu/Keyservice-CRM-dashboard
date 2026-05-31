@@ -247,7 +247,7 @@ function openOrderModal(id) {
     </div>
   `);
   bindSourceSelect($('[data-source]'));
-  if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone });
+  if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id });
 
   $('#f-cancel').onclick = closeModal;
   $('#f-save').onclick = async () => {
@@ -326,6 +326,7 @@ function reviewHTML(r) {
         <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label>
         <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label>
         <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label>
+        <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label>
         <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label>
         <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label>
         <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label>
@@ -348,6 +349,7 @@ function bindReview(r) {
         status: $('.r-status', el).value,
         customerName: $('.r-cname', el).value,
         customerPhone: $('.r-cphone', el).value,
+        customerEmail: $('.r-cemail', el).value,
         customerAddress: $('.r-caddress', el).value,
         description: $('.r-problem', el).value,
         source: $('[data-source]', el).value,
@@ -362,7 +364,7 @@ function bindReview(r) {
   };
   $('.r-reply', el).onclick = () => openReplyModal({
     name: $('.r-cname', el).value,
-    email: r.suggestion?.customerEmail,
+    email: $('.r-cemail', el).value,
     phone: $('.r-cphone', el).value,
     channel: r.channel,
   });
@@ -636,21 +638,30 @@ function openUserModal() {
 function openReplyModal(ctx = {}) {
   const templates = state.meta.templates || [];
   const opts = templates.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('');
-  const mailto = ctx.email ? `mailto:${encodeURIComponent(ctx.email)}` : '';
+  const canSend = state.meta.canSendEmail && ctx.email;
   modal(`
     <h2>💬 Snel antwoord</h2>
-    <p class="muted small">Kies een standaardtekst, pas hem zo nodig aan, en kopieer of stuur hem.${ctx.name ? ' Klant: <strong>' + esc(ctx.name) + '</strong>' : ''}</p>
+    <p class="muted small">Kies een standaardtekst, pas hem zo nodig aan, en verstuur of kopieer.${ctx.name ? ' Klant: <strong>' + esc(ctx.name) + '</strong>' : ''}${ctx.email ? ' · ' + esc(ctx.email) : ''}</p>
     <label>Sjabloon <select id="rep-select">${opts || '<option>(geen sjablonen)</option>'}</select></label>
-    <label>Tekst <textarea id="rep-body" rows="12">${esc(templates[0]?.body || '')}</textarea></label>
+    <div class="row">
+      <label>Aan (e-mail) <input id="rep-to" value="${esc(ctx.email || '')}" placeholder="e-mailadres klant"></label>
+      <label>Onderwerp <input id="rep-subject" value="Keyservice — uw aanvraag"></label>
+    </div>
+    <label>Tekst <textarea id="rep-body" rows="11">${esc(templates[0]?.body || '')}</textarea></label>
     <div class="modal-actions">
       <span></span>
       <div class="right">
         <button class="btn" id="rep-close">Sluiten</button>
-        ${ctx.email ? `<a class="btn" id="rep-mail" href="${mailto}" target="_blank" rel="noopener">✉️ Open in e-mail</a>` : ''}
-        <button class="btn btn-primary" id="rep-copy">📋 Kopieer tekst</button>
+        <button class="btn" id="rep-copy">📋 Kopieer</button>
+        ${ctx.email ? '<a class="btn" id="rep-mail" href="#" target="_blank" rel="noopener">✉️ Open in e-mail</a>' : ''}
+        ${canSend ? '<button class="btn btn-primary" id="rep-send">📨 Direct versturen</button>' : ''}
       </div>
     </div>
-    <p class="muted small" id="rep-hint" style="margin-top:10px">${ctx.email ? '' : 'ℹ️ Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp of e-mail. (Automatisch versturen volgt zodra de e-mailkoppeling actief is.)'}</p>
+    <p class="muted small" id="rep-hint" style="margin-top:10px">${
+      canSend ? '✅ Wordt direct vanuit het dashboard per e-mail verstuurd.'
+      : ctx.email ? 'ℹ️ Direct versturen staat nog uit. Zet SMTP aan (zie docs) of gebruik “Open in e-mail”.'
+      : 'ℹ️ Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp.'
+    }</p>
   `);
   const sel = $('#rep-select'), body = $('#rep-body');
   sel.onchange = () => { const t = templates[Number(sel.value)]; if (t) body.value = t.body; };
@@ -660,8 +671,18 @@ function openReplyModal(ctx = {}) {
     catch { body.select(); document.execCommand('copy'); toast('Tekst gekopieerd'); }
   };
   const mailBtn = $('#rep-mail');
-  if (mailBtn) mailBtn.onclick = () => {
-    mailBtn.href = `mailto:${encodeURIComponent(ctx.email)}?subject=${encodeURIComponent('Keyservice — uw aanvraag')}&body=${encodeURIComponent(body.value)}`;
+  if (mailBtn) mailBtn.onclick = (e) => {
+    mailBtn.href = `mailto:${encodeURIComponent($('#rep-to').value)}?subject=${encodeURIComponent($('#rep-subject').value)}&body=${encodeURIComponent(body.value)}`;
+  };
+  const sendBtn = $('#rep-send');
+  if (sendBtn) sendBtn.onclick = async () => {
+    sendBtn.disabled = true;
+    try {
+      await api('/api/send-reply', 'POST', {
+        to: $('#rep-to').value, subject: $('#rep-subject').value, text: body.value, orderId: ctx.orderId || null,
+      });
+      closeModal(); toast('E-mail verstuurd ✅');
+    } catch (err) { toast(err.message, true); sendBtn.disabled = false; }
   };
 }
 

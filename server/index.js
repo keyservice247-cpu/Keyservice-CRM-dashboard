@@ -13,6 +13,7 @@ import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
 } from './pipeline.js';
 import { startEmailPoller } from './connectors/email-imap.js';
+import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
@@ -60,6 +61,7 @@ app.get('/api/me', (req, res) => {
       statusLabels: getStatusLabels(),
       sources: getSources(),
       templates: getTemplates(),
+      canSendEmail: smtpConfigured(),
       autoApproveThreshold: autoApproveThreshold(),
     },
   });
@@ -436,6 +438,29 @@ app.get('/api/templates', requireAuth, (req, res) => {
   res.json(getTemplates());
 });
 
+// Snel antwoord direct per e-mail versturen (assistente/admin)
+app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) => {
+  const { to, subject, text, orderId } = req.body || {};
+  if (!smtpConfigured()) return res.status(503).json({ error: 'E-mail versturen is nog niet ingesteld (SMTP). Zie docs/INTEGRATIES.md.' });
+  if (!to) return res.status(400).json({ error: 'Geen e-mailadres van de klant bekend' });
+  try {
+    await sendMail({ to, subject, text });
+    // Leg vast in de opdracht (indien meegegeven) en in de activiteit.
+    if (orderId) {
+      const order = db().orders.find((o) => o.id === orderId);
+      if (order) {
+        order.notes = `${order.notes ? order.notes + '\n\n' : ''}[${now()}] E-mail verstuurd door ${req.user.name}:\n${text}`;
+        order.updatedAt = now();
+      }
+    }
+    logActivity(req.user.name, 'e-mail verstuurd', `aan ${to}`);
+    saveSoon();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Versturen mislukt: ' + err.message });
+  }
+});
+
 app.get('/api/stats', requireAuth, (req, res) => {
   const orders = db().orders;
   const byStatus = {};
@@ -473,6 +498,7 @@ app.use(express.static(PUBLIC_DIR));
 app.listen(PORT, () => {
   console.log(`\n  Keyservice CRM draait op  http://localhost:${PORT}`);
   console.log(`  AI-modus: ${aiMode() === 'ai' ? 'AI (Claude)' : 'DEMO (regels)'}`);
+  console.log(`  E-mail versturen (SMTP): ${smtpConfigured() ? 'actief' : 'niet geconfigureerd'}`);
   startEmailPoller();
   console.log('');
 });

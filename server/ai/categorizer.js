@@ -63,38 +63,57 @@ function pickLabeled(text, labels) {
   return null;
 }
 
+// Een waarde achter een label, met daarna een patroon eruit gehaald.
+// Bv. pickLabeledPattern(t, ['telefoon','tel'], PHONE_RE) -> klantnummer.
+function pickLabeledPattern(text, labels, re) {
+  const v = pickLabeled(text, labels);
+  if (!v) return null;
+  const m = v.match(re);
+  return m ? (m[1] || m[0]) : null;
+}
+
 // Naam: 1–4 woorden met hoofdletter, evt. met tussenvoegsels (de, van, der).
 function pickName(text) {
   const m = (text || '').match(/\b(?:naam\s*(?:is|:)?\s*)?([A-Z][a-zà-ÿ]+(?:\s(?:de|van|der|den|ten|te|het|el|al)?\s?[A-Z][a-zà-ÿ]+){0,3})/);
   return m ? m[1].trim() : null;
 }
 
+function cleanPhone(raw) {
+  if (!raw) return null;
+  const cleaned = raw.replace(/[^\d+]/g, '');
+  return cleaned.replace(/\D/g, '').length >= 8 ? cleaned : null;
+}
+
 // Haalt klantgegevens uit vrije (geplakte) tekst: naam, telefoon, e-mail, adres,
 // en een korte probleemomschrijving.
+// BELANGRIJK: gelabelde velden ("Naam:", "Email:", "Telefoon:") krijgen altijd
+// voorrang — dat zijn de gegevens die de klant zelf invult. Pas als een label
+// ontbreekt, valt hij terug op een vrije zoektocht in de tekst (zodat een
+// bedrijfsnummer/handtekening niet per ongeluk wordt overgenomen).
 export function extractDetails(text) {
   const t = text || '';
 
-  // Telefoon: pak de eerste reeks die op een NL-nummer lijkt en houd alleen
-  // cijfers/+ over.
-  const phoneRaw = pick(t, PHONE_RE);
-  let phone = null;
-  if (phoneRaw) {
-    const cleaned = phoneRaw.replace(/[^\d+]/g, '');
-    if (cleaned.replace(/\D/g, '').length >= 8) phone = cleaned;
-  }
+  // Telefoon: eerst het gelabelde klantnummer (let op: 'telefoon' vóór 'tel'
+  // zodat "Telefoon:" wint van een los "<tel:...>").
+  let phone = cleanPhone(pickLabeledPattern(t, ['telefoonnummer', 'telefoon', 'mobiel', 'gsm', 'tel'], PHONE_RE));
+  if (!phone) phone = cleanPhone(pick(t, PHONE_RE));
 
-  const email = pick(t, EMAIL_RE);
+  // E-mail: eerst gelabeld, anders eerste e-mail in de tekst.
+  let email = pickLabeledPattern(t, ['e-mailadres', 'emailadres', 'e-mail', 'email', 'mail'], EMAIL_RE);
+  if (!email) email = pick(t, EMAIL_RE);
 
   // Naam: eerst via label, anders patroon.
   let name = pickLabeled(t, ['naam', 'voornaam', 'achternaam']);
   if (name) name = name.replace(/^is\s+/i, '').trim();
   if (!name) name = pickName(t);
 
-  // Adres: straat + huisnummer en/of postcode + plaats.
-  const street = pick(t, ADDRESS_RE);
-  const pc = t.match(POSTCODE_RE);
-  let address = [street, pc ? pc[0].trim() : null].filter(Boolean).join(', ') || null;
-  if (!address) address = pickLabeled(t, ['adres', 'woonplaats', 'plaats', 'locatie']);
+  // Adres: eerst gelabeld, anders straat + huisnummer / postcode + plaats.
+  let address = pickLabeled(t, ['adres', 'woonplaats', 'volledig adres']);
+  if (!address) {
+    const street = pick(t, ADDRESS_RE);
+    const pc = t.match(POSTCODE_RE);
+    address = [street, pc ? pc[0].trim() : null].filter(Boolean).join(', ') || null;
+  }
 
   // Probleemomschrijving: zin met een probleem-werkwoord, anders eerste lange zin
   // zonder pure contactgegevens.
