@@ -63,13 +63,20 @@ function pickLabeled(text, labels) {
   return null;
 }
 
-// Een waarde achter een label, met daarna een patroon eruit gehaald.
-// Bv. pickLabeledPattern(t, ['telefoon','tel'], PHONE_RE) -> klantnummer.
+// Zoekt een patroon (e-mail/telefoon) dat ná een label staat. Pakt een ruime
+// strook tekst na het label (mag punten bevatten, zodat e-mailadressen heel
+// blijven) en haalt daar het patroon uit. Zo wint "Email: klant@x.nl" van een
+// bedrijfsadres elders in de mail.
 function pickLabeledPattern(text, labels, re) {
-  const v = pickLabeled(text, labels);
-  if (!v) return null;
-  const m = v.match(re);
-  return m ? (m[1] || m[0]) : null;
+  for (const label of labels) {
+    const lre = new RegExp(`\\b${label}\\b\\s*(?:is|:|=|-)?\\s*([^\\n]{2,120})`, 'i');
+    const m = (text || '').match(lre);
+    if (m && m[1]) {
+      const found = m[1].match(re);
+      if (found) return found[1] || found[0];
+    }
+  }
+  return null;
 }
 
 // Naam: 1–4 woorden met hoofdletter, evt. met tussenvoegsels (de, van, der).
