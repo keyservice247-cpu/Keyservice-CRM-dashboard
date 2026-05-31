@@ -218,13 +218,21 @@ async function classifyWithClaude(message) {
   const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 
   const system = `Je bent een assistent voor een sleutel-/slotenmaker-bedrijf (Keyservice).
-Je categoriseert inkomende klantberichten (e-mail of WhatsApp) voor een opdrachten-dashboard.
+Je categoriseert inkomende klantberichten (e-mail of WhatsApp) voor een opdrachten-dashboard
+en haalt de klantgegevens eruit.
 Kies precies één status uit deze lijst:
 - "open": nieuwe aanvraag of offerteverzoek dat nog opgepakt moet worden.
 - "offerte_verzonden": er is al een offerte/prijsopgave naar de klant gestuurd.
 - "afspraak_ingepland": het gaat over het maken/bevestigen van een afspraak of langskomen.
 - "afgerond": de klus is uitgevoerd/klaar/opgelost.
 - "geannuleerd": de klant annuleert of zegt af.
+
+BELANGRIJK bij de klantgegevens:
+- Pak de gegevens van de KLANT, niet van Keyservice zelf. Negeer handtekeningen,
+  bedrijfsregels of footers met "Key Service", "info@keyservice247.nl" of nummers
+  als 085-..., en negeer doorstuur-/website-systeemteksten.
+- Velden met labels ("Naam:", "Email:", "Telefoon:", "Adres:") zijn leidend.
+- Maak een korte, duidelijke probleemomschrijving in 1 zin.
 Antwoord UITSLUITEND met geldige JSON, geen extra tekst.`;
 
   const user = `Bericht-kanaal: ${message.channel}
@@ -277,6 +285,15 @@ Geef JSON met exact deze velden:
   if (!CANONICAL_STATUSES.includes(parsed.status)) parsed.status = 'open';
   parsed.confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0.5));
   parsed.engine = `ai:${model}`;
+
+  // Veiligheidsnet: vul ontbrekende velden aan met de regel-extractie, die heel
+  // betrouwbaar gelabelde gegevens en het juiste telefoonnummer pakt.
+  const det = extractDetails(`${message.sender || ''}\n${message.body || ''}`);
+  parsed.customerName = parsed.customerName || det.customerName;
+  parsed.customerPhone = parsed.customerPhone || det.customerPhone;
+  parsed.customerEmail = parsed.customerEmail || det.customerEmail;
+  parsed.customerAddress = parsed.customerAddress || det.customerAddress;
+  parsed.problem = parsed.problem || det.problem;
   return parsed;
 }
 

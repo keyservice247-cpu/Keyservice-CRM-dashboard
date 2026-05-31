@@ -14,6 +14,7 @@ import {
 } from './pipeline.js';
 import { startEmailPoller } from './connectors/email-imap.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
+import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
@@ -200,10 +201,31 @@ app.delete('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) =>
 // ---------- Opdrachten ----------
 app.get('/api/orders', requireAuth, (req, res) => {
   let list = db().orders.map(withRelations);
+  // Standaard tonen we alleen actieve (niet-ingeklapte) opdrachten op het bord.
+  if (req.query.archivedWeek) list = list.filter((o) => o.archivedWeek?.key === req.query.archivedWeek);
+  else if (req.query.includeArchived !== '1') list = list.filter((o) => !o.archivedWeek);
   if (req.query.status) list = list.filter((o) => o.status === req.query.status);
   if (req.query.monteurId) list = list.filter((o) => o.monteurId === req.query.monteurId);
   list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   res.json(list);
+});
+
+// Lijst van week-bundels (ingeklapte agenda's), met aantallen.
+app.get('/api/archives', requireAuth, (req, res) => {
+  const map = new Map();
+  for (const o of db().orders) {
+    if (!o.archivedWeek) continue;
+    const k = o.archivedWeek.key;
+    if (!map.has(k)) map.set(k, { key: k, label: o.archivedWeek.label, count: 0 });
+    map.get(k).count++;
+  }
+  res.json([...map.values()].sort((a, b) => b.key.localeCompare(a.key)));
+});
+
+// Handmatig de wekelijkse archivering nu uitvoeren (admin).
+app.post('/api/archives/run', requireRole('admin'), (req, res) => {
+  const result = runWeeklyArchive();
+  res.json(result);
 });
 
 app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
@@ -500,5 +522,6 @@ app.listen(PORT, () => {
   console.log(`  AI-modus: ${aiMode() === 'ai' ? 'AI (Claude)' : 'DEMO (regels)'}`);
   console.log(`  E-mail versturen (SMTP): ${smtpConfigured() ? 'actief' : 'niet geconfigureerd'}`);
   startEmailPoller();
+  startWeeklyArchiver();
   console.log('');
 });

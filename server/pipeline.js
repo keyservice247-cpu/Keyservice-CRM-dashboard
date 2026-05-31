@@ -89,9 +89,18 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     urgent: !!s.urgent,
     notes: '',
     messageId: review.messageId,
+    thread: [],
     createdAt: now(),
     updatedAt: now(),
   };
+  // Het oorspronkelijke bericht als eerste item in de gesprekshistorie.
+  const origMsg = db().messages.find((m) => m.id === review.messageId);
+  if (origMsg) {
+    order.thread.push({
+      id: id('thr'), channel: origMsg.channel, sender: origMsg.sender,
+      subject: origMsg.subject, body: origMsg.body, at: origMsg.receivedAt,
+    });
+  }
   db().orders.push(order);
 
   review.status = auto ? 'auto_approved' : 'approved';
@@ -131,6 +140,36 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // landen standaard in "Open / Nieuw". De assistente bepaalt de rest.
   suggestion.aiStatus = suggestion.status;
   suggestion.status = firstStatusKey();
+
+  // Bestaande klant herkennen (op e-mail/telefoon, anders naam). Zo voorkomen we
+  // 3 kaarten voor 1 klant: een vervolgbericht hangt aan de lopende opdracht.
+  const existingCustomer = findCustomer({
+    name: suggestion.customerName,
+    phone: suggestion.customerPhone,
+    email: suggestion.customerEmail,
+  });
+  if (existingCustomer) {
+    // zoek een nog lopende (niet-afgeronde/geannuleerde/ingeklapte) opdracht
+    const openOrder = db().orders.find((o) =>
+      o.customerId === existingCustomer.id &&
+      !o.archivedWeek &&
+      !['afgerond', 'geannuleerd'].includes(o.status));
+    if (openOrder) {
+      openOrder.thread = openOrder.thread || [];
+      openOrder.thread.push({
+        id: id('thr'), channel, sender: sender || '',
+        subject: subject || '', body: body || '', at: now(),
+      });
+      openOrder.updatedAt = now();
+      // vul ontbrekende klantgegevens aan
+      if (!existingCustomer.email && suggestion.customerEmail) existingCustomer.email = suggestion.customerEmail;
+      if (!existingCustomer.phone && suggestion.customerPhone) existingCustomer.phone = suggestion.customerPhone;
+      if (!existingCustomer.address && suggestion.customerAddress) existingCustomer.address = suggestion.customerAddress;
+      saveSoon();
+      logActivity('systeem', 'bericht aan bestaande opdracht', `${existingCustomer.name}: ${openOrder.title}`);
+      return { message, review: null, mergedIntoOrder: openOrder.id };
+    }
+  }
 
   const review = {
     id: id('rev'),

@@ -121,9 +121,45 @@ function fillMonteurFilter() {
 
 async function loadBoard() {
   state.orders = await api('/api/orders');
+  state.archives = await api('/api/archives');
   renderBoard();
+  renderArchives();
   const stats = await api('/api/stats');
   $('#boardStats').textContent = `${stats.totalOrders} opdrachten · ${stats.leads} leads · ${stats.customers} klanten`;
+}
+
+// Ingeklapte week-agenda's onder het bord.
+function renderArchives() {
+  let wrap = $('#archiveWrap');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'archiveWrap';
+    wrap.className = 'archive-wrap';
+    $('#view-board').appendChild(wrap);
+  }
+  const archives = state.archives || [];
+  if (!archives.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<h3 class="archive-title">📦 Ingeklapte agenda's</h3>` +
+    archives.map((a) => `
+      <details class="archive">
+        <summary>🗓️ ${esc(a.label)} <span class="count">${a.count}</span></summary>
+        <div class="archive-body" data-week="${esc(a.key)}">Laden…</div>
+      </details>`).join('');
+  $$('.archive').forEach((d) => {
+    d.addEventListener('toggle', async () => {
+      if (!d.open) return;
+      const body = $('.archive-body', d);
+      const week = body.dataset.week;
+      const orders = await api(`/api/orders?archivedWeek=${encodeURIComponent(week)}`);
+      body.innerHTML = orders.map((o) => `
+        <div class="archive-item" data-id="${o.id}">
+          <span class="dot" style="background:${esc(statusColor(o.status))}"></span>
+          <strong>${esc(o.title)}</strong>
+          <span class="muted small">${esc(o.customer?.name || '')} · ${esc(statusLabel(o.status))}</span>
+        </div>`).join('') || '<div class="muted small">Leeg</div>';
+      $$('.archive-item', body).forEach((it) => it.onclick = () => openOrderModal(it.dataset.id, orders));
+    });
+  });
 }
 
 function filteredOrders() {
@@ -209,8 +245,9 @@ function statusOptionsHTML(selected) {
 }
 
 // ---------- Order modal ----------
-function openOrderModal(id) {
-  const o = id ? state.orders.find((x) => x.id === id) : null;
+function openOrderModal(id, pool) {
+  const list = pool || state.orders;
+  const o = id ? list.find((x) => x.id === id) : null;
   const canWrite = state.me.role !== 'monteur';
   const isMonteur = state.me.role === 'monteur';
   const monteurOpts = '<option value="">— geen monteur —</option>' +
@@ -237,6 +274,15 @@ function openOrderModal(id) {
     ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label>
     ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}> Spoed</label>` : ''}
+    ${o && o.thread && o.thread.length ? `
+      <div class="thread">
+        <div class="thread-head">💬 Gesprekshistorie (${o.thread.length})</div>
+        ${o.thread.map((t) => `
+          <div class="thread-item">
+            <div class="thread-meta">${sourceMeta(t.channel).icon} ${esc(t.sender || '')} · ${fmtDate(t.at)}${t.subject ? ' · ' + esc(t.subject) : ''}</div>
+            <div class="thread-body">${esc(t.body || '')}</div>
+          </div>`).join('')}
+      </div>` : ''}
     <div class="modal-actions">
       ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
       <div class="right">
@@ -492,13 +538,22 @@ async function loadControl() {
         <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}"></label>
       <button class="btn btn-primary" id="saveThreshold">Opslaan</button>
     </div>
-    ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">ℹ️ De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : ''}
+    ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">ℹ️ De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : '<p class="muted small" style="margin-top:14px">🤖 Slimme AI (Claude) is actief.</p>'}
+    <div class="info-card" style="max-width:680px;margin-top:16px">
+      <h3>Wekelijkse agenda inklappen</h3>
+      <p class="muted small">Gebeurt automatisch elke zondag na 23:59. Opdrachten van de afgelopen week worden ingeklapt onder een agenda-bundel — behalve openstaande/nieuwe opdrachten en afspraken die ná die week vallen. Je kunt het ook nu handmatig uitvoeren.</p>
+      <button class="btn" id="runArchive">📦 Nu de afgelopen week inklappen</button>
+    </div>
   `;
   const range = $('#threshold');
   range.oninput = () => ($('#threshLbl').textContent = range.value + '%');
   $('#saveThreshold').onclick = async () => {
     await api('/api/settings', 'PATCH', { aiAutoApproveThreshold: Number(range.value) / 100 });
     toast('Instelling opgeslagen');
+  };
+  $('#runArchive').onclick = async () => {
+    const r = await api('/api/archives/run', 'POST');
+    toast(r.archived > 0 ? `${r.archived} opdrachten ingeklapt onder "${r.week.label}"` : 'Niets om in te klappen (al gedaan of niets passend)');
   };
 }
 
