@@ -230,6 +230,7 @@ function cardHTML(o) {
       <div class="card-title">${esc(o.title)}</div>
       ${o.customer ? `<div class="card-customer">👤 ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
       <div class="card-meta">${meta.join('')}</div>
+      <div class="card-foot">🕓 Binnen: ${esc(fmtDateShort(o.createdAt))}</div>
     </div>`;
 }
 
@@ -238,6 +239,14 @@ function fmtDate(s) {
   const d = new Date(s);
   if (isNaN(d)) return s;
   return d.toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+// Datum + tijd voltuit, bv. "31 mei 2026, 14:07"
+function fmtDateShort(s) {
+  if (!s) return '—';
+  const d = new Date(s);
+  if (isNaN(d)) return s;
+  return d.toLocaleString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function statusOptionsHTML(selected) {
@@ -255,6 +264,7 @@ function openOrderModal(id, pool) {
 
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2>
+    ${o ? `<p class="muted small" style="margin:-8px 0 14px">🕓 Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label>
     ${!o ? `
       <div class="row">

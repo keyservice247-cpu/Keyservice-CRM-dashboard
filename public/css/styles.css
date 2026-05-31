@@ -118,6 +118,7 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 .card-title { font-weight: 600; margin-bottom: 9px; line-height: 1.4; color: var(--ink); }
 .card-customer { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 9px; display: flex; align-items: center; gap: 5px; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.card-foot { margin-top: 8px; font-size: 11px; color: var(--muted); }
 .chip { font-size: 11px; padding: 3px 8px; border-radius: 7px; background: #f1f3f7; color: var(--ink-soft); font-weight: 600; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .chip.src-email { background: #eaf1fe; color: #2563eb; }
 .chip.src-whatsapp { background: #e6f8ec; color: #15803d; }
