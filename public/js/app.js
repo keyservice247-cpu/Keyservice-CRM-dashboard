@@ -728,11 +728,11 @@ const REJECT_REASONS = [
 function openRejectModal(r) {
   const statusOpts = '<option value="">— n.v.t. —</option>' + statusOptionsHTML('');
   modal(`
-    <h2>✕ Afwijzen + feedback</h2>
-    <p class="muted small">Je uitleg helpt de AI leren en is zichtbaar voor het team. Waarom wijs je dit af?</p>
-    <label>Reden <select id="rj-reason">${REJECT_REASONS.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
+    <h2>✕ Afwijzen</h2>
+    <p class="muted small">Je kunt direct afwijzen. Feedback geven is optioneel, maar helpt de AI leren en is zichtbaar voor het team.</p>
+    <label>Reden (optioneel) <select id="rj-reason"><option value="">— geen reden —</option>${REJECT_REASONS.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
     <label>Had eigenlijk moeten zijn (optioneel) <select id="rj-should">${statusOpts}</select></label>
-    <label>Uitleg (optioneel, maar helpt de AI) <textarea id="rj-note" rows="3" placeholder="Bv. dit was een nieuwsbrief van een leverancier, geen klant."></textarea></label>
+    <label>Uitleg (optioneel) <textarea id="rj-note" rows="3" placeholder="Bv. dit was een nieuwsbrief van een leverancier, geen klant."></textarea></label>
     <div class="modal-actions"><span></span><div class="right">
       <button class="btn" id="rj-cancel">Annuleren</button>
       <button class="btn btn-danger" id="rj-save">Afwijzen</button>
@@ -745,7 +745,7 @@ function openRejectModal(r) {
         shouldBe: $('#rj-should').value ? statusLabel($('#rj-should').value) : '',
         note: $('#rj-note').value,
       });
-      closeModal(); toast('Afgewezen — feedback opgeslagen'); loadInbox(); refreshInboxBadge();
+      closeModal(); toast('Afgewezen'); loadInbox(); refreshInboxBadge();
     } catch (err) { toast(err.message, true); }
   };
 }

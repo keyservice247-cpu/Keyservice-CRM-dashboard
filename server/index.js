@@ -320,30 +320,31 @@ app.post('/api/reviews/:id/reject', requireRole('admin', 'assistent'), (req, res
   if (!review) return res.status(404).json({ error: 'Niet gevonden' });
   if (review.status !== 'pending') return res.status(400).json({ error: 'Al verwerkt' });
   const b = req.body || {};
-  if (!b.reason) return res.status(400).json({ error: 'Geef een reden voor de afwijzing' });
   review.status = 'rejected';
   review.reviewedBy = req.user.name;
   review.reviewedAt = now();
-  review.rejectReason = b.reason;            // korte categorie
-  review.rejectNote = b.note || '';          // vrije uitleg
-  review.rejectShouldBe = b.shouldBe || '';  // wat had het moeten zijn
+  review.rejectReason = b.reason || '';      // korte categorie (optioneel)
+  review.rejectNote = b.note || '';          // vrije uitleg (optioneel)
+  review.rejectShouldBe = b.shouldBe || '';  // wat had het moeten zijn (optioneel)
 
-  // Bewaar als leervoorbeeld zodat de AI hiervan leert bij volgende berichten.
-  const msg = db().messages.find((m) => m.id === review.messageId);
-  db().feedback.unshift({
-    id: id('fb'),
-    at: now(),
-    by: req.user.name,
-    channel: review.channel,
-    reason: b.reason,
-    note: b.note || '',
-    shouldBe: b.shouldBe || '',
-    aiStatus: review.suggestion?.aiStatus || review.suggestion?.status,
-    sample: (msg?.body || '').slice(0, 400),
-  });
-  if (db().feedback.length > 500) db().feedback.length = 500;
+  // Bewaar als leervoorbeeld alleen als er feedback is meegegeven.
+  if (b.reason || b.note || b.shouldBe) {
+    const msg = db().messages.find((m) => m.id === review.messageId);
+    db().feedback.unshift({
+      id: id('fb'),
+      at: now(),
+      by: req.user.name,
+      channel: review.channel,
+      reason: b.reason || 'Afgewezen',
+      note: b.note || '',
+      shouldBe: b.shouldBe || '',
+      aiStatus: review.suggestion?.aiStatus || review.suggestion?.status,
+      sample: (msg?.body || '').slice(0, 400),
+    });
+    if (db().feedback.length > 500) db().feedback.length = 500;
+  }
 
-  logActivity(req.user.name, 'review afgewezen', `${review.suggestion?.title || ''} — ${b.reason}`);
+  logActivity(req.user.name, 'review afgewezen', `${review.suggestion?.title || ''}${b.reason ? ' — ' + b.reason : ''}`);
   saveSoon();
   res.json({ review });
 });
