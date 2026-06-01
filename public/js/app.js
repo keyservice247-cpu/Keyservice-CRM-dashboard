@@ -235,6 +235,7 @@ function cardHTML(o) {
   if (o.monteur) meta.push(`<span class="chip mont">🔧 ${esc(o.monteur.name)}</span>`);
   if (o.urgent) meta.push('<span class="chip urgent">⚡ spoed</span>');
   if (o.appointmentAt) meta.push(`<span class="chip">📅 ${fmtDate(o.appointmentAt)}</span>`);
+  if (o.attachments && o.attachments.length) meta.push(`<span class="chip">📎 ${o.attachments.length}</span>`);
   return `
     <div class="card ${o.urgent ? 'urgent' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
       <div class="card-title">${esc(o.title)}</div>
@@ -249,6 +250,17 @@ function fmtDate(s) {
   const d = new Date(s);
   if (isNaN(d)) return s;
   return d.toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+// Toont bijlagen als thumbnails (foto/video) of bestand-tegels.
+function attachmentsHTML(atts) {
+  if (!atts || !atts.length) return '<div class="muted small">Nog geen foto’s of bestanden.</div>';
+  return atts.map((a) => {
+    if (a.kind === 'image') return `<a class="att att-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.url)}" loading="lazy"></a>`;
+    if (a.kind === 'video') return `<a class="att att-vid" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">🎬<span>video</span></a>`;
+    if (a.kind === 'audio') return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">🎙️<span>audio</span></a>`;
+    return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">📄<span>${esc((a.filename || 'bestand').slice(0, 14))}</span></a>`;
+  }).join('');
 }
 
 // Datum + tijd voltuit, bv. "31 mei 2026, 14:07"
@@ -294,6 +306,14 @@ function openOrderModal(id, pool) {
     ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label>
     ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}> Spoed</label>` : ''}
+    ${o ? `
+      <div class="attach">
+        <div class="thread-head">📎 Foto's &amp; bestanden${o.attachments && o.attachments.length ? ` (${o.attachments.length})` : ''}
+          <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button>
+          <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden>
+        </div>
+        <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div>
+      </div>` : ''}
     ${o && o.thread && o.thread.length ? `
       <div class="thread">
         <div class="thread-head">💬 Gesprekshistorie (${o.thread.length})</div>
@@ -301,6 +321,7 @@ function openOrderModal(id, pool) {
           <div class="thread-item">
             <div class="thread-meta">${sourceMeta(t.channel).icon} ${esc(t.sender || '')} · ${fmtDate(t.at)}${t.subject ? ' · ' + esc(t.subject) : ''}</div>
             <div class="thread-body">${esc(t.body || '')}</div>
+            ${t.attachments && t.attachments.length ? `<div class="attach-grid">${attachmentsHTML(t.attachments)}</div>` : ''}
           </div>`).join('')}
       </div>` : ''}
     <div class="modal-actions">
@@ -314,6 +335,33 @@ function openOrderModal(id, pool) {
   `);
   bindSourceSelect($('[data-source]'));
   if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id });
+
+  // Bijlagen toevoegen
+  if (o) {
+    const fileInput = $('#f-fileinput');
+    $('#f-addfile').onclick = () => fileInput.click();
+    fileInput.onchange = async () => {
+      const files = [...fileInput.files];
+      if (!files.length) return;
+      toast(`${files.length} bestand(en) uploaden…`);
+      for (const file of files) {
+        try {
+          const dataBase64 = await new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(fr.result);
+            fr.onerror = reject;
+            fr.readAsDataURL(file);
+          });
+          const updated = await api(`/api/orders/${o.id}/attachments`, 'POST', { filename: file.name, mime: file.type, dataBase64 });
+          o.attachments = updated.attachments || [];
+        } catch (err) { toast(err.message, true); }
+      }
+      $('#f-attachgrid').innerHTML = attachmentsHTML(o.attachments);
+      flash('#f-attachgrid');
+      toast('Toegevoegd ✅');
+      loadBoard();
+    };
+  }
 
   $('#f-cancel').onclick = closeModal;
   $('#f-save').onclick = async () => {

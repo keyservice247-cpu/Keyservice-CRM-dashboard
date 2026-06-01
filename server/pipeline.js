@@ -90,16 +90,22 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     notes: '',
     messageId: review.messageId,
     thread: [],
+    attachments: [],
     createdAt: now(),
     updatedAt: now(),
   };
-  // Het oorspronkelijke bericht als eerste item in de gesprekshistorie.
+  // Het oorspronkelijke bericht als eerste item in de gesprekshistorie,
+  // inclusief eventuele foto's/video's die de klant meestuurde.
   const origMsg = db().messages.find((m) => m.id === review.messageId);
   if (origMsg) {
     order.thread.push({
       id: id('thr'), channel: origMsg.channel, sender: origMsg.sender,
       subject: origMsg.subject, body: origMsg.body, at: origMsg.receivedAt,
+      attachments: origMsg.attachments || [],
     });
+    if (origMsg.attachments && origMsg.attachments.length) {
+      order.attachments = origMsg.attachments.slice();
+    }
   }
   db().orders.push(order);
 
@@ -116,7 +122,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
 
 // Verwerk een binnenkomend bericht: ontdubbelen -> opslaan -> AI categoriseren
 // -> review aanmaken -> eventueel automatisch goedkeuren bij hoge zekerheid.
-export async function ingestMessage({ channel, sender, subject, body, group, externalId }) {
+export async function ingestMessage({ channel, sender, subject, body, group, externalId, attachments = [] }) {
   // Ontdubbelen: zelfde bericht (zelfde externe id) nooit twee keer verwerken.
   if (externalId) {
     const existing = db().messages.find((m) => m.externalId && m.externalId === externalId);
@@ -131,6 +137,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
     body: body || '',
     group: group || '',
     externalId: externalId || '',
+    attachments: attachments || [],
     receivedAt: now(),
   };
   db().messages.push(message);
@@ -161,7 +168,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
       openOrder.thread.push({
         id: id('thr'), channel, sender: sender || '',
         subject: subject || '', body: body || '', at: now(),
+        attachments: attachments || [],
       });
+      // Bijlagen ook op opdracht-niveau verzamelen (foto's/video's van de klant).
+      if (attachments && attachments.length) {
+        openOrder.attachments = (openOrder.attachments || []).concat(attachments);
+      }
       openOrder.updatedAt = now();
       // vul ontbrekende klantgegevens aan
       if (!existingCustomer.email && suggestion.customerEmail) existingCustomer.email = suggestion.customerEmail;

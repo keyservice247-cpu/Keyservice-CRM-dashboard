@@ -180,9 +180,17 @@ tr:last-child td { border-bottom: none; }
 .archive-item:hover { color: var(--primary); }
 .archive-item .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
+/* Bijlagen (foto's/video's/bestanden) */
+.attach { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.attach-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.att { display: inline-flex; align-items: center; justify-content: center; width: 78px; height: 78px; border-radius: 10px; border: 1px solid var(--line); overflow: hidden; text-decoration: none; color: var(--ink-soft); background: #fafbfd; flex-direction: column; font-size: 22px; transition: transform .1s, box-shadow .15s; }
+.att:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.att img { width: 100%; height: 100%; object-fit: cover; }
+.att span { font-size: 10px; margin-top: 3px; }
+
 /* Gesprekshistorie in opdracht */
 .thread { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
-.thread-head { font-weight: 700; font-size: 13px; margin-bottom: 8px; }
+.thread-head { font-weight: 700; font-size: 13px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
 .thread-item { background: #fafbfd; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 9px 11px; margin-bottom: 7px; }
 .thread-meta { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
 .thread-body { font-size: 13px; color: var(--ink-soft); white-space: pre-wrap; max-height: 130px; overflow: auto; }

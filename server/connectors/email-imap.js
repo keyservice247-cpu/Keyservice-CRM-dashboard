@@ -4,6 +4,7 @@
 // Aanzetten: vul in .env de variabelen IMAP_HOST, IMAP_USER en IMAP_PASSWORD in.
 // Staat dat er niet, dan slaat deze koppeling zichzelf netjes over.
 import { ingestMessage } from '../pipeline.js';
+import { saveBuffer } from '../storage.js';
 
 let polling = false;
 
@@ -58,12 +59,21 @@ async function poll({ host, port, user, pass }) {
         const msg = await client.fetchOne(uid, { source: true }, { uid: true });
         if (!msg || !msg.source) continue;
         const parsed = await simpleParser(msg.source);
+        // Bijlagen opslaan (foto's/video's/pdf's die de klant meestuurt).
+        const attachments = [];
+        for (const att of parsed.attachments || []) {
+          // sla inline-handtekeninglogo's e.d. zonder content over
+          if (!att.content || !att.content.length) continue;
+          const saved = saveBuffer(att.content, { mime: att.contentType, filename: att.filename });
+          if (saved) attachments.push(saved);
+        }
         await ingestMessage({
           channel: 'email',
           sender: parsed.from?.text || '',
           subject: parsed.subject || '',
           body: (parsed.text || parsed.html || '').toString().slice(0, 8000),
           externalId: parsed.messageId || `imap-${uid}`,
+          attachments,
         });
         // Markeer als gelezen zodat we hem niet opnieuw verwerken.
         await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });

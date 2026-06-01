@@ -15,6 +15,7 @@ import {
 import { startEmailPoller } from './connectors/email-imap.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
+import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
@@ -308,6 +309,35 @@ app.delete('/api/orders/:id', requireRole('admin', 'assistent'), (req, res) => {
   res.json({ ok: true });
 });
 
+// Bijlage handmatig toevoegen aan een opdracht (foto/video/document).
+// Verwacht JSON: { filename, mime, dataBase64 }.
+app.post('/api/orders/:id/attachments', requireAuth, (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  const { filename, mime, dataBase64 } = req.body || {};
+  if (!dataBase64) return res.status(400).json({ error: 'Geen bestand ontvangen' });
+  let buffer;
+  try { buffer = Buffer.from(String(dataBase64).split(',').pop(), 'base64'); }
+  catch { return res.status(400).json({ error: 'Ongeldig bestand' }); }
+  const saved = saveBuffer(buffer, { mime, filename });
+  if (!saved) return res.status(400).json({ error: 'Bestand te groot of leeg (max 25 MB)' });
+  saved.uploadedBy = req.user.name;
+  order.attachments = (order.attachments || []).concat(saved);
+  order.updatedAt = now();
+  logActivity(req.user.name, 'bijlage toegevoegd', `${order.title}: ${saved.filename}`);
+  saveSoon();
+  res.json(withRelations(order));
+});
+
+// Bijlage verwijderen van een opdracht.
+app.delete('/api/orders/:id/attachments/:attId', requireRole('admin', 'assistent'), (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  const att = (order.attachments || []).find((a) => a.id === req.params.attId);
+  if (att) { deleteFile(att.file); order.attachments = order.attachments.filter((a) => a.id !== req.params.attId); order.updatedAt = now(); saveSoon(); }
+  res.json(withRelations(order));
+});
+
 // ---------- Inbox / AI-controlewachtrij ----------
 app.get('/api/reviews', requireAuth, (req, res) => {
   const status = req.query.status || 'pending';
@@ -413,8 +443,29 @@ app.get('/api/ingest/whatsapp/cloud', (req, res) => {
   res.sendStatus(403);
 });
 
+// Haalt een media-bestand op bij Meta (twee stappen: media-id -> URL -> bytes)
+// en slaat het op als bijlage. Vereist WHATSAPP_TOKEN (permanent access token).
+async function downloadWhatsappMedia(mediaId, mime, filename) {
+  const token = process.env.WHATSAPP_TOKEN;
+  if (!token || !mediaId) return null;
+  try {
+    const metaResp = await fetch(`https://graph.facebook.com/v20.0/${mediaId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!metaResp.ok) throw new Error('media-meta ' + metaResp.status);
+    const meta = await metaResp.json();
+    const fileResp = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!fileResp.ok) throw new Error('media-download ' + fileResp.status);
+    const buf = Buffer.from(await fileResp.arrayBuffer());
+    return saveBuffer(buf, { mime: mime || meta.mime_type, filename });
+  } catch (err) {
+    console.error('WhatsApp media ophalen mislukt:', err.message);
+    return null;
+  }
+}
+
 // Inkomende berichten van de WhatsApp Cloud API. Meta's formaat wordt hier
-// vertaald naar ons standaardformaat.
+// vertaald naar ons standaardformaat (incl. foto's/video's als bijlage).
 app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
   try {
     const entries = req.body?.entry || [];
@@ -425,12 +476,11 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
         for (const msg of value.messages || []) {
           const contact = contacts.find((c) => c.wa_id === msg.from) || contacts[0];
           const name = contact?.profile?.name || msg.from;
-          // Telefoonnummer van de klant (internationaal, bv. 316...). Zet er een
-          // + voor zodat het herkenbaar is.
           const phone = msg.from ? `+${String(msg.from).replace(/[^\d]/g, '')}` : '';
 
-          // Tekst uit de verschillende berichttypes halen.
           let text = '';
+          const attachments = [];
+          const media = msg.image || msg.video || msg.document || msg.audio || msg.voice;
           if (msg.type === 'text') text = msg.text?.body || '';
           else if (msg.type === 'image') text = `[foto] ${msg.image?.caption || ''}`.trim();
           else if (msg.type === 'video') text = `[video] ${msg.video?.caption || ''}`.trim();
@@ -441,7 +491,12 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
           else if (msg.interactive) text = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '';
           else text = `[${msg.type}-bericht ontvangen]`;
 
-          // Voeg het nummer onderaan toe zodat de herkenning het oppakt.
+          // Media downloaden en als bijlage opslaan (indien token aanwezig).
+          if (media && media.id) {
+            const saved = await downloadWhatsappMedia(media.id, media.mime_type, media.filename);
+            if (saved) attachments.push(saved);
+          }
+
           const body = `${text}\nTelefoon: ${phone}`;
           await ingestMessage({
             channel: 'whatsapp',
@@ -449,6 +504,7 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
             subject: '',
             body,
             externalId: msg.id, // ontdubbelen via Meta's bericht-id
+            attachments,
           });
         }
       }
@@ -565,6 +621,12 @@ app.get('/api/stats', requireAuth, (req, res) => {
 
 app.get('/api/activity', requireAuth, (req, res) => {
   res.json(db().activity.slice(0, 100));
+});
+
+// ---------- Bijlagen (alleen voor ingelogde gebruikers) ----------
+app.get('/uploads/:file', requireAuth, (req, res) => {
+  if (!/^att_[a-zA-Z0-9_.]+$/.test(req.params.file)) return res.status(400).end();
+  res.sendFile(path.join(UPLOAD_DIR, req.params.file));
 });
 
 // ---------- Statische bestanden / frontend ----------
