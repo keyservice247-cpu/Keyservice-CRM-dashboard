@@ -240,18 +240,26 @@ export function classifyWithRules({ channel, sender, subject, body }) {
   };
 }
 
-// Korte samenvatting van recente afwijzingen, zodat de AU ervan "leert".
-// (Wordt door classify() meegegeven; categorizer kent de db niet zelf.)
+// Bouwt een leerblok van eerdere team-correcties. Correcties (mens koos andere
+// categorie) wegen zwaarder dan afwijzingen, en worden vooraan gezet.
 function learningsBlock(learnings) {
   if (!learnings || !learnings.length) return '';
-  const lines = learnings.slice(0, 8).map((f, i) => {
-    const bits = [`${i + 1}. Reden: ${f.reason}`];
-    if (f.shouldBe) bits.push(`had moeten zijn: ${f.shouldBe}`);
+  // Sorteer: echte correcties eerst, dan de rest; max 15 voorbeelden.
+  const sorted = [...learnings].sort((a, b) => {
+    const ca = a.shouldBe ? 0 : 1, cb = b.shouldBe ? 0 : 1;
+    return ca - cb;
+  }).slice(0, 15);
+  const lines = sorted.map((f, i) => {
+    const bits = [];
+    if (f.shouldBe) bits.push(`CORRECTIE: moet "${f.shouldBe}" zijn (AI koos eerder "${f.aiStatus || '?'}")`);
+    else bits.push(`Reden afwijzing: ${f.reason}`);
     if (f.note) bits.push(`uitleg: ${f.note}`);
-    if (f.sample) bits.push(`voorbeeldtekst: "${(f.sample || '').slice(0, 120)}"`);
-    return bits.join(' | ');
+    if (f.sample) bits.push(`bericht leek op: "${(f.sample || '').replace(/\s+/g, ' ').slice(0, 140)}"`);
+    return `${i + 1}. ${bits.join(' | ')}`;
   });
-  return `\n\nLeer van eerdere correcties door het team (vermijd dezelfde fouten):\n${lines.join('\n')}`;
+  return `\n\nBELANGRIJK — leer van deze eerdere correcties van het team en pas je oordeel hierop aan.
+Als een nieuw bericht lijkt op een van deze voorbeelden, volg dan de correctie/het advies:
+${lines.join('\n')}`;
 }
 
 // --- AI-modus: Claude ---

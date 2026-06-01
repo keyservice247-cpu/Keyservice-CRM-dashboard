@@ -112,9 +112,31 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
   review.status = auto ? 'auto_approved' : 'approved';
   review.finalStatus = status;
   review.orderId = order.id;
-  review.correctedStatus = status !== s.status ? status : null;
+  // Vergelijk met wat de AI oorspronkelijk dacht (aiStatus), niet de in de inbox
+  // getoonde 'nieuw'-status.
+  const aiThought = s.aiStatus || s.status;
+  review.correctedStatus = status !== aiThought ? status : null;
   review.reviewedBy = actorName;
   review.reviewedAt = now();
+
+  // Mens heeft de AI-categorie GECORRIGEERD -> dit is het sterkste leersignaal.
+  // Sla het op zodat de AI het de volgende keer meeneemt.
+  if (!auto && review.correctedStatus) {
+    const msg = db().messages.find((m) => m.id === review.messageId);
+    db().feedback.unshift({
+      id: id('fb'),
+      at: now(),
+      by: actorName,
+      channel: review.channel,
+      reason: 'Categorie gecorrigeerd',
+      note: `AI koos "${aiThought}", mens koos "${status}"`,
+      shouldBe: status,
+      aiStatus: aiThought,
+      sample: (msg?.body || '').slice(0, 400),
+    });
+    if (db().feedback.length > 500) db().feedback.length = 500;
+  }
+
   saveSoon();
   logActivity(actorName, auto ? 'opdracht automatisch aangemaakt' : 'review goedgekeurd', order.title);
   return order;
@@ -143,7 +165,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   db().messages.push(message);
 
   // Geef de AI de laatste teamcorrecties mee zodat hij ervan leert.
-  const learnings = (db().feedback || []).slice(0, 8);
+  const learnings = (db().feedback || []).slice(0, 20);
   const suggestion = await classify({ channel, sender, subject, body, learnings });
   // De AI-inschatting bewaren we als hint, maar alle binnenkomende klanten
   // landen standaard in "Open / Nieuw". De assistente bepaalt de rest.
