@@ -103,10 +103,39 @@ const statusColor = (key) => {
   bindNav();
   bindButtons();
   await refreshAll();
-  setInterval(refreshInboxBadge, 20000);
   refreshWaStatus();
   setInterval(refreshWaStatus, 60000);
+  startLiveUpdates();
 })();
+
+// Live-updates: checkt elke 5s of er iets veranderd is op de server en ververst
+// dan automatisch de huidige weergave — geen handmatig verversen nodig.
+let _lastPulse = null;
+async function startLiveUpdates() {
+  const tick = async () => {
+    // Niet verversen tijdens slepen, een open venster (modal) of typen.
+    if (window._dragging) return;
+    if (!$('#modalRoot').hidden) return;
+    const active = document.activeElement;
+    if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) return;
+    try {
+      const p = await api('/api/pulse');
+      if (!p) return;
+      // Inbox-badge meteen bijwerken.
+      const badge = $('#inboxBadge');
+      if (badge) { badge.textContent = p.pendingReviews; badge.hidden = p.pendingReviews === 0; }
+      // Alleen de inhoud verversen als er écht iets veranderd is.
+      if (_lastPulse !== null && p.v !== _lastPulse) {
+        if (state.view === 'board') loadBoard();
+        else if (state.view === 'inbox') loadInbox();
+        else if (state.view === 'customers') loadCustomers();
+      }
+      _lastPulse = p.v;
+    } catch { /* offline: volgende keer opnieuw */ }
+  };
+  tick();
+  setInterval(tick, 5000);
+}
 
 // Toont of de WhatsApp-bridge nog draait (groen) of stil ligt (rood).
 async function refreshWaStatus() {
@@ -282,8 +311,8 @@ function renderBoard() {
 
   $$('.card').forEach((el) => {
     el.addEventListener('click', () => { markSeen(el.dataset.id); openOrderModal(el.dataset.id); });
-    el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', el.dataset.id); el.style.opacity = '.5'; });
-    el.addEventListener('dragend', () => (el.style.opacity = '1'));
+    el.addEventListener('dragstart', (e) => { window._dragging = true; e.dataTransfer.setData('text/plain', el.dataset.id); el.style.opacity = '.5'; });
+    el.addEventListener('dragend', () => { window._dragging = false; el.style.opacity = '1'; });
   });
 
   $$('.column-cards').forEach((col) => {

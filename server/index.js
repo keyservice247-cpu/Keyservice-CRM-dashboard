@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, id, now, save, saveSoon, load, logActivity } from './db.js';
+import { db, id, now, save, saveSoon, load, logActivity, changeVersion } from './db.js';
 import {
   attachUser, requireAuth, requireRole, publicUser,
   verifyPassword, createSession, destroySession,
@@ -755,6 +755,15 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
   } catch (err) {
     res.status(500).json({ error: 'Versturen mislukt: ' + err.message });
   }
+});
+
+// Lichte "is er iets veranderd?"-check voor live-updates. Het dashboard pollt
+// dit elke paar seconden en ververst alleen als de versie veranderd is.
+app.get('/api/pulse', requireAuth, (req, res) => {
+  res.json({
+    v: changeVersion(),
+    pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
+  });
 });
 
 app.get('/api/stats', requireAuth, (req, res) => {

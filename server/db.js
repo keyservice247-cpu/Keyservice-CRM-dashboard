@@ -29,6 +29,10 @@ const DEFAULT_DATA = {
 
 let data = null;
 let saveTimer = null;
+// Wijzigingsteller voor live-updates (gaat omhoog bij elke opslag).
+let changeCounter = Date.now();
+export function bumpChange() { changeCounter++; }
+export function changeVersion() { return changeCounter; }
 
 function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -59,6 +63,7 @@ export function db() {
 // Atomisch wegschrijven (schrijf naar tmp, hernoem) zodat het bestand nooit half kapot raakt.
 export function save() {
   if (!data) return;
+  changeCounter++;
   ensureDir();
   const tmp = DB_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
@@ -67,6 +72,7 @@ export function save() {
 
 // Debounced opslaan voor veel kleine wijzigingen achter elkaar.
 export function saveSoon() {
+  bumpChange();
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
