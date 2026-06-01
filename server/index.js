@@ -423,13 +423,31 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
         const value = change.value || {};
         const contacts = value.contacts || [];
         for (const msg of value.messages || []) {
-          if (msg.type !== 'text') continue; // voorlopig alleen tekstberichten
           const contact = contacts.find((c) => c.wa_id === msg.from) || contacts[0];
+          const name = contact?.profile?.name || msg.from;
+          // Telefoonnummer van de klant (internationaal, bv. 316...). Zet er een
+          // + voor zodat het herkenbaar is.
+          const phone = msg.from ? `+${String(msg.from).replace(/[^\d]/g, '')}` : '';
+
+          // Tekst uit de verschillende berichttypes halen.
+          let text = '';
+          if (msg.type === 'text') text = msg.text?.body || '';
+          else if (msg.type === 'image') text = `[foto] ${msg.image?.caption || ''}`.trim();
+          else if (msg.type === 'video') text = `[video] ${msg.video?.caption || ''}`.trim();
+          else if (msg.type === 'document') text = `[document] ${msg.document?.caption || msg.document?.filename || ''}`.trim();
+          else if (msg.type === 'audio' || msg.type === 'voice') text = '[spraakbericht ontvangen]';
+          else if (msg.type === 'location') text = `[locatie] ${msg.location?.name || ''} ${msg.location?.address || ''}`.trim();
+          else if (msg.button) text = msg.button.text || '';
+          else if (msg.interactive) text = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '';
+          else text = `[${msg.type}-bericht ontvangen]`;
+
+          // Voeg het nummer onderaan toe zodat de herkenning het oppakt.
+          const body = `${text}\nTelefoon: ${phone}`;
           await ingestMessage({
             channel: 'whatsapp',
-            sender: contact?.profile?.name || msg.from,
+            sender: name,
             subject: '',
-            body: msg.text?.body || '',
+            body,
             externalId: msg.id, // ontdubbelen via Meta's bericht-id
           });
         }

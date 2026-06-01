@@ -80,8 +80,10 @@ function pickLabeledPattern(text, labels, re) {
 }
 
 // Naam: 1–4 woorden met hoofdletter, evt. met tussenvoegsels (de, van, der).
+// Belangrijk: blijft binnen één regel (geen \n), zodat de naam niet doorloopt
+// in het eerste woord van de volgende zin.
 function pickName(text) {
-  const m = (text || '').match(/\b(?:naam\s*(?:is|:)?\s*)?([A-Z][a-zà-ÿ]+(?:\s(?:de|van|der|den|ten|te|het|el|al)?\s?[A-Z][a-zà-ÿ]+){0,3})/);
+  const m = (text || '').match(/(?:naam[ \t]*(?:is|:)?[ \t]*)?([A-Z][a-zà-ÿ]+(?:[ \t]+(?:de|van|der|den|ten|te|het|el|al|bin)?[ \t]?[A-Z][a-zà-ÿ]+){0,3})/);
   return m ? m[1].trim() : null;
 }
 
