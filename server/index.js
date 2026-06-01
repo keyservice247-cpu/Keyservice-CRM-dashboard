@@ -7,7 +7,7 @@ import {
   verifyPassword, createSession, destroySession,
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
 } from './auth.js';
-import { aiMode } from './ai/categorizer.js';
+import { aiMode, suggestReply } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
@@ -16,6 +16,7 @@ import { startEmailPoller } from './connectors/email-imap.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
+import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
@@ -159,6 +160,58 @@ app.delete('/api/customers/:id', requireRole('admin', 'assistent'), (req, res) =
   logActivity(req.user.name, 'klant verwijderd', removed.name);
   saveSoon();
   res.json({ ok: true });
+});
+
+// Mogelijke dubbele klanten vinden (zelfde e-mail of telefoon).
+app.get('/api/customers/duplicates', requireRole('admin', 'assistent'), (req, res) => {
+  const norm = (v) => (v || '').toLowerCase().replace(/[\s().-]/g, '');
+  const groups = {};
+  for (const c of db().customers) {
+    const keys = [];
+    if (c.email) keys.push('e:' + c.email.toLowerCase());
+    if (c.phone) keys.push('p:' + norm(c.phone));
+    for (const k of keys) { (groups[k] ||= []).push(c); }
+  }
+  const dups = [];
+  const seen = new Set();
+  for (const list of Object.values(groups)) {
+    if (list.length < 2) continue;
+    const ids = list.map((c) => c.id).sort().join(',');
+    if (seen.has(ids)) continue;
+    seen.add(ids);
+    const orders = db().orders;
+    dups.push(list.map((c) => ({ ...c, orderCount: orders.filter((o) => o.customerId === c.id).length })));
+  }
+  res.json(dups);
+});
+
+// Twee (of meer) klanten samenvoegen tot één. Alle opdrachten gaan naar de
+// 'primaire' klant; de rest wordt verwijderd.
+app.post('/api/customers/merge', requireRole('admin', 'assistent'), (req, res) => {
+  const { primaryId, mergeIds } = req.body || {};
+  const primary = db().customers.find((c) => c.id === primaryId);
+  if (!primary || !Array.isArray(mergeIds) || !mergeIds.length) {
+    return res.status(400).json({ error: 'Kies een hoofdklant en minstens één samen te voegen klant' });
+  }
+  let moved = 0;
+  for (const mid of mergeIds) {
+    if (mid === primaryId) continue;
+    const other = db().customers.find((c) => c.id === mid);
+    if (!other) continue;
+    // opdrachten overzetten
+    db().orders.forEach((o) => { if (o.customerId === mid) { o.customerId = primaryId; moved++; } });
+    db().trash.forEach((o) => { if (o.customerId === mid) o.customerId = primaryId; });
+    // ontbrekende gegevens aanvullen
+    if (!primary.email && other.email) primary.email = other.email;
+    if (!primary.phone && other.phone) primary.phone = other.phone;
+    if (!primary.address && other.address) primary.address = other.address;
+    if (other.notes) primary.notes = `${primary.notes ? primary.notes + '\n' : ''}${other.notes}`;
+    if (other.type !== 'lead') primary.type = other.type;
+    db().customers = db().customers.filter((c) => c.id !== mid);
+  }
+  logActivity(req.user.name, 'klanten samengevoegd', `${primary.name} (+${mergeIds.length - 1 < 0 ? 0 : mergeIds.length})`);
+  saveSoon();
+  res.json({ ok: true, movedOrders: moved });
 });
 
 // ---------- Monteurs ----------
@@ -633,6 +686,25 @@ app.get('/api/templates', requireAuth, (req, res) => {
 });
 
 // Snel antwoord direct per e-mail versturen (assistente/admin)
+// AI stelt een concept-antwoord voor een opdracht voor.
+app.post('/api/orders/:id/suggest-reply', requireRole('admin', 'assistent'), async (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  const customer = db().customers.find((c) => c.id === order.customerId);
+  const history = (order.thread || []).map((t) => `${t.sender}: ${t.body}`).join('\n');
+  try {
+    const out = await suggestReply({
+      customerName: customer?.name,
+      problem: order.description || order.title,
+      history,
+      templates: getTemplates(),
+    });
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: 'Kon geen concept maken: ' + err.message });
+  }
+});
+
 app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) => {
   const { to, subject, text, orderId } = req.body || {};
   if (!smtpConfigured()) return res.status(503).json({ error: 'E-mail versturen is nog niet ingesteld (SMTP). Zie docs/INTEGRATIES.md.' });
@@ -708,6 +780,15 @@ app.get('/api/digest', requireAuth, (req, res) => {
   });
 });
 
+// Systeem-gezondheidscheck (laatste resultaat of nu uitvoeren met ?run=1)
+app.get('/api/health', requireRole('admin'), async (req, res) => {
+  if (req.query.run === '1' || !lastHealth()) {
+    try { return res.json(await runHealthCheck()); }
+    catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+  res.json(lastHealth());
+});
+
 app.get('/api/activity', requireAuth, (req, res) => {
   res.json(db().activity.slice(0, 100));
 });
@@ -730,5 +811,6 @@ app.listen(PORT, () => {
   console.log(`  E-mail versturen (SMTP): ${smtpConfigured() ? 'actief' : 'niet geconfigureerd'}`);
   startEmailPoller();
   startWeeklyArchiver();
+  startHealthMonitor();
   console.log('');
 });

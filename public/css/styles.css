@@ -127,6 +127,20 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 .card.replied-alert { border-left-color: #10b981 !important; box-shadow: 0 0 0 1px rgba(16,185,129,.35), var(--shadow-sm); }
 .reply-banner { background: #e6f8ec; color: #15803d; font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 7px; margin-bottom: 8px; display: inline-block; animation: flashSaved 1s ease; }
 
+/* Systeemcheck */
+.health-summary { font-weight: 700; margin-bottom: 8px; }
+.health-summary.bad { color: #b45309; }
+.health-row { display: flex; align-items: center; gap: 9px; padding: 6px 0; border-top: 1px solid var(--line-soft); }
+.health-row strong { min-width: 180px; }
+.hdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.hdot.ok { background: #10b981; }
+.hdot.bad { background: #ef4444; }
+
+/* Dubbele klanten */
+.dup-group { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 10px; }
+.dup-row { display: flex; align-items: center; gap: 9px; padding: 6px 0; font-weight: 400; }
+.dup-row input { width: auto; }
+
 /* Status-scan */
 .digest-block { margin-top: 14px; }
 .digest-block h3 { font-size: 14px; margin-bottom: 6px; }

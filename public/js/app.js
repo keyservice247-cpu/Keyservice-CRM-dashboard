@@ -666,12 +666,20 @@ async function loadControl() {
       <button class="btn" id="runArchive">📦 Nu de afgelopen week inklappen</button>
     </div>
     <div class="info-card" style="max-width:680px;margin-top:16px">
+      <h3>🩺 Systeemcheck</h3>
+      <p class="muted small">Test of e-mail (ontvangen/versturen) en de AI nog werken. Draait ook automatisch elke 6 uur.</p>
+      <div id="healthList">Laden…</div>
+      <button class="btn" id="runHealth" style="margin-top:10px">🔄 Nu opnieuw testen</button>
+    </div>
+    <div class="info-card" style="max-width:680px;margin-top:16px">
       <h3>📝 Afwijzingen & feedback (waar de AI van leert)</h3>
       <p class="muted small">De laatste afwijzingen met reden. De AI krijgt deze mee om dezelfde fouten te vermijden.</p>
       <div id="feedbackList" class="feedback-list">Laden…</div>
     </div>
   `;
   loadFeedbackList();
+  loadHealth();
+  $('#runHealth').onclick = () => loadHealth(true);
   const range = $('#threshold');
   range.oninput = () => ($('#threshLbl').textContent = range.value + '%');
   $('#saveThreshold').onclick = async () => {
@@ -696,6 +704,22 @@ async function loadFeedbackList() {
       ${f.note ? `<div class="small">${esc(f.note)}</div>` : ''}
       ${f.sample ? `<div class="muted small" style="margin-top:3px">“${esc(f.sample.slice(0, 120))}…”</div>` : ''}
     </div>`).join('');
+}
+
+async function loadHealth(run = false) {
+  const el = $('#healthList');
+  if (!el) return;
+  el.innerHTML = '<div class="muted small">Testen…</div>';
+  try {
+    const h = await api('/api/health' + (run ? '?run=1' : ''));
+    const row = (label, c) => `<div class="health-row"><span class="hdot ${c.ok ? 'ok' : 'bad'}"></span><strong>${label}</strong><span class="muted small">${esc(c.detail || '')}</span></div>`;
+    el.innerHTML = `
+      <div class="health-summary ${h.allOk ? 'ok' : 'bad'}">${h.allOk ? '✅ Alle systemen werken' : '⚠️ Aandacht nodig'} <span class="muted small">· ${fmtDateShort(h.at)}</span></div>
+      ${row('Database', h.database)}
+      ${row('E-mail ontvangen (IMAP)', h.imap)}
+      ${row('E-mail versturen (SMTP)', h.smtp)}
+      ${row('AI (Claude)', h.ai)}`;
+  } catch (err) { el.innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
 }
 
 // ---------- Instellingen (kolommen + bronnen) ----------
@@ -879,7 +903,7 @@ function openReplyModal(ctx = {}) {
     </div>
     <label>Tekst <textarea id="rep-body" rows="11">${esc(templates[0]?.body || '')}</textarea></label>
     <div class="modal-actions">
-      <span></span>
+      ${ctx.orderId ? '<button class="btn" id="rep-ai">✨ AI-concept</button>' : '<span></span>'}
       <div class="right">
         <button class="btn" id="rep-close">Sluiten</button>
         <button class="btn" id="rep-copy">📋 Kopieer</button>
@@ -895,6 +919,16 @@ function openReplyModal(ctx = {}) {
   `);
   const sel = $('#rep-select'), body = $('#rep-body');
   sel.onchange = () => { const t = templates[Number(sel.value)]; if (t) body.value = t.body; };
+  const aiBtn = $('#rep-ai');
+  if (aiBtn) aiBtn.onclick = async () => {
+    aiBtn.disabled = true; aiBtn.textContent = '✨ Bezig…';
+    try {
+      const out = await api(`/api/orders/${ctx.orderId}/suggest-reply`, 'POST');
+      if (out.text) { body.value = out.text; flash('#rep-body'); toast('Concept ingevuld'); }
+      else toast('Geen concept (zet de AI aan)', true);
+    } catch (err) { toast(err.message, true); }
+    aiBtn.disabled = false; aiBtn.textContent = '✨ AI-concept';
+  };
   $('#rep-close').onclick = closeModal;
   $('#rep-copy').onclick = async () => {
     try { await navigator.clipboard.writeText(body.value); toast('Tekst gekopieerd'); }
@@ -984,6 +1018,42 @@ async function openDigestModal() {
   $$('[data-open]').forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
 }
 
+// ---------- Dubbele klanten samenvoegen ----------
+async function openDuplicatesModal() {
+  modal('<h2>🔀 Dubbele klanten</h2><p class="muted small">Zoeken naar dubbele klanten…</p>');
+  const groups = await api('/api/customers/duplicates');
+  if (!groups.length) {
+    modal('<h2>🔀 Dubbele klanten</h2><p>✅ Geen dubbele klanten gevonden.</p><div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="d-close">Sluiten</button></div></div>');
+    $('#d-close').onclick = closeModal; return;
+  }
+  const blocks = groups.map((grp, gi) => `
+    <div class="dup-group">
+      <div class="muted small">Mogelijke dezelfde klant:</div>
+      ${grp.map((c, ci) => `
+        <label class="dup-row">
+          <input type="radio" name="primary-${gi}" value="${c.id}" ${ci === 0 ? 'checked' : ''}>
+          <span><strong>${esc(c.name)}</strong> · ${esc(c.email || '')} ${esc(c.phone || '')} <span class="muted">(${c.orderCount} opdrachten)</span></span>
+        </label>`).join('')}
+      <button class="btn btn-sm btn-primary" data-merge="${gi}">Samenvoegen tot gekozen klant</button>
+    </div>`).join('');
+  modal(`<h2>🔀 Dubbele klanten (${groups.length})</h2>
+    <p class="muted small">Kies per groep de juiste hoofdklant en voeg samen. Opdrachten worden verplaatst.</p>
+    ${blocks}
+    <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="d-close">Sluiten</button></div></div>`);
+  $('#d-close').onclick = closeModal;
+  $$('[data-merge]').forEach((b) => b.onclick = async () => {
+    const gi = b.dataset.merge;
+    const primaryId = $(`input[name="primary-${gi}"]:checked`).value;
+    const mergeIds = groups[gi].map((c) => c.id);
+    try {
+      const r = await api('/api/customers/merge', 'POST', { primaryId, mergeIds });
+      toast(`Samengevoegd (${r.movedOrders} opdrachten verplaatst)`);
+      openDuplicatesModal();
+      if (state.view === 'customers') loadCustomers();
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
 // ---------- Buttons & modal infra ----------
 function bindButtons() {
   $('#newOrderBtn')?.addEventListener('click', () => openOrderModal());
@@ -995,6 +1065,7 @@ function bindButtons() {
   $('#boardMonteurFilter')?.addEventListener('change', renderBoard);
   $('#customerSearch')?.addEventListener('input', renderCustomers);
   $('#digestBtn')?.addEventListener('click', openDigestModal);
+  $('#dupBtn')?.addEventListener('click', openDuplicatesModal);
   $('#emptyTrashBtn')?.addEventListener('click', async () => {
     if (!confirm('De hele prullenbak definitief legen?')) return;
     try { const r = await api('/api/trash/empty', 'POST'); toast(`${r.removed} opdrachten verwijderd`); loadTrash(); }

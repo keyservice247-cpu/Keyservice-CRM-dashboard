@@ -331,3 +331,40 @@ export async function classify(message) {
 export function aiMode() {
   return process.env.ANTHROPIC_API_KEY ? 'ai' : 'demo';
 }
+
+// Stelt een concept-antwoord voor een klant op, op basis van het probleem,
+// de gesprekshistorie en (optioneel) je standaardsjablonen. Vereist de AI-modus.
+export async function suggestReply({ customerName, problem, history = '', templates = [] }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+  if (!apiKey) {
+    // Demo-modus: geen AI -> geef het meest relevante sjabloon terug (of leeg).
+    const t = templates[0];
+    return { text: t ? t.body : '', engine: 'demo (geen AI)' };
+  }
+
+  const tmplText = templates.length
+    ? `\n\nBeschikbare standaardteksten (gebruik/combineer indien passend):\n${templates.map((t) => `- ${t.title}: ${t.body}`).join('\n')}`
+    : '';
+
+  const system = `Je bent de klantenservice van Keyservice, een sleutel-/slotenmakerbedrijf.
+Schrijf een vriendelijk, professioneel en BONDIG concept-antwoord in het Nederlands aan de klant.
+- Spreek de klant netjes aan${customerName ? ` (klant: ${customerName})` : ''}.
+- Beantwoord of help met het probleem; vraag om ontbrekende info (foto's, maten, adres) als dat nodig is.
+- Geen verzonnen prijzen of garanties; gebruik alleen info uit de standaardteksten als die past.
+- Eindig met een nette afsluiting namens Keyservice.
+Antwoord met ALLEEN de e-mailtekst, geen uitleg eromheen.${tmplText}`;
+
+  const user = `Probleem/omschrijving van de klant: ${problem || '(onbekend)'}
+${history ? `\nGesprekshistorie:\n${history.slice(0, 2000)}` : ''}`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: 700, system, messages: [{ role: 'user', content: user }] }),
+  });
+  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
+  const json = await resp.json();
+  const text = (json.content || []).map((c) => c.text || '').join('').trim();
+  return { text, engine: `ai:${model}` };
+}
