@@ -44,9 +44,14 @@ const client = new Client({
 });
 
 client.on('qr', (qr) => {
-  console.log('\n📱 Scan deze QR-code met WhatsApp op je iPhone:');
-  console.log('   (WhatsApp → Instellingen → Gekoppelde apparaten → Apparaat koppelen)\n');
+  console.log('\nScan deze QR-code met WhatsApp op je iPhone:');
+  console.log('(WhatsApp -> Instellingen -> Gekoppelde apparaten -> Apparaat koppelen)\n');
+  // 1) Tekst-QR in de terminal (werkt als je scherm groot genoeg is)
   qrcode.generate(qr, { small: true });
+  // 2) Nette, scanbare QR als AFBEELDING via een link — open deze in je browser:
+  const link = 'https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(qr);
+  console.log('\n>>> Lukt scannen niet? Open DEZE link in je browser en scan die QR:\n');
+  console.log(link + '\n');
 });
 
 client.on('authenticated', () => console.log('✅ Gekoppeld — sessie opgeslagen, geen QR meer nodig bij herstart.'));
