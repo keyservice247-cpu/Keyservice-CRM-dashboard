@@ -120,10 +120,21 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 .view-actions input[type=search] { min-width: 220px; }
 
 /* Board */
-.board { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 12px; align-items: flex-start; padding-bottom: 14px; }
-.column { background: var(--line-soft); border-radius: var(--radius); min-width: 0; max-height: calc(100vh - 150px); display: flex; flex-direction: column; }
+.board { padding-bottom: 14px; }
+.board-row { margin-bottom: 14px; }
+/* Hoofdkolommen: prominent, naast elkaar */
+.board-primary { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 12px; align-items: flex-start; }
+.column { background: var(--line-soft); border-radius: var(--radius); min-width: 0; max-height: calc(100vh - 230px); display: flex; flex-direction: column; }
+/* Afgehandeld: rustige tweede rij, lager en compacter */
+.board-secondary { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 12px; }
+.board-sec-label { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.board-sec-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 360px)); gap: 12px; }
+.column-secondary { background: #f3f4f7; opacity: .82; }
+.column-secondary .column-cards { max-height: 260px; }
+.column-secondary:hover { opacity: 1; }
 @media (max-width: 1100px) {
-  .board { display: flex; overflow-x: auto; }
+  .board-primary { display: flex; overflow-x: auto; }
+  .board-sec-cols { grid-template-columns: 1fr; }
   .column { width: 270px; min-width: 260px; flex-shrink: 0; }
 }
 .column.drag-over { outline: 1px dashed var(--accent); outline-offset: -3px; background: var(--accent-soft); }

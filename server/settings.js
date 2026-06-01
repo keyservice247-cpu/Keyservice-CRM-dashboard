@@ -4,11 +4,12 @@
 import { db, save } from './db.js';
 
 export const DEFAULT_STATUSES = [
-  { key: 'open', label: 'Open / Nieuw', color: '#6366f1' },
-  { key: 'offerte_verzonden', label: 'Offerte verzonden', color: '#f59e0b' },
-  { key: 'afspraak_ingepland', label: 'Afspraak ingepland', color: '#0ea5e9' },
-  { key: 'afgerond', label: 'Afgerond', color: '#10b981' },
-  { key: 'geannuleerd', label: 'Geannuleerd', color: '#ef4444' },
+  { key: 'nieuw', label: 'Nieuw', color: '#6366f1', secondary: false },
+  { key: 'open', label: 'In behandeling', color: '#8b5cf6', secondary: false },
+  { key: 'offerte_verzonden', label: 'Offerte verzonden', color: '#f59e0b', secondary: false },
+  { key: 'afspraak_ingepland', label: 'Afspraak ingepland', color: '#0ea5e9', secondary: false },
+  { key: 'afgerond', label: 'Afgerond', color: '#10b981', secondary: true },
+  { key: 'geannuleerd', label: 'Geannuleerd', color: '#ef4444', secondary: true },
 ];
 
 export const DEFAULT_SOURCES = [
@@ -82,6 +83,15 @@ export function ensureSettings() {
   const s = db().settings || (db().settings = {});
   if (!Array.isArray(s.statuses) || s.statuses.length === 0) {
     s.statuses = structuredClone(DEFAULT_STATUSES);
+  }
+  // Migratie: voeg de nieuwe "Nieuw"-kolom toe en zet secondary-vlaggen, als de
+  // database nog de oude kolommenset heeft (zonder 'nieuw'-kolom).
+  if (s.statuses.length && !s.statuses.some((x) => x.key === 'nieuw') && !s.statusesMigratedV2) {
+    const open = s.statuses.find((x) => x.key === 'open');
+    if (open) open.label = 'In behandeling';
+    s.statuses.unshift({ key: 'nieuw', label: 'Nieuw', color: '#6366f1', secondary: false });
+    s.statuses.forEach((x) => { x.secondary = ['afgerond', 'geannuleerd'].includes(x.key); });
+    s.statusesMigratedV2 = true;
   }
   if (!Array.isArray(s.sources) || s.sources.length === 0) {
     s.sources = structuredClone(DEFAULT_SOURCES);
@@ -163,7 +173,7 @@ export function sanitizeStatuses(input) {
     let key = (item.key || slugify(label)).trim();
     while (seen.has(key)) key = key + '_';
     seen.add(key);
-    out.push({ key, label, color: /^#[0-9a-fA-F]{6}$/.test(item.color) ? item.color : '#64748b' });
+    out.push({ key, label, color: /^#[0-9a-fA-F]{6}$/.test(item.color) ? item.color : '#64748b', secondary: !!item.secondary });
   }
   return out.length ? out : null;
 }

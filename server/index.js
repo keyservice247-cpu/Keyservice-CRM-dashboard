@@ -735,6 +735,9 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
       if (order) {
         order.notes = `${order.notes ? order.notes + '\n\n' : ''}[${now()}] E-mail verstuurd door ${req.user.name}:\n${text}`;
         order.lastReplyAt = now();
+        // Antwoord verstuurd -> van "Nieuw" automatisch naar "In behandeling".
+        if (order.status === 'nieuw') order.status = isValidStatus('open') ? 'open' : order.status;
+        order.openedAt = order.openedAt || now();
         order.updatedAt = now();
       }
     }

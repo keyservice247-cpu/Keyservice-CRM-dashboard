@@ -258,13 +258,18 @@ function renderBoard() {
   const board = $('#board');
   const orders = filteredOrders();
   const statuses = state.meta.statuses || [];
-  board.innerHTML = statuses.map((st) => {
+  const colHTML = (st) => {
     const items = orders.filter((o) => o.status === st.key);
     return `
-      <div class="column" data-status="${esc(st.key)}"> <div class="column-head"> <span class="column-dot" style="background:${esc(st.color)}"></span> ${esc(st.label)}
+      <div class="column ${st.secondary ? 'column-secondary' : ''}" data-status="${esc(st.key)}"> <div class="column-head"> <span class="column-dot" style="background:${esc(st.color)}"></span> ${esc(st.label)}
           <span class="count">${items.length}</span> </div> <div class="column-cards" data-status="${esc(st.key)}"> ${items.map(cardHTML).join('') || '<div class="empty">Leeg</div>'}
         </div> </div>`;
-  }).join('');
+  };
+  const primary = statuses.filter((s) => !s.secondary);
+  const secondary = statuses.filter((s) => s.secondary);
+  board.innerHTML =
+    `<div class="board-row board-primary">${primary.map(colHTML).join('')}</div>` +
+    (secondary.length ? `<div class="board-row board-secondary"><div class="board-sec-label">Afgehandeld</div><div class="board-sec-cols">${secondary.map(colHTML).join('')}</div></div>` : '');
 
   $$('.card').forEach((el) => {
     el.addEventListener('click', () => { markSeen(el.dataset.id); openOrderModal(el.dataset.id); });
