@@ -10,18 +10,18 @@
 <body>
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand"><img src="/img/mark.svg" alt="" class="brand-mark"> <span>KEYSERVICE</span></div>
+      <div class="brand"><img src="/img/mark.svg" alt="" class="brand-mark"> <span>Keyservice</span></div>
       <nav class="nav">
-        <button class="nav-item active" data-view="board"><span class="ic">📋</span> Opdrachten</button>
-        <button class="nav-item" data-view="inbox"><span class="ic">📥</span> Inbox / AI <span id="inboxBadge" class="badge" hidden>0</span></button>
-        <button class="nav-item" data-view="customers"><span class="ic">👥</span> Klanten &amp; Leads</button>
-        <button class="nav-item" data-view="monteurs"><span class="ic">🔧</span> Monteurs</button>
-        <button class="nav-item perm-write" data-view="trash"><span class="ic">🗑️</span> Prullenbak</button>
+        <button class="nav-item active" data-view="board"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span> Opdrachten</button>
+        <button class="nav-item" data-view="inbox"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H4z"/><path d="M4 12h4l2 3h4l2-3h4"/></svg></span> Inbox / AI <span id="inboxBadge" class="badge" hidden>0</span></button>
+        <button class="nav-item" data-view="customers"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 6-5s6 2 6 5"/><path d="M16 5.5a3 3 0 0 1 0 5.5"/><path d="M18 15c2.5.5 3.5 2.5 3.5 5"/></svg></span> Klanten &amp; leads</button>
+        <button class="nav-item" data-view="monteurs"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 1 5.4-5.4l-2.5 2.5-2-2 2.5-2.5z"/></svg></span> Monteurs</button>
+        <button class="nav-item perm-write" data-view="trash"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/></svg></span> Prullenbak</button>
         <div class="nav-sep admin-only">Beheer</div>
-        <button class="nav-item admin-only" data-view="control"><span class="ic">🤖</span> AI-controle</button>
-        <button class="nav-item admin-only" data-view="subs"><span class="ic">💳</span> Abonnementen</button>
-        <button class="nav-item admin-only" data-view="settings"><span class="ic">⚙️</span> Instellingen</button>
-        <button class="nav-item admin-only" data-view="users"><span class="ic">👤</span> Gebruikers</button>
+        <button class="nav-item admin-only" data-view="control"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 8V5"/><circle cx="12" cy="4" r="1"/><path d="M9 13h.01M15 13h.01"/></svg></span> AI-controle</button>
+        <button class="nav-item admin-only" data-view="subs"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/></svg></span> Abonnementen</button>
+        <button class="nav-item admin-only" data-view="settings"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></span> Instellingen</button>
+        <button class="nav-item admin-only" data-view="users"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/></svg></span> Gebruikers</button>
       </nav>
       <div class="sidebar-foot">
         <span id="aiMode" class="pill"></span>
@@ -39,14 +39,14 @@
         <div class="view-head">
           <div><h2>Opdrachten</h2><div id="boardStats" class="muted small"></div></div>
           <div class="view-actions">
-            <input id="boardSearch" type="search" placeholder="🔍 Zoek opdracht of klant…" />
+            <input id="boardSearch" type="search" placeholder="Zoek opdracht of klant…" />
             <select id="boardMonteurFilter"><option value="">Alle monteurs</option></select>
-            <button id="digestBtn" class="btn">📊 Status-scan</button>
+            <button id="digestBtn" class="btn">Status-scan</button>
             <button id="newOrderBtn" class="btn btn-primary perm-write">+ Nieuwe opdracht</button>
           </div>
         </div>
         <div id="board" class="board"></div>
-        <div id="trashZone" class="trash-zone">🗑️ Sleep hier naartoe om naar de prullenbak te verplaatsen</div>
+        <div id="trashZone" class="trash-zone">Sleep een kaart hierheen om naar de prullenbak te verplaatsen</div>
       </section>
 
       <!-- Inbox / AI -->
@@ -54,7 +54,7 @@
         <div class="view-head">
           <div><h2>Inbox — te controleren</h2>
             <div class="muted small">De AI heeft inkomende e-mails/WhatsApp ingedeeld. Controleer en keur goed of wijs af.</div></div>
-          <div class="view-actions"><button id="simulateBtn" class="btn btn-primary perm-write">➕ Bericht handmatig toevoegen</button></div>
+          <div class="view-actions"><button id="simulateBtn" class="btn btn-primary perm-write">Bericht handmatig toevoegen</button></div>
         </div>
         <div id="reviewList" class="review-list"></div>
       </section>
@@ -64,8 +64,8 @@
         <div class="view-head">
           <div><h2>Klanten &amp; Leads</h2></div>
           <div class="view-actions">
-            <input id="customerSearch" type="search" placeholder="🔍 Zoek klant…" />
-            <button id="dupBtn" class="btn perm-write">🔀 Dubbele klanten</button>
+            <input id="customerSearch" type="search" placeholder="Zoek klant…" />
+            <button id="dupBtn" class="btn perm-write">Dubbele klanten</button>
             <button id="newCustomerBtn" class="btn btn-primary perm-write">+ Nieuwe klant</button>
           </div>
         </div>

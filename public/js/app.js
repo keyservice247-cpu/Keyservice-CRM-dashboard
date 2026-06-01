@@ -3,6 +3,50 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Dunne outline-iconen (Lucide-stijl) — strak en zakelijk, geen emoji.
+const ICON_PATHS = {
+  whatsapp: '<path d="M3 21l1.7-5A8 8 0 1 1 8 19.3z"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  phone: '<path d="M5 4h3l1.5 5-2 1.5a11 11 0 0 0 5 5l1.5-2 5 1.5V19a2 2 0 0 1-2 2A16 16 0 0 1 4 6a2 2 0 0 1 1-2z"/>',
+  tag: '<path d="M3 7v5l8 8 6-6-8-8H3z"/><circle cx="7" cy="11" r="1"/>',
+  wrench: '<path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 1 5.4-5.4l-2.5 2.5-2-2 2.5-2.5z"/>',
+  bolt: '<path d="M13 3 4 14h6l-1 7 9-11h-6z"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/>',
+  paperclip: '<path d="M21 11.5 12 20a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/>',
+  users: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 6-5s6 2 6 5"/><path d="M16 5.5a3 3 0 0 1 0 5.5"/>',
+  message: '<path d="M21 12a8 8 0 0 1-11.5 7.2L3 21l1.8-6.5A8 8 0 1 1 21 12z"/>',
+  reply: '<path d="M9 7 4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 5 5v1"/>',
+  sparkles: '<path d="M12 3l1.8 4.7L18 9l-4.2 1.3L12 15l-1.8-4.7L6 9l4.2-1.3z"/><path d="M18 14l.8 2 .2.8-2-.8z"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  trash: '<path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/>',
+  video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  box: '<path d="m3 7 9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/>',
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  hourglass: '<path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 0M7 21c0-5 10-5 10 0"/>',
+  merge: '<path d="M7 21V8M7 8 4 11M7 8l3 3"/><path d="M17 21v-7a4 4 0 0 0-4-4H7"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+};
+function icon(name, size = 16) {
+  const p = ICON_PATHS[name];
+  if (!p) return '';
+  return `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+}
+// Outline-icoon dat past bij een herkomst-bron (whatsapp/mail/telefoon/overig).
+function sourceIcon(label) {
+  const l = (label || '').toLowerCase();
+  if (l.includes('groep') || l.includes('whatsapp') || l.includes('app')) return icon('whatsapp');
+  if (l.includes('mail')) return icon('mail');
+  if (l.includes('telefoon') || l.includes('bel')) return icon('phone');
+  return icon('tag');
+}
+
 async function api(path, method = 'GET', body) {
   const res = await fetch(path, {
     method,
@@ -24,14 +68,15 @@ function toast(msg, isError = false) {
   toast._t = setTimeout(() => (t.hidden = true), 3000);
 }
 
-// Herkomst-bron: icoon + kleurklasse op basis van trefwoorden in de naam.
+// Herkomst-bron: rustige kleurklasse (pill) op basis van trefwoorden in de naam.
+// Geen emoji-iconen (conform design-systeem) — alleen een subtiele kleur.
 function sourceMeta(label) {
   const l = (label || '').toLowerCase();
-  if (l.includes('groep')) return { icon: '👥', cls: 'src-groep' };
-  if (l.includes('whatsapp') || l.includes('app')) return { icon: '💬', cls: 'src-whatsapp' };
-  if (l.includes('mail')) return { icon: '✉️', cls: 'src-email' };
-  if (l.includes('telefoon') || l.includes('bel')) return { icon: '📞', cls: 'src-telefoon' };
-  return { icon: '🏷️', cls: '' };
+  if (l.includes('groep')) return { icon: '', cls: 'src-groep' };
+  if (l.includes('whatsapp') || l.includes('app')) return { icon: '', cls: 'src-whatsapp' };
+  if (l.includes('mail')) return { icon: '', cls: 'src-email' };
+  if (l.includes('telefoon') || l.includes('bel')) return { icon: '', cls: 'src-telefoon' };
+  return { icon: '', cls: '' };
 }
 
 // ---------- State ----------
@@ -50,7 +95,7 @@ const statusColor = (key) => {
   state.me = me.user; state.meta = me.meta;
   $('#userName').textContent = `${me.user.name} · ${me.user.role}`;
   $('#avatar').textContent = (me.user.name || '?').trim().charAt(0).toUpperCase();
-  $('#aiMode').textContent = me.meta.aiMode === 'ai' ? '🤖 AI actief' : '⚙️ AI: demo';
+  $('#aiMode').textContent = me.meta.aiMode === 'ai' ? 'AI actief' : 'AI: demo';
 
   if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => el.remove());
   if (me.user.role === 'monteur') $$('.perm-write').forEach((el) => (el.hidden = true));
@@ -113,7 +158,7 @@ function sourceSelect(selected, extraClass = '') {
   const has = selected && sources.includes(selected);
   const opts = sources.map((s) => `<option value="${esc(s)}" ${selected === s ? 'selected' : ''}>${esc(s)}</option>`).join('');
   const custom = !has && selected ? `<option value="${esc(selected)}" selected>${esc(selected)}</option>` : '';
-  return `<select class="${extraClass}" data-source>${opts}${custom}<option value="__new__">➕ Andere bron…</option></select>`;
+  return `<select class="${extraClass}" data-source>${opts}${custom}<option value="__new__">Andere bron…</option></select>`;
 }
 function bindSourceSelect(sel) {
   if (!sel) return;
@@ -159,12 +204,9 @@ function renderArchives() {
   }
   const archives = state.archives || [];
   if (!archives.length) { wrap.innerHTML = ''; return; }
-  wrap.innerHTML = `<h3 class="archive-title">📦 Ingeklapte agenda's</h3>` +
+  wrap.innerHTML = `<h3 class="archive-title">${icon('box', 14)} Ingeklapte agenda's</h3>` +
     archives.map((a) => `
-      <details class="archive">
-        <summary>🗓️ ${esc(a.label)} <span class="count">${a.count}</span></summary>
-        <div class="archive-body" data-week="${esc(a.key)}">Laden…</div>
-      </details>`).join('');
+      <details class="archive"> <summary> ${esc(a.label)} <span class="count">${a.count}</span></summary> <div class="archive-body" data-week="${esc(a.key)}">Laden…</div> </details>`).join('');
   $$('.archive').forEach((d) => {
     d.addEventListener('toggle', async () => {
       if (!d.open) return;
@@ -172,11 +214,7 @@ function renderArchives() {
       const week = body.dataset.week;
       const orders = await api(`/api/orders?archivedWeek=${encodeURIComponent(week)}`);
       body.innerHTML = orders.map((o) => `
-        <div class="archive-item" data-id="${o.id}">
-          <span class="dot" style="background:${esc(statusColor(o.status))}"></span>
-          <strong>${esc(o.title)}</strong>
-          <span class="muted small">${esc(o.customer?.name || '')} · ${esc(statusLabel(o.status))}</span>
-        </div>`).join('') || '<div class="muted small">Leeg</div>';
+        <div class="archive-item" data-id="${o.id}"> <span class="dot" style="background:${esc(statusColor(o.status))}"></span> <strong>${esc(o.title)}</strong> <span class="muted small">${esc(o.customer?.name || '')} · ${esc(statusLabel(o.status))}</span> </div>`).join('') || '<div class="muted small">Leeg</div>';
       $$('.archive-item', body).forEach((it) => it.onclick = () => openOrderModal(it.dataset.id, orders));
     });
   });
@@ -202,16 +240,9 @@ function renderBoard() {
   board.innerHTML = statuses.map((st) => {
     const items = orders.filter((o) => o.status === st.key);
     return `
-      <div class="column" data-status="${esc(st.key)}">
-        <div class="column-head">
-          <span class="column-dot" style="background:${esc(st.color)}"></span>
-          ${esc(st.label)}
-          <span class="count">${items.length}</span>
-        </div>
-        <div class="column-cards" data-status="${esc(st.key)}">
-          ${items.map(cardHTML).join('') || '<div class="empty">Leeg</div>'}
-        </div>
-      </div>`;
+      <div class="column" data-status="${esc(st.key)}"> <div class="column-head"> <span class="column-dot" style="background:${esc(st.color)}"></span> ${esc(st.label)}
+          <span class="count">${items.length}</span> </div> <div class="column-cards" data-status="${esc(st.key)}"> ${items.map(cardHTML).join('') || '<div class="empty">Leeg</div>'}
+        </div> </div>`;
   }).join('');
 
   $$('.card').forEach((el) => {
@@ -256,22 +287,22 @@ function renderBoard() {
 
 function cardHTML(o) {
   const sm = sourceMeta(o.source);
-  const meta = [`<span class="chip ${sm.cls}">${sm.icon} ${esc(o.source || 'Handmatig')}</span>`];
-  if (o.monteur) meta.push(`<span class="chip mont">🔧 ${esc(o.monteur.name)}</span>`);
-  if (o.urgent) meta.push('<span class="chip urgent">⚡ spoed</span>');
-  if (o.appointmentAt) meta.push(`<span class="chip">📅 ${fmtDate(o.appointmentAt)}</span>`);
-  if (o.attachments && o.attachments.length) meta.push(`<span class="chip">📎 ${o.attachments.length}</span>`);
+  const meta = [`<span class="chip ${sm.cls}">${sourceIcon(o.source)} ${esc(o.source || 'Handmatig')}</span>`];
+  if (o.monteur) meta.push(`<span class="chip mont">${icon('wrench', 13)} ${esc(o.monteur.name)}</span>`);
+  if (o.urgent) meta.push(`<span class="chip urgent">${icon('bolt', 13)} spoed</span>`);
+  if (o.appointmentAt) meta.push(`<span class="chip">${icon('calendar', 13)} ${fmtDate(o.appointmentAt)}</span>`);
+  if (o.attachments && o.attachments.length) meta.push(`<span class="chip">${icon('paperclip', 13)} ${o.attachments.length}</span>`);
   // Status-stip: beantwoord (groen) > geopend (blauw) > nieuw/ongelezen (geel).
   const st = o.lastReplyAt ? { c: 'replied', t: 'Beantwoord' }
     : o.openedAt ? { c: 'opened', t: 'Geopend' }
     : { c: 'new', t: 'Nieuw — nog niet bekeken' };
   return `
     <div class="card ${o.urgent ? 'urgent' : ''} ${st.c === 'new' ? 'is-new' : ''} ${o.customerReplied ? 'replied-alert' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
-      ${o.customerReplied ? '<div class="reply-banner">💬 Klant heeft gereageerd</div>' : ''}
+      ${o.customerReplied ? `<div class="reply-banner">${icon('message', 12)} Klant heeft gereageerd</div>` : ''}
       <div class="card-title"><span class="state-dot ${st.c}" title="${st.t}"></span>${esc(o.title)}</div>
-      ${o.customer ? `<div class="card-customer">👤 ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
+      ${o.customer ? `<div class="card-customer">${icon('user', 13)} ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
       <div class="card-meta">${meta.join('')}</div>
-      <div class="card-foot">🕓 Binnen: ${esc(fmtDateShort(o.createdAt))}</div>
+      <div class="card-foot">${icon('clock', 12)} Binnen: ${esc(fmtDateShort(o.createdAt))}</div>
     </div>`;
 }
 
@@ -287,9 +318,9 @@ function attachmentsHTML(atts) {
   if (!atts || !atts.length) return '<div class="muted small">Nog geen foto’s of bestanden.</div>';
   return atts.map((a) => {
     if (a.kind === 'image') return `<a class="att att-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.url)}" loading="lazy"></a>`;
-    if (a.kind === 'video') return `<a class="att att-vid" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">🎬<span>video</span></a>`;
-    if (a.kind === 'audio') return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">🎙️<span>audio</span></a>`;
-    return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">📄<span>${esc((a.filename || 'bestand').slice(0, 14))}</span></a>`;
+    if (a.kind === 'video') return `<a class="att att-vid" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">${icon('video', 22)}<span>video</span></a>`;
+    if (a.kind === 'audio') return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">${icon('mic', 22)}<span>audio</span></a>`;
+    return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">${icon('file', 22)}<span>${esc((a.filename || 'bestand').slice(0, 14))}</span></a>`;
   }).join('');
 }
 
@@ -315,54 +346,22 @@ function openOrderModal(id, pool) {
     state.monteurs.map((m) => `<option value="${m.id}" ${o?.monteurId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
 
   modal(`
-    <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2>
-    ${o ? `<p class="muted small" style="margin:-8px 0 14px">🕓 Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
-    <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label>
-    ${!o ? `
-      <div class="row">
-        <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label>
-        <label>Telefoon <input id="f-cphone" placeholder="06-…"></label>
-      </div>
-      <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label>
-    ` : `<label>Klant <input value="${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}" disabled></label>`}
-    <div class="row">
-      <label>Status <select id="f-status">${statusOptionsHTML(o?.status)}</select></label>
-      <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label>
-    </div>
-    <div class="row">
-      <label>Afspraak (datum/tijd) <input id="f-appt" type="datetime-local" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label>
-      <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label>
-    </div>
-    ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
-    <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label>
-    ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}> Spoed</label>` : ''}
+    <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
+    <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label> ${!o ? `
+      <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> ` : `<label>Klant <input value="${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}" disabled></label>`}
+    <div class="row"> <label>Status <select id="f-status">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak (datum/tijd) <input id="f-appt" type="datetime-local" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
+    <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     ${o ? `
-      <div class="attach">
-        <div class="thread-head">📎 Foto's &amp; bestanden${o.attachments && o.attachments.length ? ` (${o.attachments.length})` : ''}
-          <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button>
-          <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden>
-        </div>
-        <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div>
-      </div>` : ''}
+      <div class="attach"> <div class="thread-head">${icon('paperclip', 15)} Foto's &amp; bestanden${o.attachments && o.attachments.length ? ` (${o.attachments.length})` : ''}
+          <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button> <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden> </div> <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div> </div>` : ''}
     ${o && o.thread && o.thread.length ? `
-      <div class="thread">
-        <div class="thread-head">💬 Gesprekshistorie (${o.thread.length})</div>
-        ${o.thread.map((t) => `
-          <div class="thread-item">
-            <div class="thread-meta">${sourceMeta(t.channel).icon} ${esc(t.sender || '')} · ${fmtDate(t.at)}${t.subject ? ' · ' + esc(t.subject) : ''}</div>
-            <div class="thread-body">${esc(t.body || '')}</div>
-            ${t.attachments && t.attachments.length ? `<div class="attach-grid">${attachmentsHTML(t.attachments)}</div>` : ''}
+      <div class="thread"> <div class="thread-head">${icon('message', 15)} Gesprekshistorie (${o.thread.length})</div> ${o.thread.map((t) => `
+          <div class="thread-item"> <div class="thread-meta">${sourceIcon(t.channel)} ${esc(t.sender || '')} · ${fmtDate(t.at)}${t.subject ? ' · ' + esc(t.subject) : ''}</div> <div class="thread-body">${esc(t.body || '')}</div> ${t.attachments && t.attachments.length ? `<div class="attach-grid">${attachmentsHTML(t.attachments)}</div>` : ''}
           </div>`).join('')}
       </div>` : ''}
-    <div class="modal-actions">
-      ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right">
-        ${o ? '<button class="btn" id="f-reply">💬 Snel antwoord</button>' : ''}
-        <button class="btn" id="f-cancel">Annuleren</button>
-        <button class="btn btn-primary" id="f-save">Opslaan</button>
-      </div>
-    </div>
-  `);
+    <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
+      <div class="right"> ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+        <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('[data-source]'));
   if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id });
 
@@ -388,7 +387,7 @@ function openOrderModal(id, pool) {
       }
       $('#f-attachgrid').innerHTML = attachmentsHTML(o.attachments);
       flash('#f-attachgrid');
-      toast('Toegevoegd ✅');
+      toast('Toegevoegd ');
       loadBoard();
     };
   }
@@ -439,7 +438,7 @@ async function refreshInboxBadge() {
 async function loadInbox() {
   const reviews = await api('/api/reviews?status=pending');
   const list = $('#reviewList');
-  if (!reviews.length) { list.innerHTML = '<div class="empty">📭 Geen berichten om te controleren. Goed bezig!</div>'; return; }
+  if (!reviews.length) { list.innerHTML = '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>'; return; }
   list.innerHTML = reviews.map(reviewHTML).join('');
   reviews.forEach((r) => bindReview(r));
 }
@@ -451,37 +450,8 @@ function reviewHTML(r) {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}">
-      <div class="review-top">
-        <div>
-          <strong>${sourceMeta(r.channel).icon} ${esc(m.sender || 'Onbekend')}</strong>
-          ${m.group ? `<span class="chip src-groep">👥 ${esc(m.group)}</span>` : ''}
-          <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div>
-        </div>
-        <div class="small muted" style="text-align:right">
-          AI-zekerheid ${conf}%<br>
-          <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span>
-          <div>${esc(s.engine || '')}</div>
-        </div>
-      </div>
-      <div class="review-msg">${esc(m.body || '')}</div>
-      <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div>
-      <div class="review-actions">
-        <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label>
-        <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label>
-        <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label>
-        <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label>
-        <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label>
-        <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label>
-        <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label>
-      </div>
-      <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label>
-      <div class="review-actions" style="margin-top:10px">
-        <button class="btn r-reply">💬 Snel antwoord</button>
-        <button class="btn btn-success r-approve">✓ Goedkeuren → opdracht</button>
-        <button class="btn btn-danger r-reject">✕ Afwijzen</button>
-      </div>
-    </div>`;
+    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}
+          <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> <div class="review-msg">${esc(m.body || '')}</div> <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px"> <button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button> </div> </div>`;
 }
 
 function bindReview(r) {
@@ -521,38 +491,16 @@ function renderCustomers() {
   const list = (state._customers || []).filter((c) => !q || `${c.name} ${c.phone} ${c.email}`.toLowerCase().includes(q));
   const canWrite = state.me.role !== 'monteur';
   $('#customerList').innerHTML = `
-    <table><thead><tr>
-      <th>Naam</th><th>Type</th><th>Telefoon</th><th>E-mail</th><th>Herkomst</th><th>Opdrachten</th>${canWrite ? '<th></th>' : ''}
-    </tr></thead><tbody>
-    ${list.map((c) => { const sm = sourceMeta(c.source); return `<tr>
-      <td><strong>${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}</td>
-      <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td>
-      <td>${esc(c.phone || '')}</td><td>${esc(c.email || '')}</td>
-      <td><span class="chip ${sm.cls}">${sm.icon} ${esc(c.source || '')}</span></td>
-      <td>${c.orderCount}</td>
-      ${canWrite ? `<td><button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
+    <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>E-mail</th><th>Herkomst</th><th>Opdrachten</th>${canWrite ? '<th></th>' : ''}
+    </tr></thead><tbody> ${list.map((c) => { const sm = sourceMeta(c.source); return `<tr> <td><strong>${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td><td>${esc(c.email || '')}</td> <td><span class="chip ${sm.cls}">${sm.icon} ${esc(c.source || '')}</span></td> <td>${c.orderCount}</td> ${canWrite ? `<td><button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
     </tr>`; }).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
     </tbody></table>`;
   $$('[data-edit]').forEach((b) => b.onclick = () => openCustomerModal(state._customers.find((c) => c.id === b.dataset.edit)));
 }
 function openCustomerModal(c) {
   modal(`
-    <h2>${c ? 'Klant bewerken' : 'Nieuwe klant'}</h2>
-    <label>Naam <input id="c-name" value="${esc(c?.name || '')}"></label>
-    <div class="row">
-      <label>Telefoon <input id="c-phone" value="${esc(c?.phone || '')}"></label>
-      <label>E-mail <input id="c-email" value="${esc(c?.email || '')}"></label>
-    </div>
-    <label>Adres <input id="c-address" value="${esc(c?.address || '')}"></label>
-    <label>Type <select id="c-type">
-      <option value="lead" ${c?.type==='lead'?'selected':''}>Lead</option>
-      <option value="klant" ${c?.type==='klant'?'selected':''}>Klant</option>
-    </select></label>
-    <label>Notities <textarea id="c-notes" rows="2">${esc(c?.notes || '')}</textarea></label>
-    <div class="modal-actions">
-      ${c ? '<button class="btn btn-danger" id="c-del">Verwijderen</button>' : '<span></span>'}
-      <div class="right"><button class="btn" id="c-cancel">Annuleren</button><button class="btn btn-primary" id="c-save">Opslaan</button></div>
-    </div>`);
+    <h2>${c ? 'Klant bewerken' : 'Nieuwe klant'}</h2> <label>Naam <input id="c-name" value="${esc(c?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="c-phone" value="${esc(c?.phone || '')}"></label> <label>E-mail <input id="c-email" value="${esc(c?.email || '')}"></label> </div> <label>Adres <input id="c-address" value="${esc(c?.address || '')}"></label> <label>Type <select id="c-type"> <option value="lead" ${c?.type==='lead'?'selected':''}>Lead</option> <option value="klant" ${c?.type==='klant'?'selected':''}>Klant</option> </select></label> <label>Notities <textarea id="c-notes" rows="2">${esc(c?.notes || '')}</textarea></label> <div class="modal-actions"> ${c ? '<button class="btn btn-danger" id="c-del">Verwijderen</button>' : '<span></span>'}
+      <div class="right"><button class="btn" id="c-cancel">Annuleren</button><button class="btn btn-primary" id="c-save">Opslaan</button></div> </div>`);
   $('#c-cancel').onclick = closeModal;
   $('#c-save').onclick = async () => {
     const payload = { name: $('#c-name').value, phone: $('#c-phone').value, email: $('#c-email').value, address: $('#c-address').value, type: $('#c-type').value, notes: $('#c-notes').value };
@@ -576,11 +524,7 @@ async function loadMonteurs() {
   fillMonteurFilter();
   const canWrite = state.me.role !== 'monteur';
   $('#monteurList').innerHTML = state.monteurs.map((m) => `
-    <div class="info-card">
-      <h3>🔧 ${esc(m.name)}</h3>
-      <div class="muted small">${esc(m.phone || '')}${m.email ? ' · ' + esc(m.email) : ''}</div>
-      <div style="margin-top:10px"><span class="chip">${m.activeCount} actieve opdrachten</span></div>
-      ${canWrite ? `<div style="margin-top:12px"><button class="btn btn-sm" data-medit="${m.id}">Bewerk</button> <button class="btn btn-sm btn-danger" data-mdel="${m.id}">Verwijder</button></div>` : ''}
+    <div class="info-card"> <h3>${icon('wrench', 15)} ${esc(m.name)}</h3> <div class="muted small">${esc(m.phone || '')}${m.email ? ' · ' + esc(m.email) : ''}</div> <div style="margin-top:10px"><span class="chip">${m.activeCount} actieve opdrachten</span></div> ${canWrite ? `<div style="margin-top:12px"><button class="btn btn-sm" data-medit="${m.id}">Bewerk</button> <button class="btn btn-sm btn-danger" data-mdel="${m.id}">Verwijder</button></div>` : ''}
     </div>`).join('') || '<div class="empty">Nog geen monteurs</div>';
   $$('[data-medit]').forEach((b) => b.onclick = () => openMonteurModal(state.monteurs.find((m) => m.id === b.dataset.medit)));
   $$('[data-mdel]').forEach((b) => b.onclick = async () => {
@@ -595,15 +539,8 @@ async function loadTrash() {
   const items = await api('/api/trash');
   const isAdmin = state.me.role === 'admin';
   $('#trashList').innerHTML = items.length ? items.map((o) => `
-    <div class="info-card">
-      <h3>${esc(o.title)}</h3>
-      <div class="muted small">${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}</div>
-      <div class="muted small" style="margin-top:4px">🗑️ door ${esc(o.deletedBy || '?')} · ${fmtDateShort(o.deletedAt)}</div>
-      <div style="margin-top:12px;display:flex;gap:6px">
-        <button class="btn btn-sm" data-restore="${o.id}">↩︎ Terughalen</button>
-        ${isAdmin ? `<button class="btn btn-sm btn-danger" data-perm="${o.id}">Definitief</button>` : ''}
-      </div>
-    </div>`).join('') : '<div class="empty">🗑️ De prullenbak is leeg.</div>';
+    <div class="info-card"> <h3>${esc(o.title)}</h3> <div class="muted small">${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}</div> <div class="muted small" style="margin-top:4px">Verwijderd door ${esc(o.deletedBy || '?')} · ${fmtDateShort(o.deletedAt)}</div> <div style="margin-top:12px;display:flex;gap:6px"> <button class="btn btn-sm" data-restore="${o.id}">${icon('reply', 13)} Terughalen</button> ${isAdmin ? `<button class="btn btn-sm btn-danger" data-perm="${o.id}">Definitief</button>` : ''}
+      </div> </div>`).join('') : '<div class="empty">De prullenbak is leeg.</div>';
   $$('[data-restore]').forEach((b) => b.onclick = async () => {
     try { await api(`/api/trash/${b.dataset.restore}/restore`, 'POST'); toast('Teruggehaald'); loadTrash(); }
     catch (err) { toast(err.message, true); }
@@ -617,15 +554,7 @@ async function loadTrash() {
 
 function openMonteurModal(m) {
   modal(`
-    <h2>${m ? 'Monteur bewerken' : 'Nieuwe monteur'}</h2>
-    <label>Naam <input id="m-name" value="${esc(m?.name || '')}"></label>
-    <div class="row">
-      <label>Telefoon <input id="m-phone" value="${esc(m?.phone || '')}"></label>
-      <label>E-mail <input id="m-email" value="${esc(m?.email || '')}"></label>
-    </div>
-    <div class="modal-actions"><span></span><div class="right">
-      <button class="btn" id="m-cancel">Annuleren</button><button class="btn btn-primary" id="m-save">Opslaan</button>
-    </div></div>`);
+    <h2>${m ? 'Monteur bewerken' : 'Nieuwe monteur'}</h2> <label>Naam <input id="m-name" value="${esc(m?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="m-phone" value="${esc(m?.phone || '')}"></label> <label>E-mail <input id="m-email" value="${esc(m?.email || '')}"></label> </div> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="m-cancel">Annuleren</button><button class="btn btn-primary" id="m-save">Opslaan</button> </div></div>`);
   $('#m-cancel').onclick = closeModal;
   $('#m-save').onclick = async () => {
     const payload = { name: $('#m-name').value, phone: $('#m-phone').value, email: $('#m-email').value };
@@ -645,38 +574,8 @@ async function loadControl() {
   const ai = stats.ai;
   const pct = settings.aiAutoApproveThreshold ? Math.round(settings.aiAutoApproveThreshold * 100) : 0;
   $('#controlPanel').innerHTML = `
-    <div class="stat-grid">
-      <div class="stat"><div class="num">${ai.mode === 'ai' ? '🤖 AI' : '⚙️ Demo'}</div><div class="lbl">Categorisatie-modus</div></div>
-      <div class="stat"><div class="num">${ai.handled}</div><div class="lbl">Berichten verwerkt</div></div>
-      <div class="stat"><div class="num">${ai.accuracy === null ? '—' : ai.accuracy + '%'}</div><div class="lbl">Juist ingedeeld (na controle)</div></div>
-      <div class="stat"><div class="num">${ai.corrected}</div><div class="lbl">Door mens gecorrigeerd</div></div>
-      <div class="stat"><div class="num">${stats.pendingReviews}</div><div class="lbl">Wacht op controle</div></div>
-    </div>
-    <div class="info-card" style="max-width:680px">
-      <h3>Controle-instelling</h3>
-      <p class="muted small">Hoe zeker moet de AI zijn voordat een bericht <strong>automatisch</strong> een opdracht wordt (zonder handmatige controle)? Zet op 0% om <strong>alles</strong> handmatig te controleren (veiligst).</p>
-      <label>Drempel voor automatisch goedkeuren: <strong id="threshLbl">${pct}%</strong>
-        <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}"></label>
-      <button class="btn btn-primary" id="saveThreshold">Opslaan</button>
-    </div>
-    ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">ℹ️ De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : '<p class="muted small" style="margin-top:14px">🤖 Slimme AI (Claude) is actief.</p>'}
-    <div class="info-card" style="max-width:680px;margin-top:16px">
-      <h3>Wekelijkse agenda inklappen</h3>
-      <p class="muted small">Gebeurt automatisch elke zondag na 23:59. Opdrachten van de afgelopen week worden ingeklapt onder een agenda-bundel — behalve openstaande/nieuwe opdrachten en afspraken die ná die week vallen. Je kunt het ook nu handmatig uitvoeren.</p>
-      <button class="btn" id="runArchive">📦 Nu de afgelopen week inklappen</button>
-    </div>
-    <div class="info-card" style="max-width:680px;margin-top:16px">
-      <h3>🩺 Systeemcheck</h3>
-      <p class="muted small">Test of e-mail (ontvangen/versturen) en de AI nog werken. Draait ook automatisch elke 6 uur.</p>
-      <div id="healthList">Laden…</div>
-      <button class="btn" id="runHealth" style="margin-top:10px">🔄 Nu opnieuw testen</button>
-    </div>
-    <div class="info-card" style="max-width:680px;margin-top:16px">
-      <h3>📝 Afwijzingen & feedback (waar de AI van leert)</h3>
-      <p class="muted small">De laatste afwijzingen met reden. De AI krijgt deze mee om dezelfde fouten te vermijden.</p>
-      <div id="feedbackList" class="feedback-list">Laden…</div>
-    </div>
-  `;
+    <div class="stat-grid"> <div class="stat"><div class="num">${ai.mode === 'ai' ? 'AI' : 'Demo'}</div><div class="lbl">Categorisatie-modus</div></div> <div class="stat"><div class="num">${ai.handled}</div><div class="lbl">Berichten verwerkt</div></div> <div class="stat"><div class="num">${ai.accuracy === null ? '—' : ai.accuracy + '%'}</div><div class="lbl">Juist ingedeeld (na controle)</div></div> <div class="stat"><div class="num">${ai.corrected}</div><div class="lbl">Door mens gecorrigeerd</div></div> <div class="stat"><div class="num">${stats.pendingReviews}</div><div class="lbl">Wacht op controle</div></div> </div> <div class="info-card" style="max-width:680px"> <h3>Controle-instelling</h3> <p class="muted small">Hoe zeker moet de AI zijn voordat een bericht <strong>automatisch</strong> een opdracht wordt (zonder handmatige controle)? Zet op 0% om <strong>alles</strong> handmatig te controleren (veiligst).</p> <label>Drempel voor automatisch goedkeuren: <strong id="threshLbl">${pct}%</strong> <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}"></label> <button class="btn btn-primary" id="saveThreshold">Opslaan</button> </div> ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : '<p class="muted small" style="margin-top:14px">Slimme AI (Claude) is actief.</p>'}
+    <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Wekelijkse agenda inklappen</h3> <p class="muted small">Gebeurt automatisch elke zondag na 23:59. Opdrachten van de afgelopen week worden ingeklapt onder een agenda-bundel — behalve openstaande/nieuwe opdrachten en afspraken die ná die week vallen. Je kunt het ook nu handmatig uitvoeren.</p> <button class="btn" id="runArchive">${icon('box', 14)} Nu de afgelopen week inklappen</button> </div> <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Systeemcheck</h3> <p class="muted small">Test of e-mail (ontvangen/versturen) en de AI nog werken. Draait ook automatisch elke 6 uur.</p> <div id="healthList">Laden…</div> <button class="btn" id="runHealth" style="margin-top:10px">${icon('refresh', 14)} Nu opnieuw testen</button> </div> <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Afwijzingen & feedback (waar de AI van leert)</h3> <p class="muted small">De laatste afwijzingen met reden. De AI krijgt deze mee om dezelfde fouten te vermijden.</p> <div id="feedbackList" class="feedback-list">Laden…</div> </div> `;
   loadFeedbackList();
   loadHealth();
   $('#runHealth').onclick = () => loadHealth(true);
@@ -698,10 +597,8 @@ async function loadFeedbackList() {
   const fb = await api('/api/feedback');
   if (!fb.length) { el.innerHTML = '<div class="muted small">Nog geen afwijzingen.</div>'; return; }
   el.innerHTML = fb.map((f) => `
-    <div class="feedback-item">
-      <div><strong>${esc(f.reason)}</strong>${f.shouldBe ? ` <span class="chip">→ ${esc(f.shouldBe)}</span>` : ''}
-        <span class="muted small">· ${esc(f.by)} · ${fmtDateShort(f.at)}</span></div>
-      ${f.note ? `<div class="small">${esc(f.note)}</div>` : ''}
+    <div class="feedback-item"> <div><strong>${esc(f.reason)}</strong>${f.shouldBe ? ` <span class="chip"> ${esc(f.shouldBe)}</span>` : ''}
+        <span class="muted small">· ${esc(f.by)} · ${fmtDateShort(f.at)}</span></div> ${f.note ? `<div class="small">${esc(f.note)}</div>` : ''}
       ${f.sample ? `<div class="muted small" style="margin-top:3px">“${esc(f.sample.slice(0, 120))}…”</div>` : ''}
     </div>`).join('');
 }
@@ -714,8 +611,7 @@ async function loadHealth(run = false) {
     const h = await api('/api/health' + (run ? '?run=1' : ''));
     const row = (label, c) => `<div class="health-row"><span class="hdot ${c.ok ? 'ok' : 'bad'}"></span><strong>${label}</strong><span class="muted small">${esc(c.detail || '')}</span></div>`;
     el.innerHTML = `
-      <div class="health-summary ${h.allOk ? 'ok' : 'bad'}">${h.allOk ? '✅ Alle systemen werken' : '⚠️ Aandacht nodig'} <span class="muted small">· ${fmtDateShort(h.at)}</span></div>
-      ${row('Database', h.database)}
+      <div class="health-summary ${h.allOk ? 'ok' : 'bad'}">${h.allOk ? 'Alle systemen werken' : 'Aandacht nodig'} <span class="muted small">· ${fmtDateShort(h.at)}</span></div> ${row('Database', h.database)}
       ${row('E-mail ontvangen (IMAP)', h.imap)}
       ${row('E-mail versturen (SMTP)', h.smtp)}
       ${row('AI (Claude)', h.ai)}`;
@@ -727,20 +623,8 @@ async function loadSubs() {
   const d = await api('/api/subscriptions');
   const u = d.usage;
   $('#subsPanel').innerHTML = `
-    <div class="stat-grid">
-      <div class="stat"><div class="num">${u.calls}</div><div class="lbl">AI-aanroepen deze maand (${esc(u.month)})</div></div>
-      <div class="stat"><div class="num">$${u.estimatedCostUsd.toFixed(2)}</div><div class="lbl">Geschatte AI-kosten (indicatie)</div></div>
-      <div class="stat"><div class="num">${(u.inputTokens + u.outputTokens).toLocaleString('nl-NL')}</div><div class="lbl">Tokens verbruikt</div></div>
-    </div>
-    <p class="muted small" style="margin:-6px 0 16px">ℹ️ De AI-kosten zijn een <strong>schatting</strong> van het verbruik via dit dashboard. Het officiële verbruik/tegoed zie je in de Claude Console.</p>
-    <div class="card-grid">
-      ${d.services.map((s) => `
-        <div class="info-card">
-          <h3>${esc(s.name)}</h3>
-          <div class="muted small">${esc(s.what)}</div>
-          <div style="margin:8px 0"><span class="chip">${esc(s.cost)}</span></div>
-          <div class="small">${esc(s.note)}</div>
-          ${s.manageUrl ? `<div style="margin-top:10px"><a class="btn btn-sm" href="${esc(s.manageUrl)}" target="_blank" rel="noopener">Beheer / verbruik →</a></div>` : ''}
+    <div class="stat-grid"> <div class="stat"><div class="num">${u.calls}</div><div class="lbl">AI-aanroepen deze maand (${esc(u.month)})</div></div> <div class="stat"><div class="num">$${u.estimatedCostUsd.toFixed(2)}</div><div class="lbl">Geschatte AI-kosten (indicatie)</div></div> <div class="stat"><div class="num">${(u.inputTokens + u.outputTokens).toLocaleString('nl-NL')}</div><div class="lbl">Tokens verbruikt</div></div> </div> <p class="muted small" style="margin:-6px 0 16px">De AI-kosten zijn een <strong>schatting</strong> van het verbruik via dit dashboard. Het officiële verbruik/tegoed zie je in de Claude Console.</p> <div class="card-grid"> ${d.services.map((s) => `
+        <div class="info-card"> <h3>${esc(s.name)}</h3> <div class="muted small">${esc(s.what)}</div> <div style="margin:8px 0"><span class="chip">${esc(s.cost)}</span></div> <div class="small">${esc(s.note)}</div> ${s.manageUrl ? `<div style="margin-top:10px"><a class="btn btn-sm" href="${esc(s.manageUrl)}" target="_blank" rel="noopener">Beheer / verbruik </a></div>` : ''}
         </div>`).join('')}
     </div>`;
 }
@@ -749,36 +633,14 @@ async function loadSubs() {
 async function loadSettings() {
   const s = await api('/api/settings');
   $('#settingsPanel').innerHTML = `
-    <div class="settings-grid">
-      <div class="info-card">
-        <h3>📋 Kolommen (statussen)</h3>
-        <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p>
-        <div id="statusRows"></div>
-        <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button>
-        <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div>
-      </div>
-      <div class="info-card">
-        <h3>🏷️ Herkomst-bronnen</h3>
-        <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p>
-        <div id="sourceRows"></div>
-        <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button>
-        <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div>
-      </div>
-    </div>
-    <div class="info-card" style="margin-top:18px">
-      <h3>💬 Snelle standaardantwoorden</h3>
-      <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p>
-      <div id="tmplRows"></div>
-      <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button>
-      <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div>
-    </div>`;
+    <div class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
   const statusRows = $('#statusRows');
   const renderStatusRow = (st = { key: '', label: '', color: '#64748b' }) => {
     const row = document.createElement('div');
     row.className = 'editor-row';
     row.dataset.key = st.key || '';
-    row.innerHTML = `<input type="color" value="${esc(st.color || '#64748b')}"><input type="text" value="${esc(st.label || '')}" placeholder="Kolomnaam"><button class="btn btn-sm btn-danger" title="Verwijderen">✕</button>`;
+    row.innerHTML = `<input type="color" value="${esc(st.color || '#64748b')}"><input type="text" value="${esc(st.label || '')}" placeholder="Kolomnaam"><button class="btn btn-sm btn-danger" title="Verwijderen"></button>`;
     row.querySelector('button').onclick = () => row.remove();
     statusRows.appendChild(row);
   };
@@ -799,7 +661,7 @@ async function loadSettings() {
   const renderSourceRow = (val = '') => {
     const row = document.createElement('div');
     row.className = 'editor-row';
-    row.innerHTML = `<input type="text" value="${esc(val)}" placeholder="Bijv. DRS WhatsApp groep"><button class="btn btn-sm btn-danger">✕</button>`;
+    row.innerHTML = `<input type="text" value="${esc(val)}" placeholder="Bijv. DRS WhatsApp groep"><button class="btn btn-sm btn-danger"></button>`;
     row.querySelector('button').onclick = () => row.remove();
     sourceRows.appendChild(row);
   };
@@ -819,8 +681,7 @@ async function loadSettings() {
     row.className = 'tmpl-row';
     row.dataset.id = t.id || '';
     row.innerHTML = `
-      <div class="editor-row"><input type="text" class="t-title" value="${esc(t.title || '')}" placeholder="Titel van het antwoord"><button class="btn btn-sm btn-danger">✕</button></div>
-      <textarea class="t-body" rows="4" placeholder="De standaardtekst…">${esc(t.body || '')}</textarea>`;
+      <div class="editor-row"><input type="text" class="t-title" value="${esc(t.title || '')}" placeholder="Titel van het antwoord"><button class="btn btn-sm btn-danger"></button></div> <textarea class="t-body" rows="4" placeholder="De standaardtekst…">${esc(t.body || '')}</textarea>`;
     row.querySelector('button').onclick = () => row.remove();
     tmplRows.appendChild(row);
   };
@@ -841,12 +702,7 @@ async function loadSettings() {
 async function loadUsers() {
   const users = await api('/api/users');
   $('#userList').innerHTML = `
-    <table><thead><tr><th>Naam</th><th>E-mail</th><th>Rol</th><th></th></tr></thead><tbody>
-    ${users.map((u) => `<tr>
-      <td><strong>${esc(u.name)}</strong></td><td>${esc(u.email)}</td>
-      <td><span class="tag ${esc(u.role)}">${esc(u.role)}</span></td>
-      <td>${u.id !== state.me.id ? `<button class="btn btn-sm btn-danger" data-udel="${u.id}">Verwijder</button>` : '<span class="muted small">jij</span>'}</td>
-    </tr>`).join('')}
+    <table><thead><tr><th>Naam</th><th>E-mail</th><th>Rol</th><th></th></tr></thead><tbody> ${users.map((u) => `<tr> <td><strong>${esc(u.name)}</strong></td><td>${esc(u.email)}</td> <td><span class="tag ${esc(u.role)}">${esc(u.role)}</span></td> <td>${u.id !== state.me.id ? `<button class="btn btn-sm btn-danger" data-udel="${u.id}">Verwijder</button>` : '<span class="muted small">jij</span>'}</td> </tr>`).join('')}
     </tbody></table>`;
   $$('[data-udel]').forEach((b) => b.onclick = async () => {
     if (!confirm('Gebruiker verwijderen?')) return;
@@ -856,18 +712,7 @@ async function loadUsers() {
 }
 function openUserModal() {
   modal(`
-    <h2>Nieuwe gebruiker</h2>
-    <label>Naam <input id="u-name"></label>
-    <label>E-mail <input id="u-email" type="email"></label>
-    <label>Wachtwoord <input id="u-pass" type="text" placeholder="minimaal 6 tekens"></label>
-    <label>Rol <select id="u-role">
-      <option value="assistent">Assistent (alles behalve gebruikersbeheer)</option>
-      <option value="monteur">Monteur (alleen opdrachten bekijken/bijwerken)</option>
-      <option value="admin">Admin (volledige toegang)</option>
-    </select></label>
-    <div class="modal-actions"><span></span><div class="right">
-      <button class="btn" id="u-cancel">Annuleren</button><button class="btn btn-primary" id="u-save">Aanmaken</button>
-    </div></div>`);
+    <h2>Nieuwe gebruiker</h2> <label>Naam <input id="u-name"></label> <label>E-mail <input id="u-email" type="email"></label> <label>Wachtwoord <input id="u-pass" type="text" placeholder="minimaal 6 tekens"></label> <label>Rol <select id="u-role"> <option value="assistent">Assistent (alles behalve gebruikersbeheer)</option> <option value="monteur">Monteur (alleen opdrachten bekijken/bijwerken)</option> <option value="admin">Admin (volledige toegang)</option> </select></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="u-cancel">Annuleren</button><button class="btn btn-primary" id="u-save">Aanmaken</button> </div></div>`);
   $('#u-cancel').onclick = closeModal;
   $('#u-save').onclick = async () => {
     const payload = { name: $('#u-name').value, email: $('#u-email').value, password: $('#u-pass').value, role: $('#u-role').value };
@@ -889,15 +734,7 @@ const REJECT_REASONS = [
 function openRejectModal(r) {
   const statusOpts = '<option value="">— n.v.t. —</option>' + statusOptionsHTML('');
   modal(`
-    <h2>✕ Afwijzen</h2>
-    <p class="muted small">Je kunt direct afwijzen. Feedback geven is optioneel, maar helpt de AI leren en is zichtbaar voor het team.</p>
-    <label>Reden (optioneel) <select id="rj-reason"><option value="">— geen reden —</option>${REJECT_REASONS.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
-    <label>Had eigenlijk moeten zijn (optioneel) <select id="rj-should">${statusOpts}</select></label>
-    <label>Uitleg (optioneel) <textarea id="rj-note" rows="3" placeholder="Bv. dit was een nieuwsbrief van een leverancier, geen klant."></textarea></label>
-    <div class="modal-actions"><span></span><div class="right">
-      <button class="btn" id="rj-cancel">Annuleren</button>
-      <button class="btn btn-danger" id="rj-save">Afwijzen</button>
-    </div></div>`);
+    <h2>Afwijzen</h2> <p class="muted small">Je kunt direct afwijzen. Feedback geven is optioneel, maar helpt de AI leren en is zichtbaar voor het team.</p> <label>Reden (optioneel) <select id="rj-reason"><option value="">— geen reden —</option>${REJECT_REASONS.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label> <label>Had eigenlijk moeten zijn (optioneel) <select id="rj-should">${statusOpts}</select></label> <label>Uitleg (optioneel) <textarea id="rj-note" rows="3" placeholder="Bv. dit was een nieuwsbrief van een leverancier, geen klant."></textarea></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="rj-cancel">Annuleren</button> <button class="btn btn-danger" id="rj-save">Afwijzen</button> </div></div>`);
   $('#rj-cancel').onclick = closeModal;
   $('#rj-save').onclick = async () => {
     try {
@@ -917,40 +754,25 @@ function openReplyModal(ctx = {}) {
   const opts = templates.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('');
   const canSend = state.meta.canSendEmail && ctx.email;
   modal(`
-    <h2>💬 Snel antwoord</h2>
-    <p class="muted small">Kies een standaardtekst, pas hem zo nodig aan, en verstuur of kopieer.${ctx.name ? ' Klant: <strong>' + esc(ctx.name) + '</strong>' : ''}${ctx.email ? ' · ' + esc(ctx.email) : ''}</p>
-    <label>Sjabloon <select id="rep-select">${opts || '<option>(geen sjablonen)</option>'}</select></label>
-    <div class="row">
-      <label>Aan (e-mail) <input id="rep-to" value="${esc(ctx.email || '')}" placeholder="e-mailadres klant"></label>
-      <label>Onderwerp <input id="rep-subject" value="Keyservice — uw aanvraag"></label>
-    </div>
-    <label>Tekst <textarea id="rep-body" rows="11">${esc(templates[0]?.body || '')}</textarea></label>
-    <div class="modal-actions">
-      ${ctx.orderId ? '<button class="btn" id="rep-ai">✨ AI-concept</button>' : '<span></span>'}
-      <div class="right">
-        <button class="btn" id="rep-close">Sluiten</button>
-        <button class="btn" id="rep-copy">📋 Kopieer</button>
-        ${ctx.email ? '<a class="btn" id="rep-mail" href="#" target="_blank" rel="noopener">✉️ Open in e-mail</a>' : ''}
-        ${canSend ? '<button class="btn btn-primary" id="rep-send">📨 Direct versturen</button>' : ''}
-      </div>
-    </div>
-    <p class="muted small" id="rep-hint" style="margin-top:10px">${
-      canSend ? '✅ Wordt direct vanuit het dashboard per e-mail verstuurd.'
-      : ctx.email ? 'ℹ️ Direct versturen staat nog uit. Zet SMTP aan (zie docs) of gebruik “Open in e-mail”.'
-      : 'ℹ️ Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp.'
-    }</p>
-  `);
+    <h2>Snel antwoord</h2> <p class="muted small">Kies een standaardtekst, pas hem zo nodig aan, en verstuur of kopieer.${ctx.name ? ' Klant: <strong>' + esc(ctx.name) + '</strong>' : ''}${ctx.email ? ' · ' + esc(ctx.email) : ''}</p> <label>Sjabloon <select id="rep-select">${opts || '<option>(geen sjablonen)</option>'}</select></label> <div class="row"> <label>Aan (e-mail) <input id="rep-to" value="${esc(ctx.email || '')}" placeholder="e-mailadres klant"></label> <label>Onderwerp <input id="rep-subject" value="Keyservice — uw aanvraag"></label> </div> <label>Tekst <textarea id="rep-body" rows="11">${esc(templates[0]?.body || '')}</textarea></label> <div class="modal-actions"> ${ctx.orderId ? `<button class="btn" id="rep-ai">${icon('sparkles', 14)} AI-concept</button>` : '<span></span>'}
+      <div class="right"> <button class="btn" id="rep-close">Sluiten</button> <button class="btn" id="rep-copy">${icon('copy', 14)} Kopieer</button> ${ctx.email ? `<a class="btn" id="rep-mail" href="#" target="_blank" rel="noopener">${icon('mail', 14)} Open in e-mail</a>` : ''}
+        ${canSend ? '<button class="btn btn-primary" id="rep-send">Direct versturen</button>' : ''}
+      </div> </div> <p class="muted small" id="rep-hint" style="margin-top:10px">${
+      canSend ? ' Wordt direct vanuit het dashboard per e-mail verstuurd.'
+      : ctx.email ? ' Direct versturen staat nog uit. Zet SMTP aan (zie docs) of gebruik “Open in e-mail”.'
+      : ' Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp.'
+    }</p> `);
   const sel = $('#rep-select'), body = $('#rep-body');
   sel.onchange = () => { const t = templates[Number(sel.value)]; if (t) body.value = t.body; };
   const aiBtn = $('#rep-ai');
   if (aiBtn) aiBtn.onclick = async () => {
-    aiBtn.disabled = true; aiBtn.textContent = '✨ Bezig…';
+    aiBtn.disabled = true; aiBtn.textContent = 'Bezig…';
     try {
       const out = await api(`/api/orders/${ctx.orderId}/suggest-reply`, 'POST');
       if (out.text) { body.value = out.text; flash('#rep-body'); toast('Concept ingevuld'); }
       else toast('Geen concept (zet de AI aan)', true);
     } catch (err) { toast(err.message, true); }
-    aiBtn.disabled = false; aiBtn.textContent = '✨ AI-concept';
+    aiBtn.disabled = false; aiBtn.innerHTML = `${icon('sparkles', 14)} AI-concept`;
   };
   $('#rep-close').onclick = closeModal;
   $('#rep-copy').onclick = async () => {
@@ -968,7 +790,7 @@ function openReplyModal(ctx = {}) {
       await api('/api/send-reply', 'POST', {
         to: $('#rep-to').value, subject: $('#rep-subject').value, text: body.value, orderId: ctx.orderId || null,
       });
-      closeModal(); toast('E-mail verstuurd ✅');
+      closeModal(); toast('E-mail verstuurd ');
     } catch (err) { toast(err.message, true); sendBtn.disabled = false; }
   };
 }
@@ -976,15 +798,7 @@ function openReplyModal(ctx = {}) {
 // ---------- Account / wachtwoord ----------
 function openAccountModal() {
   modal(`
-    <h2>Mijn account</h2>
-    <p class="muted small">${esc(state.me.name)} · ${esc(state.me.email)} · rol: ${esc(state.me.role)}</p>
-    <h3 style="margin:16px 0 10px;font-size:15px">Wachtwoord wijzigen</h3>
-    <label>Huidig wachtwoord <input id="p-cur" type="password"></label>
-    <label>Nieuw wachtwoord <input id="p-new" type="password" placeholder="minimaal 6 tekens"></label>
-    <label>Herhaal nieuw wachtwoord <input id="p-new2" type="password"></label>
-    <div class="modal-actions"><span></span><div class="right">
-      <button class="btn" id="p-cancel">Sluiten</button><button class="btn btn-primary" id="p-save">Wijzigen</button>
-    </div></div>`);
+    <h2>Mijn account</h2> <p class="muted small">${esc(state.me.name)} · ${esc(state.me.email)} · rol: ${esc(state.me.role)}</p> <h3 style="margin:16px 0 10px;font-size:15px">Wachtwoord wijzigen</h3> <label>Huidig wachtwoord <input id="p-cur" type="password"></label> <label>Nieuw wachtwoord <input id="p-new" type="password" placeholder="minimaal 6 tekens"></label> <label>Herhaal nieuw wachtwoord <input id="p-new2" type="password"></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="p-cancel">Sluiten</button><button class="btn btn-primary" id="p-save">Wijzigen</button> </div></div>`);
   $('#p-cancel').onclick = closeModal;
   $('#p-save').onclick = async () => {
     const cur = $('#p-cur').value, n1 = $('#p-new').value, n2 = $('#p-new2').value;
@@ -998,18 +812,7 @@ function openAccountModal() {
 // ---------- Bericht handmatig toevoegen ----------
 function openSimulateModal() {
   modal(`
-    <h2>➕ Bericht handmatig toevoegen</h2>
-    <p class="muted small">Handig om een bericht uit je <strong>WhatsApp-groep</strong> door te zetten: kopieer het en plak het hieronder. De AI deelt het daarna in.</p>
-    <label>Kanaal <select id="s-channel">
-      <option value="whatsapp">💬 WhatsApp</option><option value="email">✉️ E-mail</option>
-    </select></label>
-    <label>Afzender (naam / nummer / e-mail) <input id="s-sender" placeholder="Jan Jansen of 06-12345678"></label>
-    <label>Groep (optioneel) <input id="s-group" placeholder="bv. DRS WhatsApp groep"></label>
-    <label>Onderwerp (bij e-mail) <input id="s-subject" placeholder="Offerte aanvraag voordeurslot"></label>
-    <label>Bericht <textarea id="s-body" rows="4" placeholder="Hoi, ik ben buitengesloten en kom mijn huis niet in. Kunnen jullie snel langskomen?"></textarea></label>
-    <div class="modal-actions"><span></span><div class="right">
-      <button class="btn" id="s-cancel">Annuleren</button><button class="btn btn-primary" id="s-save">Versturen</button>
-    </div></div>`);
+    <h2>Bericht handmatig toevoegen</h2> <p class="muted small">Handig om een bericht uit je <strong>WhatsApp-groep</strong> door te zetten: kopieer het en plak het hieronder. De AI deelt het daarna in.</p> <label>Kanaal <select id="s-channel"> <option value="whatsapp">WhatsApp</option><option value="email">E-mail</option> </select></label> <label>Afzender (naam / nummer / e-mail) <input id="s-sender" placeholder="Jan Jansen of 06-12345678"></label> <label>Groep (optioneel) <input id="s-group" placeholder="bv. DRS WhatsApp groep"></label> <label>Onderwerp (bij e-mail) <input id="s-subject" placeholder="Offerte aanvraag voordeurslot"></label> <label>Bericht <textarea id="s-body" rows="4" placeholder="Hoi, ik ben buitengesloten en kom mijn huis niet in. Kunnen jullie snel langskomen?"></textarea></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="s-cancel">Annuleren</button><button class="btn btn-primary" id="s-save">Versturen</button> </div></div>`);
   $('#s-cancel').onclick = closeModal;
   $('#s-save').onclick = async () => {
     const payload = { channel: $('#s-channel').value, sender: $('#s-sender').value, group: $('#s-group').value, subject: $('#s-subject').value, body: $('#s-body').value };
@@ -1021,47 +824,31 @@ function openSimulateModal() {
 
 // ---------- Status-scan (digest) ----------
 async function openDigestModal() {
-  modal('<h2>📊 Status-scan</h2><p class="muted small">Bezig met scannen…</p>');
+  modal('<h2>Status-scan</h2><p class="muted small">Bezig met scannen…</p>');
   const d = await api('/api/digest');
   const list = (arr, emptyTxt) => arr.length
     ? `<ul class="digest-list">${arr.map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}</ul>`
     : `<div class="muted small">${emptyTxt}</div>`;
   const statusBar = Object.values(d.byStatus).map((s) => `<span class="chip">${esc(s.label)}: <strong>${s.count}</strong></span>`).join(' ');
   modal(`
-    <h2>📊 Status-scan</h2>
-    <p class="muted small">${d.total} actieve opdrachten · ${d.pendingReviews} wachten in de inbox</p>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">${statusBar}</div>
-    <div class="digest-block"><h3>💬 Klant heeft gereageerd (${d.customerReplied.length})</h3>${list(d.customerReplied, 'Niemand op dit moment.')}</div>
-    <div class="digest-block"><h3>⏳ Wacht op ons antwoord (${d.awaitingReply.length})</h3>${list(d.awaitingReply, 'Niets openstaand.')}</div>
-    <div class="digest-block"><h3>👁️ Nog niet bekeken (${d.neverOpened.length})</h3>${list(d.neverOpened, 'Alles is bekeken.')}</div>
-    <div class="digest-block"><h3>🕸️ Lang stil (5+ dagen) (${d.stale.length})</h3>${list(d.stale, 'Niets blijft liggen.')}</div>
-    <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="dg-close">Sluiten</button></div></div>
-  `);
+    <h2>Status-scan</h2> <p class="muted small">${d.total} actieve opdrachten · ${d.pendingReviews} wachten in de inbox</p> <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">${statusBar}</div> <div class="digest-block"><h3>Klant heeft gereageerd (${d.customerReplied.length})</h3>${list(d.customerReplied, 'Niemand op dit moment.')}</div> <div class="digest-block"><h3>Wacht op ons antwoord (${d.awaitingReply.length})</h3>${list(d.awaitingReply, 'Niets openstaand.')}</div> <div class="digest-block"><h3>Nog niet bekeken (${d.neverOpened.length})</h3>${list(d.neverOpened, 'Alles is bekeken.')}</div> <div class="digest-block"><h3>Lang stil (5+ dagen) (${d.stale.length})</h3>${list(d.stale, 'Niets blijft liggen.')}</div> <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="dg-close">Sluiten</button></div></div> `);
   $('#dg-close').onclick = closeModal;
   $$('[data-open]').forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
 }
 
 // ---------- Dubbele klanten samenvoegen ----------
 async function openDuplicatesModal() {
-  modal('<h2>🔀 Dubbele klanten</h2><p class="muted small">Zoeken naar dubbele klanten…</p>');
+  modal('<h2>Dubbele klanten</h2><p class="muted small">Zoeken naar dubbele klanten…</p>');
   const groups = await api('/api/customers/duplicates');
   if (!groups.length) {
-    modal('<h2>🔀 Dubbele klanten</h2><p>✅ Geen dubbele klanten gevonden.</p><div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="d-close">Sluiten</button></div></div>');
+    modal('<h2>Dubbele klanten</h2><p>Geen dubbele klanten gevonden.</p><div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="d-close">Sluiten</button></div></div>');
     $('#d-close').onclick = closeModal; return;
   }
   const blocks = groups.map((grp, gi) => `
-    <div class="dup-group">
-      <div class="muted small">Mogelijke dezelfde klant:</div>
-      ${grp.map((c, ci) => `
-        <label class="dup-row">
-          <input type="radio" name="primary-${gi}" value="${c.id}" ${ci === 0 ? 'checked' : ''}>
-          <span><strong>${esc(c.name)}</strong> · ${esc(c.email || '')} ${esc(c.phone || '')} <span class="muted">(${c.orderCount} opdrachten)</span></span>
-        </label>`).join('')}
-      <button class="btn btn-sm btn-primary" data-merge="${gi}">Samenvoegen tot gekozen klant</button>
-    </div>`).join('');
-  modal(`<h2>🔀 Dubbele klanten (${groups.length})</h2>
-    <p class="muted small">Kies per groep de juiste hoofdklant en voeg samen. Opdrachten worden verplaatst.</p>
-    ${blocks}
+    <div class="dup-group"> <div class="muted small">Mogelijke dezelfde klant:</div> ${grp.map((c, ci) => `
+        <label class="dup-row"> <input type="radio" name="primary-${gi}" value="${c.id}" ${ci === 0 ? 'checked' : ''}> <span><strong>${esc(c.name)}</strong> · ${esc(c.email || '')} ${esc(c.phone || '')} <span class="muted">(${c.orderCount} opdrachten)</span></span> </label>`).join('')}
+      <button class="btn btn-sm btn-primary" data-merge="${gi}">Samenvoegen tot gekozen klant</button> </div>`).join('');
+  modal(`<h2>Dubbele klanten (${groups.length})</h2> <p class="muted small">Kies per groep de juiste hoofdklant en voeg samen. Opdrachten worden verplaatst.</p> ${blocks}
     <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="d-close">Sluiten</button></div></div>`);
   $('#d-close').onclick = closeModal;
   $$('[data-merge]').forEach((b) => b.onclick = async () => {
