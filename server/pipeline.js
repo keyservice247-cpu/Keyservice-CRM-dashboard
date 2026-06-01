@@ -182,6 +182,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
       }
       // Markeer dat de KLANT heeft gereageerd -> melding op de kaart.
       openOrder.customerReplied = true;
+      openOrder.unreadReplies = (openOrder.unreadReplies || 0) + 1;
       openOrder.lastCustomerReplyAt = now();
       openOrder.updatedAt = now();
       // vul ontbrekende klantgegevens aan

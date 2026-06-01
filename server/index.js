@@ -419,6 +419,7 @@ app.post('/api/orders/:id/seen', requireAuth, (req, res) => {
   if (!order.openedAt) { order.openedAt = now(); changed = true; }
   // 'Klant heeft gereageerd'-melding wegklikken zodra je de kaart opent.
   if (order.customerReplied) { order.customerReplied = false; changed = true; }
+  if (order.unreadReplies) { order.unreadReplies = 0; changed = true; }
   if (changed) saveSoon();
   res.json({ ok: true });
 });

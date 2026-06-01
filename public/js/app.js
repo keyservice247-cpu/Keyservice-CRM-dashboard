@@ -317,9 +317,12 @@ function cardHTML(o) {
   const st = o.lastReplyAt ? { c: 'replied', t: 'Beantwoord' }
     : o.openedAt ? { c: 'opened', t: 'Geopend' }
     : { c: 'new', t: 'Nieuw — nog niet bekeken' };
+  const replyCount = o.unreadReplies || 0;
+  const replyLabel = replyCount > 1 ? `${replyCount} nieuwe berichten` : 'Nieuw bericht';
   return `
     <div class="card ${o.urgent ? 'urgent' : ''} ${st.c === 'new' ? 'is-new' : ''} ${o.customerReplied ? 'replied-alert' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
-      ${o.customerReplied ? `<div class="reply-banner">${icon('message', 12)} Klant heeft gereageerd</div>` : ''}
+      ${o.customerReplied ? `<span class="reply-corner" title="${replyLabel}">${replyCount || ''}</span>` : ''}
+      ${o.customerReplied ? `<div class="reply-banner">${icon('message', 12)} ${replyLabel}</div>` : ''}
       <div class="card-title"><span class="state-dot ${st.c}" title="${st.t}"></span>${esc(o.title)}</div>
       ${o.customer ? `<div class="card-customer">${icon('user', 13)} ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
       <div class="card-meta">${meta.join('')}</div>
