@@ -27,8 +27,15 @@ if (fs.existsSync(envPath)) {
   }
 }
 
-const DASHBOARD_URL = (process.env.DASHBOARD_URL || '').replace(/\/$/, '');
-const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
+// Hardcoded omdat de Hetzner-webconsole tekens als _ + = sloopt bij plakken.
+// Pas deze twee waarden aan als je dashboard-adres of token verandert.
+const HARDCODED_DASHBOARD_URL = 'https://keyservice-crm.onrender.com';
+const HARDCODED_INGEST_TOKEN = 'kNG2TbPsgPXqRKkugqmplBXXI0KONYSDiNB+59DLdtg=';
+
+// Hardcoded waarden hebben voorrang (de .env op de server bevat door de console
+// beschadigde tekens). Verander hierboven als je wilt afwijken.
+const DASHBOARD_URL = (HARDCODED_DASHBOARD_URL || process.env.DASHBOARD_URL || '').replace(/\/$/, '');
+const INGEST_TOKEN = HARDCODED_INGEST_TOKEN || process.env.INGEST_TOKEN || '';
 const FORWARD_DIRECT = (process.env.FORWARD_DIRECT || 'true') === 'true';
 const GROUP_FILTER = (process.env.GROUP_FILTER || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 const SESSION_DIR = process.env.SESSION_DIR || './wa-session';
