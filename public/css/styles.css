@@ -260,6 +260,17 @@ tr:last-child td { border-bottom: none; }
 .thread { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .thread-head { font-weight: 500; font-size: 13px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
 .thread-item { background: #fcfcfd; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 9px 11px; margin-bottom: 7px; }
+/* Uitgaand bericht (ons antwoord) -> rechts uitgelijnd, lichtblauw */
+.thread-item.thread-out { background: var(--accent-soft); border-color: #d5e0f5; margin-left: 32px; }
+.thread-item.thread-out .thread-meta { color: var(--accent-ink); }
+
+/* Beantwoorden-venster: gesprek bovenin */
+.reply-head { font-weight: 500; font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
+.reply-thread { max-height: 200px; overflow-y: auto; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 8px 10px; background: #fcfcfd; }
+.reply-msg-row { padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+.reply-msg-row:last-child { border-bottom: none; }
+.reply-who { font-weight: 500; font-size: 12px; }
+.reply-msg-txt { font-size: 13px; color: var(--ink-soft); white-space: pre-wrap; margin-top: 2px; }
 .thread-meta { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
 .thread-body { font-size: 13px; color: var(--ink-soft); white-space: pre-wrap; max-height: 130px; overflow: auto; }
 

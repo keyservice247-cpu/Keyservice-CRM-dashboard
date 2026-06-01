@@ -733,11 +733,20 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
     if (orderId) {
       const order = db().orders.find((o) => o.id === orderId);
       if (order) {
-        order.notes = `${order.notes ? order.notes + '\n\n' : ''}[${now()}] E-mail verstuurd door ${req.user.name}:\n${text}`;
+        // Ons antwoord als bericht in de gesprekshistorie (zo blijft het gesprek
+        // compleet op de kaart, met wie wat wanneer stuurde).
+        order.thread = order.thread || [];
+        order.thread.push({
+          id: id('thr'), channel: 'email', outgoing: true,
+          sender: `${req.user.name} (Keyservice)`, subject, body: text, at: now(),
+        });
         order.lastReplyAt = now();
         // Antwoord verstuurd -> van "Nieuw" automatisch naar "In behandeling".
         if (order.status === 'nieuw') order.status = isValidStatus('open') ? 'open' : order.status;
         order.openedAt = order.openedAt || now();
+        // Klantreactie-melding weg (we hebben er net op gereageerd).
+        order.customerReplied = false;
+        order.unreadReplies = 0;
         order.updatedAt = now();
       }
     }

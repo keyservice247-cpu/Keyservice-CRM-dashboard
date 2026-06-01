@@ -151,11 +151,20 @@ function showView(view) {
 // Markeer een opdracht als geopend/gezien (zet de statusstip op blauw).
 async function markSeen(id) {
   const o = state.orders.find((x) => x.id === id);
-  if (!o || o.openedAt) return;
-  o.openedAt = new Date().toISOString();
-  const dot = $(`.card[data-id="${id}"] .state-dot`);
-  if (dot && !o.lastReplyAt) { dot.classList.remove('new'); dot.classList.add('opened'); }
-  const card = $(`.card[data-id="${id}"]`); if (card) card.classList.remove('is-new');
+  if (!o) return;
+  // Niets te doen als al geopend én geen nieuwe klantreactie open staat.
+  if (o.openedAt && !o.customerReplied) return;
+  o.openedAt = o.openedAt || new Date().toISOString();
+  o.customerReplied = false;
+  o.unreadReplies = 0;
+  const card = $(`.card[data-id="${id}"]`);
+  if (card) {
+    card.classList.remove('is-new', 'replied-alert');
+    const dot = $('.state-dot', card);
+    if (dot && !o.lastReplyAt) { dot.classList.remove('new'); dot.classList.add('opened'); }
+    const banner = $('.reply-banner', card); if (banner) banner.remove();
+    const corner = $('.reply-corner', card); if (corner) corner.remove();
+  }
   try { await api(`/api/orders/${id}/seen`, 'POST'); } catch {}
 }
 
@@ -385,14 +394,14 @@ function openOrderModal(id, pool) {
           <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button> <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden> </div> <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div> </div>` : ''}
     ${o && o.thread && o.thread.length ? `
       <div class="thread"> <div class="thread-head">${icon('message', 15)} Gesprekshistorie (${o.thread.length})</div> ${o.thread.map((t) => `
-          <div class="thread-item"> <div class="thread-meta">${sourceIcon(t.channel)} ${esc(t.sender || '')} · ${fmtDate(t.at)}${t.subject ? ' · ' + esc(t.subject) : ''}</div> <div class="thread-body">${esc(t.body || '')}</div> ${t.attachments && t.attachments.length ? `<div class="attach-grid">${attachmentsHTML(t.attachments)}</div>` : ''}
+          <div class="thread-item ${t.outgoing ? 'thread-out' : ''}"> <div class="thread-meta">${t.outgoing ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || '')} · ${fmtDate(t.at)}${t.subject ? ' · ' + esc(t.subject) : ''}</div> <div class="thread-body">${esc(t.body || '')}</div> ${t.attachments && t.attachments.length ? `<div class="attach-grid">${attachmentsHTML(t.attachments)}</div>` : ''}
           </div>`).join('')}
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
       <div class="right"> ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('[data-source]'));
-  if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id });
+  if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
 
   // Bijlagen toevoegen
   if (o) {
@@ -513,6 +522,8 @@ function bindReview(r) {
     email: $('.r-cemail', el).value,
     phone: $('.r-cphone', el).value,
     channel: r.channel,
+    title: r.suggestion?.title,
+    thread: r.message ? [{ sender: r.message.sender, body: r.message.body, at: r.message.receivedAt, channel: r.channel }] : [],
   });
 }
 
@@ -783,22 +794,51 @@ function openRejectModal(r) {
   };
 }
 
-// ---------- Snel antwoord (standaard-sjablonen) ----------
+// ---------- Beantwoorden (echte conversatie) ----------
 function openReplyModal(ctx = {}) {
   const templates = state.meta.templates || [];
-  const opts = templates.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('');
+  const opts = '<option value="">— kies standaardtekst —</option>' + templates.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('');
   const canSend = state.meta.canSendEmail && ctx.email;
+  const thread = ctx.thread || [];
+  // Onderwerp wordt "Re: <titel>" zodat het een doorlopend gesprek is.
+  const subj = ctx.title ? (/^re:/i.test(ctx.title) ? ctx.title : 'Re: ' + ctx.title) : 'Re: uw aanvraag bij Keyservice';
+  // Laatste klantbericht om te citeren (zodat het als antwoord leest).
+  const lastMsg = [...thread].reverse().find((t) => t.body);
+  const threadHTML = thread.length
+    ? `<div class="reply-thread">${thread.slice(-6).map((t) => `
+        <div class="reply-msg-row"><span class="reply-who">${esc(t.sender || 'Klant')}</span> <span class="muted small">${fmtDate(t.at)}</span><div class="reply-msg-txt">${esc((t.body || '').slice(0, 600))}</div></div>`).join('')}</div>`
+    : '<div class="muted small">Nog geen eerdere berichten.</div>';
+
   modal(`
-    <h2>Snel antwoord</h2> <p class="muted small">Kies een standaardtekst, pas hem zo nodig aan, en verstuur of kopieer.${ctx.name ? ' Klant: <strong>' + esc(ctx.name) + '</strong>' : ''}${ctx.email ? ' · ' + esc(ctx.email) : ''}</p> <label>Sjabloon <select id="rep-select">${opts || '<option>(geen sjablonen)</option>'}</select></label> <div class="row"> <label>Aan (e-mail) <input id="rep-to" value="${esc(ctx.email || '')}" placeholder="e-mailadres klant"></label> <label>Onderwerp <input id="rep-subject" value="Keyservice — uw aanvraag"></label> </div> <label>Tekst <textarea id="rep-body" rows="11">${esc(templates[0]?.body || '')}</textarea></label> <div class="modal-actions"> ${ctx.orderId ? `<button class="btn" id="rep-ai">${icon('sparkles', 14)} AI-concept</button>` : '<span></span>'}
+    <h2>Beantwoorden${ctx.name ? ' — ' + esc(ctx.name) : ''}</h2>
+    <p class="muted small">${ctx.email ? esc(ctx.email) : 'Geen e-mailadres bekend'}</p>
+    <div class="reply-head">Gesprek</div>
+    ${threadHTML}
+    <div class="row" style="margin-top:12px"> <label>Aan <input id="rep-to" value="${esc(ctx.email || '')}" placeholder="e-mailadres klant"></label> <label>Onderwerp <input id="rep-subject" value="${esc(subj)}"></label> </div>
+    <label>Sjabloon invoegen <select id="rep-select">${opts}</select></label>
+    <label>Jouw antwoord <textarea id="rep-body" rows="7" placeholder="Typ hier je antwoord aan de klant…"></textarea></label>
+    <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:4px"><input type="checkbox" id="rep-quote" style="width:auto" checked> Vorig bericht citeren onder mijn antwoord</label>
+    <div class="modal-actions"> ${ctx.orderId ? `<button class="btn" id="rep-ai">${icon('sparkles', 14)} AI-concept</button>` : '<span></span>'}
       <div class="right"> <button class="btn" id="rep-close">Sluiten</button> <button class="btn" id="rep-copy">${icon('copy', 14)} Kopieer</button> ${ctx.email ? `<a class="btn" id="rep-mail" href="#" target="_blank" rel="noopener">${icon('mail', 14)} Open in e-mail</a>` : ''}
-        ${canSend ? '<button class="btn btn-primary" id="rep-send">Direct versturen</button>' : ''}
-      </div> </div> <p class="muted small" id="rep-hint" style="margin-top:10px">${
-      canSend ? ' Wordt direct vanuit het dashboard per e-mail verstuurd.'
-      : ctx.email ? ' Direct versturen staat nog uit. Zet SMTP aan (zie docs) of gebruik “Open in e-mail”.'
-      : ' Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp.'
+        ${canSend ? '<button class="btn btn-primary" id="rep-send">Verzenden</button>' : ''}
+      </div> </div>
+    <p class="muted small" id="rep-hint" style="margin-top:10px">${
+      canSend ? 'Wordt direct vanuit het dashboard verstuurd, met je naam als afzender. Het hele gesprek blijft op de kaart bewaard.'
+      : ctx.email ? 'Direct versturen staat nog uit (SMTP). Gebruik “Open in e-mail” of kopieer de tekst.'
+      : 'Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp.'
     }</p> `);
-  const sel = $('#rep-select'), body = $('#rep-body');
-  sel.onchange = () => { const t = templates[Number(sel.value)]; if (t) body.value = t.body; };
+
+  // Bouwt de volledige tekst: jouw antwoord + (optioneel) geciteerd vorig bericht.
+  const fullText = () => {
+    let t = $('#rep-body').value.trim();
+    if ($('#rep-quote')?.checked && lastMsg) {
+      const when = fmtDate(lastMsg.at);
+      const quoted = (lastMsg.body || '').split('\n').map((l) => '> ' + l).join('\n');
+      t += `\n\n----- Op ${when} schreef ${lastMsg.sender || 'de klant'}: -----\n${quoted}`;
+    }
+    return t;
+  };
+
   const aiBtn = $('#rep-ai');
   if (aiBtn) aiBtn.onclick = async () => {
     aiBtn.disabled = true; aiBtn.textContent = 'Bezig…';
@@ -811,21 +851,23 @@ function openReplyModal(ctx = {}) {
   };
   $('#rep-close').onclick = closeModal;
   $('#rep-copy').onclick = async () => {
-    try { await navigator.clipboard.writeText(body.value); toast('Tekst gekopieerd'); }
-    catch { body.select(); document.execCommand('copy'); toast('Tekst gekopieerd'); }
+    const t = fullText();
+    try { await navigator.clipboard.writeText(t); toast('Tekst gekopieerd'); }
+    catch { body.value = t; body.select(); document.execCommand('copy'); toast('Tekst gekopieerd'); }
   };
   const mailBtn = $('#rep-mail');
-  if (mailBtn) mailBtn.onclick = (e) => {
-    mailBtn.href = `mailto:${encodeURIComponent($('#rep-to').value)}?subject=${encodeURIComponent($('#rep-subject').value)}&body=${encodeURIComponent(body.value)}`;
+  if (mailBtn) mailBtn.onclick = () => {
+    mailBtn.href = `mailto:${encodeURIComponent($('#rep-to').value)}?subject=${encodeURIComponent($('#rep-subject').value)}&body=${encodeURIComponent(fullText())}`;
   };
   const sendBtn = $('#rep-send');
   if (sendBtn) sendBtn.onclick = async () => {
+    if (!$('#rep-body').value.trim()) return toast('Typ eerst een antwoord', true);
     sendBtn.disabled = true;
     try {
       await api('/api/send-reply', 'POST', {
-        to: $('#rep-to').value, subject: $('#rep-subject').value, text: body.value, orderId: ctx.orderId || null,
+        to: $('#rep-to').value, subject: $('#rep-subject').value, text: fullText(), orderId: ctx.orderId || null,
       });
-      closeModal(); toast('E-mail verstuurd ');
+      closeModal(); toast('Verstuurd'); loadBoard();
     } catch (err) { toast(err.message, true); sendBtn.disabled = false; }
   };
 }
