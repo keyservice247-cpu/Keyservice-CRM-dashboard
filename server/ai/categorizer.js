@@ -283,7 +283,12 @@ BELANGRIJK bij de klantgegevens:
   als 085-..., en negeer doorstuur-/website-systeemteksten.
 - Velden met labels ("Naam:", "Email:", "Telefoon:", "Adres:") zijn leidend.
 - Maak een korte, duidelijke probleemomschrijving in 1 zin.
-Antwoord UITSLUITEND met geldige JSON, geen extra tekst.${learningsBlock(message.learnings)}`;
+
+Geef in je JSON ook een veld "isOpdracht" (true/false): is dit een ECHTE klant-
+aanvraag/opdracht voor een sleutel-/slotenmaker, of geen opdracht (geklets,
+reclame, leverancier, intern, nieuwsbrief)? Het team heeft eerder berichten
+afgewezen — leer daar streng van.
+Antwoord UITSLUITEND met geldige JSON, geen extra tekst.${message.rejectSummary ? `\n\nSAMENVATTING van alle afwijzingen door het team:\n${message.rejectSummary}` : ''}${learningsBlock(message.learnings)}`;
 
   const user = `Bericht-kanaal: ${message.channel}
 Afzender: ${message.sender || '(onbekend)'}

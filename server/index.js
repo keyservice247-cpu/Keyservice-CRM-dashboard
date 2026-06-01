@@ -484,22 +484,21 @@ app.post('/api/reviews/:id/reject', requireRole('admin', 'assistent'), (req, res
   review.rejectNote = b.note || '';          // vrije uitleg (optioneel)
   review.rejectShouldBe = b.shouldBe || '';  // wat had het moeten zijn (optioneel)
 
-  // Bewaar als leervoorbeeld alleen als er feedback is meegegeven.
-  if (b.reason || b.note || b.shouldBe) {
-    const msg = db().messages.find((m) => m.id === review.messageId);
-    db().feedback.unshift({
-      id: id('fb'),
-      at: now(),
-      by: req.user.name,
-      channel: review.channel,
-      reason: b.reason || 'Afgewezen',
-      note: b.note || '',
-      shouldBe: b.shouldBe || '',
-      aiStatus: review.suggestion?.aiStatus || review.suggestion?.status,
-      sample: (msg?.body || '').slice(0, 400),
-    });
-    if (db().feedback.length > 500) db().feedback.length = 500;
-  }
+  // ELKE afwijzing wordt opgeslagen als leersignaal (ook zonder reden), zodat de
+  // AI steeds beter leert wat géén echte opdracht is. Geen limiet.
+  const msg = db().messages.find((m) => m.id === review.messageId);
+  db().feedback.unshift({
+    id: id('fb'),
+    type: 'reject',
+    at: now(),
+    by: req.user.name,
+    channel: review.channel,
+    reason: b.reason || 'Afgewezen (geen reden opgegeven)',
+    note: b.note || '',
+    shouldBe: b.shouldBe || '',
+    aiStatus: review.suggestion?.aiStatus || review.suggestion?.status,
+    sample: (msg?.body || '').slice(0, 400),
+  });
 
   logActivity(req.user.name, 'review afgewezen', `${review.suggestion?.title || ''}${b.reason ? ' — ' + b.reason : ''}`);
   saveSoon();

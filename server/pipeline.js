@@ -4,6 +4,21 @@ import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey } from './settings.js';
 
+// Vat ALLE afwijzingen samen per reden ("12x spam/reclame, 5x leverancier"),
+// zodat de AI leert van het volledige beeld, niet alleen de losse voorbeelden.
+function summarizeRejections(rejects) {
+  if (!rejects || !rejects.length) return '';
+  const counts = {};
+  for (const r of rejects) {
+    const key = (r.reason || 'Afgewezen').trim();
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  const parts = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, n]) => `${n}x "${reason}"`);
+  return `Totaal ${rejects.length} eerdere afwijzingen door het team. Verdeling: ${parts.join(', ')}.`;
+}
+
 export function autoApproveThreshold() {
   const s = db().settings || {};
   if (s.aiAutoApproveThreshold != null) return Number(s.aiAutoApproveThreshold);
@@ -125,6 +140,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     const msg = db().messages.find((m) => m.id === review.messageId);
     db().feedback.unshift({
       id: id('fb'),
+      type: 'correction',
       at: now(),
       by: actorName,
       channel: review.channel,
@@ -134,7 +150,6 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
       aiStatus: aiThought,
       sample: (msg?.body || '').slice(0, 400),
     });
-    if (db().feedback.length > 500) db().feedback.length = 500;
   }
 
   saveSoon();
@@ -164,9 +179,16 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   };
   db().messages.push(message);
 
-  // Geef de AI de laatste teamcorrecties mee zodat hij ervan leert.
-  const learnings = (db().feedback || []).slice(0, 20);
-  const suggestion = await classify({ channel, sender, subject, body, learnings });
+  // Feedback meegeven aan de AI. Afwijzingen ("dit is géén opdracht") zijn het
+  // belangrijkst, dus die krijgen voorrang: recente afwijzingen als concrete
+  // voorbeelden + een samenvatting van ÁLLE afwijzingen (zodat niets verloren gaat,
+  // ook al passen niet alle voorbeelden los in het AI-geheugen).
+  const allFb = db().feedback || [];
+  const rejects = allFb.filter((f) => f.type === 'reject' || f.reason !== 'Categorie gecorrigeerd');
+  const corrections = allFb.filter((f) => f.type === 'correction');
+  const learnings = [...rejects.slice(0, 25), ...corrections.slice(0, 10)];
+  const rejectSummary = summarizeRejections(rejects);
+  const suggestion = await classify({ channel, sender, subject, body, learnings, rejectSummary });
   // De AI-inschatting bewaren we als hint, maar alle binnenkomende klanten
   // landen standaard in "Open / Nieuw". De assistente bepaalt de rest.
   suggestion.aiStatus = suggestion.status;
