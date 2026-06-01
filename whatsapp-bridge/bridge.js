@@ -43,9 +43,12 @@ const client = new Client({
   puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] },
 });
 
-// Koppelen via 8-cijferige code i.p.v. QR-scan. Zet PAIR_NUMBER in .env op het
-// telefoonnummer (internationaal, alleen cijfers, bv. 31612345678).
-const PAIR_NUMBER = (process.env.PAIR_NUMBER || '').replace(/[^\d]/g, '');
+// Koppelen via 8-cijferige code i.p.v. QR-scan.
+// Nummer staat hier hardcoded omdat de Hetzner-webconsole _ en $ bij plakken
+// sloopt. Pas dit getal aan als je een ander nummer koppelt (internationaal,
+// alleen cijfers, bv. 31612345678). Leeg laten = QR gebruiken.
+const HARDCODED_PAIR_NUMBER = '31685352477';
+const PAIR_NUMBER = (process.env.PAIR_NUMBER || HARDCODED_PAIR_NUMBER || '').replace(/[^\d]/g, '');
 let pairingRequested = false;
 
 client.on('qr', async (qr) => {
