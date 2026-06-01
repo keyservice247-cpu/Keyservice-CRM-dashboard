@@ -19,6 +19,7 @@
         <button class="nav-item perm-write" data-view="trash"><span class="ic">🗑️</span> Prullenbak</button>
         <div class="nav-sep admin-only">Beheer</div>
         <button class="nav-item admin-only" data-view="control"><span class="ic">🤖</span> AI-controle</button>
+        <button class="nav-item admin-only" data-view="subs"><span class="ic">💳</span> Abonnementen</button>
         <button class="nav-item admin-only" data-view="settings"><span class="ic">⚙️</span> Instellingen</button>
         <button class="nav-item admin-only" data-view="users"><span class="ic">👤</span> Gebruikers</button>
       </nav>
@@ -94,6 +95,13 @@
           <div class="view-actions"><button id="emptyTrashBtn" class="btn btn-danger admin-only">Prullenbak legen</button></div>
         </div>
         <div id="trashList" class="card-grid"></div>
+      </section>
+
+      <!-- Abonnementen (admin) -->
+      <section id="view-subs" class="view" hidden>
+        <div class="view-head"><div><h2>Abonnementen &amp; verbruik</h2>
+          <div class="muted small">Overzicht van je diensten. Officieel verbruik/facturen zie je via de beheerlinks.</div></div></div>
+        <div id="subsPanel"></div>
       </section>
 
       <!-- Instellingen (admin) -->

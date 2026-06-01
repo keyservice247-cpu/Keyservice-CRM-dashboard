@@ -78,7 +78,7 @@ function showView(view) {
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, settings: loadSettings, users: loadUsers };
+  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers };
   (map[view] || (() => {}))();
 }
 
@@ -720,6 +720,29 @@ async function loadHealth(run = false) {
       ${row('E-mail versturen (SMTP)', h.smtp)}
       ${row('AI (Claude)', h.ai)}`;
   } catch (err) { el.innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
+}
+
+// ---------- Abonnementen & verbruik ----------
+async function loadSubs() {
+  const d = await api('/api/subscriptions');
+  const u = d.usage;
+  $('#subsPanel').innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${u.calls}</div><div class="lbl">AI-aanroepen deze maand (${esc(u.month)})</div></div>
+      <div class="stat"><div class="num">$${u.estimatedCostUsd.toFixed(2)}</div><div class="lbl">Geschatte AI-kosten (indicatie)</div></div>
+      <div class="stat"><div class="num">${(u.inputTokens + u.outputTokens).toLocaleString('nl-NL')}</div><div class="lbl">Tokens verbruikt</div></div>
+    </div>
+    <p class="muted small" style="margin:-6px 0 16px">ℹ️ De AI-kosten zijn een <strong>schatting</strong> van het verbruik via dit dashboard. Het officiële verbruik/tegoed zie je in de Claude Console.</p>
+    <div class="card-grid">
+      ${d.services.map((s) => `
+        <div class="info-card">
+          <h3>${esc(s.name)}</h3>
+          <div class="muted small">${esc(s.what)}</div>
+          <div style="margin:8px 0"><span class="chip">${esc(s.cost)}</span></div>
+          <div class="small">${esc(s.note)}</div>
+          ${s.manageUrl ? `<div style="margin-top:10px"><a class="btn btn-sm" href="${esc(s.manageUrl)}" target="_blank" rel="noopener">Beheer / verbruik →</a></div>` : ''}
+        </div>`).join('')}
+    </div>`;
 }
 
 // ---------- Instellingen (kolommen + bronnen) ----------

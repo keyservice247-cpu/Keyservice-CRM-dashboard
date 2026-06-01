@@ -8,6 +8,7 @@
 //
 // De uitvoer is altijd hetzelfde formaat, zodat de rest van de app er niet om geeft
 // welke modus actief is.
+import { recordAIUsage } from '../usage.js';
 
 // De vaste "denkcategorieën" die de AI gebruikt. De échte kolommen in het
 // dashboard zijn instelbaar (zie server/settings.js); na categorisatie wordt
@@ -293,6 +294,7 @@ Geef JSON met exact deze velden:
   }
 
   const json = await resp.json();
+  recordAIUsage(json.usage);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('Geen JSON in AI-antwoord');
@@ -365,6 +367,7 @@ ${history ? `\nGesprekshistorie:\n${history.slice(0, 2000)}` : ''}`;
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
+  recordAIUsage(json.usage);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   return { text, engine: `ai:${model}` };
 }

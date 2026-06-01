@@ -17,6 +17,7 @@ import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
+import { usageSummary } from './usage.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
@@ -777,6 +778,35 @@ app.get('/api/digest', requireAuth, (req, res) => {
     byStatus,
     customerReplied, neverOpened, awaitingReply, stale,
     pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
+  });
+});
+
+// Abonnementen-overzicht + (geschat) AI-verbruik via dit dashboard.
+app.get('/api/subscriptions', requireRole('admin'), (req, res) => {
+  res.json({
+    usage: usageSummary(),
+    services: [
+      {
+        name: 'Render (hosting)', what: 'Draait het CRM-dashboard online',
+        cost: '± €7 / maand (Starter + schijf)', manageUrl: 'https://dashboard.render.com',
+        note: 'Verbruik/facturen zie je in het Render-dashboard.',
+      },
+      {
+        name: 'Claude API (Anthropic Console)', what: 'Slimme AI-categorisatie & concepten',
+        cost: 'Betaal per gebruik (zie schatting hiernaast)', manageUrl: 'https://console.anthropic.com/settings/usage',
+        note: 'Officieel verbruik/tegoed staat in de Console. Los van je Claude Pro-abo.',
+      },
+      {
+        name: 'TransIP (e-mail & website)', what: 'Mailboxen, domein en website-hosting',
+        cost: 'Volgens je TransIP-abonnement', manageUrl: 'https://www.transip.nl/cp/',
+        note: 'Facturen/verbruik beheer je in het TransIP-controlepaneel.',
+      },
+      {
+        name: 'WhatsApp-bridge (VPS)', what: 'Stuurt WhatsApp-groepen/1-op-1 door (optioneel)',
+        cost: '± €4–5 / maand (indien in gebruik)', manageUrl: '',
+        note: 'Alleen nodig als je de onofficiële WhatsApp-koppeling draait.',
+      },
+    ],
   });
 });
 
