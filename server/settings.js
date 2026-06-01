@@ -123,6 +123,15 @@ export function getStatusLabels() {
 export function getSources() {
   return db().settings.sources || DEFAULT_SOURCES;
 }
+// De kolom voor ingeplande afspraken (op sleutel of label herkend).
+// Geeft null als er geen geschikte kolom bestaat.
+export function appointmentStatusKey() {
+  const s = getStatuses();
+  const found = s.find((x) => x.key === 'afspraak_ingepland')
+    || s.find((x) => /afspraak|ingepland|gepland/i.test(x.key + ' ' + x.label));
+  return found ? found.key : null;
+}
+
 export function isValidStatus(key) {
   return getStatusKeys().includes(key);
 }

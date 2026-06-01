@@ -76,8 +76,17 @@ function showView(view) {
   state.view = view;
   $$('.nav-item').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
+  const active = $(`#view-${view}`);
+  if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
   const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, monteurs: loadMonteurs, control: loadControl, settings: loadSettings, users: loadUsers };
   (map[view] || (() => {}))();
+}
+
+// Korte groene puls op een element, om te tonen dat iets is opgeslagen/veranderd.
+function flash(elOrSelector) {
+  const el = typeof elOrSelector === 'string' ? $(elOrSelector) : elOrSelector;
+  if (!el) return;
+  el.classList.remove('flash-saved'); void el.offsetWidth; el.classList.add('flash-saved');
 }
 
 async function refreshAll() {
@@ -212,7 +221,8 @@ function renderBoard() {
       if (order && order.status !== newStatus) {
         order.status = newStatus;
         renderBoard();
-        try { await api(`/api/orders/${id}`, 'PATCH', { status: newStatus }); toast('Status bijgewerkt'); loadBoard(); }
+        const moved = $(`.card[data-id="${id}"]`); if (moved) moved.classList.add('just-moved');
+        try { await api(`/api/orders/${id}`, 'PATCH', { status: newStatus }); toast('Status bijgewerkt'); await loadBoard(); flash(`.card[data-id="${id}"]`); }
         catch (err) { toast(err.message, true); loadBoard(); }
       }
     });

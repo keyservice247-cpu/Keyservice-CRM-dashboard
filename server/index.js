@@ -18,7 +18,7 @@ import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
-  getTemplates, sanitizeTemplates,
+  getTemplates, sanitizeTemplates, appointmentStatusKey,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -280,6 +280,18 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
       order[k] = b[k];
     }
   }
+
+  // Automatisch naar "Afspraak ingepland" zodra er een afspraakdatum is gezet,
+  // mits de gebruiker niet zelf al een andere status koos en de opdracht nog
+  // open/nieuw of zonder afspraakkolom staat.
+  if ('appointmentAt' in b && b.appointmentAt && !b.status) {
+    const apptKey = appointmentStatusKey();
+    if (apptKey && order.status === firstStatusKey() && order.status !== apptKey) {
+      order.status = apptKey;
+      changedStatus = true;
+    }
+  }
+
   order.updatedAt = now();
   if (changedStatus) logActivity(req.user.name, 'status gewijzigd', `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
   saveSoon();
