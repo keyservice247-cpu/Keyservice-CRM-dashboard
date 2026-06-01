@@ -25,6 +25,7 @@
       </nav>
       <div class="sidebar-foot">
         <span id="aiMode" class="pill"></span>
+        <span id="waStatus" class="pill wa-pill" hidden></span>
         <div class="who"><span class="avatar" id="avatar"></span><span id="userName" class="muted small"></span></div>
         <div class="foot-actions">
           <button id="accountBtn" class="btn btn-ghost btn-sm">Account</button>
@@ -54,7 +55,13 @@
         <div class="view-head">
           <div><h2>Inbox — te controleren</h2>
             <div class="muted small">De AI heeft inkomende e-mails/WhatsApp ingedeeld. Controleer en keur goed of wijs af.</div></div>
-          <div class="view-actions"><button id="simulateBtn" class="btn btn-primary perm-write">Bericht handmatig toevoegen</button></div>
+          <div class="view-actions">
+            <select id="inboxFilter">
+              <option value="pending">Te controleren</option>
+              <option value="overige">Overige (geklets)</option>
+            </select>
+            <button id="simulateBtn" class="btn btn-primary perm-write">Bericht handmatig toevoegen</button>
+          </div>
         </div>
         <div id="reviewList" class="review-list"></div>
       </section>

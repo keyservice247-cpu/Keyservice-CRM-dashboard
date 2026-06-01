@@ -1,7 +1,7 @@
 // Gedeelde verwerkingslogica voor inkomende berichten.
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
-import { classify } from './ai/categorizer.js';
+import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey } from './settings.js';
 
 export function autoApproveThreshold() {
@@ -150,6 +150,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   suggestion.aiStatus = suggestion.status;
   suggestion.status = firstStatusKey();
 
+  // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
+  // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
+  const rel = scoreRelevance({ subject, body, hasAttachments: (attachments || []).length > 0 });
+  suggestion.relevant = rel.relevant;
+  suggestion.relevanceReason = rel.reason;
+
   // Bestaande klant herkennen (op e-mail/telefoon, anders naam). Zo voorkomen we
   // 3 kaarten voor 1 klant: een vervolgbericht hangt aan de lopende opdracht.
   const existingCustomer = findCustomer({
@@ -193,7 +199,8 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
     messageId: message.id,
     channel,
     suggestion,
-    status: 'pending', // pending | approved | rejected | auto_approved
+    // Geklets komt als 'overige' binnen (aparte lijst), echte aanvragen als 'pending'.
+    status: rel.relevant ? 'pending' : 'overige',
     finalStatus: null,
     orderId: null,
     correctedStatus: null,
@@ -204,7 +211,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   db().reviews.push(review);
 
   const threshold = autoApproveThreshold();
-  if (threshold > 0 && suggestion.confidence >= threshold) {
+  if (rel.relevant && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 

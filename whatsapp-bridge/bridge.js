@@ -87,9 +87,30 @@ client.on('qr', async (qr) => {
   console.log(link + '\n');
 });
 
-client.on('authenticated', () => console.log('✅ Gekoppeld — sessie opgeslagen, geen QR meer nodig bij herstart.'));
-client.on('ready', () => console.log(`\n🚀 Bridge actief. Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`));
-client.on('disconnected', (r) => console.log('⚠️ Verbinding verbroken:', r, '— herstart het programma.'));
+client.on('authenticated', () => console.log('Gekoppeld — sessie opgeslagen, geen QR meer nodig bij herstart.'));
+client.on('ready', () => {
+  console.log(`\nBridge actief. Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
+  startHeartbeat();
+});
+client.on('disconnected', (r) => console.log('Verbinding verbroken:', r, '— pm2 herstart automatisch.'));
+
+// Stuurt elke 60s een "ik leef nog"-seintje naar het dashboard. Als deze
+// uitblijft, weet het dashboard dat de WhatsApp-bridge stil ligt.
+let heartbeatTimer = null;
+function startHeartbeat() {
+  const ping = async () => {
+    try {
+      await fetch(`${DASHBOARD_URL}/api/whatsapp/heartbeat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
+        body: JSON.stringify({ at: new Date().toISOString() }),
+      });
+    } catch (e) { /* netwerkfout: volgende keer opnieuw */ }
+  };
+  ping();
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(ping, 60 * 1000);
+}
 
 // Bepaalt of een groep moet worden doorgestuurd op basis van GROUP_FILTER.
 function groupAllowed(name) {

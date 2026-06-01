@@ -104,7 +104,28 @@ const statusColor = (key) => {
   bindButtons();
   await refreshAll();
   setInterval(refreshInboxBadge, 20000);
+  refreshWaStatus();
+  setInterval(refreshWaStatus, 60000);
 })();
+
+// Toont of de WhatsApp-bridge nog draait (groen) of stil ligt (rood).
+async function refreshWaStatus() {
+  const el = $('#waStatus');
+  if (!el) return;
+  try {
+    const s = await api('/api/whatsapp/status');
+    if (!s.configured) { el.hidden = true; return; } // nooit gekoppeld: niks tonen
+    el.hidden = false;
+    if (s.online) {
+      el.textContent = 'WhatsApp: actief';
+      el.classList.remove('wa-down'); el.classList.add('wa-up');
+    } else {
+      const mins = s.ageSeconds ? Math.round(s.ageSeconds / 60) : '?';
+      el.textContent = `WhatsApp: GESTOPT (${mins} min stil)`;
+      el.classList.remove('wa-up'); el.classList.add('wa-down');
+    }
+  } catch { el.hidden = true; }
+}
 
 async function refreshMeta() {
   const me = await api('/api/me');
@@ -436,9 +457,15 @@ async function refreshInboxBadge() {
 }
 
 async function loadInbox() {
-  const reviews = await api('/api/reviews?status=pending');
+  const filter = $('#inboxFilter')?.value || 'pending';
+  const reviews = await api('/api/reviews?status=' + filter);
   const list = $('#reviewList');
-  if (!reviews.length) { list.innerHTML = '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>'; return; }
+  if (!reviews.length) {
+    list.innerHTML = filter === 'overige'
+      ? '<div class="empty">Geen overige berichten (geklets).</div>'
+      : '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>';
+    return;
+  }
   list.innerHTML = reviews.map(reviewHTML).join('');
   reviews.forEach((r) => bindReview(r));
 }
@@ -874,6 +901,7 @@ function bindButtons() {
   $('#boardSearch')?.addEventListener('input', renderBoard);
   $('#boardMonteurFilter')?.addEventListener('change', renderBoard);
   $('#customerSearch')?.addEventListener('input', renderCustomers);
+  $('#inboxFilter')?.addEventListener('change', loadInbox);
   $('#digestBtn')?.addEventListener('click', openDigestModal);
   $('#dupBtn')?.addEventListener('click', openDuplicatesModal);
   $('#emptyTrashBtn')?.addEventListener('click', async () => {

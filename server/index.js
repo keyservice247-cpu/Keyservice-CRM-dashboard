@@ -466,7 +466,7 @@ app.get('/api/reviews', requireAuth, (req, res) => {
 app.post('/api/reviews/:id/approve', requireRole('admin', 'assistent'), (req, res) => {
   const review = db().reviews.find((r) => r.id === req.params.id);
   if (!review) return res.status(404).json({ error: 'Niet gevonden' });
-  if (review.status !== 'pending') return res.status(400).json({ error: 'Al verwerkt' });
+  if (!['pending', 'overige'].includes(review.status)) return res.status(400).json({ error: 'Al verwerkt' });
   const order = applyReview(review, { actorName: req.user.name, overrides: req.body || {} });
   res.json({ review, order: withRelations(order) });
 });
@@ -474,7 +474,7 @@ app.post('/api/reviews/:id/approve', requireRole('admin', 'assistent'), (req, re
 app.post('/api/reviews/:id/reject', requireRole('admin', 'assistent'), (req, res) => {
   const review = db().reviews.find((r) => r.id === req.params.id);
   if (!review) return res.status(404).json({ error: 'Niet gevonden' });
-  if (review.status !== 'pending') return res.status(400).json({ error: 'Al verwerkt' });
+  if (!['pending', 'overige'].includes(review.status)) return res.status(400).json({ error: 'Al verwerkt' });
   const b = req.body || {};
   review.status = 'rejected';
   review.reviewedBy = req.user.name;
@@ -518,6 +518,22 @@ function checkIngestToken(req, res, next) {
   if (got !== expected) return res.status(401).json({ error: 'Ongeldig ingest-token' });
   next();
 }
+
+// WhatsApp-bridge laat elke ~60s van zich horen. Hieraan ziet het dashboard of
+// de bridge nog draait.
+app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
+  db().settings.whatsappLastSeen = now();
+  saveSoon();
+  res.json({ ok: true });
+});
+
+// Status van de WhatsApp-bridge: draait hij nog? (geen seintje in 3 min = stil)
+app.get('/api/whatsapp/status', requireAuth, (req, res) => {
+  const last = db().settings.whatsappLastSeen || null;
+  const ageSec = last ? (Date.now() - new Date(last).getTime()) / 1000 : null;
+  const online = ageSec != null && ageSec < 180; // 3 minuten marge
+  res.json({ configured: !!last, online, lastSeen: last, ageSeconds: ageSec });
+});
 
 app.post('/api/ingest/email', checkIngestToken, async (req, res) => {
   const { from, sender, subject, body, text, html, externalId } = req.body || {};

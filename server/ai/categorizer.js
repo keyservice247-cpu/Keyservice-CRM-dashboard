@@ -36,6 +36,31 @@ function pick(text, re) {
   return m ? (m[1] || m[0]).trim() : null;
 }
 
+// Bepaalt of een bericht een echte werk-aanvraag is of "ruis" (geklets, bedankjes,
+// losse reacties). Geeft { relevant: bool, reason }. Vooral voor drukke groepen.
+const WORK_WORDS = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|deur|raam|kozijn|sloten|inbra|buitengesloten|kapot|klemt|defect|stuk|vervang|repareer|reparatie|monteur|offerte|prijs|kosten|wat kost|afspraak|inplannen|langskomen|adres|woonplaats|spoed|loopwagen|rail|beslag|hang|scharnier|montage|installat)/i;
+const CHATTER_ONLY = /^(ok|oké|oke|oke[ëe]|top|prima|bedankt|dankje|dank je|dankjewel|thanks|thx|ja|nee|goed|mooi|super|perfect|duidelijk|👍|🙏|😂|😅|🙂|❤️|\?+|\.+|haha+|hihi+|proficiat|gefeliciteerd|goedemorgen|goedemiddag|goedenavond|hoi|hallo|hey|doei|tot ziens|fijne dag|welkom)[\s!.,👍🙏🙂😂😅❤️]*$/i;
+
+export function scoreRelevance({ subject, body, hasAttachments }) {
+  const text = `${subject || ''} ${body || ''}`.trim();
+  const clean = text.replace(/telefoon:\s*\+?\d+/gi, '').trim(); // nummer dat bridge toevoegt niet meetellen
+  const words = clean.split(/\s+/).filter(Boolean);
+
+  // Foto/video van een klant is bijna altijd relevant (vaak schade/situatie).
+  if (hasAttachments) return { relevant: true, reason: 'Bevat foto/bestand.' };
+  // Duidelijke werk-termen -> relevant.
+  if (WORK_WORDS.test(clean)) return { relevant: true, reason: 'Bevat een aanvraag/werk-term.' };
+  // Telefoon of adres genoemd -> waarschijnlijk een aanvraag.
+  if (PHONE_RE.test(clean) || ADDRESS_RE.test(clean) || POSTCODE_RE.test(clean)) {
+    return { relevant: true, reason: 'Bevat contact-/adresgegevens.' };
+  }
+  // Heel kort en/of puur geklets -> ruis.
+  if (clean.length < 12 || words.length <= 2) return { relevant: false, reason: 'Te kort / losse reactie.' };
+  if (CHATTER_ONLY.test(clean)) return { relevant: false, reason: 'Geklets/bevestiging zonder aanvraag.' };
+  // Twijfelgeval: laat het in de inbox (liever te veel dan iets missen).
+  return { relevant: true, reason: 'Twijfelgeval — voor de zekerheid in de inbox.' };
+}
+
 function cleanName(sender) {
   if (!sender) return null;
   // "Jan Jansen <jan@x.nl>" -> "Jan Jansen"

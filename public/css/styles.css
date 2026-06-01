@@ -108,6 +108,8 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 .foot-actions { display: flex; gap: 6px; }
 .foot-actions .btn { color: var(--ink-soft); flex: 1; }
 .pill { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: var(--line-soft); color: var(--ink-soft); font-weight: 500; }
+.wa-pill.wa-up { background: var(--ok-soft); color: var(--ok); }
+.wa-pill.wa-down { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
 
 /* Content */
 .content { padding: 26px 30px; max-width: 1500px; overflow-x: hidden; }
