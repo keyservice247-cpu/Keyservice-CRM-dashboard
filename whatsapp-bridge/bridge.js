@@ -43,12 +43,35 @@ const client = new Client({
   puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] },
 });
 
-client.on('qr', (qr) => {
+// Koppelen via 8-cijferige code i.p.v. QR-scan. Zet PAIR_NUMBER in .env op het
+// telefoonnummer (internationaal, alleen cijfers, bv. 31612345678).
+const PAIR_NUMBER = (process.env.PAIR_NUMBER || '').replace(/[^\d]/g, '');
+let pairingRequested = false;
+
+client.on('qr', async (qr) => {
+  // Als er een telefoonnummer is opgegeven: vraag een koppelcode aan.
+  if (PAIR_NUMBER && !pairingRequested) {
+    pairingRequested = true;
+    try {
+      const code = await client.requestPairingCode(PAIR_NUMBER);
+      const pretty = code.match(/.{1,4}/g)?.join('-') || code;
+      console.log('\n==============================================');
+      console.log('  KOPPELCODE: ' + pretty);
+      console.log('==============================================');
+      console.log('Op je iPhone: WhatsApp -> Instellingen -> Gekoppelde apparaten');
+      console.log('-> Een apparaat koppelen -> "Koppel met telefoonnummer"');
+      console.log('-> tik bovenstaande code in.\n');
+      console.log('(Code verloopt? Dan verschijnt hier vanzelf een nieuwe.)\n');
+    } catch (e) {
+      console.error('Kon geen koppelcode aanvragen:', e.message);
+      console.error('Controleer of PAIR_NUMBER klopt (bv. 31612345678).');
+    }
+    return;
+  }
+  // Anders: toon de QR (tekst + scanbare afbeelding-link).
   console.log('\nScan deze QR-code met WhatsApp op je iPhone:');
   console.log('(WhatsApp -> Instellingen -> Gekoppelde apparaten -> Apparaat koppelen)\n');
-  // 1) Tekst-QR in de terminal (werkt als je scherm groot genoeg is)
   qrcode.generate(qr, { small: true });
-  // 2) Nette, scanbare QR als AFBEELDING via een link — open deze in je browser:
   const link = 'https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(qr);
   console.log('\n>>> Lukt scannen niet? Open DEZE link in je browser en scan die QR:\n');
   console.log(link + '\n');
