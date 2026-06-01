@@ -174,6 +174,9 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
       if (attachments && attachments.length) {
         openOrder.attachments = (openOrder.attachments || []).concat(attachments);
       }
+      // Markeer dat de KLANT heeft gereageerd -> melding op de kaart.
+      openOrder.customerReplied = true;
+      openOrder.lastCustomerReplyAt = now();
       openOrder.updatedAt = now();
       // vul ontbrekende klantgegevens aan
       if (!existingCustomer.email && suggestion.customerEmail) existingCustomer.email = suggestion.customerEmail;

@@ -16,6 +16,7 @@
         <button class="nav-item" data-view="inbox"><span class="ic">📥</span> Inbox / AI <span id="inboxBadge" class="badge" hidden>0</span></button>
         <button class="nav-item" data-view="customers"><span class="ic">👥</span> Klanten &amp; Leads</button>
         <button class="nav-item" data-view="monteurs"><span class="ic">🔧</span> Monteurs</button>
+        <button class="nav-item perm-write" data-view="trash"><span class="ic">🗑️</span> Prullenbak</button>
         <div class="nav-sep admin-only">Beheer</div>
         <button class="nav-item admin-only" data-view="control"><span class="ic">🤖</span> AI-controle</button>
         <button class="nav-item admin-only" data-view="settings"><span class="ic">⚙️</span> Instellingen</button>
@@ -39,10 +40,12 @@
           <div class="view-actions">
             <input id="boardSearch" type="search" placeholder="🔍 Zoek opdracht of klant…" />
             <select id="boardMonteurFilter"><option value="">Alle monteurs</option></select>
+            <button id="digestBtn" class="btn">📊 Status-scan</button>
             <button id="newOrderBtn" class="btn btn-primary perm-write">+ Nieuwe opdracht</button>
           </div>
         </div>
         <div id="board" class="board"></div>
+        <div id="trashZone" class="trash-zone">🗑️ Sleep hier naartoe om naar de prullenbak te verplaatsen</div>
       </section>
 
       <!-- Inbox / AI -->
@@ -81,6 +84,15 @@
         <div class="view-head"><div><h2>AI-controle &amp; betrouwbaarheid</h2>
           <div class="muted small">Bewaak hoe goed de AI presteert en stel in hoeveel hij zelf mag doen.</div></div></div>
         <div id="controlPanel"></div>
+      </section>
+
+      <!-- Prullenbak -->
+      <section id="view-trash" class="view" hidden>
+        <div class="view-head">
+          <div><h2>Prullenbak</h2><div class="muted small">Verwijderde opdrachten. Terug te halen of definitief te wissen.</div></div>
+          <div class="view-actions"><button id="emptyTrashBtn" class="btn btn-danger admin-only">Prullenbak legen</button></div>
+        </div>
+        <div id="trashList" class="card-grid"></div>
       </section>
 
       <!-- Instellingen (admin) -->

@@ -78,8 +78,19 @@ function showView(view) {
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, monteurs: loadMonteurs, control: loadControl, settings: loadSettings, users: loadUsers };
+  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, settings: loadSettings, users: loadUsers };
   (map[view] || (() => {}))();
+}
+
+// Markeer een opdracht als geopend/gezien (zet de statusstip op blauw).
+async function markSeen(id) {
+  const o = state.orders.find((x) => x.id === id);
+  if (!o || o.openedAt) return;
+  o.openedAt = new Date().toISOString();
+  const dot = $(`.card[data-id="${id}"] .state-dot`);
+  if (dot && !o.lastReplyAt) { dot.classList.remove('new'); dot.classList.add('opened'); }
+  const card = $(`.card[data-id="${id}"]`); if (card) card.classList.remove('is-new');
+  try { await api(`/api/orders/${id}/seen`, 'POST'); } catch {}
 }
 
 // Korte groene puls op een element, om te tonen dat iets is opgeslagen/veranderd.
@@ -204,7 +215,7 @@ function renderBoard() {
   }).join('');
 
   $$('.card').forEach((el) => {
-    el.addEventListener('click', () => openOrderModal(el.dataset.id));
+    el.addEventListener('click', () => { markSeen(el.dataset.id); openOrderModal(el.dataset.id); });
     el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', el.dataset.id); el.style.opacity = '.5'; });
     el.addEventListener('dragend', () => (el.style.opacity = '1'));
   });
@@ -227,6 +238,20 @@ function renderBoard() {
       }
     });
   });
+
+  // Prullenbak-dropzone (alleen voor wie mag verwijderen)
+  const tz = $('#trashZone');
+  if (tz && state.me.role !== 'monteur') {
+    tz.hidden = false;
+    tz.ondragover = (e) => { e.preventDefault(); tz.classList.add('drag-over'); };
+    tz.ondragleave = () => tz.classList.remove('drag-over');
+    tz.ondrop = async (e) => {
+      e.preventDefault(); tz.classList.remove('drag-over');
+      const id = e.dataTransfer.getData('text/plain');
+      try { await api(`/api/orders/${id}`, 'DELETE'); toast('Naar prullenbak verplaatst'); loadBoard(); }
+      catch (err) { toast(err.message, true); }
+    };
+  } else if (tz) { tz.hidden = true; }
 }
 
 function cardHTML(o) {
@@ -236,9 +261,14 @@ function cardHTML(o) {
   if (o.urgent) meta.push('<span class="chip urgent">⚡ spoed</span>');
   if (o.appointmentAt) meta.push(`<span class="chip">📅 ${fmtDate(o.appointmentAt)}</span>`);
   if (o.attachments && o.attachments.length) meta.push(`<span class="chip">📎 ${o.attachments.length}</span>`);
+  // Status-stip: beantwoord (groen) > geopend (blauw) > nieuw/ongelezen (geel).
+  const st = o.lastReplyAt ? { c: 'replied', t: 'Beantwoord' }
+    : o.openedAt ? { c: 'opened', t: 'Geopend' }
+    : { c: 'new', t: 'Nieuw — nog niet bekeken' };
   return `
-    <div class="card ${o.urgent ? 'urgent' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
-      <div class="card-title">${esc(o.title)}</div>
+    <div class="card ${o.urgent ? 'urgent' : ''} ${st.c === 'new' ? 'is-new' : ''} ${o.customerReplied ? 'replied-alert' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
+      ${o.customerReplied ? '<div class="reply-banner">💬 Klant heeft gereageerd</div>' : ''}
+      <div class="card-title"><span class="state-dot ${st.c}" title="${st.t}"></span>${esc(o.title)}</div>
       ${o.customer ? `<div class="card-customer">👤 ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
       <div class="card-meta">${meta.join('')}</div>
       <div class="card-foot">🕓 Binnen: ${esc(fmtDateShort(o.createdAt))}</div>
@@ -559,6 +589,32 @@ async function loadMonteurs() {
     catch (err) { toast(err.message, true); }
   });
 }
+
+// ---------- Prullenbak ----------
+async function loadTrash() {
+  const items = await api('/api/trash');
+  const isAdmin = state.me.role === 'admin';
+  $('#trashList').innerHTML = items.length ? items.map((o) => `
+    <div class="info-card">
+      <h3>${esc(o.title)}</h3>
+      <div class="muted small">${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}</div>
+      <div class="muted small" style="margin-top:4px">🗑️ door ${esc(o.deletedBy || '?')} · ${fmtDateShort(o.deletedAt)}</div>
+      <div style="margin-top:12px;display:flex;gap:6px">
+        <button class="btn btn-sm" data-restore="${o.id}">↩︎ Terughalen</button>
+        ${isAdmin ? `<button class="btn btn-sm btn-danger" data-perm="${o.id}">Definitief</button>` : ''}
+      </div>
+    </div>`).join('') : '<div class="empty">🗑️ De prullenbak is leeg.</div>';
+  $$('[data-restore]').forEach((b) => b.onclick = async () => {
+    try { await api(`/api/trash/${b.dataset.restore}/restore`, 'POST'); toast('Teruggehaald'); loadTrash(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $$('[data-perm]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Definitief verwijderen? Dit kan niet ongedaan worden gemaakt.')) return;
+    try { await api(`/api/trash/${b.dataset.perm}`, 'DELETE'); toast('Definitief verwijderd'); loadTrash(); }
+    catch (err) { toast(err.message, true); }
+  });
+}
+
 function openMonteurModal(m) {
   modal(`
     <h2>${m ? 'Monteur bewerken' : 'Nieuwe monteur'}</h2>
@@ -906,6 +962,28 @@ function openSimulateModal() {
   };
 }
 
+// ---------- Status-scan (digest) ----------
+async function openDigestModal() {
+  modal('<h2>📊 Status-scan</h2><p class="muted small">Bezig met scannen…</p>');
+  const d = await api('/api/digest');
+  const list = (arr, emptyTxt) => arr.length
+    ? `<ul class="digest-list">${arr.map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}</ul>`
+    : `<div class="muted small">${emptyTxt}</div>`;
+  const statusBar = Object.values(d.byStatus).map((s) => `<span class="chip">${esc(s.label)}: <strong>${s.count}</strong></span>`).join(' ');
+  modal(`
+    <h2>📊 Status-scan</h2>
+    <p class="muted small">${d.total} actieve opdrachten · ${d.pendingReviews} wachten in de inbox</p>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">${statusBar}</div>
+    <div class="digest-block"><h3>💬 Klant heeft gereageerd (${d.customerReplied.length})</h3>${list(d.customerReplied, 'Niemand op dit moment.')}</div>
+    <div class="digest-block"><h3>⏳ Wacht op ons antwoord (${d.awaitingReply.length})</h3>${list(d.awaitingReply, 'Niets openstaand.')}</div>
+    <div class="digest-block"><h3>👁️ Nog niet bekeken (${d.neverOpened.length})</h3>${list(d.neverOpened, 'Alles is bekeken.')}</div>
+    <div class="digest-block"><h3>🕸️ Lang stil (5+ dagen) (${d.stale.length})</h3>${list(d.stale, 'Niets blijft liggen.')}</div>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="dg-close">Sluiten</button></div></div>
+  `);
+  $('#dg-close').onclick = closeModal;
+  $$('[data-open]').forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
+}
+
 // ---------- Buttons & modal infra ----------
 function bindButtons() {
   $('#newOrderBtn')?.addEventListener('click', () => openOrderModal());
@@ -916,6 +994,12 @@ function bindButtons() {
   $('#boardSearch')?.addEventListener('input', renderBoard);
   $('#boardMonteurFilter')?.addEventListener('change', renderBoard);
   $('#customerSearch')?.addEventListener('input', renderCustomers);
+  $('#digestBtn')?.addEventListener('click', openDigestModal);
+  $('#emptyTrashBtn')?.addEventListener('click', async () => {
+    if (!confirm('De hele prullenbak definitief legen?')) return;
+    try { const r = await api('/api/trash/empty', 'POST'); toast(`${r.removed} opdrachten verwijderd`); loadTrash(); }
+    catch (err) { toast(err.message, true); }
+  });
 }
 
 function modal(html) {

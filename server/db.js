@@ -20,6 +20,7 @@ const DEFAULT_DATA = {
   messages: [],
   reviews: [],
   feedback: [],
+  trash: [],
   sessions: [],
   activity: [],
   settings: { aiAutoApproveThreshold: null },

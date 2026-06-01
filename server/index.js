@@ -299,13 +299,73 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   res.json(withRelations(order));
 });
 
+// Verwijderen = naar de prullenbak verplaatsen (terug te halen).
 app.delete('/api/orders/:id', requireRole('admin', 'assistent'), (req, res) => {
   const orders = db().orders;
   const i = orders.findIndex((o) => o.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   const [removed] = orders.splice(i, 1);
-  logActivity(req.user.name, 'opdracht verwijderd', removed.title);
+  removed.deletedAt = now();
+  removed.deletedBy = req.user.name;
+  db().trash.unshift(removed);
+  if (db().trash.length > 500) {
+    // oudste boven de 500 definitief opruimen (incl. bestanden)
+    const old = db().trash.splice(500);
+    old.forEach((o) => (o.attachments || []).forEach((a) => deleteFile(a.file)));
+  }
+  logActivity(req.user.name, 'opdracht naar prullenbak', removed.title);
   saveSoon();
+  res.json({ ok: true });
+});
+
+// Prullenbak bekijken
+app.get('/api/trash', requireRole('admin', 'assistent'), (req, res) => {
+  res.json(db().trash.map(withRelations));
+});
+
+// Opdracht terughalen uit de prullenbak
+app.post('/api/trash/:id/restore', requireRole('admin', 'assistent'), (req, res) => {
+  const i = db().trash.findIndex((o) => o.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
+  const [order] = db().trash.splice(i, 1);
+  delete order.deletedAt; delete order.deletedBy;
+  order.updatedAt = now();
+  db().orders.push(order);
+  logActivity(req.user.name, 'opdracht teruggehaald', order.title);
+  saveSoon();
+  res.json(withRelations(order));
+});
+
+// Definitief verwijderen uit de prullenbak (incl. bestanden)
+app.delete('/api/trash/:id', requireRole('admin'), (req, res) => {
+  const i = db().trash.findIndex((o) => o.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
+  const [order] = db().trash.splice(i, 1);
+  (order.attachments || []).forEach((a) => deleteFile(a.file));
+  logActivity(req.user.name, 'opdracht definitief verwijderd', order.title);
+  saveSoon();
+  res.json({ ok: true });
+});
+
+// Prullenbak helemaal legen (alleen admin)
+app.post('/api/trash/empty', requireRole('admin'), (req, res) => {
+  const count = db().trash.length;
+  db().trash.forEach((o) => (o.attachments || []).forEach((a) => deleteFile(a.file)));
+  db().trash = [];
+  logActivity(req.user.name, 'prullenbak geleegd', `${count} opdrachten`);
+  saveSoon();
+  res.json({ ok: true, removed: count });
+});
+
+// Markeer een opdracht als 'geopend/gezien' (voor de statusstip op de kaart).
+app.post('/api/orders/:id/seen', requireAuth, (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  let changed = false;
+  if (!order.openedAt) { order.openedAt = now(); changed = true; }
+  // 'Klant heeft gereageerd'-melding wegklikken zodra je de kaart opent.
+  if (order.customerReplied) { order.customerReplied = false; changed = true; }
+  if (changed) saveSoon();
   res.json({ ok: true });
 });
 
@@ -584,6 +644,7 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
       const order = db().orders.find((o) => o.id === orderId);
       if (order) {
         order.notes = `${order.notes ? order.notes + '\n\n' : ''}[${now()}] E-mail verstuurd door ${req.user.name}:\n${text}`;
+        order.lastReplyAt = now();
         order.updatedAt = now();
       }
     }
@@ -616,6 +677,34 @@ app.get('/api/stats', requireAuth, (req, res) => {
       corrected,
       accuracy: approved.length ? Math.round(((approved.length - corrected) / approved.length) * 100) : null,
     },
+  });
+});
+
+// Snel statusoverzicht ("scan"): wie heeft gereageerd, wie wacht op ons, enz.
+app.get('/api/digest', requireAuth, (req, res) => {
+  const active = db().orders.filter((o) => !o.archivedWeek);
+  const labels = getStatusLabels();
+  const byStatus = {};
+  getStatusKeys().forEach((k) => { byStatus[k] = { label: labels[k], count: 0 }; });
+  active.forEach((o) => { if (byStatus[o.status]) byStatus[o.status].count++; });
+
+  const customerReplied = active.filter((o) => o.customerReplied)
+    .map((o) => ({ id: o.id, title: o.title, customer: (db().customers.find((c) => c.id === o.customerId) || {}).name }));
+  const neverOpened = active.filter((o) => !o.openedAt)
+    .map((o) => ({ id: o.id, title: o.title }));
+  // Wacht op ons antwoord: offerte-fase of open, nog geen antwoord gestuurd.
+  const awaitingReply = active.filter((o) => !o.lastReplyAt && ['open', firstStatusKey(), 'offerte_verzonden'].includes(o.status))
+    .map((o) => ({ id: o.id, title: o.title }));
+  // Lang stil: geen update in 5+ dagen, niet afgerond/geannuleerd.
+  const fiveDays = Date.now() - 5 * 86400000;
+  const stale = active.filter((o) => !['afgerond', 'geannuleerd'].includes(o.status) && new Date(o.updatedAt).getTime() < fiveDays)
+    .map((o) => ({ id: o.id, title: o.title, since: o.updatedAt }));
+
+  res.json({
+    total: active.length,
+    byStatus,
+    customerReplied, neverOpened, awaitingReply, stale,
+    pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
   });
 });
 
