@@ -506,7 +506,14 @@ async function loadInbox() {
   const filter = $('#inboxFilter')?.value || 'pending';
   const reviews = await api('/api/reviews?status=' + filter);
   const list = $('#reviewList');
+  const bulkBar = $('#bulkBar');
+  // Bulk-balk en "alle geklets afwijzen"-knop alleen tonen wanneer relevant.
+  if (bulkBar && state.me.role !== 'monteur') bulkBar.hidden = reviews.length === 0;
+  if ($('#rejectAllOverigeBtn')) $('#rejectAllOverigeBtn').style.display = filter === 'overige' ? '' : 'none';
+  if ($('#selectAll')) $('#selectAll').checked = false;
+  updateBulkCount();
   if (!reviews.length) {
+    if (bulkBar) bulkBar.hidden = true;
     list.innerHTML = filter === 'overige'
       ? '<div class="empty">Geen overige berichten (geklets).</div>'
       : '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>';
@@ -514,6 +521,15 @@ async function loadInbox() {
   }
   list.innerHTML = reviews.map(reviewHTML).join('');
   reviews.forEach((r) => bindReview(r));
+  $$('.r-select').forEach((c) => c.addEventListener('change', updateBulkCount));
+}
+
+function selectedReviewIds() {
+  return $$('.r-select:checked').map((c) => c.dataset.id);
+}
+function updateBulkCount() {
+  const n = selectedReviewIds().length;
+  const el = $('#bulkCount'); if (el) el.textContent = n ? `${n} geselecteerd` : '';
 }
 
 function reviewHTML(r) {
@@ -523,7 +539,7 @@ function reviewHTML(r) {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}
+    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> <div class="review-msg">${esc(m.body || '')}</div> <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px"> <button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button> </div> </div>`;
 }
 
@@ -981,6 +997,27 @@ function bindButtons() {
   $('#boardMonteurFilter')?.addEventListener('change', renderBoard);
   $('#customerSearch')?.addEventListener('input', renderCustomers);
   $('#inboxFilter')?.addEventListener('change', loadInbox);
+  $('#selectAll')?.addEventListener('change', (e) => {
+    $$('.r-select').forEach((c) => (c.checked = e.target.checked));
+    updateBulkCount();
+  });
+  $('#bulkRejectBtn')?.addEventListener('click', async () => {
+    const ids = selectedReviewIds();
+    if (!ids.length) return toast('Selecteer eerst berichten', true);
+    if (!confirm(`${ids.length} geselecteerde berichten afwijzen? Dit traint ook de AI.`)) return;
+    try { const r = await api('/api/reviews/bulk-reject', 'POST', { ids }); toast(`${r.count} afgewezen`); loadInbox(); refreshInboxBadge(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#rejectAllOverigeBtn')?.addEventListener('click', async () => {
+    if (!confirm('ALLE berichten in "Overige" (geklets) afwijzen? Dit traint de AI dat dit geen opdrachten zijn.')) return;
+    try { const r = await api('/api/reviews/bulk-reject', 'POST', { scope: 'overige' }); toast(`${r.count} geklets afgewezen`); loadInbox(); refreshInboxBadge(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#cleanupBtn')?.addEventListener('click', async () => {
+    if (!confirm('De inbox opschonen? Geklets wordt verplaatst naar "Overige", echte aanvragen blijven staan.')) return;
+    try { const r = await api('/api/reviews/recategorize', 'POST'); toast(r.moved ? `${r.moved} geklets verplaatst naar Overige` : 'Niets te verplaatsen'); loadInbox(); refreshInboxBadge(); }
+    catch (err) { toast(err.message, true); }
+  });
   $('#digestBtn')?.addEventListener('click', openDigestModal);
   $('#dupBtn')?.addEventListener('click', openDuplicatesModal);
   $('#emptyTrashBtn')?.addEventListener('click', async () => {

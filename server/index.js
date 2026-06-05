@@ -7,7 +7,7 @@ import {
   verifyPassword, createSession, destroySession,
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
 } from './auth.js';
-import { aiMode, suggestReply } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
@@ -472,38 +472,74 @@ app.post('/api/reviews/:id/approve', requireRole('admin', 'assistent'), (req, re
   res.json({ review, order: withRelations(order) });
 });
 
+// Eén review afwijzen + als leersignaal opslaan (herbruikbaar voor bulk).
+function rejectReview(review, user, b = {}) {
+  review.status = 'rejected';
+  review.reviewedBy = user.name;
+  review.reviewedAt = now();
+  review.rejectReason = b.reason || '';
+  review.rejectNote = b.note || '';
+  review.rejectShouldBe = b.shouldBe || '';
+  const msg = db().messages.find((m) => m.id === review.messageId);
+  db().feedback.unshift({
+    id: id('fb'), type: 'reject', at: now(), by: user.name, channel: review.channel,
+    reason: b.reason || 'Afgewezen (geen reden opgegeven)', note: b.note || '', shouldBe: b.shouldBe || '',
+    aiStatus: review.suggestion?.aiStatus || review.suggestion?.status,
+    sample: (msg?.body || '').slice(0, 400),
+  });
+}
+
 app.post('/api/reviews/:id/reject', requireRole('admin', 'assistent'), (req, res) => {
   const review = db().reviews.find((r) => r.id === req.params.id);
   if (!review) return res.status(404).json({ error: 'Niet gevonden' });
   if (!['pending', 'overige'].includes(review.status)) return res.status(400).json({ error: 'Al verwerkt' });
-  const b = req.body || {};
-  review.status = 'rejected';
-  review.reviewedBy = req.user.name;
-  review.reviewedAt = now();
-  review.rejectReason = b.reason || '';      // korte categorie (optioneel)
-  review.rejectNote = b.note || '';          // vrije uitleg (optioneel)
-  review.rejectShouldBe = b.shouldBe || '';  // wat had het moeten zijn (optioneel)
-
-  // ELKE afwijzing wordt opgeslagen als leersignaal (ook zonder reden), zodat de
-  // AI steeds beter leert wat géén echte opdracht is. Geen limiet.
-  const msg = db().messages.find((m) => m.id === review.messageId);
-  db().feedback.unshift({
-    id: id('fb'),
-    type: 'reject',
-    at: now(),
-    by: req.user.name,
-    channel: review.channel,
-    reason: b.reason || 'Afgewezen (geen reden opgegeven)',
-    note: b.note || '',
-    shouldBe: b.shouldBe || '',
-    aiStatus: review.suggestion?.aiStatus || review.suggestion?.status,
-    sample: (msg?.body || '').slice(0, 400),
-  });
-
-  logActivity(req.user.name, 'review afgewezen', `${review.suggestion?.title || ''}${b.reason ? ' — ' + b.reason : ''}`);
+  rejectReview(review, req.user, req.body || {});
+  logActivity(req.user.name, 'review afgewezen', `${review.suggestion?.title || ''}${req.body?.reason ? ' — ' + req.body.reason : ''}`);
   saveSoon();
   res.json({ review });
 });
+
+// BULK afwijzen: meerdere ids tegelijk, of alle 'overige' (geklets), of alle pending.
+app.post('/api/reviews/bulk-reject', requireRole('admin', 'assistent'), (req, res) => {
+  const b = req.body || {};
+  let targets = [];
+  if (Array.isArray(b.ids) && b.ids.length) {
+    targets = db().reviews.filter((r) => b.ids.includes(r.id) && ['pending', 'overige'].includes(r.status));
+  } else if (b.scope === 'overige') {
+    targets = db().reviews.filter((r) => r.status === 'overige');
+  } else if (b.scope === 'pending') {
+    targets = db().reviews.filter((r) => r.status === 'pending');
+  } else {
+    return res.status(400).json({ error: 'Geef ids of scope (overige/pending) op' });
+  }
+  targets.forEach((r) => rejectReview(r, req.user, { reason: b.reason || '' }));
+  logActivity(req.user.name, 'bulk afgewezen', `${targets.length} berichten${b.reason ? ' — ' + b.reason : ''}`);
+  saveSoon();
+  res.json({ ok: true, count: targets.length });
+});
+
+// OPSCHONEN: laat alle pending berichten opnieuw door het ruisfilter lopen.
+// Geklets verschuift naar 'overige', zodat de hoofdinbox alleen echte aanvragen houdt.
+app.post('/api/reviews/recategorize', requireRole('admin', 'assistent'), (req, res) => {
+  const messages = db().messages;
+  let moved = 0;
+  for (const r of db().reviews) {
+    if (r.status !== 'pending') continue;
+    const m = messages.find((x) => x.id === r.messageId);
+    if (!m) continue;
+    const rel = scoreRelevance({ subject: m.subject, body: m.body, hasAttachments: (m.attachments || []).length > 0 });
+    if (!rel.relevant) {
+      r.status = 'overige';
+      if (r.suggestion) { r.suggestion.relevant = false; r.suggestion.relevanceReason = rel.reason; }
+      moved++;
+    }
+  }
+  logActivity(req.user.name, 'inbox opgeschoond', `${moved} naar Overige`);
+  saveSoon();
+  res.json({ ok: true, moved });
+});
+
+
 
 // Feedback-overzicht (waarom werden berichten afgewezen) — voor assistente/eigenaar.
 app.get('/api/feedback', requireAuth, (req, res) => {

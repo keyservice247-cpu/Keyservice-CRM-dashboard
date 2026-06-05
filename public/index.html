@@ -60,8 +60,16 @@
               <option value="pending">Te controleren</option>
               <option value="overige">Overige (geklets)</option>
             </select>
+            <button id="cleanupBtn" class="btn perm-write">Opschonen (geklets eruit)</button>
             <button id="simulateBtn" class="btn btn-primary perm-write">Bericht handmatig toevoegen</button>
           </div>
+        </div>
+        <div id="bulkBar" class="bulk-bar perm-write" hidden>
+          <label class="bulk-check"><input type="checkbox" id="selectAll"> Alles selecteren</label>
+          <span id="bulkCount" class="muted small"></span>
+          <span style="flex:1"></span>
+          <button id="bulkRejectBtn" class="btn btn-danger btn-sm">Geselecteerde afwijzen</button>
+          <button id="rejectAllOverigeBtn" class="btn btn-danger btn-sm">Alle geklets afwijzen</button>
         </div>
         <div id="reviewList" class="review-list"></div>
       </section>
