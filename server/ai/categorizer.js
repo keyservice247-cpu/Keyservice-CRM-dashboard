@@ -41,7 +41,7 @@ function pick(text, re) {
 const WORK_WORDS = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|deur|raam|kozijn|sloten|inbra|buitengesloten|kapot|klemt|defect|stuk|vervang|repareer|reparatie|monteur|offerte|prijs|kosten|wat kost|afspraak|inplannen|langskomen|adres|woonplaats|spoed|loopwagen|rail|beslag|hang|scharnier|montage|installat)/i;
 const CHATTER_ONLY = /^(ok|oké|oke|oke[ëe]|top|prima|bedankt|dankje|dank je|dankjewel|thanks|thx|ja|nee|goed|mooi|super|perfect|duidelijk|👍|🙏|😂|😅|🙂|❤️|\?+|\.+|haha+|hihi+|proficiat|gefeliciteerd|goedemorgen|goedemiddag|goedenavond|hoi|hallo|hey|doei|tot ziens|fijne dag|welkom)[\s!.,👍🙏🙂😂😅❤️]*$/i;
 
-export function scoreRelevance({ subject, body, hasAttachments }) {
+export function scoreRelevance({ subject, body, hasAttachments }, strict = false) {
   const text = `${subject || ''} ${body || ''}`.trim();
   const clean = text.replace(/telefoon:\s*\+?\d+/gi, '').trim(); // nummer dat bridge toevoegt niet meetellen
   const words = clean.split(/\s+/).filter(Boolean);
@@ -57,7 +57,9 @@ export function scoreRelevance({ subject, body, hasAttachments }) {
   // Heel kort en/of puur geklets -> ruis.
   if (clean.length < 12 || words.length <= 2) return { relevant: false, reason: 'Te kort / losse reactie.' };
   if (CHATTER_ONLY.test(clean)) return { relevant: false, reason: 'Geklets/bevestiging zonder aanvraag.' };
-  // Twijfelgeval: laat het in de inbox (liever te veel dan iets missen).
+  // Strenge modus (opschonen): geen enkel werk-/contactsignaal gevonden -> ruis.
+  if (strict) return { relevant: false, reason: 'Geen aanvraag-signaal (geen werk-term, telefoon of adres).' };
+  // Normale modus: twijfelgeval -> laat het in de inbox (liever te veel dan iets missen).
   return { relevant: true, reason: 'Twijfelgeval — voor de zekerheid in de inbox.' };
 }
 

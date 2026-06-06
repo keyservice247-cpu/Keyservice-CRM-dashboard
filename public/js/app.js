@@ -510,6 +510,7 @@ async function loadInbox() {
   // Bulk-balk en "alle geklets afwijzen"-knop alleen tonen wanneer relevant.
   if (bulkBar && state.me.role !== 'monteur') bulkBar.hidden = reviews.length === 0;
   if ($('#rejectAllOverigeBtn')) $('#rejectAllOverigeBtn').style.display = filter === 'overige' ? '' : 'none';
+  if ($('#rejectAllPendingBtn')) $('#rejectAllPendingBtn').style.display = filter === 'pending' ? '' : 'none';
   if ($('#selectAll')) $('#selectAll').checked = false;
   updateBulkCount();
   if (!reviews.length) {
@@ -1011,6 +1012,11 @@ function bindButtons() {
   $('#rejectAllOverigeBtn')?.addEventListener('click', async () => {
     if (!confirm('ALLE berichten in "Overige" (geklets) afwijzen? Dit traint de AI dat dit geen opdrachten zijn.')) return;
     try { const r = await api('/api/reviews/bulk-reject', 'POST', { scope: 'overige' }); toast(`${r.count} geklets afgewezen`); loadInbox(); refreshInboxBadge(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#rejectAllPendingBtn')?.addEventListener('click', async () => {
+    if (!confirm('ALLE berichten in "Te controleren" afwijzen? Gebruik dit om een achterstand op te ruimen — het traint de AI dat dit geen opdrachten waren.')) return;
+    try { const r = await api('/api/reviews/bulk-reject', 'POST', { scope: 'pending' }); toast(`${r.count} afgewezen`); loadInbox(); refreshInboxBadge(); }
     catch (err) { toast(err.message, true); }
   });
   $('#cleanupBtn')?.addEventListener('click', async () => {

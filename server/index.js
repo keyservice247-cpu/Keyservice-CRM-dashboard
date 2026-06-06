@@ -527,7 +527,7 @@ app.post('/api/reviews/recategorize', requireRole('admin', 'assistent'), (req, r
     if (r.status !== 'pending') continue;
     const m = messages.find((x) => x.id === r.messageId);
     if (!m) continue;
-    const rel = scoreRelevance({ subject: m.subject, body: m.body, hasAttachments: (m.attachments || []).length > 0 });
+    const rel = scoreRelevance({ subject: m.subject, body: m.body, hasAttachments: (m.attachments || []).length > 0 }, true);
     if (!rel.relevant) {
       r.status = 'overige';
       if (r.suggestion) { r.suggestion.relevant = false; r.suggestion.relevanceReason = rel.reason; }
