@@ -310,10 +310,23 @@ function renderBoard() {
     (secondary.length ? `<div class="board-row board-secondary"><div class="board-sec-label">Afgehandeld</div><div class="board-sec-cols">${secondary.map(colHTML).join('')}</div></div>` : '');
 
   $$('.card').forEach((el) => {
-    el.addEventListener('click', () => { markSeen(el.dataset.id); openOrderModal(el.dataset.id); });
+    el.addEventListener('click', (e) => {
+      // Klikken op selectievakje of prullenbak-knop opent de kaart niet.
+      if (e.target.closest('.card-select') || e.target.closest('.card-trash')) return;
+      markSeen(el.dataset.id); openOrderModal(el.dataset.id);
+    });
     el.addEventListener('dragstart', (e) => { window._dragging = true; e.dataTransfer.setData('text/plain', el.dataset.id); el.style.opacity = '.5'; });
     el.addEventListener('dragend', () => { window._dragging = false; el.style.opacity = '1'; });
   });
+  // Mini-prullenbak per kaart
+  $$('.card-trash').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try { await api(`/api/orders/${b.dataset.del}`, 'DELETE'); toast('Naar prullenbak'); loadBoard(); }
+    catch (err) { toast(err.message, true); }
+  }));
+  // Selectievakjes -> toon/verberg de bord-bulkbalk
+  $$('.card-check').forEach((c) => c.addEventListener('change', updateBoardBulk));
+  updateBoardBulk();
 
   $$('.column-cards').forEach((col) => {
     col.addEventListener('dragover', (e) => { e.preventDefault(); col.closest('.column').classList.add('drag-over'); });
@@ -349,6 +362,14 @@ function renderBoard() {
   } else if (tz) { tz.hidden = true; }
 }
 
+function selectedCardIds() { return $$('.card-check:checked').map((c) => c.dataset.id); }
+function updateBoardBulk() {
+  const bar = $('#boardBulkBar'); if (!bar) return;
+  const ids = selectedCardIds();
+  bar.hidden = ids.length === 0;
+  const c = $('#boardBulkCount'); if (c) c.textContent = `${ids.length} geselecteerd`;
+}
+
 function cardHTML(o) {
   const sm = sourceMeta(o.source);
   const meta = [`<span class="chip ${sm.cls}">${sourceIcon(o.source)} ${esc(o.source || 'Handmatig')}</span>`];
@@ -362,9 +383,12 @@ function cardHTML(o) {
     : { c: 'new', t: 'Nieuw — nog niet bekeken' };
   const replyCount = o.unreadReplies || 0;
   const replyLabel = replyCount > 1 ? `${replyCount} nieuwe berichten` : 'Nieuw bericht';
+  const canDel = state.me.role !== 'monteur';
   return `
     <div class="card ${o.urgent ? 'urgent' : ''} ${st.c === 'new' ? 'is-new' : ''} ${o.customerReplied ? 'replied-alert' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
       ${o.customerReplied ? `<span class="reply-corner" title="${replyLabel}">${replyCount || ''}</span>` : ''}
+      ${canDel ? `<label class="card-select" title="Selecteren"><input type="checkbox" class="card-check" data-id="${o.id}"></label>` : ''}
+      ${canDel ? `<button class="card-trash" data-del="${o.id}" title="Naar prullenbak">${icon('trash', 14)}</button>` : ''}
       ${o.customerReplied ? `<div class="reply-banner">${icon('message', 12)} ${replyLabel}</div>` : ''}
       <div class="card-title"><span class="state-dot ${st.c}" title="${st.t}"></span>${esc(o.title)}</div>
       ${o.customer ? `<div class="card-customer">${icon('user', 13)} ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
@@ -1105,6 +1129,14 @@ function bindButtons() {
     catch (err) { toast(err.message, true); }
   });
   $('#digestBtn')?.addEventListener('click', openDigestModal);
+  $('#boardBulkDelete')?.addEventListener('click', async () => {
+    const ids = selectedCardIds();
+    if (!ids.length) return;
+    if (!confirm(`${ids.length} kaart(en) naar de prullenbak verplaatsen?`)) return;
+    try { for (const id of ids) await api(`/api/orders/${id}`, 'DELETE'); toast(`${ids.length} naar prullenbak`); loadBoard(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#boardBulkClear')?.addEventListener('click', () => { $$('.card-check').forEach((c) => (c.checked = false)); updateBoardBulk(); });
   $('#dupBtn')?.addEventListener('click', openDuplicatesModal);
   $('#emptyTrashBtn')?.addEventListener('click', async () => {
     if (!confirm('De hele prullenbak definitief legen?')) return;

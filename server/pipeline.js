@@ -19,6 +19,19 @@ function summarizeRejections(rejects) {
   return `Totaal ${rejects.length} eerdere afwijzingen door het team. Verdeling: ${parts.join(', ')}.`;
 }
 
+// Normaliseert berichttekst voor inhoud-vergelijking (doorgestuurde berichten
+// herkennen): kleine letters, telefoon-regel en "doorgestuurd"-kopjes eruit,
+// witruimte samengevoegd.
+function normalizeForDedup(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/telefoon:\s*\+?\d[\d\s().-]*/g, '')           // het nummer dat de bridge toevoegt
+    .replace(/doorgestuurd|forwarded|fwd:|\bvia drs\b/g, '')
+    .replace(/[^a-z0-9à-ÿ ]/g, ' ')                          // leestekens/emoji weg
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function autoApproveThreshold() {
   const s = db().settings || {};
   if (s.aiAutoApproveThreshold != null) return Number(s.aiAutoApproveThreshold);
@@ -201,6 +214,35 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   if (externalId) {
     const existing = db().messages.find((m) => m.externalId && m.externalId === externalId);
     if (existing) return { message: existing, review: null, duplicate: true };
+  }
+
+  // INHOUD-ONTDUBBELEN: een opdracht die uit de DRS-groep wordt doorgestuurd naar
+  // Youssef komt als (bijna) identieke tekst opnieuw binnen via WhatsApp. Herken
+  // dit en hang het aan de bestaande opdracht/review i.p.v. een tweede kaart.
+  const normBody = normalizeForDedup(body);
+  if (normBody.length >= 20) {
+    const dayAgo = Date.now() - 24 * 3600 * 1000;
+    const twin = db().messages.find((m) =>
+      m.channel === 'whatsapp' &&
+      new Date(m.receivedAt).getTime() >= dayAgo &&
+      normalizeForDedup(m.body) === normBody);
+    if (twin) {
+      // Hang aan de bijbehorende lopende opdracht als die er is.
+      const rev = db().reviews.find((r) => r.messageId === twin.id && r.orderId);
+      const order = rev ? db().orders.find((o) => o.id === rev.orderId && !o.archivedWeek) : null;
+      if (order) {
+        order.thread = order.thread || [];
+        order.thread.push({ id: id('thr'), channel, sender: sender || '', subject: subject || '', body: body || '', at: now(), attachments: attachments || [] });
+        if (attachments?.length) order.attachments = (order.attachments || []).concat(attachments);
+        order.updatedAt = now();
+        saveSoon();
+        logActivity('systeem', 'dubbele WhatsApp (doorgestuurd) samengevoegd', order.title);
+        return { message: twin, review: null, duplicate: true, mergedIntoOrder: order.id };
+      }
+      // Anders: nog in de inbox -> niet nog een review maken.
+      logActivity('systeem', 'dubbele WhatsApp genegeerd', (body || '').slice(0, 40));
+      return { message: twin, review: null, duplicate: true };
+    }
   }
 
   const message = {
