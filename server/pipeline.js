@@ -91,6 +91,43 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     : review.channel === 'email' ? 'Keyservice e-mail'
     : 'Handmatig';
 
+  // STRENGE DEDUP bij goedkeuren: bestaat er al een actieve (niet-afgeronde/
+  // geannuleerde/ingeklapte) kaart van deze klant? Dan dit bericht daaraan
+  // toevoegen i.p.v. een tweede kaart maken. Tenzij de gebruiker dat expliciet
+  // overslaat (overrides.forceNew).
+  const origMsg0 = db().messages.find((m) => m.id === review.messageId);
+  if (!overrides.forceNew) {
+    const existingOrder = db().orders.find((o) =>
+      o.customerId === customer.id &&
+      !o.archivedWeek &&
+      !['afgerond', 'geannuleerd'].includes(o.status));
+    if (existingOrder) {
+      existingOrder.thread = existingOrder.thread || [];
+      if (origMsg0) {
+        existingOrder.thread.push({
+          id: id('thr'), channel: origMsg0.channel, sender: origMsg0.sender,
+          subject: origMsg0.subject, body: origMsg0.body, at: origMsg0.receivedAt,
+          attachments: origMsg0.attachments || [],
+        });
+        if (origMsg0.attachments && origMsg0.attachments.length) {
+          existingOrder.attachments = (existingOrder.attachments || []).concat(origMsg0.attachments);
+        }
+      }
+      existingOrder.customerReplied = true;
+      existingOrder.unreadReplies = (existingOrder.unreadReplies || 0) + 1;
+      existingOrder.lastCustomerReplyAt = now();
+      existingOrder.updatedAt = now();
+      review.status = auto ? 'auto_approved' : 'approved';
+      review.finalStatus = existingOrder.status;
+      review.orderId = existingOrder.id;
+      review.reviewedBy = actorName;
+      review.reviewedAt = now();
+      saveSoon();
+      logActivity(actorName, 'bericht aan bestaande opdracht', `${customer.name}: ${existingOrder.title}`);
+      return existingOrder;
+    }
+  }
+
   const order = {
     id: id('ord'),
     title: overrides.title || s.title || 'Nieuwe opdracht',
