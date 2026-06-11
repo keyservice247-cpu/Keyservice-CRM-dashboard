@@ -270,6 +270,7 @@ async function classifyWithClaude(message) {
   const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 
   const system = `Je bent een assistent voor een sleutel-/slotenmaker-bedrijf (Keyservice).
+${message.companyProfile ? `\nOVER HET BEDRIJF (gebruik dit om aanvragen goed te begrijpen):\n${message.companyProfile}\n` : ''}
 Je categoriseert inkomende klantberichten (e-mail of WhatsApp) voor een opdrachten-dashboard
 en haalt de klantgegevens eruit.
 Kies precies één status uit deze lijst:
@@ -376,7 +377,7 @@ export function aiMode() {
 
 // Stelt een concept-antwoord voor een klant op, op basis van het probleem,
 // de gesprekshistorie en (optioneel) je standaardsjablonen. Vereist de AI-modus.
-export async function suggestReply({ customerName, problem, history = '', templates = [] }) {
+export async function suggestReply({ customerName, problem, history = '', templates = [], companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
   if (!apiKey) {
@@ -390,6 +391,7 @@ export async function suggestReply({ customerName, problem, history = '', templa
     : '';
 
   const system = `Je bent de klantenservice van Keyservice, een sleutel-/slotenmakerbedrijf.
+${companyProfile ? `\nOVER HET BEDRIJF:\n${companyProfile}\n` : ''}
 Schrijf een vriendelijk, professioneel en BONDIG concept-antwoord in het Nederlands aan de klant.
 - Spreek de klant netjes aan${customerName ? ` (klant: ${customerName})` : ''}.
 - Beantwoord of help met het probleem; vraag om ontbrekende info (foto's, maten, adres) als dat nodig is.
@@ -410,4 +412,40 @@ ${history ? `\nGesprekshistorie:\n${history.slice(0, 2000)}` : ''}`;
   recordAIUsage(json.usage);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   return { text, engine: `ai:${model}` };
+}
+
+// Analyseert een berg berichten (WhatsApp/e-mail) en geeft inzichten terug:
+// veelgevraagde diensten, terugkerende patronen, en verbeterpunten.
+export async function analyzeTraffic({ messages = [], companyProfile = '' }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  // Voor een grondige analyse gebruiken we een sterker model als dat kan.
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-4-6';
+  if (!apiKey) return { text: 'Zet eerst de AI aan (ANTHROPIC_API_KEY) om analyses te draaien.', engine: 'demo' };
+  if (!messages.length) return { text: 'Geen berichten om te analyseren.', engine: 'n.v.t.' };
+
+  // Beperk de hoeveelheid tekst (kosten/limiet): neem tot 200 berichten, ingekort.
+  const sample = messages.slice(0, 200).map((m, i) =>
+    `[${i + 1}] (${m.channel}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 300)}`
+  ).join('\n');
+
+  const system = `Je bent een data-analist voor Keyservice, een sleutel-/slotenmakersbedrijf.
+${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
+Je krijgt een verzameling inkomende klantberichten (WhatsApp/e-mail). Analyseer ze en
+geef een helder, praktisch rapport in het Nederlands met deze kopjes:
+1. Meest gevraagde diensten/klussen (met aantallen/percentages indien mogelijk)
+2. Terugkerende patronen (typische vragen, drukke momenten, soorten klanten)
+3. Veelvoorkomende ruis/niet-opdrachten
+4. Concrete verbeterpunten voor de werkwijze (bv. standaardvragen, snellere reactie)
+Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je ziet.`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: 1500, system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }),
+  });
+  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
+  const json = await resp.json();
+  recordAIUsage(json.usage);
+  const text = (json.content || []).map((c) => c.text || '').join('').trim();
+  return { text, engine: `ai:${model}`, analyzed: Math.min(messages.length, 200) };
 }

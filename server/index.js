@@ -7,7 +7,7 @@ import {
   verifyPassword, createSession, destroySession,
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
@@ -21,7 +21,7 @@ import { usageSummary } from './usage.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
-  getTemplates, sanitizeTemplates, appointmentStatusKey,
+  getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -700,6 +700,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     statuses: getStatuses(),
     sources: getSources(),
     templates: getTemplates(),
+    companyProfile: getCompanyProfile(),
   });
 });
 
@@ -724,12 +725,16 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     if (!clean) return res.status(400).json({ error: 'Ongeldige sjablonen' });
     db().settings.templates = clean;
   }
+  if ('companyProfile' in b) {
+    db().settings.companyProfile = String(b.companyProfile || '').slice(0, 5000);
+  }
   save();
   res.json({
     aiAutoApproveThreshold: autoApproveThreshold(),
     statuses: getStatuses(),
     sources: getSources(),
     templates: getTemplates(),
+    companyProfile: getCompanyProfile(),
   });
 });
 
@@ -751,6 +756,7 @@ app.post('/api/orders/:id/suggest-reply', requireRole('admin', 'assistent'), asy
       problem: order.description || order.title,
       history,
       templates: getTemplates(),
+      companyProfile: getCompanyProfile(),
     });
     res.json(out);
   } catch (err) {
@@ -791,6 +797,26 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
   } catch (err) {
     res.status(500).json({ error: 'Versturen mislukt: ' + err.message });
   }
+});
+
+// AI analyseert het binnengekomen verkeer en geeft inzichten. (admin)
+app.post('/api/analyze', requireRole('admin'), async (req, res) => {
+  const days = Math.max(1, Math.min(365, Number(req.body?.days) || 30));
+  const since = Date.now() - days * 86400000;
+  const msgs = db().messages.filter((m) => new Date(m.receivedAt).getTime() >= since);
+  try {
+    const out = await analyzeTraffic({ messages: msgs, companyProfile: getCompanyProfile() });
+    // Bewaar het laatste rapport zodat je het kunt terugzien.
+    db().settings.lastAnalysis = { at: now(), days, total: msgs.length, ...out };
+    saveSoon();
+    res.json(db().settings.lastAnalysis);
+  } catch (err) {
+    res.status(500).json({ error: 'Analyse mislukt: ' + err.message });
+  }
+});
+
+app.get('/api/analyze/last', requireRole('admin'), (req, res) => {
+  res.json(db().settings.lastAnalysis || null);
 });
 
 // Lichte "is er iets veranderd?"-check voor live-updates. Het dashboard pollt

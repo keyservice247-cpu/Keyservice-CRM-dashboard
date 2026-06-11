@@ -2,7 +2,7 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
-import { normalizeStatus, firstStatusKey } from './settings.js';
+import { normalizeStatus, firstStatusKey, getCompanyProfile } from './settings.js';
 
 // Vat ALLE afwijzingen samen per reden ("12x spam/reclame, 5x leverancier"),
 // zodat de AI leert van het volledige beeld, niet alleen de losse voorbeelden.
@@ -188,7 +188,8 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   const corrections = allFb.filter((f) => f.type === 'correction');
   const learnings = [...rejects.slice(0, 25), ...corrections.slice(0, 10)];
   const rejectSummary = summarizeRejections(rejects);
-  const suggestion = await classify({ channel, sender, subject, body, learnings, rejectSummary });
+  const companyProfile = getCompanyProfile();
+  const suggestion = await classify({ channel, sender, subject, body, learnings, rejectSummary, companyProfile });
   // De AI-inschatting bewaren we als hint, maar alle binnenkomende klanten
   // landen standaard in "Open / Nieuw". De assistente bepaalt de rest.
   suggestion.aiStatus = suggestion.status;

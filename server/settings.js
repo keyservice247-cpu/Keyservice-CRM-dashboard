@@ -100,7 +100,22 @@ export function ensureSettings() {
     s.templates = structuredClone(DEFAULT_TEMPLATES);
   }
   if (s.aiAutoApproveThreshold === undefined) s.aiAutoApproveThreshold = null;
+  if (s.companyProfile === undefined) s.companyProfile = DEFAULT_COMPANY_PROFILE;
   save();
+}
+
+// Standaard bedrijfsprofiel (kennisbank) — de gebruiker past dit aan in Instellingen.
+// Deze context krijgt de AI bij elke beoordeling/antwoord mee.
+export const DEFAULT_COMPANY_PROFILE = `Keyservice is een sleutel- en slotenmakersbedrijf in Nederland.
+Diensten: sloten vervangen/repareren, cilindersloten, inbraakschade herstellen,
+buitengesloten/openingen, schuifpui- en hefschuifpui-reparatie (loopwagens, rails,
+beslag), sleutels bijmaken, hang- en sluitwerk, montage.
+Werkwijze: klant stuurt aanvraag via e-mail, WhatsApp of telefoon. Wij vragen indien
+nodig om foto's, maten en adres, sturen een offerte/prijsindicatie, en plannen bij
+akkoord een afspraak. Toon naar klanten: vriendelijk, professioneel, bondig.`;
+
+export function getCompanyProfile() {
+  return db().settings.companyProfile || DEFAULT_COMPANY_PROFILE;
 }
 
 export function getTemplates() {
