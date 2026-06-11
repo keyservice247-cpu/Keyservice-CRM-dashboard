@@ -353,6 +353,41 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   res.json(withRelations(order));
 });
 
+// Meerdere opdrachten samenvoegen tot één (zelfde klant, dubbele kaarten).
+// De 'primaire' opdracht behoudt alles; de rest gaat erin op (historie + foto's).
+app.post('/api/orders/merge', requireRole('admin', 'assistent'), (req, res) => {
+  const { primaryId, mergeIds } = req.body || {};
+  const primary = db().orders.find((o) => o.id === primaryId);
+  if (!primary || !Array.isArray(mergeIds) || !mergeIds.length) {
+    return res.status(400).json({ error: 'Kies een hoofdkaart en minstens één kaart om samen te voegen' });
+  }
+  primary.thread = primary.thread || [];
+  primary.attachments = primary.attachments || [];
+  let merged = 0;
+  for (const mid of mergeIds) {
+    if (mid === primaryId) continue;
+    const i = db().orders.findIndex((o) => o.id === mid);
+    if (i < 0) continue;
+    const other = db().orders[i];
+    // historie en bijlagen overnemen
+    primary.thread.push(...(other.thread || []));
+    primary.attachments.push(...(other.attachments || []));
+    // ontbrekende velden aanvullen
+    if (!primary.description && other.description) primary.description = other.description;
+    if (!primary.appointmentAt && other.appointmentAt) primary.appointmentAt = other.appointmentAt;
+    if (!primary.price && other.price) primary.price = other.price;
+    if (other.notes) primary.notes = `${primary.notes ? primary.notes + '\n' : ''}${other.notes}`;
+    db().orders.splice(i, 1);
+    merged++;
+  }
+  // historie netjes op tijd sorteren
+  primary.thread.sort((a, b) => (a.at || '').localeCompare(b.at || ''));
+  primary.updatedAt = now();
+  logActivity(req.user.name, 'kaarten samengevoegd', `${primary.title} (+${merged})`);
+  saveSoon();
+  res.json(withRelations(primary));
+});
+
 // Verwijderen = naar de prullenbak verplaatsen (terug te halen).
 app.delete('/api/orders/:id', requireRole('admin', 'assistent'), (req, res) => {
   const orders = db().orders;
@@ -516,6 +551,20 @@ app.post('/api/reviews/bulk-reject', requireRole('admin', 'assistent'), (req, re
   logActivity(req.user.name, 'bulk afgewezen', `${targets.length} berichten${b.reason ? ' — ' + b.reason : ''}`);
   saveSoon();
   res.json({ ok: true, count: targets.length });
+});
+
+// BULK accepteren: keur alle pending reviews goed met AI-zekerheid >= drempel.
+app.post('/api/reviews/bulk-approve', requireRole('admin', 'assistent'), (req, res) => {
+  const minPct = Math.max(0, Math.min(100, Number(req.body?.minConfidence) || 80));
+  const min = minPct / 100;
+  const targets = db().reviews.filter((r) => r.status === 'pending' && (r.suggestion?.confidence || 0) >= min);
+  let count = 0;
+  for (const r of targets) {
+    try { applyReview(r, { actorName: `${req.user.name} (bulk >=${minPct}%)` }); count++; } catch { /* skip */ }
+  }
+  logActivity(req.user.name, 'bulk goedgekeurd', `${count} berichten met AI-zekerheid >= ${minPct}%`);
+  saveSoon();
+  res.json({ ok: true, count, minPct });
 });
 
 // OPSCHONEN: laat alle pending berichten opnieuw door het ruisfilter lopen.

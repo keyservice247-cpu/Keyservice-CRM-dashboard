@@ -404,6 +404,31 @@ function statusOptionsHTML(selected) {
 }
 
 // ---------- Order modal ----------
+// Kaarten samenvoegen: kies andere opdrachten (zelfde klant of handmatig) die in
+// deze kaart moeten opgaan (historie + foto's komen samen).
+function openMergeModal(primary) {
+  // Kandidaten: andere actieve kaarten, dezelfde klant bovenaan.
+  const others = state.orders.filter((o) => o.id !== primary.id);
+  const sameCustomer = others.filter((o) => o.customerId && o.customerId === primary.customerId);
+  const rest = others.filter((o) => !(o.customerId && o.customerId === primary.customerId));
+  const row = (o, suggested) => `
+    <label class="dup-row"><input type="checkbox" class="mg-pick" value="${o.id}" ${suggested ? 'checked' : ''}>
+      <span><strong>${esc(o.title)}</strong> <span class="muted">· ${esc(o.customer?.name || '')} · ${esc(statusLabel(o.status))} · ${o.attachments?.length || 0} bijlagen</span></span></label>`;
+  modal(`
+    <h2>Kaarten samenvoegen</h2>
+    <p class="muted small">Alles wat je aanvinkt gaat op in deze kaart: <strong>${esc(primary.title)}</strong> (${esc(primary.customer?.name || '')}). Gesprekshistorie en foto's worden gecombineerd; de andere kaarten verdwijnen.</p>
+    ${sameCustomer.length ? `<div class="muted small" style="margin:8px 0 4px">Zelfde klant (aangeraden):</div>${sameCustomer.map((o) => row(o, true)).join('')}` : '<div class="muted small">Geen andere kaarten van dezelfde klant gevonden.</div>'}
+    ${rest.length ? `<details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Andere kaarten tonen (${rest.length})</summary>${rest.slice(0, 40).map((o) => row(o, false)).join('')}</details>` : ''}
+    <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="mg-cancel">Annuleren</button> <button class="btn btn-primary" id="mg-save">Samenvoegen</button> </div></div>`);
+  $('#mg-cancel').onclick = () => openOrderModal(primary.id);
+  $('#mg-save').onclick = async () => {
+    const ids = $$('.mg-pick:checked').map((c) => c.value);
+    if (!ids.length) return toast('Selecteer minstens één kaart', true);
+    try { await api('/api/orders/merge', 'POST', { primaryId: primary.id, mergeIds: ids }); closeModal(); toast(`${ids.length} kaart(en) samengevoegd`); loadBoard(); }
+    catch (err) { toast(err.message, true); }
+  };
+}
+
 function openOrderModal(id, pool) {
   const list = pool || state.orders;
   const o = id ? list.find((x) => x.id === id) : null;
@@ -415,7 +440,8 @@ function openOrderModal(id, pool) {
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label> ${!o ? `
-      <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> ` : `<label>Klant <input value="${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}" disabled></label>`}
+      <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> ` : `
+      <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}" ${isMonteur ? 'disabled' : ''}></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" ${isMonteur ? 'disabled' : ''}></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" ${isMonteur ? 'disabled' : ''} placeholder="e-mailadres klant"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}" ${isMonteur ? 'disabled' : ''}></label> </div>`}
     <div class="row"> <label>Status <select id="f-status">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak (datum/tijd) <input id="f-appt" type="datetime-local" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     ${o ? `
@@ -427,10 +453,11 @@ function openOrderModal(id, pool) {
           </div>`).join('')}
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('[data-source]'));
   if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
+  if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
 
   // Bijlagen toevoegen
   if (o) {
@@ -474,8 +501,14 @@ function openOrderModal(id, pool) {
       payload.urgent = $('#f-urgent')?.checked || false;
     }
     try {
-      if (o) await api(`/api/orders/${o.id}`, 'PATCH', payload);
-      else {
+      if (o) {
+        await api(`/api/orders/${o.id}`, 'PATCH', payload);
+        // Klantgegevens (naam/telefoon/e-mail/adres) van de gekoppelde klant bijwerken.
+        if (canWrite && o.customer) {
+          const cp = { name: $('#f-ccname')?.value, phone: $('#f-ccphone')?.value, email: $('#f-ccemail')?.value, address: $('#f-ccaddress')?.value };
+          await api(`/api/customers/${o.customer.id}`, 'PATCH', cp).catch(() => {});
+        }
+      } else {
         payload.customerName = $('#f-cname').value;
         payload.customerPhone = $('#f-cphone').value;
         payload.customerEmail = $('#f-cemail').value;
@@ -1058,6 +1091,12 @@ function bindButtons() {
   $('#rejectAllPendingBtn')?.addEventListener('click', async () => {
     if (!confirm('ALLE berichten in "Te controleren" afwijzen? Gebruik dit om een achterstand op te ruimen — het traint de AI dat dit geen opdrachten waren.')) return;
     try { const r = await api('/api/reviews/bulk-reject', 'POST', { scope: 'pending' }); toast(`${r.count} afgewezen`); loadInbox(); refreshInboxBadge(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#bulkApproveBtn')?.addEventListener('click', async () => {
+    const pct = Number($('#bulkApprovePct').value);
+    if (!confirm(`Alle inbox-berichten met AI-zekerheid van ${pct}% of hoger automatisch goedkeuren (worden opdrachten)?`)) return;
+    try { const r = await api('/api/reviews/bulk-approve', 'POST', { minConfidence: pct }); toast(r.count ? `${r.count} goedgekeurd (≥${pct}%)` : 'Geen berichten boven de drempel'); loadInbox(); refreshInboxBadge(); loadBoard(); }
     catch (err) { toast(err.message, true); }
   });
   $('#cleanupBtn')?.addEventListener('click', async () => {
