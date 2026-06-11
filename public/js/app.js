@@ -735,6 +735,7 @@ async function loadSettings() {
   $('#settingsPanel').innerHTML = `
     <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
     <div class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
   $('#saveProfile').onclick = async () => {
@@ -753,6 +754,18 @@ async function loadSettings() {
       renderAnalysis(out);
     } catch (err) { $('#analyzeResult').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
     btn.disabled = false; btn.textContent = 'Analyse starten';
+  };
+  $('#runLearn').onclick = async () => {
+    const btn = $('#runLearn'); btn.disabled = true; btn.textContent = 'Bezig met leren…';
+    $('#learnResult').innerHTML = '<div class="muted small">De AI bestudeert het verkeer en stelt filterregels op… ~10-30 sec.</div>';
+    try {
+      const out = await api('/api/learn-filter', 'POST', { days: Number($('#learnDays').value) });
+      $('#learnResult').innerHTML = `<div class="analysis-box">${esc(out.rules).replace(/\n/g, '<br>')}</div><div class="muted small" style="margin-top:8px">Toegevoegd aan het bedrijfsprofiel. De AI gebruikt dit nu bij het filteren.</div>`;
+      // Profielveld bijwerken zodat je de toevoeging direct ziet.
+      if ($('#companyProfile')) $('#companyProfile').value = out.companyProfile;
+      toast('Filterregels toegevoegd aan bedrijfsprofiel');
+    } catch (err) { $('#learnResult').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
+    btn.disabled = false; btn.textContent = 'Filterregels leren & toevoegen';
   };
 
   const statusRows = $('#statusRows');

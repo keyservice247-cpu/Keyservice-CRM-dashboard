@@ -449,3 +449,39 @@ Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je zie
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   return { text, engine: `ai:${model}`, analyzed: Math.min(messages.length, 200) };
 }
+
+// Genereert een bondige "leerregel"-tekst op basis van het verkeer: wat IS en wat
+// is NIET een echte opdracht voor Keyservice. Bedoeld om aan het bedrijfsprofiel
+// toe te voegen, zodat de AI scherper filtert in de inbox.
+export async function learnFilterRules({ messages = [], companyProfile = '', feedback = [] }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-4-6';
+  if (!apiKey) return { text: '', engine: 'demo' };
+  if (!messages.length) return { text: '', engine: 'n.v.t.' };
+
+  const sample = messages.slice(0, 200).map((m, i) =>
+    `[${i + 1}] (${m.channel}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 250)}`
+  ).join('\n');
+  const rejectInfo = feedback.length
+    ? `\nHet team heeft eerder berichten AFGEWEZEN met deze redenen: ${[...new Set(feedback.map((f) => f.reason))].slice(0, 15).join('; ')}.`
+    : '';
+
+  const system = `Je helpt Keyservice (sleutel-/slotenmaker) de inbox-filtering verbeteren.
+${companyProfile ? `\nHuidig bedrijfsprofiel:\n${companyProfile}\n` : ''}${rejectInfo}
+Bekijk de echte inkomende berichten en schrijf een KORTE set leerregels (max ~12 regels)
+die een AI helpt om te bepalen wat WEL een echte opdracht/aanvraag is en wat NIET
+(geklets, reclame, leveranciers, interne berichten). Wees concreet en gebruik
+voorbeelden uit de berichten. Schrijf in het Nederlands, als bullet-punten.
+Begin met de kop "FILTERREGELS (op basis van werkelijk verkeer):".`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: 800, system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }),
+  });
+  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
+  const json = await resp.json();
+  recordAIUsage(json.usage);
+  const text = (json.content || []).map((c) => c.text || '').join('').trim();
+  return { text, engine: `ai:${model}` };
+}

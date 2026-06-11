@@ -7,7 +7,7 @@ import {
   verifyPassword, createSession, destroySession,
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance, analyzeTraffic } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
@@ -817,6 +817,31 @@ app.post('/api/analyze', requireRole('admin'), async (req, res) => {
 
 app.get('/api/analyze/last', requireRole('admin'), (req, res) => {
   res.json(db().settings.lastAnalysis || null);
+});
+
+// AI leidt FILTERREGELS af uit het echte verkeer (wat is wel/niet een opdracht)
+// en voegt ze toe aan het bedrijfsprofiel, zodat de inbox-filtering scherper wordt.
+app.post('/api/learn-filter', requireRole('admin'), async (req, res) => {
+  const days = Math.max(1, Math.min(365, Number(req.body?.days) || 30));
+  const since = Date.now() - days * 86400000;
+  const msgs = db().messages.filter((m) => new Date(m.receivedAt).getTime() >= since);
+  try {
+    const out = await learnFilterRules({
+      messages: msgs,
+      companyProfile: getCompanyProfile(),
+      feedback: db().feedback || [],
+    });
+    if (!out.text) return res.status(400).json({ error: 'Geen regels gegenereerd (te weinig berichten of AI uit).' });
+    // Vervang een eerder toegevoegd filterregel-blok, of voeg toe.
+    const profile = getCompanyProfile();
+    const marker = '\n\n=== Door AI geleerde filterregels ===\n';
+    const base = profile.split('\n\n=== Door AI geleerde filterregels ===')[0];
+    db().settings.companyProfile = `${base}${marker}${out.text}`.slice(0, 5000);
+    saveSoon();
+    res.json({ ok: true, rules: out.text, companyProfile: db().settings.companyProfile });
+  } catch (err) {
+    res.status(500).json({ error: 'Mislukt: ' + err.message });
+  }
 });
 
 // Lichte "is er iets veranderd?"-check voor live-updates. Het dashboard pollt
