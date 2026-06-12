@@ -32,6 +32,9 @@ const ICON_PATHS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
   activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  'chevron-left': '<path d="M15 5l-7 7 7 7"/>',
+  'chevron-right': '<path d="M9 5l7 7-7 7"/>',
 };
 function icon(name, size = 16) {
   const p = ICON_PATHS[name];
@@ -79,8 +82,16 @@ function sourceMeta(label) {
   return { icon: '', cls: '' };
 }
 
+// Bepaalt via welk kanaal een opdracht binnenkwam (voor de hoofdmenu's E-mail / WhatsApp).
+function orderChannel(o) {
+  const l = (o.source || '').toLowerCase();
+  if (l.includes('mail')) return 'email';
+  if (l.includes('whatsapp') || l.includes('app') || l.includes('groep')) return 'whatsapp';
+  return 'other';
+}
+
 // ---------- State ----------
-const state = { me: null, meta: null, monteurs: [], orders: [], view: 'board' };
+const state = { me: null, meta: null, monteurs: [], orders: [], view: 'board', channel: 'all' };
 
 const statusLabel = (key) => (state.meta.statusLabels && state.meta.statusLabels[key]) || key;
 const statusColor = (key) => {
@@ -162,14 +173,18 @@ async function refreshMeta() {
 }
 
 function bindNav() {
-  $$('.nav-item').forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view)));
+  $$('.nav-item').forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view, tab)));
   $('#logoutBtn').addEventListener('click', async () => { await api('/api/logout', 'POST'); window.location.href = '/'; });
   $('#accountBtn').addEventListener('click', openAccountModal);
 }
 
-function showView(view) {
+function showView(view, tab) {
   state.view = view;
-  $$('.nav-item').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
+  // De drie board-menu's (Opdrachten/E-mail/WhatsApp) delen dezelfde weergave maar filteren op kanaal.
+  state.channel = (tab && tab.dataset.channel) || 'all';
+  $$('.nav-item').forEach((t) => t.classList.remove('active'));
+  if (tab) tab.classList.add('active');
+  else $(`.nav-item[data-view="${view}"]`)?.classList.add('active');
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
@@ -262,7 +277,8 @@ function renderArchives() {
     $('#view-board').appendChild(wrap);
   }
   const archives = state.archives || [];
-  if (!archives.length) { wrap.innerHTML = ''; return; }
+  // Alleen tonen in het hoofdmenu "Opdrachten" (niet in de kanaal-filters).
+  if (state.channel !== 'all' || !archives.length) { wrap.innerHTML = ''; return; }
   wrap.innerHTML = `<h3 class="archive-title">${icon('box', 14)} Ingeklapte agenda's</h3>` +
     archives.map((a) => `
       <details class="archive"> <summary> ${esc(a.label)} <span class="count">${a.count}</span></summary> <div class="archive-body" data-week="${esc(a.key)}">Laden…</div> </details>`).join('');
@@ -283,6 +299,8 @@ function filteredOrders() {
   const q = ($('#boardSearch').value || '').toLowerCase();
   const mont = $('#boardMonteurFilter').value;
   return state.orders.filter((o) => {
+    if (state.channel === 'email' && orderChannel(o) !== 'email') return false;
+    if (state.channel === 'whatsapp' && orderChannel(o) !== 'whatsapp') return false;
     if (mont && o.monteurId !== mont) return false;
     if (q) {
       const hay = `${o.title} ${o.customer?.name || ''} ${o.notes || ''} ${o.source || ''}`.toLowerCase();
@@ -294,6 +312,9 @@ function filteredOrders() {
 
 function renderBoard() {
   const board = $('#board');
+  // Titel meebewegen met het gekozen hoofdmenu.
+  const titles = { all: 'Opdrachten', email: 'E-mail — opdrachten', whatsapp: 'WhatsApp — opdrachten' };
+  const h = $('#view-board h2'); if (h) h.textContent = titles[state.channel] || 'Opdrachten';
   const orders = filteredOrders();
   const statuses = state.meta.statuses || [];
   const colHTML = (st) => {
@@ -1265,4 +1286,54 @@ function modal(html) {
   $('.modal-backdrop').onclick = closeModal;
 }
 function closeModal() { $('#modalRoot').hidden = true; $('#modal').innerHTML = ''; }
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if ($('.lightbox')) return; // open foto-viewer handelt zijn eigen Esc af
+  closeModal();
+});
+
+// ---------- Foto-viewer (lightbox) ----------
+// Toont een foto schermvullend met kruisje, Esc om te sluiten en pijltjes ← → tussen foto's.
+function openLightbox(images, start = 0) {
+  if (!images || !images.length) return;
+  let i = Math.max(0, Math.min(start, images.length - 1));
+  const multi = images.length > 1;
+  const root = document.createElement('div');
+  root.className = 'lightbox';
+  root.innerHTML = `
+    <button class="lb-close" title="Sluiten (Esc)">${icon('x', 24)}</button>
+    ${multi ? `<button class="lb-nav lb-prev" title="Vorige (←)">${icon('chevron-left', 30)}</button>` : ''}
+    <img class="lb-img" src="" alt="">
+    ${multi ? `<button class="lb-nav lb-next" title="Volgende (→)">${icon('chevron-right', 30)}</button>` : ''}
+    <div class="lb-counter"></div>`;
+  document.body.appendChild(root);
+  const imgEl = $('.lb-img', root);
+  const counter = $('.lb-counter', root);
+  const show = () => { imgEl.src = images[i].url; counter.textContent = multi ? `${i + 1} / ${images.length}` : ''; };
+  const close = () => { root.remove(); document.removeEventListener('keydown', onKey); };
+  const prev = () => { i = (i - 1 + images.length) % images.length; show(); };
+  const next = () => { i = (i + 1) % images.length; show(); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    else if (e.key === 'ArrowLeft' && multi) prev();
+    else if (e.key === 'ArrowRight' && multi) next();
+  };
+  $('.lb-close', root).onclick = close;
+  $('.lb-prev', root)?.addEventListener('click', (e) => { e.stopPropagation(); prev(); });
+  $('.lb-next', root)?.addEventListener('click', (e) => { e.stopPropagation(); next(); });
+  root.addEventListener('click', (e) => { if (e.target === root || e.target === imgEl) close(); });
+  document.addEventListener('keydown', onKey);
+  show();
+}
+
+// Klik op een foto-bijlage opent de viewer i.p.v. de losse afbeelding in een nieuw tabblad.
+// Alle foto's in dezelfde bijlage-grid vormen samen de galerij (pijltjes bladeren erdoorheen).
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('.att-img');
+  if (!a) return;
+  e.preventDefault();
+  const grid = a.closest('.attach-grid') || document;
+  const imgs = $$('.att-img', grid).map((el) => ({ url: el.getAttribute('href'), name: el.getAttribute('title') || '' }));
+  const idx = imgs.findIndex((x) => x.url === a.getAttribute('href'));
+  openLightbox(imgs.length ? imgs : [{ url: a.getAttribute('href') }], Math.max(0, idx));
+});
