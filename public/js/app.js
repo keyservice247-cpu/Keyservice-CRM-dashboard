@@ -792,12 +792,33 @@ async function loadFeedbackList() {
   const el = $('#feedbackList');
   if (!el) return;
   const fb = await api('/api/feedback');
-  if (!fb.length) { el.innerHTML = '<div class="muted small">Nog geen afwijzingen.</div>'; return; }
-  el.innerHTML = fb.map((f) => `
+  const tools = state.me.role === 'admin'
+    ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-sm btn-danger" id="fb-clear-today">Leervoorbeelden van vandaag wissen</button><button class="btn btn-sm btn-danger" id="fb-clear-all">Alle leervoorbeelden wissen</button></div>`
+    : '';
+  if (!fb.length) { el.innerHTML = tools + '<div class="muted small">Nog geen afwijzingen.</div>'; bindFbTools(); return; }
+  el.innerHTML = tools + fb.map((f) => `
     <div class="feedback-item"> <div><strong>${esc(f.reason)}</strong>${f.shouldBe ? ` <span class="chip"> ${esc(f.shouldBe)}</span>` : ''}
-        <span class="muted small">· ${esc(f.by)} · ${fmtDateShort(f.at)}</span></div> ${f.note ? `<div class="small">${esc(f.note)}</div>` : ''}
+        <span class="muted small">· ${esc(f.by)} · ${fmtDateShort(f.at)}</span>
+        <button class="btn btn-sm fb-del" data-id="${f.id}" title="Dit leervoorbeeld verwijderen" style="float:right">verwijder</button></div> ${f.note ? `<div class="small">${esc(f.note)}</div>` : ''}
       ${f.sample ? `<div class="muted small" style="margin-top:3px">“${esc(f.sample.slice(0, 120))}…”</div>` : ''}
     </div>`).join('');
+  $$('.fb-del').forEach((b) => b.onclick = async () => {
+    try { await api(`/api/feedback/${b.dataset.id}`, 'DELETE'); toast('Verwijderd'); loadFeedbackList(); }
+    catch (err) { toast(err.message, true); }
+  });
+  bindFbTools();
+}
+function bindFbTools() {
+  $('#fb-clear-today')?.addEventListener('click', async () => {
+    if (!confirm('Alle leervoorbeelden van VANDAAG wissen? (handig na een verkeerde bulk-actie)')) return;
+    try { const r = await api('/api/feedback/clear-today', 'POST'); toast(`${r.removed} gewist`); loadFeedbackList(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#fb-clear-all')?.addEventListener('click', async () => {
+    if (!confirm('ALLE AI-leervoorbeelden wissen en schoon beginnen? Dit kan niet ongedaan worden gemaakt.')) return;
+    try { const r = await api('/api/feedback/clear-all', 'POST'); toast(`${r.removed} gewist — schoon begonnen`); loadFeedbackList(); }
+    catch (err) { toast(err.message, true); }
+  });
 }
 
 async function loadHealth(run = false) {

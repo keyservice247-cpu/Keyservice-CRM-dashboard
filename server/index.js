@@ -640,6 +640,32 @@ app.get('/api/feedback', requireAuth, (req, res) => {
   res.json((db().feedback || []).slice(0, 100));
 });
 
+// Eén leervoorbeeld verwijderen (bv. een afwijzing die eigenlijk een opdracht was).
+app.delete('/api/feedback/:id', requireRole('admin', 'assistent'), (req, res) => {
+  const i = (db().feedback || []).findIndex((f) => f.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
+  db().feedback.splice(i, 1);
+  saveSoon();
+  res.json({ ok: true });
+});
+
+// Alle leervoorbeelden van VANDAAG wissen (handig na een verkeerde bulk-actie).
+app.post('/api/feedback/clear-today', requireRole('admin'), (req, res) => {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const before = (db().feedback || []).length;
+  db().feedback = (db().feedback || []).filter((f) => new Date(f.at).getTime() < start.getTime());
+  saveSoon();
+  res.json({ ok: true, removed: before - db().feedback.length });
+});
+
+// Alle AI-leervoorbeelden wissen (volledig schoon beginnen). Alleen admin.
+app.post('/api/feedback/clear-all', requireRole('admin'), (req, res) => {
+  const removed = (db().feedback || []).length;
+  db().feedback = [];
+  saveSoon();
+  res.json({ ok: true, removed });
+});
+
 // ---------- Inkomende koppelingen (webhooks) ----------
 function checkIngestToken(req, res, next) {
   const expected = process.env.INGEST_TOKEN;
