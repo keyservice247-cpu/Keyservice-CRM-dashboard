@@ -283,6 +283,36 @@ app.post('/api/archives/run', requireRole('admin'), (req, res) => {
   res.json(result);
 });
 
+// Bepaalt via welk kanaal een opdracht binnenkwam (voor handmatig inklappen per bron).
+function orderChannelOf(o) {
+  const l = (o.source || '').toLowerCase();
+  if (l.includes('mail')) return 'email';
+  if (l.includes('whatsapp') || l.includes('app') || l.includes('groep')) return 'whatsapp';
+  return 'other';
+}
+
+// Handmatig inklappen: stopt alle nu zichtbare (actieve) opdrachten van het gekozen
+// kanaal in één gedateerde bundel, zodat het bord weer leeg is. Terug te halen door
+// op de bundel te klikken.
+app.post('/api/archives/collapse', requireRole('admin', 'assistent'), (req, res) => {
+  const channel = (req.body && req.body.channel) || 'all';
+  const ts = new Date();
+  const key = 'manual_' + ts.getTime();
+  const dateLabel = ts.toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const chanName = channel === 'email' ? 'E-mail' : channel === 'whatsapp' ? 'WhatsApp' : 'Alle opdrachten';
+  const label = `Ingeklapt ${dateLabel} — ${chanName}`;
+  let count = 0;
+  for (const o of db().orders) {
+    if (o.archivedWeek) continue;
+    if (channel !== 'all' && orderChannelOf(o) !== channel) continue;
+    o.archivedWeek = { key, label, manual: true };
+    o.updatedAt = now();
+    count++;
+  }
+  if (count > 0) { logActivity(req.user.name, 'handmatig ingeklapt', `${label} — ${count} opdrachten`); saveSoon(); }
+  res.json({ ok: true, count, key, label });
+});
+
 app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
   const b = req.body || {};
   let customerId = b.customerId;

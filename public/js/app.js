@@ -277,8 +277,7 @@ function renderArchives() {
     $('#view-board').appendChild(wrap);
   }
   const archives = state.archives || [];
-  // Alleen tonen in het hoofdmenu "Opdrachten" (niet in de kanaal-filters).
-  if (state.channel !== 'all' || !archives.length) { wrap.innerHTML = ''; return; }
+  if (!archives.length) { wrap.innerHTML = ''; return; }
   wrap.innerHTML = `<h3 class="archive-title">${icon('box', 14)} Ingeklapte agenda's</h3>` +
     archives.map((a) => `
       <details class="archive"> <summary> ${esc(a.label)} <span class="count">${a.count}</span></summary> <div class="archive-body" data-week="${esc(a.key)}">Laden…</div> </details>`).join('');
@@ -288,8 +287,22 @@ function renderArchives() {
       const body = $('.archive-body', d);
       const week = body.dataset.week;
       const orders = await api(`/api/orders?archivedWeek=${encodeURIComponent(week)}`);
-      body.innerHTML = orders.map((o) => `
-        <div class="archive-item" data-id="${o.id}"> <span class="dot" style="background:${esc(statusColor(o.status))}"></span> <strong>${esc(o.title)}</strong> <span class="muted small">${esc(o.customer?.name || '')} · ${esc(statusLabel(o.status))}</span> </div>`).join('') || '<div class="muted small">Leeg</div>';
+      // Overzichtelijk: gegroepeerd per kolom (status), met kopjes en aantallen.
+      const statuses = state.meta.statuses || [];
+      const groups = statuses
+        .map((st) => ({ st, items: orders.filter((o) => o.status === st.key) }))
+        .filter((g) => g.items.length);
+      body.innerHTML = groups.map((g) => `
+        <div class="arch-group">
+          <div class="arch-group-head"><span class="column-dot" style="background:${esc(g.st.color)}"></span> ${esc(g.st.label)} <span class="count">${g.items.length}</span></div>
+          ${g.items.map((o) => `
+            <div class="archive-item" data-id="${o.id}">
+              <span class="dot" style="background:${esc(statusColor(o.status))}"></span>
+              <strong>${esc(o.title)}</strong>
+              <span class="muted small">${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}</span>
+              <span class="muted small arch-when">${esc(fmtDateShort(o.createdAt))}</span>
+            </div>`).join('')}
+        </div>`).join('') || '<div class="muted small">Leeg</div>';
       $$('.archive-item', body).forEach((it) => it.onclick = () => openOrderModal(it.dataset.id, orders));
     });
   });
@@ -1289,6 +1302,17 @@ function bindButtons() {
     catch (err) { toast(err.message, true); }
   });
   $('#digestBtn')?.addEventListener('click', openDigestModal);
+  $('#collapseBtn')?.addEventListener('click', async () => {
+    const naam = state.channel === 'email' ? 'E-mail' : state.channel === 'whatsapp' ? 'WhatsApp' : 'Alle';
+    const visible = filteredOrders().length;
+    if (!visible) return toast('Er staan geen kaarten om in te klappen', true);
+    if (!confirm(`${visible} kaart(en) van "${naam}" nu inklappen in een gedateerde bundel? Het bord wordt leeg; je vindt ze terug onder "Ingeklapte agenda's" en kunt ze altijd weer openen.`)) return;
+    try {
+      const r = await api('/api/archives/collapse', 'POST', { channel: state.channel });
+      toast(r.count ? `${r.count} kaart(en) ingeklapt` : 'Niets ingeklapt');
+      loadBoard();
+    } catch (err) { toast(err.message, true); }
+  });
   $('#boardBulkDelete')?.addEventListener('click', async () => {
     const ids = selectedCardIds();
     if (!ids.length) return;
