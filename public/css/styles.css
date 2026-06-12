@@ -156,7 +156,11 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 .card:hover { box-shadow: var(--shadow-md); border-color: #dde1e6; }
 .card.just-moved { animation: flashSaved .9s ease; }
 .card.urgent { border-left: 2px solid var(--danger); }
-.card-title { font-weight: 500; margin-bottom: 8px; line-height: 1.4; color: var(--ink); display: flex; align-items: baseline; }
+.card-title { font-weight: 500; margin-bottom: 8px; line-height: 1.4; color: var(--ink); display: flex; align-items: baseline; gap: 6px; }
+.card-title-txt { flex: 1; min-width: 0; }
+/* Teller naast de titel: aantal nieuwe (ongelezen) berichten op deze kaart */
+.title-count { flex-shrink: 0; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; align-self: flex-start; box-shadow: 0 1px 3px rgba(31,37,48,.2); animation: pop-in .18s ease; }
+@keyframes pop-in { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .state-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 8px; flex-shrink: 0; position: relative; top: -1px; }
 .state-dot.new { background: var(--warn); }
 .state-dot.opened { background: var(--info); }

@@ -408,11 +408,10 @@ function cardHTML(o) {
   const canDel = state.me.role !== 'monteur';
   return `
     <div class="card ${o.urgent ? 'urgent' : ''} ${st.c === 'new' ? 'is-new' : ''} ${o.customerReplied ? 'replied-alert' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
-      ${o.customerReplied ? `<span class="reply-corner" title="${replyLabel}">${replyCount || ''}</span>` : ''}
       ${canDel ? `<label class="card-select" title="Selecteren"><input type="checkbox" class="card-check" data-id="${o.id}"></label>` : ''}
       ${canDel ? `<button class="card-trash" data-del="${o.id}" title="Naar prullenbak">${icon('trash', 14)}</button>` : ''}
       ${o.customerReplied ? `<div class="reply-banner">${icon('message', 12)} ${replyLabel}</div>` : ''}
-      <div class="card-title"><span class="state-dot ${st.c}" title="${st.t}"></span>${esc(o.title)}</div>
+      <div class="card-title"><span class="state-dot ${st.c}" title="${st.t}"></span><span class="card-title-txt">${esc(o.title)}</span>${replyCount ? `<span class="title-count" title="${replyLabel}">${replyCount}</span>` : ''}</div>
       ${o.customer ? `<div class="card-customer">${icon('user', 13)} ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
       <div class="card-meta">${meta.join('')}</div>
       <div class="card-foot">${icon('clock', 12)} Binnen: ${esc(fmtDateShort(o.createdAt))}</div>
