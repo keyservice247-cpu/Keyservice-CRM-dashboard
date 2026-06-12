@@ -65,6 +65,7 @@
             <select id="inboxFilter">
               <option value="pending">Te controleren</option>
               <option value="overige">Overige (geklets)</option>
+              <option value="rejected">Prullenbak (afgewezen)</option>
             </select>
             <button id="cleanupBtn" class="btn perm-write">Opschonen (geklets eruit)</button>
             <button id="simulateBtn" class="btn btn-primary perm-write">Bericht handmatig toevoegen</button>
@@ -83,6 +84,7 @@
           <button id="bulkRejectBtn" class="btn btn-danger btn-sm">Geselecteerde afwijzen</button>
           <button id="rejectAllOverigeBtn" class="btn btn-danger btn-sm">Alle geklets afwijzen</button>
           <button id="rejectAllPendingBtn" class="btn btn-danger btn-sm">Hele lijst afwijzen</button>
+          <button id="emptyRejectedBtn" class="btn btn-danger btn-sm admin-only">Prullenbak legen</button>
         </div>
         <div id="reviewList" class="review-list"></div>
       </section>

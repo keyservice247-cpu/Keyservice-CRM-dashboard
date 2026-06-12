@@ -339,7 +339,8 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   db().reviews.push(review);
 
   const threshold = autoApproveThreshold();
-  if (rel.relevant && threshold > 0 && suggestion.confidence >= threshold) {
+  // Automatisch goedkeuren alleen voor ECHTE opdrachten (nooit bij 'geen opdracht').
+  if (rel.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 

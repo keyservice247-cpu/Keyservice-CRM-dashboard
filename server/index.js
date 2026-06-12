@@ -575,7 +575,7 @@ app.post('/api/reviews/bulk-reject', requireRole('admin', 'assistent'), (req, re
 app.post('/api/reviews/bulk-approve', requireRole('admin', 'assistent'), (req, res) => {
   const minPct = Math.max(0, Math.min(100, Number(req.body?.minConfidence) || 80));
   const min = minPct / 100;
-  const targets = db().reviews.filter((r) => r.status === 'pending' && (r.suggestion?.confidence || 0) >= min);
+  const targets = db().reviews.filter((r) => r.status === 'pending' && !r.suggestion?.aiNotOrder && (r.suggestion?.confidence || 0) >= min);
   let count = 0;
   for (const r of targets) {
     try { applyReview(r, { actorName: `${req.user.name} (bulk >=${minPct}%)` }); count++; } catch { /* skip */ }
@@ -609,6 +609,33 @@ app.post('/api/reviews/recategorize', requireRole('admin', 'assistent'), (req, r
 
 
 // Feedback-overzicht (waarom werden berichten afgewezen) — voor assistente/eigenaar.
+// Afgewezen inbox-bericht terugzetten naar 'te controleren'.
+app.post('/api/reviews/:id/restore', requireRole('admin', 'assistent'), (req, res) => {
+  const r = db().reviews.find((x) => x.id === req.params.id);
+  if (!r) return res.status(404).json({ error: 'Niet gevonden' });
+  if (r.status !== 'rejected') return res.status(400).json({ error: 'Alleen afgewezen berichten terugzetten' });
+  r.status = 'pending'; r.reviewedAt = null; r.reviewedBy = null;
+  saveSoon();
+  res.json({ ok: true });
+});
+
+// Afgewezen bericht DEFINITIEF verwijderen (alleen admin).
+app.delete('/api/reviews/:id', requireRole('admin'), (req, res) => {
+  const i = db().reviews.findIndex((x) => x.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
+  db().reviews.splice(i, 1);
+  saveSoon();
+  res.json({ ok: true });
+});
+
+// Hele inbox-prullenbak legen (alleen admin).
+app.post('/api/reviews/empty-rejected', requireRole('admin'), (req, res) => {
+  const before = db().reviews.length;
+  db().reviews = db().reviews.filter((r) => r.status !== 'rejected');
+  saveSoon();
+  res.json({ ok: true, removed: before - db().reviews.length });
+});
+
 app.get('/api/feedback', requireAuth, (req, res) => {
   res.json((db().feedback || []).slice(0, 100));
 });

@@ -595,13 +595,17 @@ async function loadInbox() {
   const bulkBar = $('#bulkBar');
   // Bulk-balk en "alle geklets afwijzen"-knop alleen tonen wanneer relevant.
   if (bulkBar && state.me.role !== 'monteur') bulkBar.hidden = reviews.length === 0;
-  if ($('#rejectAllOverigeBtn')) $('#rejectAllOverigeBtn').style.display = filter === 'overige' ? '' : 'none';
-  if ($('#rejectAllPendingBtn')) $('#rejectAllPendingBtn').style.display = filter === 'pending' ? '' : 'none';
+  // Op de prullenbak-weergave verbergen we approve/afwijs-acties; toon evt. 'legen'.
+  const inTrash = filter === 'rejected';
+  ['#bulkApproveBtn', '#bulkApprovePct', '#bulkRejectBtn', '#rejectAllOverigeBtn', '#rejectAllPendingBtn'].forEach((sel) => { const e = $(sel); if (e) e.style.display = inTrash ? 'none' : (sel.includes('Overige') ? (filter === 'overige' ? '' : 'none') : sel.includes('Pending') ? (filter === 'pending' ? '' : 'none') : ''); });
+  if ($('#emptyRejectedBtn')) $('#emptyRejectedBtn').style.display = (inTrash && state.me.role === 'admin') ? '' : 'none';
   if ($('#selectAll')) $('#selectAll').checked = false;
   updateBulkCount();
   if (!reviews.length) {
     if (bulkBar) bulkBar.hidden = true;
-    list.innerHTML = filter === 'overige'
+    list.innerHTML = filter === 'rejected'
+      ? '<div class="empty">De inbox-prullenbak is leeg.</div>'
+      : filter === 'overige'
       ? '<div class="empty">Geen overige berichten (geklets).</div>'
       : '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>';
     return;
@@ -627,12 +631,27 @@ function reviewHTML(r) {
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
     <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}
-          <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px"> <button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button> </div> </div>`;
+          <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
+      ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${state.me.role === 'admin' ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
+      : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
 }
 
 function bindReview(r) {
   const el = $(`.review[data-id="${r.id}"]`);
   bindSourceSelect($('[data-source]', el));
+  // Prullenbak-acties (afgewezen berichten)
+  const restoreBtn = $('.r-restore', el);
+  if (restoreBtn) restoreBtn.onclick = async () => {
+    try { await api(`/api/reviews/${r.id}/restore`, 'POST'); toast('Teruggezet naar Te controleren'); loadInbox(); refreshInboxBadge(); }
+    catch (err) { toast(err.message, true); }
+  };
+  const permBtn = $('.r-perm', el);
+  if (permBtn) permBtn.onclick = async () => {
+    if (!confirm('Definitief verwijderen? Dit kan niet ongedaan worden gemaakt.')) return;
+    try { await api(`/api/reviews/${r.id}`, 'DELETE'); toast('Definitief verwijderd'); loadInbox(); }
+    catch (err) { toast(err.message, true); }
+  };
+  if (!$('.r-approve', el)) return; // afgewezen-weergave: geen verdere knoppen
   $('.r-approve', el).onclick = async () => {
     try {
       await api(`/api/reviews/${r.id}/approve`, 'POST', {
@@ -1169,6 +1188,11 @@ function bindButtons() {
   $('#rejectAllPendingBtn')?.addEventListener('click', async () => {
     if (!confirm('ALLE berichten in "Te controleren" afwijzen? Gebruik dit om een achterstand op te ruimen — het traint de AI dat dit geen opdrachten waren.')) return;
     try { const r = await api('/api/reviews/bulk-reject', 'POST', { scope: 'pending' }); toast(`${r.count} afgewezen`); loadInbox(); refreshInboxBadge(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#emptyRejectedBtn')?.addEventListener('click', async () => {
+    if (!confirm('De inbox-prullenbak definitief legen? Dit kan niet ongedaan worden gemaakt.')) return;
+    try { const r = await api('/api/reviews/empty-rejected', 'POST'); toast(`${r.removed} definitief verwijderd`); loadInbox(); }
     catch (err) { toast(err.message, true); }
   });
   $('#bulkApproveBtn')?.addEventListener('click', async () => {
