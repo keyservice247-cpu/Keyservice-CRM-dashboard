@@ -286,6 +286,12 @@ tr:last-child td { border-bottom: none; }
 .chat-bubble { background: #fff; border: 1px solid var(--line); border-radius: 14px; border-top-left-radius: 4px; padding: 9px 12px; font-size: 14px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; word-break: break-word; box-shadow: var(--shadow-sm); }
 .chat-msg.out .chat-bubble { background: var(--accent); border-color: var(--accent); color: #fff; border-radius: 14px; border-top-right-radius: 4px; }
 .chat-msg.out .chat-bubble .att { border-color: rgba(255,255,255,.3); }
+/* Geciteerde tekst (oude mail) opklapbaar onder een bericht */
+.quote-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; padding: 3px 9px; font-size: 11px; font-weight: 500; color: var(--accent-ink); background: var(--accent-soft); border: none; border-radius: 999px; cursor: pointer; }
+.quote-toggle:hover { filter: brightness(.97); }
+.chat-msg.out .quote-toggle { color: #fff; background: rgba(255,255,255,.22); }
+.quoted-block { margin-top: 8px; padding: 8px 10px; font-size: 12.5px; line-height: 1.45; color: var(--ink-soft); white-space: pre-wrap; word-break: break-word; background: rgba(0,0,0,.03); border-left: 2px solid var(--line); border-radius: 6px; }
+.chat-msg.out .quoted-block { color: rgba(255,255,255,.9); background: rgba(255,255,255,.12); border-left-color: rgba(255,255,255,.35); }
 
 /* Beantwoorden-venster: gesprek bovenin */
 .reply-head { font-weight: 500; font-size: 12px; color: var(--muted); margin: 12px 0 6px; }

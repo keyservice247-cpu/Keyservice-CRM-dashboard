@@ -426,6 +426,32 @@ function fmtDate(s) {
   return d.toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+// Splitst een e-mail/bericht in 'nieuwe tekst' en 'geciteerde tekst' (de >-regels en
+// reply-headers eronder). Zo leest de historie als een nette chat — niet steeds de hele
+// oude mail eronder geplakt. De geciteerde tekst gaat achter een "toon citaat"-knopje.
+function splitQuoted(body) {
+  const raw = (body || '').replace(/\r\n/g, '\n');
+  const lines = raw.split('\n');
+  const markers = [
+    /^\s*>/,                                       // geciteerde regel (Gmail e.d.)
+    /^\s*-----.*schreef.*-----/i,                  // ons eigen citaat-formaat
+    /^\s*Op .*schreef.*:\s*$/i,                    // Gmail NL: "Op … schreef …:"
+    /^\s*On .*wrote:\s*$/i,                         // Gmail EN: "On … wrote:"
+    /^\s*(Van|From|Verzonden|Sent):\s/i,           // Outlook header-blok
+    /^\s*-{2,}\s*Oorspronkelijk bericht/i,         // Outlook NL
+    /^\s*_{5,}\s*$/,                                // Outlook scheidingslijn
+  ];
+  let cut = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (markers.some((m) => m.test(lines[i]))) { cut = i; break; }
+  }
+  if (cut < 0) return { text: raw.trim(), quoted: '' };
+  const text = lines.slice(0, cut).join('\n').trim();
+  const quoted = lines.slice(cut).join('\n').replace(/^\s*>\s?/gm, '').trim();
+  if (!text) return { text: quoted || raw.trim(), quoted: '' }; // alles was citaat → toch tonen
+  return { text, quoted };
+}
+
 // Toont bijlagen als thumbnails (foto/video) of bestand-tegels.
 function attachmentsHTML(atts) {
   if (!atts || !atts.length) return '<div class="muted small">Nog geen foto’s of bestanden.</div>';
@@ -516,17 +542,17 @@ function openOrderModal(id, pool) {
       <div class="thread">
         <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}</div>
         <div class="chat" id="f-chat">
-          ${o.thread.map((t) => `
+          ${o.thread.map((t) => { const q = splitQuoted(t.body || ''); return `
           <div class="chat-msg ${t.outgoing ? 'out' : 'in'}">
             <div class="chat-meta">${t.outgoing ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (t.outgoing ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)}</div>
-            <div class="chat-bubble">${esc(t.body || '')}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div>
-          </div>`).join('')}
+            <div class="chat-bubble">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div>
+          </div>`; }).join('')}
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
       <div class="right"> ${o && canWrite ? `<button class="btn" id="f-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
-  bindSourceSelect($('[data-source]'));
+  bindSourceSelect($('#modal [data-source]'));
   // Gesprek meteen naar het nieuwste bericht scrollen.
   const chat = $('#f-chat'); if (chat) chat.scrollTop = chat.scrollHeight;
   if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
@@ -571,7 +597,7 @@ function openOrderModal(id, pool) {
       payload.title = $('#f-title').value;
       payload.monteurId = $('#f-monteur').value || null;
       payload.price = $('#f-price').value;
-      payload.source = $('[data-source]')?.value || 'Handmatig';
+      payload.source = $('#modal [data-source]')?.value || 'Handmatig';
       payload.urgent = $('#f-urgent')?.checked || false;
     }
     try {
@@ -1065,7 +1091,7 @@ function openReplyModal(ctx = {}) {
   const lastMsg = [...thread].reverse().find((t) => t.body);
   const threadHTML = thread.length
     ? `<div class="reply-thread">${thread.slice(-6).map((t) => `
-        <div class="reply-msg-row"><span class="reply-who">${esc(t.sender || 'Klant')}</span> <span class="muted small">${fmtDate(t.at)}</span><div class="reply-msg-txt">${esc((t.body || '').slice(0, 600))}</div></div>`).join('')}</div>`
+        <div class="reply-msg-row"><span class="reply-who">${esc(t.sender || 'Klant')}</span> <span class="muted small">${fmtDate(t.at)}</span><div class="reply-msg-txt">${esc(splitQuoted(t.body || '').text.slice(0, 600))}</div></div>`).join('')}</div>`
     : '<div class="muted small">Nog geen eerdere berichten.</div>';
 
   modal(`
@@ -1325,6 +1351,17 @@ function openLightbox(images, start = 0) {
   document.addEventListener('keydown', onKey);
   show();
 }
+
+// Geciteerde tekst (oude mail onder een bericht) in-/uitklappen in de gesprekshistorie.
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.quote-toggle');
+  if (!btn) return;
+  const blk = btn.nextElementSibling;
+  if (!blk || !blk.classList.contains('quoted-block')) return;
+  const hidden = blk.hasAttribute('hidden');
+  if (hidden) { blk.removeAttribute('hidden'); btn.innerHTML = `${icon('message', 11)} eerdere berichten verbergen`; }
+  else { blk.setAttribute('hidden', ''); btn.innerHTML = `${icon('message', 11)} toon eerdere berichten`; }
+});
 
 // Klik op een foto-bijlage opent de viewer i.p.v. de losse afbeelding in een nieuw tabblad.
 // Alle foto's in dezelfde bijlage-grid vormen samen de galerij (pijltjes bladeren erdoorheen).
