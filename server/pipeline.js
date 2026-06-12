@@ -277,8 +277,11 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
   const rel = scoreRelevance({ subject, body, hasAttachments: (attachments || []).length > 0 });
-  suggestion.relevant = rel.relevant;
-  suggestion.relevanceReason = rel.reason;
+  // De AI mag overrulen: zegt hij expliciet 'geen opdracht' (incasso/leverancier/
+  // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
+  const aiSaysNotOrder = suggestion.aiNotOrder === true;
+  suggestion.relevant = aiSaysNotOrder ? false : rel.relevant;
+  suggestion.relevanceReason = aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
 
   // Bestaande klant herkennen (op e-mail/telefoon, anders naam). Zo voorkomen we
   // 3 kaarten voor 1 klant: een vervolgbericht hangt aan de lopende opdracht.

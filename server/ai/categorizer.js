@@ -40,11 +40,16 @@ function pick(text, re) {
 // losse reacties). Geeft { relevant: bool, reason }. Vooral voor drukke groepen.
 const WORK_WORDS = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|deur|raam|kozijn|sloten|inbra|buitengesloten|kapot|klemt|defect|stuk|vervang|repareer|reparatie|monteur|offerte|prijs|kosten|wat kost|afspraak|inplannen|langskomen|adres|woonplaats|spoed|loopwagen|rail|beslag|hang|scharnier|montage|installat)/i;
 const CHATTER_ONLY = /^(ok|oké|oke|oke[ëe]|top|prima|bedankt|dankje|dank je|dankjewel|thanks|thx|ja|nee|goed|mooi|super|perfect|duidelijk|👍|🙏|😂|😅|🙂|❤️|\?+|\.+|haha+|hihi+|proficiat|gefeliciteerd|goedemorgen|goedemiddag|goedenavond|hoi|hallo|hey|doei|tot ziens|fijne dag|welkom)[\s!.,👍🙏🙂😂😅❤️]*$/i;
+// Sterke signalen dat het GEEN klantopdracht is (incasso/leverancier/reclame/admin).
+const NOT_ORDER_WORDS = /(incasso|aanmaning|herinnering betaling|betalingsherinnering|deurwaarder|factuur|factuurnummer|automatische incasso|nieuwsbrief|uitschrijven|afmelden|leverancier|inkoop|bestelling bevestig|orderbevestiging|btw-aangifte|belastingdienst|kvk|verzekering|abonnement|offerte van|aanbieding|promotie|korting|webinar|vacature|sollicitat|no-?reply|noreply)/i;
 
 export function scoreRelevance({ subject, body, hasAttachments }, strict = false) {
   const text = `${subject || ''} ${body || ''}`.trim();
   const clean = text.replace(/telefoon:\s*\+?\d+/gi, '').trim(); // nummer dat bridge toevoegt niet meetellen
   const words = clean.split(/\s+/).filter(Boolean);
+
+  // Sterke "geen opdracht"-signalen wegen het zwaarst (incasso/leverancier/reclame).
+  if (NOT_ORDER_WORDS.test(clean)) return { relevant: false, reason: 'Lijkt geen klantopdracht (incasso/leverancier/reclame/administratie).' };
 
   // Foto/video van een klant is bijna altijd relevant (vaak schade/situatie).
   if (hasAttachments) return { relevant: true, reason: 'Bevat foto/bestand.' };
@@ -287,10 +292,14 @@ BELANGRIJK bij de klantgegevens:
 - Velden met labels ("Naam:", "Email:", "Telefoon:", "Adres:") zijn leidend.
 - Maak een korte, duidelijke probleemomschrijving in 1 zin.
 
-Geef in je JSON ook een veld "isOpdracht" (true/false): is dit een ECHTE klant-
-aanvraag/opdracht voor een sleutel-/slotenmaker, of geen opdracht (geklets,
-reclame, leverancier, intern, nieuwsbrief)? Het team heeft eerder berichten
-afgewezen — leer daar streng van.
+CRUCIAAL — bepaal eerst of dit überhaupt een opdracht is:
+Geef een veld "isOpdracht" (true/false): is dit een ECHTE klantaanvraag/opdracht
+voor een sleutel-/slotenmaker? Zet "isOpdracht": false bij incasso, aanmaning,
+factuur, leverancier, reclame, nieuwsbrief, bank, overheid, intern bericht of
+geklets — ZELFS als er een bedrag of urgentie in staat.
+Het veld "confidence" betekent: hoe zeker ben je dat dit een ECHTE opdracht is
+ÉN in de juiste kolom staat. Is "isOpdracht" false, geef dan confidence MAXIMAAL 0.15.
+Het team heeft eerder berichten afgewezen — leer daar streng van.
 Antwoord UITSLUITEND met geldige JSON, geen extra tekst.${message.rejectSummary ? `\n\nSAMENVATTING van alle afwijzingen door het team:\n${message.rejectSummary}` : ''}${learningsBlock(message.learnings)}`;
 
   const user = `Bericht-kanaal: ${message.channel}
@@ -303,6 +312,7 @@ ${(message.body || '').slice(0, 4000)}
 
 Geef JSON met exact deze velden:
 {
+  "isOpdracht": true/false,
   "status": "open|offerte_verzonden|afspraak_ingepland|afgerond|geannuleerd",
   "title": "korte titel voor de opdracht (max 120 tekens)",
   "customerName": "naam klant of null",
@@ -344,6 +354,16 @@ Geef JSON met exact deze velden:
   if (!CANONICAL_STATUSES.includes(parsed.status)) parsed.status = 'open';
   parsed.confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0.5));
   parsed.engine = `ai:${model}`;
+
+  // BELANGRIJK: 'confidence' is de zekerheid over de KOLOM, niet of het een echte
+  // opdracht is. Zegt de AI zelf dat het GEEN opdracht is (incasso/leverancier/
+  // reclame/intern), dan markeren we het als niet-relevant én verlagen we de
+  // zekerheid, zodat automatisch accepteren het nooit oppakt.
+  parsed.isOpdracht = parsed.isOpdracht !== false; // default true tenzij expliciet false
+  if (!parsed.isOpdracht) {
+    parsed.aiNotOrder = true;
+    parsed.confidence = Math.min(parsed.confidence, 0.2);
+  }
 
   // Veiligheidsnet: vul ontbrekende velden aan met de regel-extractie, die heel
   // betrouwbaar gelabelde gegevens en het juiste telefoonnummer pakt.
