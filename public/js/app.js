@@ -1082,16 +1082,31 @@ function openReplyModal(ctx = {}) {
     aiBtn.disabled = true; aiBtn.textContent = 'Bezig…';
     try {
       const out = await api(`/api/orders/${ctx.orderId}/suggest-reply`, 'POST');
-      if (out.text) { body.value = out.text; flash('#rep-body'); toast('Concept ingevuld'); }
+      if (out.text) { $('#rep-body').value = out.text; flash('#rep-body'); toast('Concept ingevuld'); }
       else toast('Geen concept (zet de AI aan)', true);
     } catch (err) { toast(err.message, true); }
     aiBtn.disabled = false; aiBtn.innerHTML = `${icon('sparkles', 14)} AI-concept`;
+  };
+  // Sjabloon kiezen → tekst in het antwoordvak zetten (bestaande tekst wordt vervangen na bevestiging).
+  const tplSel = $('#rep-select');
+  if (tplSel) tplSel.onchange = () => {
+    const i = tplSel.value;
+    if (i === '') return;
+    const tpl = templates[Number(i)];
+    if (!tpl) return;
+    const bodyEl = $('#rep-body');
+    if (bodyEl.value.trim() && !confirm('Het antwoordvak wordt vervangen door dit sjabloon. Doorgaan?')) {
+      tplSel.value = ''; return;
+    }
+    bodyEl.value = tpl.body || '';
+    flash('#rep-body');
+    tplSel.value = ''; // terug naar "kies standaardtekst" zodat je 'm opnieuw kunt kiezen
   };
   $('#rep-close').onclick = closeModal;
   $('#rep-copy').onclick = async () => {
     const t = fullText();
     try { await navigator.clipboard.writeText(t); toast('Tekst gekopieerd'); }
-    catch { body.value = t; body.select(); document.execCommand('copy'); toast('Tekst gekopieerd'); }
+    catch { const b = $('#rep-body'); b.value = t; b.select(); document.execCommand('copy'); toast('Tekst gekopieerd'); }
   };
   const mailBtn = $('#rep-mail');
   if (mailBtn) mailBtn.onclick = () => {
