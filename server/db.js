@@ -20,6 +20,7 @@ const DEFAULT_DATA = {
   messages: [],
   reviews: [],
   feedback: [],
+  outbox: [],
   trash: [],
   sessions: [],
   activity: [],

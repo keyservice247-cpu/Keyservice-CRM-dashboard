@@ -91,6 +91,7 @@ client.on('authenticated', () => console.log('Gekoppeld — sessie opgeslagen, g
 client.on('ready', () => {
   console.log(`\nBridge actief. Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
   startHeartbeat();
+  startOutbox();
 });
 client.on('disconnected', (r) => console.log('Verbinding verbroken:', r, '— pm2 herstart automatisch.'));
 
@@ -110,6 +111,44 @@ function startHeartbeat() {
   ping();
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = setInterval(ping, 60 * 1000);
+}
+
+// Haalt de uitgaande wachtrij op en stuurt opdrachten naar de monteur-groep.
+let outboxTimer = null;
+let groupCache = null;
+async function resolveGroupId(groupName) {
+  if (!groupCache) {
+    const chats = await client.getChats();
+    groupCache = chats.filter((c) => c.isGroup);
+  }
+  const wanted = (groupName || '').toLowerCase().trim();
+  const hit = groupCache.find((g) => (g.name || '').toLowerCase().trim() === wanted)
+    || groupCache.find((g) => (g.name || '').toLowerCase().includes(wanted));
+  return hit ? hit.id._serialized : null;
+}
+function startOutbox() {
+  const tick = async () => {
+    try {
+      const resp = await fetch(`${DASHBOARD_URL}/api/outbox`, { headers: { 'x-ingest-token': INGEST_TOKEN } });
+      if (!resp.ok) return;
+      const items = await resp.json();
+      for (const it of items) {
+        let ok = false;
+        try {
+          const gid = await resolveGroupId(it.group);
+          if (gid) { await client.sendMessage(gid, it.text); ok = true; console.log(`-> verstuurd naar monteur-groep "${it.group}"`); }
+          else { console.error(`Groep niet gevonden: "${it.group}" — kan opdracht niet versturen`); }
+        } catch (e) { console.error('Versturen naar monteur mislukt:', e.message); }
+        // meld terug aan dashboard
+        await fetch(`${DASHBOARD_URL}/api/outbox/${it.id}/done`, {
+          method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
+          body: JSON.stringify({ ok }),
+        }).catch(() => {});
+      }
+    } catch (e) { /* netwerk: volgende keer */ }
+  };
+  if (outboxTimer) clearInterval(outboxTimer);
+  outboxTimer = setInterval(tick, 8000); // elke 8 sec
 }
 
 // Bepaalt of een groep moet worden doorgestuurd op basis van GROUP_FILTER.

@@ -225,9 +225,9 @@ app.get('/api/monteurs', requireAuth, (req, res) => {
 });
 
 app.post('/api/monteurs', requireRole('admin', 'assistent'), (req, res) => {
-  const { name, phone, email } = req.body || {};
+  const { name, phone, email, waGroup } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Naam verplicht' });
-  const m = { id: id('mont'), name, phone: phone || '', email: email || '', createdAt: now() };
+  const m = { id: id('mont'), name, phone: phone || '', email: email || '', waGroup: waGroup || '', createdAt: now() };
   db().monteurs.push(m);
   logActivity(req.user.name, 'monteur toegevoegd', name);
   saveSoon();
@@ -237,7 +237,7 @@ app.post('/api/monteurs', requireRole('admin', 'assistent'), (req, res) => {
 app.patch('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) => {
   const m = db().monteurs.find((x) => x.id === req.params.id);
   if (!m) return res.status(404).json({ error: 'Niet gevonden' });
-  for (const k of ['name', 'phone', 'email']) if (k in (req.body || {})) m[k] = req.body[k];
+  for (const k of ['name', 'phone', 'email', 'waGroup']) if (k in (req.body || {})) m[k] = req.body[k];
   saveSoon();
   res.json(m);
 });
@@ -349,6 +349,8 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
   order.updatedAt = now();
   if (changedStatus) logActivity(req.user.name, 'status gewijzigd', `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
+  // Auto-versturen naar monteur bij het inplannen van een afspraak (indien ingesteld).
+  if ('appointmentAt' in b && b.appointmentAt) maybeAutoSendToMonteur(order, 'appointment');
   saveSoon();
   res.json(withRelations(order));
 });
@@ -504,8 +506,24 @@ app.post('/api/reviews/:id/approve', requireRole('admin', 'assistent'), (req, re
   if (!review) return res.status(404).json({ error: 'Niet gevonden' });
   if (!['pending', 'overige'].includes(review.status)) return res.status(400).json({ error: 'Al verwerkt' });
   const order = applyReview(review, { actorName: req.user.name, overrides: req.body || {} });
+  maybeAutoSendToMonteur(order, 'approved');
   res.json({ review, order: withRelations(order) });
 });
+
+// Volautomatisch versturen naar de monteur als dat is ingesteld én toegestaan
+// op de dag van vandaag, en de juiste trigger optreedt. Niet dubbel versturen.
+function maybeAutoSendToMonteur(order, event) {
+  const cfg = db().settings.monteurDispatch || {};
+  if (!cfg.autoEnabled) return;
+  if (cfg.trigger !== event) return;
+  if (order.sentToMonteur) return; // al verstuurd
+  if (!autoSendAllowedToday()) return;
+  const monteur = db().monteurs.find((m) => m.id === (cfg.autoMonteurId || order.monteurId));
+  if (!monteur || !monteur.waGroup) return;
+  if (!order.monteurId) order.monteurId = monteur.id;
+  const r = queueToMonteur(order, monteur, 'automatisch');
+  if (!r.error) { logActivity('systeem', 'automatisch naar monteur', `${order.title} -> ${monteur.name}`); saveSoon(); }
+}
 
 // Eén review afwijzen + als leersignaal opslaan (herbruikbaar voor bulk).
 function rejectReview(review, user, b = {}) {
@@ -750,6 +768,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     sources: getSources(),
     templates: getTemplates(),
     companyProfile: getCompanyProfile(),
+    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' },
   });
 });
 
@@ -777,6 +796,15 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
   if ('companyProfile' in b) {
     db().settings.companyProfile = String(b.companyProfile || '').slice(0, 5000);
   }
+  if ('monteurDispatch' in b) {
+    const d = b.monteurDispatch || {};
+    db().settings.monteurDispatch = {
+      autoEnabled: !!d.autoEnabled,
+      days: Array.isArray(d.days) ? d.days.filter((n) => n >= 0 && n <= 6) : [],
+      autoMonteurId: d.autoMonteurId || '',
+      trigger: d.trigger === 'appointment' ? 'appointment' : 'approved', // wanneer auto-versturen
+    };
+  }
   save();
   res.json({
     aiAutoApproveThreshold: autoApproveThreshold(),
@@ -784,6 +812,7 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     sources: getSources(),
     templates: getTemplates(),
     companyProfile: getCompanyProfile(),
+    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' },
   });
 });
 
@@ -811,6 +840,85 @@ app.post('/api/orders/:id/suggest-reply', requireRole('admin', 'assistent'), asy
   } catch (err) {
     res.status(500).json({ error: 'Kon geen concept maken: ' + err.message });
   }
+});
+
+// ---------- Opdracht naar monteur sturen (via WhatsApp-bridge) ----------
+// Bouwt een nette samenvatting van de opdracht voor de monteur-groep.
+function buildMonteurMessage(order) {
+  const c = db().customers.find((x) => x.id === order.customerId);
+  const lines = [`*Nieuwe opdracht: ${order.title}*`];
+  if (c?.name) lines.push(`Klant: ${c.name}`);
+  if (c?.phone) lines.push(`Tel: ${c.phone}`);
+  if (c?.address) lines.push(`Adres: ${c.address}`);
+  if (order.description) lines.push(`Omschrijving: ${order.description}`);
+  if (order.appointmentAt) lines.push(`Afspraak: ${order.appointmentAt.replace('T', ' ')}`);
+  if (order.price) lines.push(`Prijs: ${order.price}`);
+  if (order.attachments?.length) lines.push(`(${order.attachments.length} foto's/bestanden in het dashboard)`);
+  return lines.join('\n');
+}
+
+// Mag er nu (vandaag) automatisch naar de monteur verstuurd worden?
+function autoSendAllowedToday() {
+  const cfg = db().settings.monteurDispatch || {};
+  if (!cfg.autoEnabled) return false;
+  const days = cfg.days || []; // 0=zo ... 6=za
+  // Dag in Amsterdamse tijd.
+  const wd = new Date().toLocaleDateString('en-US', { timeZone: 'Europe/Amsterdam', weekday: 'short' });
+  const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return days.includes(map[wd]);
+}
+
+// Zet een opdracht in de uitgaande wachtrij voor een monteur-groep.
+function queueToMonteur(order, monteur, byName) {
+  if (!monteur?.waGroup) return { error: 'Deze monteur heeft geen WhatsApp-groep ingesteld' };
+  const item = {
+    id: id('out'),
+    orderId: order.id,
+    group: monteur.waGroup,
+    monteurName: monteur.name,
+    text: buildMonteurMessage(order),
+    status: 'queued',           // queued | sent | failed
+    createdAt: now(),
+    by: byName,
+  };
+  db().outbox.unshift(item);
+  order.sentToMonteur = { monteurId: monteur.id, monteurName: monteur.name, at: now(), status: 'queued' };
+  order.updatedAt = now();
+  if (db().outbox.length > 1000) db().outbox.length = 1000;
+  return { item };
+}
+
+// Handmatig: stuur een opdracht naar (de groep van) een monteur.
+app.post('/api/orders/:id/send-monteur', requireRole('admin', 'assistent'), (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  const monteurId = req.body?.monteurId || order.monteurId;
+  const monteur = db().monteurs.find((m) => m.id === monteurId);
+  if (!monteur) return res.status(400).json({ error: 'Kies een monteur' });
+  // koppel de monteur ook aan de opdracht als dat nog niet zo is
+  if (!order.monteurId) order.monteurId = monteur.id;
+  const r = queueToMonteur(order, monteur, req.user.name);
+  if (r.error) return res.status(400).json({ error: r.error });
+  logActivity(req.user.name, 'naar monteur gestuurd', `${order.title} -> ${monteur.name}`);
+  saveSoon();
+  res.json(withRelations(order));
+});
+
+// De WhatsApp-bridge haalt hier de wachtrij op (queued items).
+app.get('/api/outbox', checkIngestToken, (req, res) => {
+  res.json(db().outbox.filter((o) => o.status === 'queued'));
+});
+
+// De bridge meldt hier terug dat een item verzonden is (of mislukt).
+app.post('/api/outbox/:id/done', checkIngestToken, (req, res) => {
+  const item = db().outbox.find((o) => o.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'Niet gevonden' });
+  item.status = req.body?.ok === false ? 'failed' : 'sent';
+  item.doneAt = now();
+  const order = db().orders.find((o) => o.id === item.orderId);
+  if (order && order.sentToMonteur) order.sentToMonteur.status = item.status;
+  saveSoon();
+  res.json({ ok: true });
 });
 
 app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) => {

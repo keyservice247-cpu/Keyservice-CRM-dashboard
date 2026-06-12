@@ -374,6 +374,7 @@ function cardHTML(o) {
   const sm = sourceMeta(o.source);
   const meta = [`<span class="chip ${sm.cls}">${sourceIcon(o.source)} ${esc(o.source || 'Handmatig')}</span>`];
   if (o.monteur) meta.push(`<span class="chip mont">${icon('wrench', 13)} ${esc(o.monteur.name)}</span>`);
+  if (o.sentToMonteur) meta.push(`<span class="chip src-whatsapp" title="Verstuurd naar ${esc(o.sentToMonteur.monteurName)}">${icon('whatsapp', 13)} naar ${esc(o.sentToMonteur.monteurName)}</span>`);
   if (o.urgent) meta.push(`<span class="chip urgent">${icon('bolt', 13)} spoed</span>`);
   if (o.appointmentAt) meta.push(`<span class="chip">${icon('calendar', 13)} ${fmtDate(o.appointmentAt)}</span>`);
   if (o.attachments && o.attachments.length) meta.push(`<span class="chip">${icon('paperclip', 13)} ${o.attachments.length}</span>`);
@@ -430,6 +431,24 @@ function statusOptionsHTML(selected) {
 // ---------- Order modal ----------
 // Kaarten samenvoegen: kies andere opdrachten (zelfde klant of handmatig) die in
 // deze kaart moeten opgaan (historie + foto's komen samen).
+// Opdracht naar een monteur(-groep) sturen.
+function openSendMonteurModal(order) {
+  const opts = state.monteurs.map((m) => `<option value="${m.id}" ${order.monteurId === m.id ? 'selected' : ''} ${!m.waGroup ? 'disabled' : ''}>${esc(m.name)}${m.waGroup ? ' — ' + esc(m.waGroup) : ' (geen WhatsApp-groep)'}</option>`).join('');
+  modal(`
+    <h2>Naar monteur sturen</h2>
+    <p class="muted small">De opdracht wordt als nette samenvatting naar de WhatsApp-groep van de monteur gestuurd via de bridge.</p>
+    <label>Monteur <select id="sm-monteur">${opts || '<option>(geen monteurs)</option>'}</select></label>
+    <p class="muted small">Heeft de monteur nog geen WhatsApp-groep? Stel die in bij Monteurs.</p>
+    <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="sm-cancel">Annuleren</button> <button class="btn btn-primary" id="sm-send">Versturen</button> </div></div>`);
+  $('#sm-cancel').onclick = () => openOrderModal(order.id);
+  $('#sm-send').onclick = async () => {
+    const monteurId = $('#sm-monteur').value;
+    if (!monteurId) return toast('Kies een monteur', true);
+    try { await api(`/api/orders/${order.id}/send-monteur`, 'POST', { monteurId }); closeModal(); toast('In de wachtrij gezet — wordt verstuurd'); loadBoard(); }
+    catch (err) { toast(err.message, true); }
+  };
+}
+
 function openMergeModal(primary) {
   // Kandidaten: andere actieve kaarten, dezelfde klant bovenaan.
   const others = state.orders.filter((o) => o.id !== primary.id);
@@ -463,6 +482,7 @@ function openOrderModal(id, pool) {
 
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
+    ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}</div>` : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}" ${isMonteur ? 'disabled' : ''}></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" ${isMonteur ? 'disabled' : ''}></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" ${isMonteur ? 'disabled' : ''} placeholder="e-mailadres klant"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}" ${isMonteur ? 'disabled' : ''}></label> </div>`}
@@ -477,11 +497,12 @@ function openOrderModal(id, pool) {
           </div>`).join('')}
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && canWrite ? `<button class="btn" id="f-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('[data-source]'));
   if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
   if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
+  if (o && canWrite) $('#f-monteur').onclick = () => openSendMonteurModal(o);
 
   // Bijlagen toevoegen
   if (o) {
@@ -703,10 +724,10 @@ async function loadTrash() {
 
 function openMonteurModal(m) {
   modal(`
-    <h2>${m ? 'Monteur bewerken' : 'Nieuwe monteur'}</h2> <label>Naam <input id="m-name" value="${esc(m?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="m-phone" value="${esc(m?.phone || '')}"></label> <label>E-mail <input id="m-email" value="${esc(m?.email || '')}"></label> </div> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="m-cancel">Annuleren</button><button class="btn btn-primary" id="m-save">Opslaan</button> </div></div>`);
+    <h2>${m ? 'Monteur bewerken' : 'Nieuwe monteur'}</h2> <label>Naam <input id="m-name" value="${esc(m?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="m-phone" value="${esc(m?.phone || '')}"></label> <label>E-mail <input id="m-email" value="${esc(m?.email || '')}"></label> </div> <label>WhatsApp-groep (voor opdrachten) <input id="m-wagroup" value="${esc(m?.waGroup || '')}" placeholder="exacte naam van de WhatsApp-groep"></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="m-cancel">Annuleren</button><button class="btn btn-primary" id="m-save">Opslaan</button> </div></div>`);
   $('#m-cancel').onclick = closeModal;
   $('#m-save').onclick = async () => {
-    const payload = { name: $('#m-name').value, phone: $('#m-phone').value, email: $('#m-email').value };
+    const payload = { name: $('#m-name').value, phone: $('#m-phone').value, email: $('#m-email').value, waGroup: $('#m-wagroup').value };
     if (!payload.name) return toast('Naam verplicht', true);
     try {
       if (m) await api(`/api/monteurs/${m.id}`, 'PATCH', payload);
@@ -793,10 +814,35 @@ async function loadSettings() {
     <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een kaart, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="md-auto" style="width:auto"> Automatisch versturen aanzetten</label>
+      <div class="row"> <label>Welke monteur (auto) <select id="md-monteur"></select></label> <label>Wanneer <select id="md-trigger"><option value="approved">zodra opdracht goedgekeurd</option><option value="appointment">zodra afspraak ingepland</option></select></label> </div>
+      <label style="margin-bottom:4px">Alleen op deze dagen versturen</label>
+      <div id="md-days" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="md-save">Verstuur-instellingen opslaan</button></div>
+    </div>
     <div class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
   $('#saveProfile').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { companyProfile: $('#companyProfile').value }); toast('Bedrijfsprofiel opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+
+  // Monteur-verstuurinstellingen
+  const md = s.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' };
+  $('#md-auto').checked = !!md.autoEnabled;
+  $('#md-trigger').value = md.trigger || 'approved';
+  // monteurs vullen
+  const mons = await api('/api/monteurs').catch(() => []);
+  $('#md-monteur').innerHTML = '<option value="">— kies monteur —</option>' + mons.map((m) => `<option value="${m.id}" ${md.autoMonteurId === m.id ? 'selected' : ''}>${esc(m.name)}${m.waGroup ? '' : ' (geen groep!)'}</option>`).join('');
+  // dagen als knopjes
+  const dayNames = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
+  $('#md-days').innerHTML = dayNames.map((d, i) => `<button type="button" class="day-toggle ${(md.days || []).includes(i) ? 'on' : ''}" data-day="${i}">${d}</button>`).join('');
+  $$('#md-days .day-toggle').forEach((b) => b.onclick = () => b.classList.toggle('on'));
+  $('#md-save').onclick = async () => {
+    const days = $$('#md-days .day-toggle.on').map((b) => Number(b.dataset.day));
+    const cfg = { autoEnabled: $('#md-auto').checked, days, autoMonteurId: $('#md-monteur').value, trigger: $('#md-trigger').value };
+    try { await api('/api/settings', 'PATCH', { monteurDispatch: cfg }); toast('Verstuur-instellingen opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   // Laatste analyse tonen indien aanwezig.
