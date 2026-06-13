@@ -1087,8 +1087,10 @@ async function loadSettings() {
     <div class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een kaart, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="md-auto" style="width:auto"> Automatisch versturen aanzetten</label>
-      <div class="row"> <label>Welke monteur (auto) <select id="md-monteur"></select></label> <label>Wanneer <select id="md-trigger"><option value="approved">zodra opdracht goedgekeurd</option><option value="appointment">zodra afspraak ingepland</option></select></label> </div>
-      <label style="margin-bottom:4px">Alleen op deze dagen versturen</label>
+      <div class="row"> <label>Welke monteur (auto) <select id="md-monteur"></select></label> <label>Wanneer <select id="md-trigger"><option value="approved">zodra ik de opdracht goedkeur</option><option value="appointment">zodra een afspraak is ingepland</option><option value="intake">volautomatisch — meteen bij binnenkomst</option></select></label> </div>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" id="md-onlydrs" style="width:auto"> Alleen opdrachten uit de DRS / Raf Breda-groep</label>
+      <p class="muted small" id="md-hint" style="margin:6px 0 0"></p>
+      <label style="margin:10px 0 4px">Alleen op deze dagen versturen</label>
       <div id="md-days" style="display:flex;gap:6px;flex-wrap:wrap"></div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="md-save">Verstuur-instellingen opslaan</button></div>
     </div>
@@ -1122,9 +1124,19 @@ async function loadSettings() {
   };
 
   // Monteur-verstuurinstellingen
-  const md = s.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' };
+  const md = s.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true };
   $('#md-auto').checked = !!md.autoEnabled;
   $('#md-trigger').value = md.trigger || 'approved';
+  $('#md-onlydrs').checked = md.onlyDrs !== false;
+  // Korte uitleg bij de gekozen stand.
+  const hints = {
+    approved: 'Half-automatisch: je controleert de opdracht en zodra jij goedkeurt gaat hij naar de monteur.',
+    appointment: 'De opdracht gaat naar de monteur zodra er een afspraakdatum is ingepland.',
+    intake: 'Volautomatisch: zodra een opdracht binnenkomt wordt hij meteen aangemaakt én naar de monteur gestuurd (geen handmatige stap).',
+  };
+  const setHint = () => { $('#md-hint').textContent = hints[$('#md-trigger').value] || ''; };
+  setHint();
+  $('#md-trigger').addEventListener('change', setHint);
   // monteurs vullen
   const mons = await api('/api/monteurs').catch(() => []);
   $('#md-monteur').innerHTML = '<option value="">— kies monteur —</option>' + mons.map((m) => `<option value="${m.id}" ${md.autoMonteurId === m.id ? 'selected' : ''}>${esc(m.name)}${m.waGroup ? '' : ' (geen groep!)'}</option>`).join('');
@@ -1134,7 +1146,9 @@ async function loadSettings() {
   $$('#md-days .day-toggle').forEach((b) => b.onclick = () => b.classList.toggle('on'));
   $('#md-save').onclick = async () => {
     const days = $$('#md-days .day-toggle.on').map((b) => Number(b.dataset.day));
-    const cfg = { autoEnabled: $('#md-auto').checked, days, autoMonteurId: $('#md-monteur').value, trigger: $('#md-trigger').value };
+    const cfg = { autoEnabled: $('#md-auto').checked, days, autoMonteurId: $('#md-monteur').value, trigger: $('#md-trigger').value, onlyDrs: $('#md-onlydrs').checked };
+    if (cfg.autoEnabled && !cfg.autoMonteurId) return toast('Kies eerst een monteur', true);
+    if (cfg.autoEnabled && !days.length) return toast('Kies minstens één dag (anders wordt er nooit verstuurd)', true);
     try { await api('/api/settings', 'PATCH', { monteurDispatch: cfg }); toast('Verstuur-instellingen opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };

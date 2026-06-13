@@ -31,7 +31,7 @@ import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
-  getEmailSignature,
+  getEmailSignature, isWhatsappOrderGroup,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -586,12 +586,19 @@ app.post('/api/reviews/:id/approve', requireRole('admin', 'assistent'), (req, re
   res.json({ review, order: withRelations(order) });
 });
 
-// Volautomatisch versturen naar de monteur als dat is ingesteld én toegestaan
-// op de dag van vandaag, en de juiste trigger optreedt. Niet dubbel versturen.
+// Is dit een opdracht uit de DRS/Raf Breda-groep (de opdracht-WhatsApp-groep)?
+function isDrsOrder(order) {
+  if (order.originGroup) return isWhatsappOrderGroup(order.originGroup);
+  return /whatsapp|groep|app/.test((order.source || '').toLowerCase());
+}
+
+// Automatisch versturen naar de monteur als dat is ingesteld én toegestaan op de dag
+// van vandaag, en de juiste trigger optreedt. Niet dubbel versturen.
 function maybeAutoSendToMonteur(order, event) {
   const cfg = db().settings.monteurDispatch || {};
   if (!cfg.autoEnabled) return;
   if (cfg.trigger !== event) return;
+  if (cfg.onlyDrs !== false && !isDrsOrder(order)) return; // standaard alleen DRS-opdrachten
   if (order.sentToMonteur) return; // al verstuurd
   if (!autoSendAllowedToday()) return;
   const monteur = db().monteurs.find((m) => m.id === (cfg.autoMonteurId || order.monteurId));
@@ -599,6 +606,26 @@ function maybeAutoSendToMonteur(order, event) {
   if (!order.monteurId) order.monteurId = monteur.id;
   const r = queueToMonteur(order, monteur, 'automatisch');
   if (!r.error) { logActivity('systeem', 'automatisch naar monteur', `${order.title} -> ${monteur.name}`); saveSoon(); }
+}
+
+// Volautomatisch (trigger 'intake'): zodra een DRS-opdracht binnenkomt, meteen zelf
+// goedkeuren (kaart aanmaken) én naar de monteur sturen — zonder handmatige stap.
+function maybeIntakeAutoSend(result) {
+  const cfg = db().settings.monteurDispatch || {};
+  if (!cfg.autoEnabled || cfg.trigger !== 'intake') return;
+  if (!autoSendAllowedToday()) return;
+  const review = result && result.review;
+  if (!review || review.status !== 'pending' || !review.suggestion?.relevant) return;
+  const msg = db().messages.find((m) => m.id === review.messageId);
+  if (cfg.onlyDrs !== false && !(msg && isWhatsappOrderGroup(msg.group))) return; // standaard alleen DRS
+  const order = applyReview(review, { actorName: 'AI (volautomatisch)', auto: true });
+  const monteur = db().monteurs.find((m) => m.id === cfg.autoMonteurId);
+  if (monteur && monteur.waGroup && !order.sentToMonteur) {
+    if (!order.monteurId) order.monteurId = monteur.id;
+    const r = queueToMonteur(order, monteur, 'volautomatisch');
+    if (!r.error) logActivity('systeem', 'volautomatisch naar monteur', `${order.title} -> ${monteur.name}`);
+  }
+  saveSoon();
 }
 
 // Eén review afwijzen + als leersignaal opslaan (herbruikbaar voor bulk).
@@ -789,6 +816,8 @@ app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
     group,
     externalId,
   });
+  // Volautomatisch: DRS-opdracht direct goedkeuren + naar monteur (indien ingesteld).
+  try { maybeIntakeAutoSend(result); } catch (e) { console.error('intake-autosend:', e.message); }
   res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
 });
 
@@ -901,7 +930,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     emailSignature: getEmailSignature(),
     sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
     imapAddress: process.env.IMAP_USER || '',
-    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' },
+    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
 });
 
@@ -937,11 +966,13 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
   }
   if ('monteurDispatch' in b) {
     const d = b.monteurDispatch || {};
+    const trigger = ['approved', 'appointment', 'intake'].includes(d.trigger) ? d.trigger : 'approved';
     db().settings.monteurDispatch = {
       autoEnabled: !!d.autoEnabled,
       days: Array.isArray(d.days) ? d.days.filter((n) => n >= 0 && n <= 6) : [],
       autoMonteurId: d.autoMonteurId || '',
-      trigger: d.trigger === 'appointment' ? 'appointment' : 'approved', // wanneer auto-versturen
+      trigger, // approved | appointment | intake (volautomatisch)
+      onlyDrs: d.onlyDrs !== false, // standaard alleen DRS/Raf Breda-opdrachten
     };
   }
   save();
@@ -953,7 +984,7 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     companyProfile: getCompanyProfile(),
     whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
     emailSignature: getEmailSignature(),
-    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' },
+    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
 });
 
