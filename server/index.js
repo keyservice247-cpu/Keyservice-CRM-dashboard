@@ -851,6 +851,9 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     sources: getSources(),
     templates: getTemplates(),
     companyProfile: getCompanyProfile(),
+    whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
+    sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
+    imapAddress: process.env.IMAP_USER || '',
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' },
   });
 });
@@ -879,6 +882,9 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
   if ('companyProfile' in b) {
     db().settings.companyProfile = String(b.companyProfile || '').slice(0, 5000);
   }
+  if ('whatsappOrderGroups' in b) {
+    db().settings.whatsappOrderGroups = String(b.whatsappOrderGroups || '').slice(0, 500);
+  }
   if ('monteurDispatch' in b) {
     const d = b.monteurDispatch || {};
     db().settings.monteurDispatch = {
@@ -895,6 +901,7 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     sources: getSources(),
     templates: getTemplates(),
     companyProfile: getCompanyProfile(),
+    whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' },
   });
 });

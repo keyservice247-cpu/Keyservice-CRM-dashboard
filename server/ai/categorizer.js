@@ -39,21 +39,30 @@ function pick(text, re) {
 // Bepaalt of een bericht een echte werk-aanvraag is of "ruis" (geklets, bedankjes,
 // losse reacties). Geeft { relevant: bool, reason }. Vooral voor drukke groepen.
 const WORK_WORDS = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|deur|raam|kozijn|sloten|inbra|buitengesloten|kapot|klemt|defect|stuk|vervang|repareer|reparatie|monteur|offerte|prijs|kosten|wat kost|afspraak|inplannen|langskomen|adres|woonplaats|spoed|loopwagen|rail|beslag|hang|scharnier|montage|installat)/i;
+// STERKE slotenmaker-aanvraag: concrete fysieke termen. Deze wegen zwaarder dan de
+// "geen-opdracht"-filter, zodat een echte klantaanvraag nooit als ruis wegvalt —
+// ook al staat er toevallig een woord als "offerte" of "aanbieding" in.
+const STRONG_WORK = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|kozijn|sloten|inbra|buitengesloten|loopwagen|rail|beslag|scharnier|deur|raam|montage|installat|reparatie|repareer|monteur|kapot|klemt|defect|vervang)/i;
 const CHATTER_ONLY = /^(ok|oké|oke|oke[ëe]|top|prima|bedankt|dankje|dank je|dankjewel|thanks|thx|ja|nee|goed|mooi|super|perfect|duidelijk|👍|🙏|😂|😅|🙂|❤️|\?+|\.+|haha+|hihi+|proficiat|gefeliciteerd|goedemorgen|goedemiddag|goedenavond|hoi|hallo|hey|doei|tot ziens|fijne dag|welkom)[\s!.,👍🙏🙂😂😅❤️]*$/i;
 // Sterke signalen dat het GEEN klantopdracht is (incasso/leverancier/reclame/admin).
-const NOT_ORDER_WORDS = /(incasso|aanmaning|herinnering betaling|betalingsherinnering|deurwaarder|factuur|factuurnummer|automatische incasso|nieuwsbrief|uitschrijven|afmelden|leverancier|inkoop|bestelling bevestig|orderbevestiging|btw-aangifte|belastingdienst|kvk|verzekering|abonnement|offerte van|aanbieding|promotie|korting|webinar|vacature|sollicitat|no-?reply|noreply)/i;
+// LET OP: "offerte van" is hier bewust NIET opgenomen — klanten vragen juist een
+// offerte aan ("ik ontvang graag een offerte van jullie") en dat is een echte opdracht.
+const NOT_ORDER_WORDS = /(incasso|aanmaning|herinnering betaling|betalingsherinnering|deurwaarder|factuur|factuurnummer|automatische incasso|nieuwsbrief|uitschrijven|afmelden|leverancier|inkoop|bestelling bevestig|orderbevestiging|btw-aangifte|belastingdienst|kvk|verzekering|abonnement|webinar|vacature|sollicitat|no-?reply|noreply)/i;
 
 export function scoreRelevance({ subject, body, hasAttachments }, strict = false) {
   const text = `${subject || ''} ${body || ''}`.trim();
   const clean = text.replace(/telefoon:\s*\+?\d+/gi, '').trim(); // nummer dat bridge toevoegt niet meetellen
   const words = clean.split(/\s+/).filter(Boolean);
 
-  // Sterke "geen opdracht"-signalen wegen het zwaarst (incasso/leverancier/reclame).
-  if (NOT_ORDER_WORDS.test(clean)) return { relevant: false, reason: 'Lijkt geen klantopdracht (incasso/leverancier/reclame/administratie).' };
-
   // Foto/video van een klant is bijna altijd relevant (vaak schade/situatie).
   if (hasAttachments) return { relevant: true, reason: 'Bevat foto/bestand.' };
-  // Duidelijke werk-termen -> relevant.
+  // STERKE slotenmaker-aanvraag wint van de ruisfilter (mis nooit een echte opdracht).
+  if (STRONG_WORK.test(clean)) return { relevant: true, reason: 'Concrete slotenmaker-aanvraag.' };
+
+  // Sterke "geen opdracht"-signalen (incasso/leverancier/reclame/administratie).
+  if (NOT_ORDER_WORDS.test(clean)) return { relevant: false, reason: 'Lijkt geen klantopdracht (incasso/leverancier/reclame/administratie).' };
+
+  // Duidelijke werk-termen (ook zwakkere: offerte/prijs/afspraak) -> relevant.
   if (WORK_WORDS.test(clean)) return { relevant: true, reason: 'Bevat een aanvraag/werk-term.' };
   // Telefoon of adres genoemd -> waarschijnlijk een aanvraag.
   if (PHONE_RE.test(clean) || ADDRESS_RE.test(clean) || POSTCODE_RE.test(clean)) {

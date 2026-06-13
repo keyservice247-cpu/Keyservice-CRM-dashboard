@@ -2,7 +2,7 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
-import { normalizeStatus, firstStatusKey, getCompanyProfile } from './settings.js';
+import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup } from './settings.js';
 
 // Vat ALLE afwijzingen samen per reden ("12x spam/reclame, 5x leverancier"),
 // zodat de AI leert van het volledige beeld, niet alleen de losse voorbeelden.
@@ -277,11 +277,17 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
   const rel = scoreRelevance({ subject, body, hasAttachments: (attachments || []).length > 0 });
+  // WhatsApp-groepfilter: opdrachten halen we alleen uit de ingestelde groep(en)
+  // (standaard de DRS/"Raf Breda"-groep). Berichten uit andere groepen zijn geklets
+  // tussen collega's -> naar "Overige", nooit een opdracht-kaart.
+  const fromOtherGroup = channel === 'whatsapp' && group && !isWhatsappOrderGroup(group);
   // De AI mag overrulen: zegt hij expliciet 'geen opdracht' (incasso/leverancier/
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
-  suggestion.relevant = aiSaysNotOrder ? false : rel.relevant;
-  suggestion.relevanceReason = aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
+  suggestion.relevant = (aiSaysNotOrder || fromOtherGroup) ? false : rel.relevant;
+  suggestion.relevanceReason = fromOtherGroup
+    ? `Niet uit de opdracht-groep (WhatsApp-groep "${group}") — naar Overige.`
+    : aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
 
   // Bestaande klant herkennen (op e-mail/telefoon, anders naam). Zo voorkomen we
   // 3 kaarten voor 1 klant: een vervolgbericht hangt aan de lopende opdracht.
@@ -322,13 +328,26 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
     }
   }
 
+  // Klantgegevens altijd bewaren in het klantenbestand (ook vóór goedkeuring), zodat
+  // namen/e-mails/telefoons nooit verloren gaan. Alleen bij een echte aanvraag met een
+  // betrouwbaar contact (e-mail of telefoon), om ruis te voorkomen.
+  if (suggestion.relevant && (suggestion.customerEmail || suggestion.customerPhone)) {
+    upsertCustomer({
+      name: suggestion.customerName,
+      phone: suggestion.customerPhone,
+      email: suggestion.customerEmail,
+      address: suggestion.customerAddress,
+      source: channel,
+    });
+  }
+
   const review = {
     id: id('rev'),
     messageId: message.id,
     channel,
     suggestion,
     // Geklets komt als 'overige' binnen (aparte lijst), echte aanvragen als 'pending'.
-    status: rel.relevant ? 'pending' : 'overige',
+    status: suggestion.relevant ? 'pending' : 'overige',
     finalStatus: null,
     orderId: null,
     correctedStatus: null,
@@ -339,8 +358,9 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   db().reviews.push(review);
 
   const threshold = autoApproveThreshold();
-  // Automatisch goedkeuren alleen voor ECHTE opdrachten (nooit bij 'geen opdracht').
-  if (rel.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  // Automatisch goedkeuren alleen voor ECHTE opdrachten (nooit bij 'geen opdracht'
+  // of berichten uit een niet-opdracht-groep).
+  if (suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 

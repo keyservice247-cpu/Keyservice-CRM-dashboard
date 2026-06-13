@@ -101,7 +101,24 @@ export function ensureSettings() {
   }
   if (s.aiAutoApproveThreshold === undefined) s.aiAutoApproveThreshold = null;
   if (s.companyProfile === undefined) s.companyProfile = DEFAULT_COMPANY_PROFILE;
+  // WhatsApp: uit welke groep(en) maken we opdrachten? Standaard de DRS/"Raf Breda"-groep.
+  // Leeg = alle groepen. Berichten uit andere groepen gaan naar "Overige".
+  if (s.whatsappOrderGroups === undefined) s.whatsappOrderGroups = 'raf breda';
   save();
+}
+
+// Lijst met groepsnamen (stukjes) waaruit we WhatsApp-opdrachten oppakken.
+// Leeg = alle groepen toegestaan.
+export function getWhatsappOrderGroups() {
+  return String(db().settings.whatsappOrderGroups || '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+// Hoort een WhatsApp-groep bij de "opdracht-groepen"? (substring-match, hoofdletter-ongevoelig)
+export function isWhatsappOrderGroup(groupName) {
+  const allow = getWhatsappOrderGroups();
+  if (!allow.length) return true; // geen filter ingesteld = alle groepen
+  const n = (groupName || '').toLowerCase();
+  return allow.some((a) => n.includes(a));
 }
 
 // Standaard bedrijfsprofiel (kennisbank) — de gebruiker past dit aan in Instellingen.

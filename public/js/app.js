@@ -264,7 +264,11 @@ async function loadBoard() {
   renderBoard();
   renderArchives();
   const stats = await api('/api/stats');
-  $('#boardStats').textContent = `${stats.totalOrders} opdrachten · ${stats.leads} leads · ${stats.customers} klanten`;
+  $('#boardStats').innerHTML =
+    `<span title="Actieve opdracht-kaarten op het bord (niet ingeklapt)">${stats.totalOrders} opdrachten</span> · ` +
+    `<span class="stat-link" data-go="customers" title="Contacten die nog geen klant zijn (eenmalige/aanvraag-contacten). Klik om te bekijken.">${stats.leads} leads</span> · ` +
+    `<span class="stat-link" data-go="customers" title="Contacten met wie je zaken hebt gedaan. Klik om te bekijken.">${stats.customers} klanten</span>`;
+  $$('#boardStats .stat-link').forEach((el) => el.onclick = () => showView(el.dataset.go));
 }
 
 // Ingeklapte week-agenda's onder het bord.
@@ -316,7 +320,8 @@ function filteredOrders() {
     if (state.channel === 'whatsapp' && orderChannel(o) !== 'whatsapp') return false;
     if (mont && o.monteurId !== mont) return false;
     if (q) {
-      const hay = `${o.title} ${o.customer?.name || ''} ${o.notes || ''} ${o.source || ''}`.toLowerCase();
+      const threadTxt = (o.thread || []).map((t) => t.body || '').join(' ');
+      const hay = `${o.title} ${o.description || ''} ${o.customer?.name || ''} ${o.customer?.phone || ''} ${o.customer?.email || ''} ${o.customer?.address || ''} ${o.notes || ''} ${o.source || ''} ${threadTxt}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -918,6 +923,17 @@ function renderAnalysis(a) {
 async function loadSettings() {
   const s = await api('/api/settings');
   $('#settingsPanel').innerHTML = `
+    <div class="info-card" style="margin-bottom:18px"> <h3>Hoe alles werkt &amp; is verbonden</h3>
+      <p class="muted small">Een overzicht van alle routes waarlangs opdrachten binnenkomen en hoe ze in het dashboard belanden.</p>
+      <div class="flow-box">
+        <div class="flow-line"><strong>E-mail:</strong> klant / website-formulier → <code>info@keyservice247.nl</code> → (assistent stuurt door / wordt opgehaald) → <strong>IMAP</strong> leest mailbox <code>${esc(s.imapAddress || 'niet ingesteld')}</code> → AI deelt in → <strong>Inbox / AI</strong> → goedkeuren → kaart in <strong>Opdrachten</strong>.</div>
+        <div class="flow-line"><strong>WhatsApp:</strong> klant/groep → wegwerp-nummer (iPhone) → <strong>bridge op VPS</strong> → dashboard → AI deelt in → Inbox. <em>Opdrachten worden alleen uit de ingestelde groep(en) gehaald (zie hieronder).</em></div>
+        <div class="flow-line"><strong>Antwoorden:</strong> "Snel antwoord" op een kaart → verstuurd via SMTP vanaf <code>${esc(s.sendAddress || 'niet ingesteld')}</code> → komt in de gesprekshistorie. Mail je buiten het dashboard om? Dan wordt die uit je Verzonden-map opgehaald en alsnog bij de kaart gezet.</div>
+        <div class="flow-line"><strong>Naar monteur:</strong> kaart → "Stuur naar monteur" (of automatisch) → wachtrij → bridge → WhatsApp-groep van de monteur.</div>
+      </div>
+      <p class="muted small" style="margin-top:10px">Verzendadres (SMTP): <strong>${esc(s.sendAddress || 'niet ingesteld in Render')}</strong> · Inkomende mailbox (IMAP): <strong>${esc(s.imapAddress || 'niet ingesteld')}</strong></p>
+    </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
@@ -932,6 +948,10 @@ async function loadSettings() {
 
   $('#saveProfile').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { companyProfile: $('#companyProfile').value }); toast('Bedrijfsprofiel opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveWaGroups').onclick = async () => {
+    try { await api('/api/settings', 'PATCH', { whatsappOrderGroups: $('#waOrderGroups').value }); toast('WhatsApp opdracht-groepen opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
 

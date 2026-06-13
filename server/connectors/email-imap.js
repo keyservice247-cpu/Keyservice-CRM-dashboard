@@ -3,7 +3,12 @@
 //
 // Aanzetten: vul in .env de variabelen IMAP_HOST, IMAP_USER en IMAP_PASSWORD in.
 // Staat dat er niet, dan slaat deze koppeling zichzelf netjes over.
-import { ingestMessage } from '../pipeline.js';
+//
+// BELANGRIJK: we halen mails op op basis van DATUM (laatste X dagen) en
+// ontdubbelen op messageId — NIET op de "ongelezen"-vlag. Zo verdwijnt een
+// binnengekomen opdracht niet als iemand de mail eerst in webmail/Outlook opent.
+import { db, id, now, saveSoon, logActivity } from '../db.js';
+import { ingestMessage, findCustomer } from '../pipeline.js';
 import { saveBuffer } from '../storage.js';
 
 let polling = false;
@@ -49,40 +54,112 @@ async function poll({ host, port, user, pass }) {
     logger: false,
   });
 
+  const lookbackDays = Math.max(1, Number(process.env.IMAP_LOOKBACK_DAYS || 5));
+  const since = new Date(Date.now() - lookbackDays * 24 * 3600 * 1000);
+
   try {
     await client.connect();
-    const lock = await client.getMailboxLock('INBOX');
-    try {
-      // Alleen ongelezen berichten ophalen.
-      const uids = await client.search({ seen: false }, { uid: true });
-      for (const uid of uids || []) {
-        const msg = await client.fetchOne(uid, { source: true }, { uid: true });
-        if (!msg || !msg.source) continue;
-        const parsed = await simpleParser(msg.source);
-        // Bijlagen opslaan (foto's/video's/pdf's die de klant meestuurt).
-        const attachments = [];
-        for (const att of parsed.attachments || []) {
-          // sla inline-handtekeninglogo's e.d. zonder content over
-          if (!att.content || !att.content.length) continue;
-          const saved = saveBuffer(att.content, { mime: att.contentType, filename: att.filename });
-          if (saved) attachments.push(saved);
-        }
-        await ingestMessage({
-          channel: 'email',
-          sender: parsed.from?.text || '',
-          subject: parsed.subject || '',
-          body: (parsed.text || parsed.html || '').toString().slice(0, 8000),
-          externalId: parsed.messageId || `imap-${uid}`,
-          attachments,
-        });
-        // Markeer als gelezen zodat we hem niet opnieuw verwerken.
-        await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
-      }
-    } finally {
-      lock.release();
-    }
+    // 1) INKOMENDE mail verwerken (INBOX).
+    await processInbox(client, simpleParser, since);
+    // 2) UITGAANDE mail (Verzonden-map) ophalen, zodat antwoorden die buiten het
+    //    dashboard om zijn verstuurd toch in de gesprekshistorie komen.
+    await processSent(client, simpleParser, since).catch((e) => console.error('  IMAP (Verzonden):', e.message));
   } finally {
     try { await client.logout(); } catch { /* negeren */ }
     polling = false;
+  }
+}
+
+// Verwerk inkomende mail: op datum (laatste X dagen), ontdubbeld op messageId.
+async function processInbox(client, simpleParser, since) {
+  const lock = await client.getMailboxLock('INBOX');
+  try {
+    const uids = await client.search({ since }, { uid: true });
+    for (const uid of uids || []) {
+      // Eerst goedkoop de envelope ophalen om messageId te kennen.
+      let head;
+      try { head = await client.fetchOne(uid, { envelope: true }, { uid: true }); } catch { continue; }
+      const mid = head?.envelope?.messageId || `imap-${uid}`;
+      // Al verwerkt? Dan overslaan (geen dubbel werk, geen dubbele kaarten).
+      if (db().messages.find((m) => m.externalId && m.externalId === mid)) continue;
+
+      const msg = await client.fetchOne(uid, { source: true }, { uid: true });
+      if (!msg || !msg.source) continue;
+      const parsed = await simpleParser(msg.source);
+      const attachments = [];
+      for (const att of parsed.attachments || []) {
+        if (!att.content || !att.content.length) continue; // inline-logo's e.d. overslaan
+        const saved = saveBuffer(att.content, { mime: att.contentType, filename: att.filename });
+        if (saved) attachments.push(saved);
+      }
+      await ingestMessage({
+        channel: 'email',
+        sender: parsed.from?.text || '',
+        subject: parsed.subject || '',
+        body: (parsed.text || parsed.html || '').toString().slice(0, 8000),
+        externalId: mid,
+        attachments,
+      });
+    }
+  } finally {
+    lock.release();
+  }
+}
+
+// Zoekt de "Verzonden"-map (naam verschilt per provider) en hangt verstuurde
+// antwoorden aan de bijbehorende klant-opdracht. Faalt veilig als er geen
+// Verzonden-map is.
+async function processSent(client, simpleParser, since) {
+  // Vind de verzonden-map via special-use '\Sent' of op naam.
+  let sentPath = null;
+  for await (const box of client.list()) {
+    const flags = box.flags || new Set();
+    const hasSentFlag = (flags.has && flags.has('\\Sent')) || box.specialUse === '\\Sent';
+    if (hasSentFlag || /sent|verzonden/i.test(box.path || box.name || '')) { sentPath = box.path; break; }
+  }
+  if (!sentPath) return;
+
+  const lock = await client.getMailboxLock(sentPath);
+  try {
+    const uids = await client.search({ since }, { uid: true });
+    for (const uid of uids || []) {
+      let head;
+      try { head = await client.fetchOne(uid, { envelope: true }, { uid: true }); } catch { continue; }
+      const mid = head?.envelope?.messageId || `sent-${uid}`;
+      const threadKey = 'sent:' + mid;
+      // Al toegevoegd aan een kaart? Overslaan.
+      if (db().orders.some((o) => (o.thread || []).some((t) => t.externalId === threadKey))) continue;
+
+      const to = head?.envelope?.to?.[0]?.address || '';
+      if (!to) continue;
+      // Bij welke klant/opdracht hoort dit verstuurde antwoord?
+      const customer = findCustomer({ email: to });
+      if (!customer) continue;
+      const order = db().orders.find((o) =>
+        o.customerId === customer.id && !o.archivedWeek &&
+        !['afgerond', 'geannuleerd'].includes(o.status));
+      if (!order) continue;
+
+      const msg = await client.fetchOne(uid, { source: true }, { uid: true });
+      if (!msg || !msg.source) continue;
+      const parsed = await simpleParser(msg.source);
+      order.thread = order.thread || [];
+      order.thread.push({
+        id: id('thr'),
+        channel: 'email',
+        sender: parsed.from?.text || 'Keyservice',
+        subject: parsed.subject || '',
+        body: (parsed.text || parsed.html || '').toString().slice(0, 8000),
+        at: (parsed.date || new Date()).toISOString(),
+        outgoing: true,            // rechts/blauw in de chat (uitgaand)
+        externalId: threadKey,     // ontdubbeling
+      });
+      order.lastReplyAt = now();
+      order.updatedAt = now();
+      saveSoon();
+      logActivity('systeem', 'verzonden e-mail gekoppeld aan kaart', `${customer.name}: ${order.title}`);
+    }
+  } finally {
+    lock.release();
   }
 }
