@@ -365,6 +365,9 @@ tr:last-child td { border-bottom: none; }
 .as-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .as-examples .as-ex { cursor: pointer; text-align: left; border: 1px solid var(--line); background: #fcfcfd; color: var(--ink-soft); transition: border-color .12s, color .12s; }
 .as-examples .as-ex:hover { border-color: var(--accent); color: var(--accent-ink); }
+/* Monteur-overzicht regels */
+.mont-line { padding: 5px 0; border-top: 1px solid var(--line-soft); cursor: pointer; font-size: 13px; }
+.mont-line:hover { color: var(--accent-ink); }
 
 /* Agenda */
 .agenda-wrap { display: flex; flex-direction: column; gap: 18px; }

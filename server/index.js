@@ -229,10 +229,26 @@ app.post('/api/customers/merge', requireRole('admin', 'assistent'), (req, res) =
 // ---------- Monteurs ----------
 app.get('/api/monteurs', requireAuth, (req, res) => {
   const orders = db().orders;
-  res.json(db().monteurs.map((m) => ({
-    ...m,
-    activeCount: orders.filter((o) => o.monteurId === m.id && o.status !== 'geannuleerd').length,
-  })));
+  const labels = getStatusLabels();
+  const now2 = Date.now();
+  res.json(db().monteurs.map((m) => {
+    const mine = orders.filter((o) => o.monteurId === m.id && !o.archivedWeek);
+    const active = mine.filter((o) => !['afgerond', 'geannuleerd'].includes(o.status));
+    const upcoming = mine
+      .filter((o) => o.appointmentAt && new Date(o.appointmentAt).getTime() >= now2 - 12 * 3600 * 1000 && !['afgerond', 'geannuleerd'].includes(o.status))
+      .sort((a, b) => new Date(a.appointmentAt) - new Date(b.appointmentAt))
+      .map((o) => ({ id: o.id, title: o.title, at: o.appointmentAt, status: o.status, statusLabel: labels[o.status] || o.status }));
+    const sentCount = orders.filter((o) => o.sentToMonteur && o.sentToMonteur.monteurId === m.id).length;
+    const doneCount = mine.filter((o) => o.status === 'afgerond').length;
+    return {
+      ...m,
+      activeCount: active.length,
+      sentCount,
+      doneCount,
+      upcoming,
+      orders: active.map((o) => ({ id: o.id, title: o.title, status: o.status, statusLabel: labels[o.status] || o.status, appointmentAt: o.appointmentAt || null })),
+    };
+  }));
 });
 
 app.post('/api/monteurs', requireRole('admin', 'assistent'), (req, res) => {

@@ -797,9 +797,21 @@ async function loadMonteurs() {
   state.monteurs = await api('/api/monteurs');
   fillMonteurFilter();
   const canWrite = state.me.role !== 'monteur';
+  const fmtAppt = (s) => s ? new Date(s).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
   $('#monteurList').innerHTML = state.monteurs.map((m) => `
-    <div class="info-card"> <h3>${icon('wrench', 15)} ${esc(m.name)}</h3> <div class="muted small">${esc(m.phone || '')}${m.email ? ' · ' + esc(m.email) : ''}</div> <div style="margin-top:10px"><span class="chip">${m.activeCount} actieve opdrachten</span></div> ${canWrite ? `<div style="margin-top:12px"><button class="btn btn-sm" data-medit="${m.id}">Bewerk</button> <button class="btn btn-sm btn-danger" data-mdel="${m.id}">Verwijder</button></div>` : ''}
+    <div class="info-card">
+      <h3>${icon('wrench', 15)} ${esc(m.name)}</h3>
+      <div class="muted small">${esc(m.phone || '')}${m.email ? ' · ' + esc(m.email) : ''}${m.waGroup ? ' · groep: ' + esc(m.waGroup) : ' · <span style="color:var(--danger)">geen WhatsApp-groep</span>'}</div>
+      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+        <span class="chip">${m.activeCount} actief</span>
+        <span class="chip">${m.sentCount || 0} verstuurd</span>
+        <span class="chip">${m.doneCount || 0} afgerond</span>
+      </div>
+      ${m.upcoming && m.upcoming.length ? `<div style="margin-top:12px"><div class="muted small" style="font-weight:500;margin-bottom:4px">Komende afspraken</div>${m.upcoming.slice(0, 5).map((o) => `<div class="mont-line" data-open="${o.id}"><strong>${esc(fmtAppt(o.at))}</strong> — ${esc(o.title)} <span class="muted">· ${esc(o.statusLabel)}</span></div>`).join('')}</div>` : ''}
+      ${m.orders && m.orders.length ? `<details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Alle ${m.orders.length} actieve opdrachten</summary>${m.orders.map((o) => `<div class="mont-line" data-open="${o.id}">${esc(o.title)} <span class="muted">· ${esc(o.statusLabel)}${o.appointmentAt ? ' · ' + esc(fmtAppt(o.appointmentAt)) : ''}</span></div>`).join('')}</details>` : ''}
+      ${canWrite ? `<div style="margin-top:12px"><button class="btn btn-sm" data-medit="${m.id}">Bewerk</button> <button class="btn btn-sm btn-danger" data-mdel="${m.id}">Verwijder</button></div>` : ''}
     </div>`).join('') || '<div class="empty">Nog geen monteurs</div>';
+  $$('#monteurList .mont-line[data-open]').forEach((el) => el.onclick = async () => { if (!state.orders.length) state.orders = await api('/api/orders'); markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
   $$('[data-medit]').forEach((b) => b.onclick = () => openMonteurModal(state.monteurs.find((m) => m.id === b.dataset.medit)));
   $$('[data-mdel]').forEach((b) => b.onclick = async () => {
     if (!confirm('Monteur verwijderen?')) return;
