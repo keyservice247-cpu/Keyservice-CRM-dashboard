@@ -201,7 +201,7 @@ function showView(view, tab) {
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers };
+  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers };
   (map[view] || (() => {}))();
 }
 
@@ -809,6 +809,42 @@ async function loadMonteurs() {
 }
 
 // ---------- Prullenbak ----------
+// ---------- Agenda ----------
+async function loadAgenda() {
+  const [agenda, orders] = await Promise.all([api('/api/agenda'), api('/api/orders')]);
+  state._agenda = agenda;
+  state.orders = orders; // zodat het openen van een kaart de volledige opdracht heeft
+  renderAgenda();
+}
+function renderAgenda() {
+  const scope = $('#agendaScope')?.value || 'drs';
+  let items = state._agenda || [];
+  if (scope === 'drs') items = items.filter((a) => a.isDrs);
+  const wrap = $('#agendaList');
+  if (!items.length) { wrap.innerHTML = '<div class="empty">Geen afspraken gepland.</div>'; return; }
+  // Groeperen per dag (datum als sleutel).
+  const fmtDay = (d) => new Date(d).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
+  const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+  const fmtTime = (d) => new Date(d).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const groups = {};
+  for (const a of items) { const k = dayKey(a.at); (groups[k] = groups[k] || []).push(a); }
+  wrap.innerHTML = Object.keys(groups).sort().map((k) => `
+    <div class="agenda-day">
+      <div class="agenda-day-head">${k === todayKey ? '<span class="agenda-today">Vandaag</span> ' : ''}${esc(fmtDay(k))}<span class="count">${groups[k].length}</span></div>
+      ${groups[k].map((a) => `
+        <div class="agenda-item" data-open="${a.id}">
+          <div class="agenda-time">${esc(fmtTime(a.at))}</div>
+          <div class="agenda-body">
+            <div class="agenda-title"><span class="dot" style="background:${esc(statusColor(a.status))}"></span>${esc(a.title)} ${a.isDrs ? '<span class="chip src-whatsapp">DRS</span>' : ''}</div>
+            <div class="muted small">${esc(a.customer || '')}${a.phone ? ' · ' + esc(a.phone) : ''}${a.address ? ' · ' + esc(a.address) : ''}</div>
+            <div class="muted small">${esc(a.statusLabel)}${a.monteur ? ' · monteur ' + esc(a.monteur) : ' · geen monteur'}</div>
+          </div>
+        </div>`).join('')}
+    </div>`).join('');
+  $$('.agenda-item[data-open]').forEach((el) => el.onclick = () => { markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
+}
+
 async function loadTrash() {
   state._trash = await api('/api/trash');
   renderTrash();
@@ -1349,6 +1385,7 @@ function bindButtons() {
   $('#boardMonteurFilter')?.addEventListener('change', renderBoard);
   $('#customerSearch')?.addEventListener('input', renderCustomers);
   $('#trashSearch')?.addEventListener('input', renderTrash);
+  $('#agendaScope')?.addEventListener('change', renderAgenda);
   $('#inboxFilter')?.addEventListener('change', loadInbox);
   $('#selectAll')?.addEventListener('change', (e) => {
     $$('.r-select').forEach((c) => (c.checked = e.target.checked));

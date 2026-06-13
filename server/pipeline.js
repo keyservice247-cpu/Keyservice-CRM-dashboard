@@ -147,6 +147,8 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     description: overrides.description ?? s.problem ?? '',
     status,
     source: overrides.source || defaultSource,
+    // Herkomst-WhatsApp-groep (bv. "Raf breda…") voor de DRS-agenda en monteur-overzicht.
+    originGroup: (db().messages.find((m) => m.id === review.messageId)?.group) || '',
     customerId: customer.id,
     monteurId: overrides.monteurId || null,
     appointmentAt: null,

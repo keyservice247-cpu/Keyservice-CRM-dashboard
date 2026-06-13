@@ -1138,6 +1138,28 @@ app.get('/api/pulse', requireAuth, (req, res) => {
   });
 });
 
+// Agenda: alle (actieve) opdrachten met een afspraakdatum, voor de agenda-pagina.
+// isDrs = afkomstig uit de DRS/opdracht-WhatsApp-groep (originGroup of WhatsApp-bron).
+app.get('/api/agenda', requireAuth, (req, res) => {
+  const labels = getStatusLabels();
+  const items = db().orders
+    .filter((o) => o.appointmentAt && !o.archivedWeek && !['geannuleerd'].includes(o.status))
+    .map((o) => {
+      const c = db().customers.find((x) => x.id === o.customerId) || {};
+      const m = db().monteurs.find((x) => x.id === o.monteurId) || null;
+      const src = (o.source || '').toLowerCase();
+      const isDrs = (o.originGroup && isWhatsappOrderGroup(o.originGroup))
+        || (!o.originGroup && /whatsapp|groep|app/.test(src));
+      return {
+        id: o.id, title: o.title, at: o.appointmentAt, status: o.status, statusLabel: labels[o.status] || o.status,
+        customer: c.name || '', phone: c.phone || '', address: c.address || '',
+        monteur: m ? m.name : '', source: o.source || '', isDrs,
+      };
+    })
+    .sort((a, b) => new Date(a.at) - new Date(b.at));
+  res.json(items);
+});
+
 app.get('/api/stats', requireAuth, (req, res) => {
   const orders = db().orders;
   const byStatus = {};
