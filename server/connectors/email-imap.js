@@ -78,11 +78,16 @@ async function poll({ host, port, user, pass }) {
 // TransIP/Outlook terugziet bij "Verzonden". Best-effort: faalt stil als IMAP uit
 // staat of er geen Verzonden-map is. (SMTP slaat zelf niets op in je mailbox.)
 export async function appendSentMail({ from, to, subject, text }) {
-  const host = process.env.IMAP_HOST, user = process.env.IMAP_USER, pass = process.env.IMAP_PASSWORD;
+  // Optioneel een APARTE mailbox voor de Verzonden-map (bv. info@) via SENT_IMAP_*.
+  // Anders dezelfde mailbox als waaruit we lezen (IMAP_*, meestal crm@).
+  const host = process.env.SENT_IMAP_HOST || process.env.IMAP_HOST;
+  const user = process.env.SENT_IMAP_USER || process.env.IMAP_USER;
+  const pass = process.env.SENT_IMAP_PASSWORD || process.env.IMAP_PASSWORD;
   if (!host || !user || !pass || !to) return;
   let ImapFlow;
   try { ({ ImapFlow } = await import('imapflow')); } catch { return; }
-  const client = new ImapFlow({ host, port: Number(process.env.IMAP_PORT || 993), secure: true, auth: { user, pass }, logger: false });
+  const port = Number(process.env.SENT_IMAP_PORT || process.env.IMAP_PORT || 993);
+  const client = new ImapFlow({ host, port, secure: true, auth: { user, pass }, logger: false });
   client.on('error', (e) => console.error('  IMAP (append) fout:', e?.message || e));
   try {
     await client.connect();

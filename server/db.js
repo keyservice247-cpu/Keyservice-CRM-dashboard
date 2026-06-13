@@ -85,6 +85,55 @@ export function id(prefix = 'id') {
   return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
+// ---------- Back-ups ----------
+// Een back-up is gewoon een kopie van db.json met een tijdstempel, in DATA_DIR/backups.
+// Op Render staat DATA_DIR op de blijvende schijf, dus back-ups overleven herstarts/deploys.
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const KEEP_BACKUPS = Number(process.env.BACKUP_KEEP || 60);
+
+export function backupNow(reason = 'auto') {
+  try {
+    if (!data) return null;
+    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(BACKUP_DIR, `db-${stamp}.json`);
+    fs.writeFileSync(file, JSON.stringify(data));
+    // Oude back-ups opruimen (alleen de laatste KEEP_BACKUPS bewaren).
+    const files = fs.readdirSync(BACKUP_DIR).filter((f) => f.startsWith('db-') && f.endsWith('.json')).sort();
+    while (files.length > KEEP_BACKUPS) {
+      const old = files.shift();
+      try { fs.unlinkSync(path.join(BACKUP_DIR, old)); } catch { /* negeren */ }
+    }
+    return { file, reason };
+  } catch (e) {
+    console.error('Back-up maken mislukt:', e.message);
+    return null;
+  }
+}
+
+export function listBackups() {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) return [];
+    return fs.readdirSync(BACKUP_DIR)
+      .filter((f) => f.startsWith('db-') && f.endsWith('.json'))
+      .map((f) => {
+        const st = fs.statSync(path.join(BACKUP_DIR, f));
+        return { name: f, size: st.size, at: st.mtime.toISOString() };
+      })
+      .sort((a, b) => b.name.localeCompare(a.name));
+  } catch { return []; }
+}
+
+export function dbFilePath() { return DB_FILE; }
+
+// Start automatische back-ups: één bij opstarten (na 10s) en daarna elke X uur.
+export function startBackups() {
+  const hours = Math.max(1, Number(process.env.BACKUP_EVERY_HOURS || 6));
+  setTimeout(() => backupNow('startup'), 10 * 1000);
+  setInterval(() => backupNow('periodiek'), hours * 3600 * 1000);
+  console.log(`  Back-ups: elke ${hours} uur naar ${BACKUP_DIR} (laatste ${KEEP_BACKUPS} bewaard)`);
+}
+
 export function now() {
   return new Date().toISOString();
 }

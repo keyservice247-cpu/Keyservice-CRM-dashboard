@@ -117,7 +117,20 @@ const statusColor = (key) => {
   refreshWaStatus();
   setInterval(refreshWaStatus, 60000);
   startLiveUpdates();
+  maybeMorningDigest();
 })();
+
+// Toont de status-scan één keer per dag automatisch (ochtend-samenvatting) voor
+// admin/assistent. Daarna pas weer de volgende dag.
+function maybeMorningDigest() {
+  if (state.me.role === 'monteur') return;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    if (localStorage.getItem('ks_lastDigest') === today) return;
+    localStorage.setItem('ks_lastDigest', today);
+  } catch { return; }
+  setTimeout(() => { if ($('#modalRoot').hidden) openDigestModal(); }, 1500);
+}
 
 // Live-updates: checkt elke 5s of er iets veranderd is op de server en ververst
 // dan automatisch de huidige weergave — geen handmatig verversen nodig.
@@ -943,6 +956,14 @@ async function loadSettings() {
       </div>
       <p class="muted small" style="margin-top:10px">Verzendadres (SMTP): <strong>${esc(s.sendAddress || 'niet ingesteld in Render')}</strong> · Inkomende mailbox (IMAP): <strong>${esc(s.imapAddress || 'niet ingesteld')}</strong></p>
     </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>Back-ups &amp; veiligheid</h3>
+      <p class="muted small">Alle gegevens staan op de blijvende schijf van de server en worden <strong>automatisch elke 6 uur</strong> geback-upt (laatste 60 bewaard). Maak af en toe ook een kopie op je eigen computer — dan ben je veilig, zelfs als de server uitvalt.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <a class="btn btn-primary" href="/api/backup/download">Download back-up (kopie op je pc)</a>
+        <button class="btn" id="backupNow">Nu een back-up maken</button>
+      </div>
+      <div id="backupList" class="muted small" style="margin-top:12px">Back-ups laden…</div>
+    </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
@@ -967,6 +988,20 @@ async function loadSettings() {
   };
   $('#saveSignature').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value }); await refreshMeta(); toast('Handtekening opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  const loadBackups = async () => {
+    try {
+      const r = await api('/api/backups');
+      const list = r.backups || [];
+      $('#backupList').innerHTML = list.length
+        ? `Laatste back-ups (${list.length}):<br>` + list.slice(0, 6).map((b) => `· ${esc(fmtDate(b.at))} — ${(b.size / 1024).toFixed(0)} kB`).join('<br>')
+        : 'Nog geen back-ups (de eerste wordt automatisch gemaakt).';
+    } catch { $('#backupList').textContent = ''; }
+  };
+  loadBackups();
+  $('#backupNow').onclick = async () => {
+    try { await api('/api/backups/now', 'POST'); toast('Back-up gemaakt'); loadBackups(); }
     catch (err) { toast(err.message, true); }
   };
 
@@ -1256,9 +1291,21 @@ async function openDigestModal() {
   const list = (arr, emptyTxt) => arr.length
     ? `<ul class="digest-list">${arr.map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}</ul>`
     : `<div class="muted small">${emptyTxt}</div>`;
+  // Variant met afspraaktijd erbij.
+  const apptList = (arr, emptyTxt) => arr.length
+    ? `<ul class="digest-list">${arr.map((o) => `<li data-open="${o.id}"><strong>${fmtDate(o.at)}</strong> — ${esc(o.title)}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}</ul>`
+    : `<div class="muted small">${emptyTxt}</div>`;
   const statusBar = Object.values(d.byStatus).map((s) => `<span class="chip">${esc(s.label)}: <strong>${s.count}</strong></span>`).join(' ');
   modal(`
-    <h2>Status-scan</h2> <p class="muted small">${d.total} actieve opdrachten · ${d.pendingReviews} wachten in de inbox</p> <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">${statusBar}</div> <div class="digest-block"><h3>Klant heeft gereageerd (${d.customerReplied.length})</h3>${list(d.customerReplied, 'Niemand op dit moment.')}</div> <div class="digest-block"><h3>Wacht op ons antwoord (${d.awaitingReply.length})</h3>${list(d.awaitingReply, 'Niets openstaand.')}</div> <div class="digest-block"><h3>Nog niet bekeken (${d.neverOpened.length})</h3>${list(d.neverOpened, 'Alles is bekeken.')}</div> <div class="digest-block"><h3>Lang stil (5+ dagen) (${d.stale.length})</h3>${list(d.stale, 'Niets blijft liggen.')}</div> <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="dg-close">Sluiten</button></div></div> `);
+    <h2>Status-scan</h2> <p class="muted small">${d.total} actieve opdrachten · ${d.pendingReviews} wachten in de inbox</p> <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">${statusBar}</div>
+    <div class="digest-block"><h3>Afspraken vandaag (${d.todayAppointments?.length || 0})</h3>${apptList(d.todayAppointments || [], 'Geen afspraken vandaag.')}</div>
+    <div class="digest-block"><h3>Afspraken deze week (${d.weekAppointments?.length || 0})</h3>${apptList(d.weekAppointments || [], 'Geen afspraken deze week.')}</div>
+    <div class="digest-block"><h3>Klant heeft gereageerd (${d.customerReplied.length})</h3>${list(d.customerReplied, 'Niemand op dit moment.')}</div>
+    <div class="digest-block"><h3>Wacht op ons antwoord (${d.awaitingReply.length})</h3>${list(d.awaitingReply, 'Niets openstaand.')}</div>
+    <div class="digest-block"><h3>Offerte blijft liggen — 3+ dagen geen reactie (${d.staleQuotes?.length || 0})</h3>${list(d.staleQuotes || [], 'Geen offertes blijven liggen.')}</div>
+    <div class="digest-block"><h3>Nog niet bekeken (${d.neverOpened.length})</h3>${list(d.neverOpened, 'Alles is bekeken.')}</div>
+    <div class="digest-block"><h3>Lang stil (5+ dagen) (${d.stale.length})</h3>${list(d.stale, 'Niets blijft liggen.')}</div>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="dg-close">Sluiten</button></div></div> `);
   $('#dg-close').onclick = closeModal;
   $$('[data-open]').forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
 }

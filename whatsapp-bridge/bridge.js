@@ -116,10 +116,11 @@ function startHeartbeat() {
 // Haalt de uitgaande wachtrij op en stuurt opdrachten naar de monteur-groep.
 let outboxTimer = null;
 let groupCache = null;
-async function resolveGroupId(groupName) {
-  if (!groupCache) {
+async function resolveGroupId(groupName, forceRefresh = false) {
+  if (!groupCache || forceRefresh) {
     const chats = await client.getChats();
     groupCache = chats.filter((c) => c.isGroup);
+    console.log(`[outbox] ${groupCache.length} groepen bekend: ${groupCache.map((g) => g.name).join(' | ')}`);
   }
   const wanted = (groupName || '').toLowerCase().trim();
   const hit = groupCache.find((g) => (g.name || '').toLowerCase().trim() === wanted)
@@ -127,25 +128,34 @@ async function resolveGroupId(groupName) {
   return hit ? hit.id._serialized : null;
 }
 function startOutbox() {
+  console.log(`[outbox] poller actief — checkt ${DASHBOARD_URL}/api/outbox elke 8s`);
+  let warned = false;
   const tick = async () => {
     try {
       const resp = await fetch(`${DASHBOARD_URL}/api/outbox`, { headers: { 'x-ingest-token': INGEST_TOKEN } });
-      if (!resp.ok) return;
+      if (!resp.ok) {
+        if (!warned) { console.error(`[outbox] dashboard gaf status ${resp.status} (token/url controleren?)`); warned = true; }
+        return;
+      }
+      warned = false;
       const items = await resp.json();
+      if (items.length) console.log(`[outbox] ${items.length} opdracht(en) in de wachtrij`);
       for (const it of items) {
         let ok = false;
         try {
-          const gid = await resolveGroupId(it.group);
-          if (gid) { await client.sendMessage(gid, it.text); ok = true; console.log(`-> verstuurd naar monteur-groep "${it.group}"`); }
-          else { console.error(`Groep niet gevonden: "${it.group}" — kan opdracht niet versturen`); }
-        } catch (e) { console.error('Versturen naar monteur mislukt:', e.message); }
-        // meld terug aan dashboard
+          let gid = await resolveGroupId(it.group);
+          if (!gid) gid = await resolveGroupId(it.group, true); // cache verversen en opnieuw
+          if (gid) { await client.sendMessage(gid, it.text); ok = true; console.log(`[outbox] -> verstuurd naar monteur-groep "${it.group}"`); }
+          else { console.error(`[outbox] Groep NIET gevonden: "${it.group}" — controleer de exacte groepsnaam bij Monteurs`); }
+        } catch (e) { console.error('[outbox] versturen mislukt:', e.message); }
         await fetch(`${DASHBOARD_URL}/api/outbox/${it.id}/done`, {
           method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
           body: JSON.stringify({ ok }),
-        }).catch(() => {});
+        }).catch((e) => console.error('[outbox] terugmelden mislukt:', e.message));
       }
-    } catch (e) { /* netwerk: volgende keer */ }
+    } catch (e) {
+      if (!warned) { console.error('[outbox] netwerkfout bij ophalen wachtrij:', e.message); warned = true; }
+    }
   };
   if (outboxTimer) clearInterval(outboxTimer);
   outboxTimer = setInterval(tick, 8000); // elke 8 sec

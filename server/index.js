@@ -10,7 +10,7 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Onafgehandelde fout (genegeerd, app blijft draaien):', err?.message || err);
 });
-import { db, id, now, save, saveSoon, load, logActivity, changeVersion } from './db.js';
+import { db, id, now, save, saveSoon, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath } from './db.js';
 import {
   attachUser, requireAuth, requireRole, publicUser,
   verifyPassword, createSession, destroySession,
@@ -292,6 +292,25 @@ app.get('/api/archives', requireAuth, (req, res) => {
 app.post('/api/archives/run', requireRole('admin'), (req, res) => {
   const result = runWeeklyArchive();
   res.json(result);
+});
+
+// ---------- Back-ups (admin) ----------
+// Lijst van bestaande back-ups.
+app.get('/api/backups', requireRole('admin'), (req, res) => {
+  res.json({ backups: listBackups() });
+});
+// Nu meteen een back-up maken.
+app.post('/api/backups/now', requireRole('admin'), (req, res) => {
+  save(); // eerst de actuele staat wegschrijven
+  const r = backupNow('handmatig');
+  logActivity(req.user.name, 'back-up gemaakt');
+  res.json({ ok: !!r });
+});
+// De volledige database downloaden (voor een veilige kopie buiten de server).
+app.get('/api/backup/download', requireRole('admin'), (req, res) => {
+  save();
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.download(dbFilePath(), `keyservice-backup-${stamp}.json`);
 });
 
 // Bepaalt via welk kanaal een opdracht binnenkwam (voor handmatig inklappen per bron).
@@ -1163,10 +1182,29 @@ app.get('/api/digest', requireAuth, (req, res) => {
   const stale = active.filter((o) => !['afgerond', 'geannuleerd'].includes(o.status) && new Date(o.updatedAt).getTime() < fiveDays)
     .map((o) => ({ id: o.id, title: o.title, since: o.updatedAt }));
 
+  const custName = (o) => (db().customers.find((c) => c.id === o.customerId) || {}).name;
+  // Afspraken: vandaag en de komende 7 dagen.
+  const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+  const endToday = startToday.getTime() + 86400000;
+  const endWeek = startToday.getTime() + 7 * 86400000;
+  const apptList = active
+    .filter((o) => o.appointmentAt && !['afgerond', 'geannuleerd'].includes(o.status))
+    .map((o) => ({ id: o.id, title: o.title, customer: custName(o), at: o.appointmentAt, t: new Date(o.appointmentAt).getTime() }))
+    .filter((a) => !isNaN(a.t))
+    .sort((a, b) => a.t - b.t);
+  const todayAppointments = apptList.filter((a) => a.t >= startToday.getTime() && a.t < endToday);
+  const weekAppointments = apptList.filter((a) => a.t >= startToday.getTime() && a.t < endWeek);
+  // Offertes die blijven liggen: verzonden, 3+ dagen geen reactie van de klant.
+  const threeDays = Date.now() - 3 * 86400000;
+  const staleQuotes = active
+    .filter((o) => o.status === 'offerte_verzonden' && !o.customerReplied && new Date(o.updatedAt).getTime() < threeDays)
+    .map((o) => ({ id: o.id, title: o.title, customer: custName(o), since: o.updatedAt }));
+
   res.json({
     total: active.length,
     byStatus,
     customerReplied, neverOpened, awaitingReply, stale,
+    todayAppointments, weekAppointments, staleQuotes,
     pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
   });
 });
@@ -1232,5 +1270,6 @@ app.listen(PORT, () => {
   startEmailPoller();
   startWeeklyArchiver();
   startHealthMonitor();
+  startBackups();
   console.log('');
 });
