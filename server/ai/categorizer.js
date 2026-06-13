@@ -489,32 +489,46 @@ export async function askAssistant({ question, messages = [], companyProfile = '
   if (!question) return { text: 'Stel een vraag.', engine: 'n.v.t.' };
   if (!messages.length) return { text: 'Er zijn nog geen berichten om in te zoeken.', engine: 'n.v.t.' };
 
-  // Corpus: tot 500 berichten met kanaal, groep, datum en afzender, ingekort.
-  const corpus = messages.slice(0, 500).map((m, i) => {
-    const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  // Corpus: tot 1500 berichten (chronologisch, oud->nieuw), met datum, groep en afzender.
+  // We laten de volledige berichttekst toe tot 600 tekens (rapportages met bedragen).
+  const corpus = messages.slice(0, 1500).map((m, i) => {
+    const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const where = m.group ? `groep ${m.group}` : (m.channel || '');
-    return `[${i + 1}] ${when} (${where}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 350)}`;
+    return `[${i + 1}] ${when} (${where}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 600)}`;
   }).join('\n');
 
-  const system = `Je bent de interne assistent van Keyservice (sleutel-/slotenmaker).
+  const system = `Je bent de interne data-assistent van Keyservice (sleutel-/slotenmaker).
 ${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
-Je krijgt een verzameling WhatsApp- en e-mailberichten (met datum, groep en afzender).
-Beantwoord de vraag van de gebruiker UITSLUITEND op basis van deze berichten.
-- Reken zo nodig bedragen/omzet bij elkaar op en laat je berekening kort zien.
-- Noem concrete berichten/data waar je je antwoord op baseert.
-- Weet je het niet zeker of staat het er niet in? Zeg dat eerlijk, verzin niets.
-- Antwoord bondig en praktisch in het Nederlands.`;
+Je krijgt WhatsApp- en e-mailberichten (chronologisch, met datum, groep en afzender).
+Beantwoord de vraag UITSLUITEND op basis van deze berichten. Verzin niets.
+
+WERKWIJZE BIJ OMZET-/BEDRAG-VRAGEN (zeer belangrijk, wees exact en volledig):
+1. Ga ELK bericht in de gevraagde periode langs — sla geen enkele dagrapportage over.
+2. Houd je STRIKT aan de datumrange in de vraag (bv. "1 juni t/m 13 juni"): tel alleen
+   bedragen mee met een datum binnen die range.
+3. Haal elk los bedrag eruit met de bijbehorende datum en categorie (contant / pin /
+   overboeking / kosten / overig). Negeer de door de monteur zélf opgetelde totalen —
+   bereken alles zelf uit de losse bedragen, zodat fouten van hem niet doorwerken.
+4. Maak eerst een overzicht PER DAG (datum → bedragen per categorie), tel daarna PER
+   CATEGORIE op, en geef tot slot een EINDTOTAAL.
+5. Noem twijfelgevallen apart (bv. "nog niet binnen", onduidelijke datum) en tel die niet
+   stilzwijgend mee.
+
+ALGEMEEN:
+- Noem concrete berichten/data waar je je op baseert.
+- Staat iets er niet in of twijfel je? Zeg dat eerlijk.
+- Antwoord helder in het Nederlands, met een nette tabel/opsomming waar dat past.`;
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 1200, system, messages: [{ role: 'user', content: `Berichten:\n${corpus}\n\n---\nVraag: ${question}` }] }),
+    body: JSON.stringify({ model, max_tokens: 2500, system, messages: [{ role: 'user', content: `Berichten (chronologisch):\n${corpus}\n\n---\nVraag: ${question}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
   recordAIUsage(json.usage);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
-  return { text, engine: `ai:${model}`, searched: Math.min(messages.length, 500) };
+  return { text, engine: `ai:${model}`, searched: Math.min(messages.length, 1500) };
 }
 
 // AI-statusscan: leest recente (groeps)berichten, matcht ze aan lopende opdrachten en

@@ -1167,7 +1167,8 @@ app.post('/api/assistant/ask', requireRole('admin', 'assistent'), async (req, re
     msgs = msgs.filter((m) => new Date(m.receivedAt).getTime() >= since);
   }
   if (group) msgs = msgs.filter((m) => (m.group || '').toLowerCase().includes(group));
-  msgs = msgs.sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt)).slice(0, 500);
+  // Neem de nieuwste tot 1500 en zet ze daarna chronologisch (oud->nieuw) voor de AI.
+  msgs = msgs.sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt)).slice(0, 1500).reverse();
   try {
     const out = await askAssistant({ question, messages: msgs, companyProfile: getCompanyProfile() });
     logActivity(req.user.name, 'AI-vraagbaak', question.slice(0, 80));
