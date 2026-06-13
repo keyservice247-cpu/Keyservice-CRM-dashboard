@@ -517,6 +517,54 @@ Beantwoord de vraag van de gebruiker UITSLUITEND op basis van deze berichten.
   return { text, engine: `ai:${model}`, searched: Math.min(messages.length, 500) };
 }
 
+// AI-statusscan: leest recente (groeps)berichten, matcht ze aan lopende opdrachten en
+// stelt statuswijzigingen voor (bv. monteur meldt "klaar" -> Afgerond; "offerte gestuurd"
+// -> Offerte verzonden; "klant wil niet" -> Geannuleerd). Geeft voorstellen terug die
+// een mens nog moet goedkeuren — past zelf NIETS aan.
+export async function suggestStatusChanges({ orders = [], messages = [], statuses = [], companyProfile = '' }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-4-6';
+  if (!apiKey) return { suggestions: [], engine: 'demo', note: 'Zet de AI aan (ANTHROPIC_API_KEY) voor de statusscan.' };
+  if (!orders.length || !messages.length) return { suggestions: [], engine: 'n.v.t.' };
+
+  const orderList = orders.slice(0, 80).map((o) =>
+    `${o.id} | "${o.title}" | klant: ${o.customer || '?'} | nu: ${o.status}`
+  ).join('\n');
+  const msgList = messages.slice(0, 300).map((m) => {
+    const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    return `${when} (${m.group ? 'groep ' + m.group : m.channel}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 250)}`;
+  }).join('\n');
+  const statusKeys = statuses.map((s) => `${s.key} (${s.label})`).join(', ');
+
+  const system = `Je bent een assistent voor Keyservice (sleutel-/slotenmaker).
+${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
+Je krijgt (1) een lijst lopende opdrachten met hun huidige status en (2) recente WhatsApp/
+e-mailberichten (vooral monteur-rapportages). Zoek berichten die duidelijk melden wat er met
+een opdracht is gebeurd en stel een statuswijziging voor. Geldige statussen: ${statusKeys}.
+Stel ALLEEN iets voor bij duidelijk bewijs (bv. "klus klaar/afgerond", "offerte verstuurd",
+"klant geannuleerd", "afspraak gepland"). Verzin niets, gok niet.
+Antwoord UITSLUITEND met JSON: een array van objecten met velden:
+{"orderId": "...", "suggestedStatus": "<geldige statuskey>", "reason": "korte uitleg", "evidence": "het bericht waarop je je baseert"}.
+Geen tekst eromheen, alleen de JSON-array (leeg = []).`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: 1500, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
+  });
+  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
+  const json = await resp.json();
+  recordAIUsage(json.usage);
+  const text = (json.content || []).map((c) => c.text || '').join('').trim();
+  let suggestions = [];
+  try {
+    const m = text.match(/\[[\s\S]*\]/);
+    suggestions = m ? JSON.parse(m[0]) : [];
+  } catch { suggestions = []; }
+  if (!Array.isArray(suggestions)) suggestions = [];
+  return { suggestions, engine: `ai:${model}` };
+}
+
 // Genereert een bondige "leerregel"-tekst op basis van het verkeer: wat IS en wat
 // is NIET een echte opdracht voor Keyservice. Bedoeld om aan het bedrijfsprofiel
 // toe te voegen, zodat de AI scherper filtert in de inbox.

@@ -840,8 +840,42 @@ async function loadAssistant() {
       <div class="as-examples">${examples.map((e) => `<button type="button" class="chip as-ex">${esc(e)}</button>`).join('')}</div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="as-ask">${icon('sparkles', 14)} Vraag de AI</button></div>
       <div id="as-answer" style="margin-top:16px"></div>
+    </div>
+    <div class="info-card" style="margin-top:18px">
+      <h3>${icon('activity', 15)} AI-statusscan</h3>
+      <p class="muted small">De AI leest de recente groepsberichten (monteur-rapportages) en stelt statuswijzigingen voor op lopende opdrachten. Jij keurt elke wijziging zelf goed — er gebeurt niets automatisch.</p>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <label style="margin:0">Periode <select id="ss-days"><option value="7">laatste 7 dagen</option><option value="14" selected>laatste 14 dagen</option><option value="30">laatste 30 dagen</option></select></label>
+        <button class="btn btn-primary" id="ss-run">Statusscan starten</button>
+      </div>
+      <div id="ss-result" style="margin-top:14px"></div>
     </div>`;
   $$('.as-ex').forEach((b) => b.onclick = () => { $('#as-q').value = b.textContent; });
+  $('#ss-run').onclick = async () => {
+    const btn = $('#ss-run'); btn.disabled = true; btn.textContent = 'Bezig met scannen…';
+    $('#ss-result').innerHTML = '<div class="muted small">De AI leest de groepsberichten… ~10-30 sec.</div>';
+    try {
+      const out = await api('/api/assistant/status-scan', 'POST', { days: Number($('#ss-days').value) });
+      const sugg = out.suggestions || [];
+      if (!sugg.length) {
+        $('#ss-result').innerHTML = `<div class="muted small">${esc(out.note || 'Geen statuswijzigingen voorgesteld.')}</div>`;
+      } else {
+        $('#ss-result').innerHTML = sugg.map((s, i) => `
+          <div class="ss-item" data-i="${i}">
+            <div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong></div>
+            <div class="muted small">${esc(s.reason)}</div>
+            ${s.evidence ? `<div class="muted small" style="font-style:italic">"${esc(s.evidence.slice(0, 160))}"</div>` : ''}
+            <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}">Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
+          </div>`).join('');
+        $$('.ss-apply').forEach((b) => b.onclick = async () => {
+          try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); toast('Status bijgewerkt'); b.closest('.ss-item').remove(); loadBoard(); }
+          catch (err) { toast(err.message, true); }
+        });
+        $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
+      }
+    } catch (err) { $('#ss-result').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
+    btn.disabled = false; btn.textContent = 'Statusscan starten';
+  };
   $('#as-ask').onclick = async () => {
     const question = $('#as-q').value.trim();
     if (!question) return toast('Stel eerst een vraag', true);

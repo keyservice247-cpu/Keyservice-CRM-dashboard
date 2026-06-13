@@ -16,7 +16,7 @@ import {
   verifyPassword, createSession, destroySession,
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
@@ -1181,6 +1181,39 @@ app.post('/api/assistant/ask', requireRole('admin', 'assistent'), async (req, re
 app.get('/api/assistant/groups', requireRole('admin', 'assistent'), (req, res) => {
   const groups = [...new Set(db().messages.map((m) => m.group).filter(Boolean))];
   res.json(groups);
+});
+
+// AI-statusscan: leest recente groepsberichten en stelt statuswijzigingen voor lopende
+// opdrachten voor. Past zelf NIETS aan — geeft alleen voorstellen terug.
+app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async (req, res) => {
+  const days = Number(req.body?.days) || 14;
+  const since = Date.now() - days * 86400000;
+  const active = db().orders
+    .filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
+    .map((o) => ({ id: o.id, title: o.title, status: o.status, customer: (db().customers.find((c) => c.id === o.customerId) || {}).name }));
+  const msgs = db().messages
+    .filter((m) => new Date(m.receivedAt).getTime() >= since)
+    .sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt))
+    .slice(0, 300);
+  try {
+    const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile() });
+    // Verrijk met huidige opdracht-info + labels, en filter op geldige status/opdracht.
+    const labels = getStatusLabels();
+    const valid = (out.suggestions || []).map((s) => {
+      const order = db().orders.find((o) => o.id === s.orderId);
+      if (!order || !isValidStatus(s.suggestedStatus)) return null;
+      if (order.status === s.suggestedStatus) return null;
+      return {
+        orderId: order.id, title: order.title,
+        from: order.status, fromLabel: labels[order.status] || order.status,
+        to: s.suggestedStatus, toLabel: labels[s.suggestedStatus] || s.suggestedStatus,
+        reason: s.reason || '', evidence: s.evidence || '',
+      };
+    }).filter(Boolean);
+    res.json({ suggestions: valid, engine: out.engine, note: out.note || '' });
+  } catch (err) {
+    res.status(500).json({ error: 'Mislukt: ' + err.message });
+  }
 });
 
 // Agenda: alle (actieve) opdrachten met een afspraakdatum, voor de agenda-pagina.
