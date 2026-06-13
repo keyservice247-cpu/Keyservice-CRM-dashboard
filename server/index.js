@@ -613,18 +613,32 @@ function maybeAutoSendToMonteur(order, event) {
 function maybeIntakeAutoSend(result) {
   const cfg = db().settings.monteurDispatch || {};
   if (!cfg.autoEnabled || cfg.trigger !== 'intake') return;
-  if (!autoSendAllowedToday()) return;
-  const review = result && result.review;
-  if (!review || review.status !== 'pending' || !review.suggestion?.relevant) return;
-  const msg = db().messages.find((m) => m.id === review.messageId);
-  if (cfg.onlyDrs !== false && !(msg && isWhatsappOrderGroup(msg.group))) return; // standaard alleen DRS
-  const order = applyReview(review, { actorName: 'AI (volautomatisch)', auto: true });
+  if (!autoSendAllowedToday()) { console.log('[intake] vandaag niet ingeschakeld (dag/aan-uit)'); return; }
   const monteur = db().monteurs.find((m) => m.id === cfg.autoMonteurId);
-  if (monteur && monteur.waGroup && !order.sentToMonteur) {
-    if (!order.monteurId) order.monteurId = monteur.id;
-    const r = queueToMonteur(order, monteur, 'volautomatisch');
-    if (!r.error) logActivity('systeem', 'volautomatisch naar monteur', `${order.title} -> ${monteur.name}`);
+  if (!monteur) { console.log('[intake] geen monteur gekozen'); return; }
+  if (!monteur.waGroup) { console.log('[intake] monteur heeft geen WhatsApp-groep'); return; }
+
+  let order = null;
+  const review = result && result.review;
+  if (review && review.status === 'pending' && review.suggestion?.relevant) {
+    const msg = db().messages.find((m) => m.id === review.messageId);
+    if (cfg.onlyDrs !== false && !(msg && isWhatsappOrderGroup(msg.group))) { console.log('[intake] niet uit DRS-groep, overgeslagen'); return; }
+    order = applyReview(review, { actorName: 'AI (volautomatisch)', auto: true });
+  } else if (review && review.orderId) {
+    order = db().orders.find((o) => o.id === review.orderId); // al goedgekeurd door drempel
+  } else if (result && result.mergedIntoOrder) {
+    order = db().orders.find((o) => o.id === result.mergedIntoOrder); // aan bestaande kaart gehangen
+  } else {
+    console.log('[intake] geen bruikbare opdracht uit dit bericht (geklets/overige/dubbel)');
+    return;
   }
+  if (!order) { console.log('[intake] opdracht niet gevonden'); return; }
+  if (cfg.onlyDrs !== false && !isDrsOrder(order)) { console.log('[intake] opdracht is geen DRS-opdracht'); return; }
+  if (order.sentToMonteur) { console.log('[intake] al naar monteur verstuurd'); return; }
+  if (!order.monteurId) order.monteurId = monteur.id;
+  const r = queueToMonteur(order, monteur, 'volautomatisch');
+  if (!r.error) { console.log(`[intake] volautomatisch in wachtrij -> ${monteur.name} (${monteur.waGroup})`); logActivity('systeem', 'volautomatisch naar monteur', `${order.title} -> ${monteur.name}`); }
+  else console.log('[intake] queueToMonteur fout:', r.error);
   saveSoon();
 }
 
