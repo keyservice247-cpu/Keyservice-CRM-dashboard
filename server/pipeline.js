@@ -277,16 +277,24 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
   const rel = scoreRelevance({ subject, body, hasAttachments: (attachments || []).length > 0 });
-  // WhatsApp-groepfilter: opdrachten halen we alleen uit de ingestelde groep(en)
-  // (standaard de DRS/"Raf Breda"-groep). Berichten uit andere groepen zijn geklets
-  // tussen collega's -> naar "Overige", nooit een opdracht-kaart.
+  // WhatsApp-groepfilter: opdrachten halen we vooral uit de ingestelde groep(en)
+  // (standaard de DRS/"Raf Breda"-groep). Berichten uit andere groepen (monteur-
+  // groepen van Youssef/Abdel/Oualid) zijn meestal collega-geklets -> "Overige".
+  // UITZONDERING: noteert iemand daar concrete klantgegevens na een belletje
+  // (telefoon + adres of postcode), dan is het wél een opdracht. Zo blijft de inbox
+  // overzichtelijk én missen we geen echte intake.
   const fromOtherGroup = channel === 'whatsapp' && group && !isWhatsappOrderGroup(group);
+  const hasPostcode = /\b\d{4}\s?[a-z]{2}\b/i.test(body || '');
+  const hasIntakeData = !!(suggestion.customerPhone && (suggestion.customerAddress || hasPostcode));
+  const otherGroupButOrder = fromOtherGroup && hasIntakeData;
+  const blockAsChatter = fromOtherGroup && !hasIntakeData;
   // De AI mag overrulen: zegt hij expliciet 'geen opdracht' (incasso/leverancier/
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
-  suggestion.relevant = (aiSaysNotOrder || fromOtherGroup) ? false : rel.relevant;
-  suggestion.relevanceReason = fromOtherGroup
-    ? `Niet uit de opdracht-groep (WhatsApp-groep "${group}") — naar Overige.`
+  suggestion.relevant = aiSaysNotOrder ? false : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
+  suggestion.relevanceReason = blockAsChatter
+    ? `Collega-bericht uit groep "${group}" zonder duidelijke klantgegevens — naar Overige.`
+    : otherGroupButOrder ? `Klantgegevens (telefoon + adres) herkend in groep "${group}" — als opdracht voorgesteld.`
     : aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
 
   // Bestaande klant herkennen (op e-mail/telefoon, anders naam). Zo voorkomen we

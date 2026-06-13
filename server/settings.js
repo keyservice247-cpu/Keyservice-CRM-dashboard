@@ -104,7 +104,19 @@ export function ensureSettings() {
   // WhatsApp: uit welke groep(en) maken we opdrachten? Standaard de DRS/"Raf Breda"-groep.
   // Leeg = alle groepen. Berichten uit andere groepen gaan naar "Overige".
   if (s.whatsappOrderGroups === undefined) s.whatsappOrderGroups = 'raf breda';
+  // Standaard handtekening onder uitgaande e-mails vanuit het dashboard.
+  if (s.emailSignature === undefined) s.emailSignature = DEFAULT_EMAIL_SIGNATURE;
   save();
+}
+
+// Nette standaard-handtekening onder elke mail die vanuit het dashboard wordt verstuurd.
+export const DEFAULT_EMAIL_SIGNATURE = `Met vriendelijke groet,
+Team Key Service 24/7
+085 060 2359`;
+
+export function getEmailSignature() {
+  const s = db().settings;
+  return (s.emailSignature !== undefined ? s.emailSignature : DEFAULT_EMAIL_SIGNATURE);
 }
 
 // Lijst met groepsnamen (stukjes) waaruit we WhatsApp-opdrachten oppakken.

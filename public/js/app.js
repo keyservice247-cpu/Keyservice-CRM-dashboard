@@ -797,11 +797,21 @@ async function loadMonteurs() {
 
 // ---------- Prullenbak ----------
 async function loadTrash() {
-  const items = await api('/api/trash');
+  state._trash = await api('/api/trash');
+  renderTrash();
+}
+function renderTrash() {
   const isAdmin = state.me.role === 'admin';
+  const q = ($('#trashSearch')?.value || '').toLowerCase();
+  const items = (state._trash || []).filter((o) => {
+    if (!q) return true;
+    const threadTxt = (o.thread || []).map((t) => t.body || '').join(' ');
+    const hay = `${o.title} ${o.description || ''} ${o.customer?.name || ''} ${o.customer?.phone || ''} ${o.customer?.email || ''} ${o.customer?.address || ''} ${o.notes || ''} ${o.source || ''} ${threadTxt}`.toLowerCase();
+    return hay.includes(q);
+  });
   $('#trashList').innerHTML = items.length ? items.map((o) => `
     <div class="info-card"> <h3>${esc(o.title)}</h3> <div class="muted small">${esc(o.customer?.name || '')}${o.customer?.phone ? ' · ' + esc(o.customer.phone) : ''}</div> <div class="muted small" style="margin-top:4px">Verwijderd door ${esc(o.deletedBy || '?')} · ${fmtDateShort(o.deletedAt)}</div> <div style="margin-top:12px;display:flex;gap:6px"> <button class="btn btn-sm" data-restore="${o.id}">${icon('reply', 13)} Terughalen</button> ${isAdmin ? `<button class="btn btn-sm btn-danger" data-perm="${o.id}">Definitief</button>` : ''}
-      </div> </div>`).join('') : '<div class="empty">De prullenbak is leeg.</div>';
+      </div> </div>`).join('') : `<div class="empty">${q ? 'Niets gevonden in de prullenbak.' : 'De prullenbak is leeg.'}</div>`;
   $$('[data-restore]').forEach((b) => b.onclick = async () => {
     try { await api(`/api/trash/${b.dataset.restore}/restore`, 'POST'); toast('Teruggehaald'); loadTrash(); }
     catch (err) { toast(err.message, true); }
@@ -934,6 +944,7 @@ async function loadSettings() {
       <p class="muted small" style="margin-top:10px">Verzendadres (SMTP): <strong>${esc(s.sendAddress || 'niet ingesteld in Render')}</strong> · Inkomende mailbox (IMAP): <strong>${esc(s.imapAddress || 'niet ingesteld')}</strong></p>
     </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
@@ -952,6 +963,10 @@ async function loadSettings() {
   };
   $('#saveWaGroups').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { whatsappOrderGroups: $('#waOrderGroups').value }); toast('WhatsApp opdracht-groepen opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveSignature').onclick = async () => {
+    try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value }); await refreshMeta(); toast('Handtekening opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
 
@@ -1121,6 +1136,7 @@ function openReplyModal(ctx = {}) {
   const subj = ctx.title ? (/^re:/i.test(ctx.title) ? ctx.title : 'Re: ' + ctx.title) : 'Re: uw aanvraag bij Keyservice';
   // Laatste klantbericht om te citeren (zodat het als antwoord leest).
   const lastMsg = [...thread].reverse().find((t) => t.body);
+  const sig = (state.meta.emailSignature || '').trim();
   const threadHTML = thread.length
     ? `<div class="reply-thread">${thread.slice(-6).map((t) => `
         <div class="reply-msg-row"><span class="reply-who">${esc(t.sender || 'Klant')}</span> <span class="muted small">${fmtDate(t.at)}</span><div class="reply-msg-txt">${esc(splitQuoted(t.body || '').text.slice(0, 600))}</div></div>`).join('')}</div>`
@@ -1134,7 +1150,8 @@ function openReplyModal(ctx = {}) {
     <div class="row" style="margin-top:12px"> <label>Aan <input id="rep-to" value="${esc(ctx.email || '')}" placeholder="e-mailadres klant"></label> <label>Onderwerp <input id="rep-subject" value="${esc(subj)}"></label> </div>
     <label>Sjabloon invoegen <select id="rep-select">${opts}</select></label>
     <label>Jouw antwoord <textarea id="rep-body" rows="7" placeholder="Typ hier je antwoord aan de klant…"></textarea></label>
-    <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:4px"><input type="checkbox" id="rep-quote" style="width:auto" checked> Vorig bericht citeren onder mijn antwoord</label>
+    <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:4px"><input type="checkbox" id="rep-quote" style="width:auto"> Vorig bericht citeren onder mijn antwoord</label>
+    ${sig ? `<p class="muted small" style="margin:8px 0 0">Onder je antwoord komt automatisch:<br><span style="white-space:pre-line;color:var(--ink-soft)">${esc(sig)}</span></p>` : ''}
     <div class="modal-actions"> ${ctx.orderId ? `<button class="btn" id="rep-ai">${icon('sparkles', 14)} AI-concept</button>` : '<span></span>'}
       <div class="right"> <button class="btn" id="rep-close">Sluiten</button> <button class="btn" id="rep-copy">${icon('copy', 14)} Kopieer</button> ${ctx.email ? `<a class="btn" id="rep-mail" href="#" target="_blank" rel="noopener">${icon('mail', 14)} Open in e-mail</a>` : ''}
         ${canSend ? '<button class="btn btn-primary" id="rep-send">Verzenden</button>' : ''}
@@ -1145,12 +1162,13 @@ function openReplyModal(ctx = {}) {
       : 'Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp.'
     }</p> `);
 
-  // Bouwt de volledige tekst: jouw antwoord + (optioneel) geciteerd vorig bericht.
+  // Bouwt de volledige tekst: jouw antwoord + nette handtekening + (optioneel) citaat.
   const fullText = () => {
     let t = $('#rep-body').value.trim();
+    if (sig) t += `\n\n${sig}`;
     if ($('#rep-quote')?.checked && lastMsg) {
       const when = fmtDate(lastMsg.at);
-      const quoted = (lastMsg.body || '').split('\n').map((l) => '> ' + l).join('\n');
+      const quoted = splitQuoted(lastMsg.body || '').text.split('\n').map((l) => '> ' + l).join('\n');
       t += `\n\n----- Op ${when} schreef ${lastMsg.sender || 'de klant'}: -----\n${quoted}`;
     }
     return t;
@@ -1283,6 +1301,7 @@ function bindButtons() {
   $('#boardSearch')?.addEventListener('input', renderBoard);
   $('#boardMonteurFilter')?.addEventListener('change', renderBoard);
   $('#customerSearch')?.addEventListener('input', renderCustomers);
+  $('#trashSearch')?.addEventListener('input', renderTrash);
   $('#inboxFilter')?.addEventListener('change', loadInbox);
   $('#selectAll')?.addEventListener('change', (e) => {
     $$('.r-select').forEach((c) => (c.checked = e.target.checked));

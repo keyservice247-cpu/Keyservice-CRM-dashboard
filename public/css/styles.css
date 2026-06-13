@@ -145,14 +145,15 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 
 .card { position: relative; background: #fff; border-radius: var(--radius-sm); padding: 12px 13px; box-shadow: var(--shadow-sm); cursor: pointer; border: 1px solid var(--line); transition: box-shadow .15s, border-color .15s; }
 /* Mini-prullenbak en selectievakje rechtsboven op de kaart (verschijnen bij hover) */
-.card-trash { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--muted); opacity: 0; transition: opacity .12s, color .12s, border-color .12s; }
+.card-trash { position: absolute; top: 7px; right: 8px; width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--muted); opacity: 0; transition: opacity .12s, color .12s, border-color .12s; z-index: 3; }
 .card:hover .card-trash { opacity: 1; }
 .card-trash:hover { color: var(--danger); border-color: #e6cecc; background: var(--danger-soft); }
 .card-trash svg.i { width: 14px; height: 14px; }
-.card-select { position: absolute; top: 9px; left: 9px; margin: 0; opacity: 0; transition: opacity .12s; }
+/* Selectievakje rechtsboven (links van de prullenbak), ruim klikgebied, ook zichtbaar op mobiel */
+.card-select { position: absolute; top: 6px; right: 38px; margin: 0; padding: 5px; opacity: .5; transition: opacity .12s; z-index: 4; line-height: 0; }
 .card:hover .card-select, .card-select:has(input:checked) { opacity: 1; }
-.card-select input { width: auto; cursor: pointer; }
-.card-title { padding-left: 2px; }
+.card-select input { width: 17px; height: 17px; cursor: pointer; display: block; }
+.card-title { padding-left: 2px; padding-right: 44px; }
 .card:hover { box-shadow: var(--shadow-md); border-color: #dde1e6; }
 .card.just-moved { animation: flashSaved .9s ease; }
 .card.urgent { border-left: 2px solid var(--danger); }

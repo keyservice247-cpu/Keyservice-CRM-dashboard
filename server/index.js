@@ -21,7 +21,7 @@ import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
 } from './pipeline.js';
-import { startEmailPoller } from './connectors/email-imap.js';
+import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -31,6 +31,7 @@ import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
+  getEmailSignature,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -76,6 +77,7 @@ app.get('/api/me', (req, res) => {
       templates: getTemplates(),
       canSendEmail: smtpConfigured(),
       autoApproveThreshold: autoApproveThreshold(),
+      emailSignature: getEmailSignature(),
     },
   });
 });
@@ -861,6 +863,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     templates: getTemplates(),
     companyProfile: getCompanyProfile(),
     whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
+    emailSignature: getEmailSignature(),
     sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
     imapAddress: process.env.IMAP_USER || '',
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' },
@@ -894,6 +897,9 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
   if ('whatsappOrderGroups' in b) {
     db().settings.whatsappOrderGroups = String(b.whatsappOrderGroups || '').slice(0, 500);
   }
+  if ('emailSignature' in b) {
+    db().settings.emailSignature = String(b.emailSignature || '').slice(0, 1000);
+  }
   if ('monteurDispatch' in b) {
     const d = b.monteurDispatch || {};
     db().settings.monteurDispatch = {
@@ -911,6 +917,7 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     templates: getTemplates(),
     companyProfile: getCompanyProfile(),
     whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
+    emailSignature: getEmailSignature(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved' },
   });
 });
@@ -1026,6 +1033,9 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
   if (!to) return res.status(400).json({ error: 'Geen e-mailadres van de klant bekend' });
   try {
     await sendMail({ to, subject, text });
+    // Zet de mail ook in je IMAP Verzonden-map (best-effort, niet blokkerend), zodat
+    // je 'm in TransIP/Outlook terugziet bij "Verzonden".
+    appendSentMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER || '', to, subject, text }).catch(() => {});
     // Leg vast in de opdracht (indien meegegeven) en in de activiteit.
     if (orderId) {
       const order = db().orders.find((o) => o.id === orderId);

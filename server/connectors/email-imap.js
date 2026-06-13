@@ -74,6 +74,44 @@ async function poll({ host, port, user, pass }) {
   }
 }
 
+// Zet een via SMTP verstuurde mail ook in de IMAP Verzonden-map, zodat je 'm in
+// TransIP/Outlook terugziet bij "Verzonden". Best-effort: faalt stil als IMAP uit
+// staat of er geen Verzonden-map is. (SMTP slaat zelf niets op in je mailbox.)
+export async function appendSentMail({ from, to, subject, text }) {
+  const host = process.env.IMAP_HOST, user = process.env.IMAP_USER, pass = process.env.IMAP_PASSWORD;
+  if (!host || !user || !pass || !to) return;
+  let ImapFlow;
+  try { ({ ImapFlow } = await import('imapflow')); } catch { return; }
+  const client = new ImapFlow({ host, port: Number(process.env.IMAP_PORT || 993), secure: true, auth: { user, pass }, logger: false });
+  client.on('error', (e) => console.error('  IMAP (append) fout:', e?.message || e));
+  try {
+    await client.connect();
+    const boxes = await client.list();
+    let sentPath = null;
+    for (const box of boxes || []) {
+      const flags = box.flags || new Set();
+      const hasSentFlag = (flags.has && flags.has('\\Sent')) || box.specialUse === '\\Sent';
+      if (hasSentFlag || /sent|verzonden/i.test(box.path || box.name || '')) { sentPath = box.path; break; }
+    }
+    if (!sentPath) return;
+    const raw = [
+      `From: ${from}`,
+      `To: ${to}`,
+      `Subject: ${subject || 'Keyservice'}`,
+      `Date: ${new Date().toUTCString()}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      text || '',
+    ].join('\r\n');
+    await client.append(sentPath, raw, ['\\Seen']);
+  } catch (e) {
+    console.error('  Kon verzonden mail niet in Verzonden-map zetten:', e.message);
+  } finally {
+    try { await client.logout(); } catch { /* negeren */ }
+  }
+}
+
 // Verwerk inkomende mail: op datum (laatste X dagen), ontdubbeld op messageId.
 async function processInbox(client, simpleParser, since) {
   const lock = await client.getMailboxLock('INBOX');
