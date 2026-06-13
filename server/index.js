@@ -1,6 +1,15 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// VANGNET: een losse fout in een achtergrondtaak (bv. IMAP-verbinding die wegvalt)
+// mag NOOIT de hele CRM platleggen. Loggen i.p.v. crashen.
+process.on('unhandledRejection', (reason) => {
+  console.error('Onafgehandelde promise-fout (genegeerd, app blijft draaien):', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Onafgehandelde fout (genegeerd, app blijft draaien):', err?.message || err);
+});
 import { db, id, now, save, saveSoon, load, logActivity, changeVersion } from './db.js';
 import {
   attachUser, requireAuth, requireRole, publicUser,

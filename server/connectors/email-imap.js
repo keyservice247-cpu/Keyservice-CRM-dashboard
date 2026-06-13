@@ -53,6 +53,10 @@ async function poll({ host, port, user, pass }) {
     auth: { user, pass },
     logger: false,
   });
+  // BELANGRIJK: ImapFlow is een EventEmitter. Zonder 'error'-listener gooit Node
+  // een verbindingsfout (bv. 'NoConnection') als uncaughtException -> de hele app
+  // crasht. Deze listener vangt dat netjes op.
+  client.on('error', (e) => console.error('  IMAP client-fout:', e?.message || e));
 
   const lookbackDays = Math.max(1, Number(process.env.IMAP_LOOKBACK_DAYS || 5));
   const since = new Date(Date.now() - lookbackDays * 24 * 3600 * 1000);
@@ -111,8 +115,10 @@ async function processInbox(client, simpleParser, since) {
 // Verzonden-map is.
 async function processSent(client, simpleParser, since) {
   // Vind de verzonden-map via special-use '\Sent' of op naam.
+  // client.list() levert een array op -> gewone for-of (geen for await!).
+  const boxes = await client.list();
   let sentPath = null;
-  for await (const box of client.list()) {
+  for (const box of boxes || []) {
     const flags = box.flags || new Set();
     const hasSentFlag = (flags.has && flags.has('\\Sent')) || box.specialUse === '\\Sent';
     if (hasSentFlag || /sent|verzonden/i.test(box.path || box.name || '')) { sentPath = box.path; break; }
