@@ -580,14 +580,14 @@ function openOrderModal(id, pool) {
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && canWrite ? `<button class="btn" id="f-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
   // Gesprek meteen naar het nieuwste bericht scrollen.
   const chat = $('#f-chat'); if (chat) chat.scrollTop = chat.scrollHeight;
   if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
   if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
-  if (o && canWrite) $('#f-monteur').onclick = () => openSendMonteurModal(o);
+  if (o && canWrite) $('#f-send-monteur').onclick = () => openSendMonteurModal(o);
 
   // Bijlagen toevoegen
   if (o) {
