@@ -16,7 +16,7 @@ import {
   verifyPassword, createSession, destroySession,
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
@@ -1136,6 +1136,35 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     v: changeVersion(),
     pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
   });
+});
+
+// AI-vraagbaak: stel een vrije vraag over de opgeslagen WhatsApp/e-mail-berichten.
+// Bv. "hoeveel omzet in de groep van Youssef?" of "wat is er met opdracht X gebeurd?".
+app.post('/api/assistant/ask', requireRole('admin', 'assistent'), async (req, res) => {
+  const question = (req.body?.question || '').trim();
+  if (!question) return res.status(400).json({ error: 'Stel een vraag' });
+  const group = (req.body?.group || '').toLowerCase().trim();
+  const days = Number(req.body?.days) || 0;
+  let msgs = db().messages.slice();
+  if (days > 0) {
+    const since = Date.now() - days * 86400000;
+    msgs = msgs.filter((m) => new Date(m.receivedAt).getTime() >= since);
+  }
+  if (group) msgs = msgs.filter((m) => (m.group || '').toLowerCase().includes(group));
+  msgs = msgs.sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt)).slice(0, 500);
+  try {
+    const out = await askAssistant({ question, messages: msgs, companyProfile: getCompanyProfile() });
+    logActivity(req.user.name, 'AI-vraagbaak', question.slice(0, 80));
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: 'Mislukt: ' + err.message });
+  }
+});
+
+// Lijst van WhatsApp-groepen die we kennen (voor het filter in de vraagbaak).
+app.get('/api/assistant/groups', requireRole('admin', 'assistent'), (req, res) => {
+  const groups = [...new Set(db().messages.map((m) => m.group).filter(Boolean))];
+  res.json(groups);
 });
 
 // Agenda: alle (actieve) opdrachten met een afspraakdatum, voor de agenda-pagina.

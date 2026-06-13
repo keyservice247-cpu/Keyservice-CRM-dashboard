@@ -201,7 +201,7 @@ function showView(view, tab) {
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers };
+  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers };
   (map[view] || (() => {}))();
 }
 
@@ -809,6 +809,40 @@ async function loadMonteurs() {
 }
 
 // ---------- Prullenbak ----------
+// ---------- AI Assistent (vraagbaak) ----------
+async function loadAssistant() {
+  const groups = await api('/api/assistant/groups').catch(() => []);
+  const examples = [
+    'Hoeveel omzet is er genoemd in de groep van Youssef de afgelopen 30 dagen?',
+    'Wat is er besproken over de schuifpui-opdracht van mevrouw Jansen?',
+    'Welke klussen zijn deze week afgerond volgens de groepsberichten?',
+    'Welke afspraken zijn er genoemd voor komende week?',
+  ];
+  $('#assistantPanel').innerHTML = `
+    <div class="info-card">
+      <div class="row">
+        <label>Zoeken in groep <select id="as-group"><option value="">Alle groepen + e-mail</option>${groups.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join('')}</select></label>
+        <label>Periode <select id="as-days"><option value="0">Alles</option><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label>
+      </div>
+      <label>Je vraag <textarea id="as-q" rows="3" placeholder="bv. Hoeveel omzet is er verstuurd in de groep van Youssef?"></textarea></label>
+      <div class="as-examples">${examples.map((e) => `<button type="button" class="chip as-ex">${esc(e)}</button>`).join('')}</div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="as-ask">${icon('sparkles', 14)} Vraag de AI</button></div>
+      <div id="as-answer" style="margin-top:16px"></div>
+    </div>`;
+  $$('.as-ex').forEach((b) => b.onclick = () => { $('#as-q').value = b.textContent; });
+  $('#as-ask').onclick = async () => {
+    const question = $('#as-q').value.trim();
+    if (!question) return toast('Stel eerst een vraag', true);
+    const btn = $('#as-ask'); btn.disabled = true; btn.innerHTML = 'Bezig met zoeken…';
+    $('#as-answer').innerHTML = '<div class="muted small">De AI doorzoekt de berichten… dit kan ~10-30 sec duren.</div>';
+    try {
+      const out = await api('/api/assistant/ask', 'POST', { question, group: $('#as-group').value, days: Number($('#as-days').value) });
+      $('#as-answer').innerHTML = `<div class="analysis-box">${esc(out.text).replace(/\n/g, '<br>')}</div>${out.searched ? `<div class="muted small" style="margin-top:6px">Doorzocht: ${out.searched} berichten · ${esc(out.engine || '')}</div>` : ''}`;
+    } catch (err) { $('#as-answer').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
+    btn.disabled = false; btn.innerHTML = `${icon('sparkles', 14)} Vraag de AI`;
+  };
+}
+
 // ---------- Agenda ----------
 async function loadAgenda() {
   const [agenda, orders] = await Promise.all([api('/api/agenda'), api('/api/orders')]);

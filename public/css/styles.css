@@ -361,6 +361,11 @@ tr:last-child td { border-bottom: none; }
 .badge { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 7px; font-size: 11px; font-weight: 500; margin-left: auto; }
 .hidden, [hidden] { display: none !important; }
 
+/* AI Assistent voorbeeld-chips */
+.as-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.as-examples .as-ex { cursor: pointer; text-align: left; border: 1px solid var(--line); background: #fcfcfd; color: var(--ink-soft); transition: border-color .12s, color .12s; }
+.as-examples .as-ex:hover { border-color: var(--accent); color: var(--accent-ink); }
+
 /* Agenda */
 .agenda-wrap { display: flex; flex-direction: column; gap: 18px; }
 .agenda-day { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }

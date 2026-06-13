@@ -479,6 +479,44 @@ Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je zie
   return { text, engine: `ai:${model}`, analyzed: Math.min(messages.length, 200) };
 }
 
+// AI-vraagbaak: beantwoordt een vrije vraag op basis van de opgeslagen WhatsApp/
+// e-mail-berichten. Bv. "hoeveel omzet is in de groep van Youssef genoemd?" of
+// "wat is er met de opdracht van mevrouw Jansen gebeurd?".
+export async function askAssistant({ question, messages = [], companyProfile = '' }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-4-6';
+  if (!apiKey) return { text: 'Zet eerst de AI aan (ANTHROPIC_API_KEY) om de vraagbaak te gebruiken.', engine: 'demo' };
+  if (!question) return { text: 'Stel een vraag.', engine: 'n.v.t.' };
+  if (!messages.length) return { text: 'Er zijn nog geen berichten om in te zoeken.', engine: 'n.v.t.' };
+
+  // Corpus: tot 500 berichten met kanaal, groep, datum en afzender, ingekort.
+  const corpus = messages.slice(0, 500).map((m, i) => {
+    const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    const where = m.group ? `groep ${m.group}` : (m.channel || '');
+    return `[${i + 1}] ${when} (${where}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 350)}`;
+  }).join('\n');
+
+  const system = `Je bent de interne assistent van Keyservice (sleutel-/slotenmaker).
+${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
+Je krijgt een verzameling WhatsApp- en e-mailberichten (met datum, groep en afzender).
+Beantwoord de vraag van de gebruiker UITSLUITEND op basis van deze berichten.
+- Reken zo nodig bedragen/omzet bij elkaar op en laat je berekening kort zien.
+- Noem concrete berichten/data waar je je antwoord op baseert.
+- Weet je het niet zeker of staat het er niet in? Zeg dat eerlijk, verzin niets.
+- Antwoord bondig en praktisch in het Nederlands.`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: 1200, system, messages: [{ role: 'user', content: `Berichten:\n${corpus}\n\n---\nVraag: ${question}` }] }),
+  });
+  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
+  const json = await resp.json();
+  recordAIUsage(json.usage);
+  const text = (json.content || []).map((c) => c.text || '').join('').trim();
+  return { text, engine: `ai:${model}`, searched: Math.min(messages.length, 500) };
+}
+
 // Genereert een bondige "leerregel"-tekst op basis van het verkeer: wat IS en wat
 // is NIET een echte opdracht voor Keyservice. Bedoeld om aan het bedrijfsprofiel
 // toe te voegen, zodat de AI scherper filtert in de inbox.
