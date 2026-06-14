@@ -137,14 +137,23 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
   .board-sec-cols { grid-template-columns: 1fr; }
   .column { width: 270px; min-width: 260px; flex-shrink: 0; }
 }
-/* Telefoon: vloeiend kolommen swipen (snap), één scroll-context i.p.v. geneste scrolls */
+/* Kolom-tabs (alleen mobiel): kies een kolom via tabs i.p.v. horizontaal scrollen */
+.board-tabs { display: none; }
 @media (max-width: 820px) {
-  .board-primary { gap: 10px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; scroll-padding: 0 14px; padding-bottom: 6px; }
-  .board-primary .column { width: 85vw; min-width: 85vw; scroll-snap-align: start; max-height: none; }
-  .board-primary .column-cards { max-height: none; overflow: visible; }
-  .board-secondary .column { max-height: none; }
-  .board-secondary .column-cards { max-height: none; overflow: visible; }
-  .column-head { position: sticky; top: 0; background: var(--line-soft); z-index: 1; border-radius: var(--radius) var(--radius) 0 0; }
+  .board-tabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 12px; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+  .board-tab { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; padding: 9px 13px; border: 1px solid var(--line); background: #fff; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--ink-soft); cursor: pointer; white-space: nowrap; }
+  .board-tab .column-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .board-tab .count { background: rgba(31,37,48,.06); border-radius: 999px; padding: 0 7px; font-size: 12px; }
+  .board-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .board-tab.active .count { background: rgba(255,255,255,.25); }
+  /* In tab-modus: één scroll-context, alleen de gekozen kolom tonen, volle breedte */
+  .board.tabbed .board-primary, .board.tabbed .board-secondary, .board.tabbed .board-sec-cols { display: block; overflow: visible; border: none; margin: 0; padding: 0; }
+  .board.tabbed .board-sec-label { display: none; }
+  .board.tabbed .column { width: 100%; min-width: 0; max-height: none; display: none; opacity: 1; }
+  .board.tabbed .column.tab-active { display: flex; }
+  .board.tabbed .column-cards { max-height: none; overflow: visible; }
+  .board.tabbed .column-head { display: none; } /* de actieve tab toont al naam + aantal */
+  #trashZone { display: none; } /* slepen naar prullenbak heeft geen zin op mobiel */
 }
 .column.drag-over { outline: 1px dashed var(--accent); outline-offset: -3px; background: var(--accent-soft); }
 .column-head { padding: 14px 14px 10px; display: flex; align-items: center; gap: 9px; font-weight: 500; font-size: 13px; color: var(--ink-soft); }

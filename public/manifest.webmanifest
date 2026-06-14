@@ -1,0 +1,15 @@
+{
+  "name": "Keyservice CRM",
+  "short_name": "Keyservice",
+  "description": "Opdrachten-dashboard voor Keyservice — e-mail & WhatsApp, AI-controle, monteur-dispatch.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#1d4f9c",
+  "icons": [
+    { "src": "/img/mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/img/mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

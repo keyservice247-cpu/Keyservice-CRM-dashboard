@@ -419,7 +419,34 @@ function renderBoard() {
       catch (err) { toast(err.message, true); }
     };
   } else if (tz) { tz.hidden = true; }
+
+  setupBoardTabs();
 }
+
+// Mobiel: kolom-tabs bovenaan het bord (kies één kolom i.p.v. horizontaal scrollen).
+function setupBoardTabs() {
+  const board = $('#board');
+  let tabs = $('#boardTabs');
+  const isMobile = window.matchMedia('(max-width: 820px)').matches;
+  if (!isMobile) { if (tabs) tabs.remove(); board.classList.remove('tabbed'); return; }
+  const statuses = state.meta.statuses || [];
+  const counts = {};
+  filteredOrders().forEach((o) => { counts[o.status] = (counts[o.status] || 0) + 1; });
+  if (!tabs) { tabs = document.createElement('div'); tabs.id = 'boardTabs'; tabs.className = 'board-tabs'; board.parentNode.insertBefore(tabs, board); }
+  if (!state.boardTab || !statuses.find((s) => s.key === state.boardTab)) state.boardTab = statuses[0]?.key;
+  tabs.innerHTML = statuses.map((s) => `<button class="board-tab ${s.key === state.boardTab ? 'active' : ''}" data-tab="${esc(s.key)}"><span class="column-dot" style="background:${esc(s.color)}"></span>${esc(s.label)} <span class="count">${counts[s.key] || 0}</span></button>`).join('');
+  board.classList.add('tabbed');
+  const apply = () => $$('#board .column').forEach((col) => col.classList.toggle('tab-active', col.dataset.status === state.boardTab));
+  apply();
+  $$('.board-tab', tabs).forEach((b) => b.onclick = () => {
+    state.boardTab = b.dataset.tab;
+    $$('.board-tab', tabs).forEach((x) => x.classList.toggle('active', x === b));
+    apply();
+  });
+}
+
+// Bord opnieuw indelen als de schermbreedte verandert (telefoon <-> pc / draaien).
+window.addEventListener('resize', () => { if (state.view === 'board' && state.orders) setupBoardTabs(); });
 
 function selectedCardIds() { return $$('.card-check:checked').map((c) => c.dataset.id); }
 function updateBoardBulk() {
@@ -1563,6 +1590,16 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if ($('.lightbox')) return; // open foto-viewer handelt zijn eigen Esc af
   closeModal();
+});
+// Sneltoets: druk "/" om direct in de zoekbalk van de huidige weergave te springen.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey) return;
+  const a = document.activeElement;
+  if (a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName)) return;
+  if (!$('#modalRoot').hidden) return;
+  const view = $(`#view-${state.view}`);
+  const search = view && $('input[type=search]', view);
+  if (search) { e.preventDefault(); search.focus(); }
 });
 
 // ---------- Foto-viewer (lightbox) ----------

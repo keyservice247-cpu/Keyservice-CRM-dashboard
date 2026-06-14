@@ -2,9 +2,14 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Keyservice CRM — Inloggen</title>
   <link rel="icon" type="image/svg+xml" href="/img/mark.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#1d4f9c" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Keyservice" />
+  <link rel="apple-touch-icon" href="/img/mark.svg" />
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body class="login-body">
@@ -42,5 +47,6 @@
       }
     });
   </script>
+  <script>if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }</script>
 </body>
 </html>
