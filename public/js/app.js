@@ -135,11 +135,18 @@ function maybeMorningDigest() {
 // Live-updates: checkt elke 5s of er iets veranderd is op de server en ververst
 // dan automatisch de huidige weergave — geen handmatig verversen nodig.
 let _lastPulse = null;
+// Onthoud wanneer de gebruiker voor het laatst scrollde/tikte, zodat we het scherm
+// niet midden in een swipe/scroll opnieuw opbouwen (voorkomt schokkerig gevoel).
+window._lastInteract = 0;
+['touchstart', 'touchmove', 'pointerdown', 'wheel', 'scroll'].forEach((ev) =>
+  window.addEventListener(ev, () => { window._lastInteract = Date.now(); }, { passive: true, capture: true }));
 async function startLiveUpdates() {
   const tick = async () => {
     // Niet verversen tijdens slepen, een open venster (modal) of typen.
     if (window._dragging) return;
     if (!$('#modalRoot').hidden) return;
+    // Niet verversen vlak na scrollen/tikken (vooral mobiel): voorkomt haperingen.
+    if (Date.now() - (window._lastInteract || 0) < 2500) return;
     const active = document.activeElement;
     if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) return;
     try {

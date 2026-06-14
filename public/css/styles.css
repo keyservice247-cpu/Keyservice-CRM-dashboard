@@ -137,6 +137,15 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
   .board-sec-cols { grid-template-columns: 1fr; }
   .column { width: 270px; min-width: 260px; flex-shrink: 0; }
 }
+/* Telefoon: vloeiend kolommen swipen (snap), één scroll-context i.p.v. geneste scrolls */
+@media (max-width: 820px) {
+  .board-primary { gap: 10px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; scroll-padding: 0 14px; padding-bottom: 6px; }
+  .board-primary .column { width: 85vw; min-width: 85vw; scroll-snap-align: start; max-height: none; }
+  .board-primary .column-cards { max-height: none; overflow: visible; }
+  .board-secondary .column { max-height: none; }
+  .board-secondary .column-cards { max-height: none; overflow: visible; }
+  .column-head { position: sticky; top: 0; background: var(--line-soft); z-index: 1; border-radius: var(--radius) var(--radius) 0 0; }
+}
 .column.drag-over { outline: 1px dashed var(--accent); outline-offset: -3px; background: var(--accent-soft); }
 .column-head { padding: 14px 14px 10px; display: flex; align-items: center; gap: 9px; font-weight: 500; font-size: 13px; color: var(--ink-soft); }
 .column-head .count { margin-left: auto; background: rgba(31,37,48,.05); border-radius: 999px; padding: 1px 9px; font-size: 12px; color: var(--ink-soft); font-weight: 400; }
@@ -443,4 +452,17 @@ tr:last-child td { border-bottom: none; }
   .modal-actions .right { margin-left: 0; width: 100%; flex-direction: column-reverse; }
   .modal-actions .btn { width: 100%; text-align: center; padding: 12px; }
   .modal-actions #f-delete, .modal-actions .btn-danger { width: 100%; }
+
+  /* Grotere tikdoelen + rustiger op mobiel */
+  .nav-item { padding: 10px 12px; font-size: 14px; }
+  .view-actions .btn, .view-actions select { padding: 10px 12px; font-size: 14px; }
+  .view-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .card { padding: 14px; }
+  .card-title { font-size: 15px; }
+  .card-select { top: 8px; right: 42px; padding: 7px; }   /* groter aanraakvlak */
+  .card-select input { width: 20px; height: 20px; }
+  .card-trash { width: 32px; height: 32px; opacity: 1; }   /* op mobiel altijd zichtbaar */
+  .btn { min-height: 40px; }
+  /* Voorkom dubbel-tik-zoom op knoppen/links */
+  button, a, .nav-item, .card { touch-action: manipulation; }
 }
