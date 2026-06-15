@@ -490,6 +490,12 @@ function setupBoardTabs() {
   if (!state.boardTab || !statuses.find((s) => s.key === state.boardTab)) state.boardTab = statuses[0]?.key;
   tabs.innerHTML = statuses.map((s) => `<button class="board-tab ${s.key === state.boardTab ? 'active' : ''}" data-tab="${esc(s.key)}"><span class="column-dot" style="background:${esc(s.color)}"></span>${esc(s.label)} <span class="count">${counts[s.key] || 0}</span></button>`).join('');
   board.classList.add('tabbed');
+  try {
+    if (state.me.role !== 'monteur' && !localStorage.getItem('ks_swipeHint')) {
+      localStorage.setItem('ks_swipeHint', '1');
+      setTimeout(() => toast('Tip: veeg een kaart naar rechts = volgende kolom, naar links = prullenbak.'), 800);
+    }
+  } catch {}
   const apply = () => $$('#board .column').forEach((col) => col.classList.toggle('tab-active', col.dataset.status === state.boardTab));
   apply();
   $$('.board-tab', tabs).forEach((b) => b.onclick = () => {
