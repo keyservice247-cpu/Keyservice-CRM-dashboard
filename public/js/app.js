@@ -261,6 +261,16 @@ function goView(view) {
   showView(view, tab);
 }
 
+// AI-dagcheck: laat de AI controleren of alle aanvragen van vandaag netjes verwerkt zijn.
+async function openDailyCheck() {
+  modal(`<h2>AI-dagcheck</h2><p class="muted small">De AI vergelijkt alle berichten van vandaag met de aangemaakte opdrachten… dit kan ~10-30 sec duren.</p><div id="dc-result" class="muted small">Bezig met controleren…</div><div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="dc-close">Sluiten</button></div></div>`);
+  $('#dc-close').onclick = closeModal;
+  try {
+    const out = await api('/api/assistant/daily-check', 'POST', {});
+    $('#dc-result').innerHTML = `<div class="analysis-box">${esc(out.text || '').replace(/\n/g, '<br>')}</div>${out.searched ? `<div class="muted small" style="margin-top:6px">Doorzocht: ${out.searched} berichten · ${esc(out.engine || '')}</div>` : ''}`;
+  } catch (err) { $('#dc-result').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
+}
+
 // ---------- Overzicht / Home ----------
 async function loadOverview() {
   const d = await api('/api/overview');
@@ -1683,6 +1693,7 @@ function bindButtons() {
   });
   $('#digestBtn')?.addEventListener('click', openDigestModal);
   $('#ovDigestBtn')?.addEventListener('click', openDigestModal);
+  $('#ovDailyCheck')?.addEventListener('click', openDailyCheck);
   $('#collapseBtn')?.addEventListener('click', async () => {
     const naam = state.channel === 'email' ? 'E-mail' : state.channel === 'whatsapp' ? 'WhatsApp' : 'Alle';
     const visible = filteredOrders().length;

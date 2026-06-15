@@ -1267,6 +1267,27 @@ app.get('/api/assistant/groups', requireRole('admin', 'assistent'), (req, res) =
   res.json(groups);
 });
 
+// AI-dagcheck: vergelijkt alle berichten van vandaag met de aangemaakte opdrachten en
+// meldt of er iets is gemist, wat opvalt (spoed/akkoord/wacht), en geeft een conclusie.
+app.post('/api/assistant/daily-check', requireRole('admin', 'assistent'), async (req, res) => {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const since = start.getTime();
+  const msgs = db().messages.filter((m) => new Date(m.receivedAt).getTime() >= since);
+  const orders = db().orders.filter((o) => new Date(o.createdAt).getTime() >= since);
+  const labels = getStatusLabels();
+  const orderSummary = orders.map((o) => {
+    const c = db().customers.find((x) => x.id === o.customerId) || {};
+    return `- ${o.title} | ${labels[o.status] || o.status} | klant: ${c.name || '?'} ${c.phone || ''}`;
+  }).join('\n') || '(vandaag nog geen opdrachten aangemaakt)';
+  const question = `Dit zijn ALLE binnengekomen berichten van vandaag (${msgs.length} stuks; staan hierboven). Hieronder de opdrachten die vandaag in het systeem zijn aangemaakt:\n${orderSummary}\n\nControleer als ervaren kantoorassistent van Keyservice:\n1) Is elke ECHTE klantaanvraag uit de berichten ook een opdracht geworden? Noem met naam de aanvragen die NIET als opdracht terug te vinden zijn (mogelijk gemist).\n2) Wat valt op? (spoed, een klant die AKKOORD geeft op een offerte, een klant die op antwoord wacht, dubbele/zelfde aanvragen).\n3) Korte eindconclusie: is alles netjes verwerkt of moet er iets nagekeken worden?\nWees concreet met namen en kort.`;
+  try {
+    const out = await askAssistant({ question, messages: msgs, companyProfile: getCompanyProfile() });
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: 'Mislukt: ' + err.message });
+  }
+});
+
 // AI-statusscan: leest recente groepsberichten en stelt statuswijzigingen voor lopende
 // opdrachten voor. Past zelf NIETS aan — geeft alleen voorstellen terug.
 app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async (req, res) => {

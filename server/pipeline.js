@@ -39,6 +39,12 @@ export function autoApproveThreshold() {
   return Number.isFinite(env) ? env : 0;
 }
 
+// Namen die GEEN echte klant zijn (het bedrijf zelf / forwarder / leeg). Hierop mag
+// nooit een klant worden samengevoegd, anders belanden allemaal losse klanten op één
+// kaart (bv. alles onder "Key Service").
+const GENERIC_NAMES = /^(key\s?service|keyservice|key service 24\/?7|het systeem van key service|systeem|info|onbekend|onbekende klant|klant|drs)$/i;
+function isGenericName(name) { return !name || GENERIC_NAMES.test(String(name).trim()); }
+
 export function findCustomer({ name, phone, email }) {
   const customers = db().customers;
   const norm = (v) => (v || '').toLowerCase().replace(/[\s().-]/g, '');
@@ -48,12 +54,34 @@ export function findCustomer({ name, phone, email }) {
   }
   if (phone) {
     const p = norm(phone);
-    const m = customers.find((c) => c.phone && norm(c.phone) === p);
-    if (m) return m;
+    if (p.length >= 6) {
+      const m = customers.find((c) => c.phone && norm(c.phone) === p);
+      if (m) return m;
+    }
   }
-  if (name) {
+  if (name && !isGenericName(name)) {
     const m = customers.find((c) => c.name && c.name.toLowerCase() === name.toLowerCase());
     if (m) return m;
+  }
+  return null;
+}
+
+// STERKE match: alleen op telefoon of e-mail. Gebruikt om te beslissen of een nieuw
+// bericht aan een BESTAANDE kaart mag worden gehangen (samenvoegen). Naam alleen is te
+// zwak (en generieke namen als "Key Service" zorgen voor verkeerde samenvoegingen).
+export function findCustomerStrong({ phone, email }) {
+  const customers = db().customers;
+  const norm = (v) => (v || '').toLowerCase().replace(/[\s().-]/g, '');
+  if (email) {
+    const m = customers.find((c) => c.email && c.email.toLowerCase() === email.toLowerCase());
+    if (m) return m;
+  }
+  if (phone) {
+    const p = norm(phone);
+    if (p.length >= 6) {
+      const m = customers.find((c) => c.phone && norm(c.phone) === p);
+      if (m) return m;
+    }
   }
   return null;
 }
@@ -299,10 +327,10 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
     : otherGroupButOrder ? `Klantgegevens (telefoon + adres) herkend in groep "${group}" — als opdracht voorgesteld.`
     : aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
 
-  // Bestaande klant herkennen (op e-mail/telefoon, anders naam). Zo voorkomen we
-  // 3 kaarten voor 1 klant: een vervolgbericht hangt aan de lopende opdracht.
-  const existingCustomer = findCustomer({
-    name: suggestion.customerName,
+  // Bestaande klant herkennen op TELEFOON/E-MAIL (sterke match). Zo hangt een
+  // vervolgbericht aan de lopende opdracht, ZONDER dat losse klanten verkeerd op één
+  // kaart belanden (naam alleen is te zwak — denk aan "Key Service" als afzender).
+  const existingCustomer = findCustomerStrong({
     phone: suggestion.customerPhone,
     email: suggestion.customerEmail,
   });
