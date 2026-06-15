@@ -113,7 +113,9 @@ export function upsertCustomer({ name, phone, email, address, source }) {
 export function withRelations(order) {
   const customer = db().customers.find((c) => c.id === order.customerId) || null;
   const monteur = db().monteurs.find((m) => m.id === order.monteurId) || null;
-  return { ...order, customer, monteur };
+  // DRS = afkomstig uit de opdracht-WhatsApp-groep (bv. "Raf Breda…").
+  const isDrs = order.originGroup ? isWhatsappOrderGroup(order.originGroup) : false;
+  return { ...order, customer, monteur, isDrs };
 }
 
 // Maak van een (goedgekeurde) review een echte opdracht + klant.

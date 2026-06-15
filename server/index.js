@@ -1094,6 +1094,7 @@ app.post('/api/orders/:id/suggest-reply', requireRole('admin', 'assistent'), asy
 function buildMonteurMessage(order) {
   const c = db().customers.find((x) => x.id === order.customerId);
   const lines = [`*Nieuwe opdracht: ${order.title}*`];
+  if (order.originGroup && isWhatsappOrderGroup(order.originGroup)) lines.push('Bron: DRS (Raf Breda)');
   if (c?.name) lines.push(`Klant: ${c.name}`);
   if (c?.phone) lines.push(`Tel: ${c.phone}`);
   if (c?.address) lines.push(`Adres: ${c.address}`);

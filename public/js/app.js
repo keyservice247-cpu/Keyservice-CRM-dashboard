@@ -593,6 +593,7 @@ function updateBoardBulk() {
 function cardHTML(o) {
   const sm = sourceMeta(o.source);
   const meta = [`<span class="chip ${sm.cls}">${sourceIcon(o.source)} ${esc(o.source || 'Handmatig')}</span>`];
+  if (o.isDrs) meta.push('<span class="chip chip-drs" title="Afkomstig uit de DRS-groep (Raf Breda)">DRS</span>');
   if (o.monteur) meta.push(`<span class="chip mont">${icon('wrench', 13)} ${esc(o.monteur.name)}</span>`);
   if (o.sentToMonteur) meta.push(`<span class="chip src-whatsapp" title="Verstuurd naar ${esc(o.sentToMonteur.monteurName)}">${icon('whatsapp', 13)} naar ${esc(o.sentToMonteur.monteurName)}</span>`);
   if (o.urgent) meta.push(`<span class="chip urgent">${icon('bolt', 13)} spoed</span>`);
