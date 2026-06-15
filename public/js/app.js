@@ -84,6 +84,22 @@ function toastUndo(msg, undoFn, ms = 8000) {
   if (btn) btn.onclick = async () => { clearTimeout(toast._t); close(); try { await undoFn(); } catch (e) { toast(e.message, true); } };
 }
 
+// Bouwt een "Zet in Google Agenda"-link (opent Google met een vooraf ingevuld event).
+function googleCalUrl({ title, at, details, location }) {
+  const start = new Date(at);
+  if (isNaN(start)) return '#';
+  const end = new Date(start.getTime() + 60 * 60000); // 1 uur standaard
+  const fmt = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const p = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: title || 'Keyservice afspraak',
+    dates: `${fmt(start)}/${fmt(end)}`,
+    details: details || '',
+    location: location || '',
+  });
+  return 'https://calendar.google.com/calendar/render?' + p.toString();
+}
+
 // Verwijderde opdracht(en) terughalen uit de prullenbak (voor de undo-knop).
 async function restoreOrders(ids) {
   for (const id of ids) { try { await api(`/api/trash/${id}/restore`, 'POST'); } catch { /* al weg */ } }
@@ -749,7 +765,7 @@ function openOrderModal(id, pool) {
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
   // Gesprek meteen naar het nieuwste bericht scrollen.
@@ -766,6 +782,13 @@ function openOrderModal(id, pool) {
     } catch (err) { toast(err.message, true); }
   });
   if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
+  // "Zet in Google Agenda": gebruikt de actuele velden in het formulier op het moment van klikken.
+  if (o) { const g = $('#f-gcal'); if (g) g.onclick = (e) => {
+    const appt = $('#f-appt')?.value;
+    if (!appt) { e.preventDefault(); toast('Vul eerst een afspraak (datum/tijd) in', true); return; }
+    const det = [o.customer?.phone ? 'Tel: ' + o.customer.phone : '', $('#f-notes')?.value || '', 'Via Keyservice CRM'].filter(Boolean).join('\n');
+    g.href = googleCalUrl({ title: $('#f-title')?.value || o.title, at: appt, details: det, location: o.customer?.address || '' });
+  }; }
   if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
   if (o && canWrite) $('#f-send-monteur').onclick = () => openSendMonteurModal(o);
 
@@ -1125,10 +1148,11 @@ function renderAgenda() {
             <div class="agenda-title"><span class="dot" style="background:${esc(statusColor(a.status))}"></span>${esc(a.title)} ${a.isDrs ? '<span class="chip src-whatsapp">DRS</span>' : ''}</div>
             <div class="muted small">${esc(a.customer || '')}${a.phone ? ' · ' + esc(a.phone) : ''}${a.address ? ' · ' + esc(a.address) : ''}</div>
             <div class="muted small">${esc(a.statusLabel)}${a.monteur ? ' · monteur ' + esc(a.monteur) : ' · geen monteur'}</div>
+            <a class="agenda-gcal" target="_blank" rel="noopener" href="${esc(googleCalUrl({ title: a.title, at: a.at, location: a.address, details: a.phone ? 'Tel: ' + a.phone : '' }))}">${icon('calendar', 12)} Zet in Google Agenda</a>
           </div>
         </div>`).join('')}
     </div>`).join('');
-  $$('.agenda-item[data-open]').forEach((el) => el.onclick = () => { markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
+  $$('.agenda-item[data-open]').forEach((el) => el.onclick = (e) => { if (e.target.closest('.agenda-gcal')) return; markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
 }
 
 async function loadTrash() {
