@@ -1310,6 +1310,14 @@ async function loadSettings() {
       </div>
       <div id="backupList" class="muted small" style="margin-top:12px">Back-ups laden…</div>
     </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>Agenda koppelen aan Google Agenda</h3>
+      <p class="muted small">Abonneer Google Agenda op onderstaande link, dan verschijnen alle CRM-afspraken automatisch in je Google Agenda (Google ververst periodiek). In Google Agenda: <strong>Andere agenda's → Via URL → plak de link</strong>.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+        <input id="calUrl" type="text" readonly value="${esc(location.origin + '/api/calendar.ics?token=' + (s.calendarToken || ''))}" style="flex:1;min-width:220px;font-size:12px">
+        <button class="btn" id="copyCalUrl">Kopieer link</button>
+      </div>
+      <p class="muted small" style="margin-top:8px">Houd deze link privé (geeft toegang tot je afspraken). Losse afspraak nú toevoegen kan ook met de knop <strong>"Google Agenda"</strong> op een opdracht/agenda-item.</p>
+    </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
@@ -1338,6 +1346,11 @@ async function loadSettings() {
     try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value }); await refreshMeta(); toast('Handtekening opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
+  $('#copyCalUrl')?.addEventListener('click', async () => {
+    const v = $('#calUrl').value;
+    try { await navigator.clipboard.writeText(v); toast('Agenda-link gekopieerd'); }
+    catch { $('#calUrl').select(); document.execCommand('copy'); toast('Agenda-link gekopieerd'); }
+  });
   const loadBackups = async () => {
     try {
       const r = await api('/api/backups');

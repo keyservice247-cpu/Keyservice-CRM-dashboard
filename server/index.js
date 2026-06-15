@@ -1007,6 +1007,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     emailSignature: getEmailSignature(),
     sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
     imapAddress: process.env.IMAP_USER || '',
+    calendarToken: getCalendarToken(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
 });
@@ -1345,6 +1346,36 @@ app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async 
   } catch (err) {
     res.status(500).json({ error: 'Mislukt: ' + err.message });
   }
+});
+
+// Geheime token voor de iCal-feed (1x gegenereerd, in settings bewaard).
+function getCalendarToken() {
+  const s = db().settings;
+  if (!s.calendarToken) { s.calendarToken = id('caltok'); save(); }
+  return s.calendarToken;
+}
+
+// iCal-feed van alle afspraken — abonneer hierop in Google Agenda ("Via URL toevoegen").
+// Google ververst periodiek, dus nieuwe/gewijzigde afspraken verschijnen vanzelf.
+app.get('/api/calendar.ics', (req, res) => {
+  if (!req.query.token || req.query.token !== getCalendarToken()) return res.status(401).send('Ongeldig of ontbrekend token');
+  const fmt = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const esc = (s) => String(s || '').replace(/([,;\\])/g, '\\$1').replace(/\r?\n/g, '\\n');
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Keyservice CRM//NL', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Keyservice afspraken'];
+  for (const o of db().orders) {
+    if (!o.appointmentAt || o.archivedWeek || o.status === 'geannuleerd') continue;
+    const start = new Date(o.appointmentAt); if (isNaN(start)) continue;
+    const end = new Date(start.getTime() + 60 * 60000);
+    const c = db().customers.find((x) => x.id === o.customerId) || {};
+    lines.push('BEGIN:VEVENT', `UID:${o.id}@keyservice-crm`, `DTSTAMP:${fmt(new Date())}`,
+      `DTSTART:${fmt(start)}`, `DTEND:${fmt(end)}`,
+      `SUMMARY:${esc(o.title + (c.name ? ' - ' + c.name : ''))}`,
+      `DESCRIPTION:${esc([c.phone ? 'Tel: ' + c.phone : '', o.description || ''].filter(Boolean).join('\n'))}`,
+      `LOCATION:${esc(c.address || '')}`, 'END:VEVENT');
+  }
+  lines.push('END:VCALENDAR');
+  res.set('Content-Type', 'text/calendar; charset=utf-8');
+  res.send(lines.join('\r\n'));
 });
 
 // Agenda: alle (actieve) opdrachten met een afspraakdatum, voor de agenda-pagina.
