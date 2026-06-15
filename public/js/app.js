@@ -155,6 +155,7 @@ async function startLiveUpdates() {
       // Inbox-badge meteen bijwerken.
       const badge = $('#inboxBadge');
       if (badge) { badge.textContent = p.pendingReviews; badge.hidden = p.pendingReviews === 0; }
+      const bn = $('#bnInboxBadge'); if (bn) { bn.textContent = p.pendingReviews; bn.hidden = p.pendingReviews === 0; }
       // Alleen de inhoud verversen als er écht iets veranderd is.
       if (_lastPulse !== null && p.v !== _lastPulse) {
         if (state.view === 'overview') loadOverview();
@@ -195,6 +196,11 @@ async function refreshMeta() {
 
 function bindNav() {
   $$('.nav-item').forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view, tab)));
+  // Onderbalk (mobiel): zelfde acties + een zoek-knop die de command palette opent.
+  $$('.bn-item').forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.action === 'search') { openCommandPalette(); return; }
+    showView(b.dataset.view, b);
+  }));
   $('#logoutBtn').addEventListener('click', async () => { await api('/api/logout', 'POST'); window.location.href = '/'; });
   $('#accountBtn').addEventListener('click', openAccountModal);
 }
@@ -204,8 +210,10 @@ function showView(view, tab) {
   // De drie board-menu's (Opdrachten/E-mail/WhatsApp) delen dezelfde weergave maar filteren op kanaal.
   state.channel = (tab && tab.dataset.channel) || 'all';
   $$('.nav-item').forEach((t) => t.classList.remove('active'));
-  if (tab) tab.classList.add('active');
+  if (tab && tab.classList.contains('nav-item')) tab.classList.add('active');
   else $(`.nav-item[data-view="${view}"]`)?.classList.add('active');
+  // Onderbalk (mobiel) active-markering synchroniseren.
+  $$('.bn-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
@@ -415,13 +423,14 @@ function renderBoard() {
 
   $$('.card').forEach((el) => {
     el.addEventListener('click', (e) => {
-      // Klikken op selectievakje of prullenbak-knop opent de kaart niet.
-      if (e.target.closest('.card-select') || e.target.closest('.card-trash')) return;
+      // Klikken op selectievakje/prullenbak, of net na een swipe, opent de kaart niet.
+      if (e.target.closest('.card-select') || e.target.closest('.card-trash') || el.dataset.swiped) return;
       markSeen(el.dataset.id); openOrderModal(el.dataset.id);
     });
     el.addEventListener('dragstart', (e) => { window._dragging = true; e.dataTransfer.setData('text/plain', el.dataset.id); el.style.opacity = '.5'; });
     el.addEventListener('dragend', () => { window._dragging = false; el.style.opacity = '1'; });
   });
+  bindCardSwipe();
   // Mini-prullenbak per kaart
   $$('.card-trash').forEach((b) => b.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -492,6 +501,52 @@ function setupBoardTabs() {
 
 // Bord opnieuw indelen als de schermbreedte verandert (telefoon <-> pc / draaien).
 window.addEventListener('resize', () => { if (state.view === 'board' && state.orders) setupBoardTabs(); });
+
+// Verzet een opdracht naar de volgende kolom (voor swipe-rechts op mobiel).
+function advanceStatus(id) {
+  const o = state.orders.find((x) => x.id === id); if (!o) return;
+  const keys = (state.meta.statuses || []).map((s) => s.key);
+  const i = keys.indexOf(o.status);
+  if (i < 0 || i >= keys.length - 1) { toast('Al in de laatste kolom', true); loadBoard(); return; }
+  const next = keys[i + 1];
+  o.status = next;
+  api(`/api/orders/${id}`, 'PATCH', { status: next })
+    .then(() => { toast('Verzet naar ' + statusLabel(next)); loadBoard(); })
+    .catch((e) => { toast(e.message, true); loadBoard(); });
+}
+
+// Swipe-acties op kaarten (alleen mobiel): links = prullenbak, rechts = volgende kolom.
+function bindCardSwipe() {
+  if (!window.matchMedia('(max-width: 820px)').matches || state.me.role === 'monteur') return;
+  $$('#board .card').forEach((card) => {
+    let x0 = 0, y0 = 0, dx = 0, dragging = false, decided = false, horiz = false;
+    card.addEventListener('touchstart', (e) => {
+      const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; dx = 0; dragging = true; decided = false; horiz = false;
+      card.style.transition = '';
+    }, { passive: true });
+    card.addEventListener('touchmove', (e) => {
+      if (!dragging) return;
+      const t = e.touches[0]; dx = t.clientX - x0; const dy = t.clientY - y0;
+      if (!decided && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) { decided = true; horiz = Math.abs(dx) > Math.abs(dy); }
+      if (horiz) { e.preventDefault(); card.style.transform = `translateX(${dx}px)`; card.style.opacity = String(Math.max(0.45, 1 - Math.abs(dx) / 320)); }
+    }, { passive: false });
+    card.addEventListener('touchend', async () => {
+      if (!dragging) return; dragging = false;
+      card.style.transition = 'transform .16s ease, opacity .16s ease';
+      const id = card.dataset.id;
+      if (horiz && Math.abs(dx) >= 95) {
+        card.dataset.swiped = '1'; setTimeout(() => { delete card.dataset.swiped; }, 400);
+        if (dx < 0) { // links -> prullenbak (terughaalbaar)
+          card.style.transform = 'translateX(-100%)'; card.style.opacity = '0';
+          try { await api(`/api/orders/${id}`, 'DELETE'); toast('Naar prullenbak'); loadBoard(); }
+          catch (e) { toast(e.message, true); loadBoard(); }
+        } else { // rechts -> volgende kolom
+          card.style.transform = ''; card.style.opacity = ''; advanceStatus(id);
+        }
+      } else { card.style.transform = ''; card.style.opacity = ''; }
+    });
+  });
+}
 
 function selectedCardIds() { return $$('.card-check:checked').map((c) => c.dataset.id); }
 function updateBoardBulk() {
@@ -739,8 +794,11 @@ function openOrderModal(id, pool) {
 async function refreshInboxBadge() {
   try {
     const stats = await api('/api/stats');
+    const n = stats.pendingReviews;
     const badge = $('#inboxBadge');
-    if (badge) { badge.textContent = stats.pendingReviews; badge.hidden = stats.pendingReviews === 0; }
+    if (badge) { badge.textContent = n; badge.hidden = n === 0; }
+    const bn = $('#bnInboxBadge');
+    if (bn) { bn.textContent = n; bn.hidden = n === 0; }
   } catch {}
 }
 
