@@ -71,6 +71,26 @@ function toast(msg, isError = false) {
   toast._t = setTimeout(() => (t.hidden = true), 3000);
 }
 
+// Toast met een "Ongedaan maken"-knop die een actie terugdraait. Verdwijnt na ms (default 8s).
+function toastUndo(msg, undoFn, ms = 8000) {
+  const t = $('#toast');
+  t.className = 'toast';
+  t.innerHTML = `<span>${esc(msg)}</span><button type="button" class="toast-undo">Ongedaan maken</button>`;
+  t.hidden = false;
+  clearTimeout(toast._t);
+  const close = () => { t.hidden = true; t.textContent = ''; };
+  toast._t = setTimeout(close, ms);
+  const btn = $('.toast-undo', t);
+  if (btn) btn.onclick = async () => { clearTimeout(toast._t); close(); try { await undoFn(); } catch (e) { toast(e.message, true); } };
+}
+
+// Verwijderde opdracht(en) terughalen uit de prullenbak (voor de undo-knop).
+async function restoreOrders(ids) {
+  for (const id of ids) { try { await api(`/api/trash/${id}/restore`, 'POST'); } catch { /* al weg */ } }
+  toast(ids.length > 1 ? `${ids.length} teruggehaald` : 'Teruggehaald');
+  loadBoard();
+}
+
 // Herkomst-bron: rustige kleurklasse (pill) op basis van trefwoorden in de naam.
 // Geen emoji-iconen (conform design-systeem) — alleen een subtiele kleur.
 function sourceMeta(label) {
@@ -441,10 +461,11 @@ function renderBoard() {
     el.addEventListener('dragend', () => { window._dragging = false; el.style.opacity = '1'; });
   });
   bindCardSwipe();
-  // Mini-prullenbak per kaart
+  // Mini-prullenbak per kaart (met "Ongedaan maken")
   $$('.card-trash').forEach((b) => b.addEventListener('click', async (e) => {
     e.stopPropagation();
-    try { await api(`/api/orders/${b.dataset.del}`, 'DELETE'); toast('Naar prullenbak'); loadBoard(); }
+    const id = b.dataset.del;
+    try { await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo('Naar prullenbak', () => restoreOrders([id])); }
     catch (err) { toast(err.message, true); }
   }));
   // Selectievakjes -> toon/verberg de bord-bulkbalk
@@ -479,7 +500,7 @@ function renderBoard() {
     tz.ondrop = async (e) => {
       e.preventDefault(); tz.classList.remove('drag-over');
       const id = e.dataTransfer.getData('text/plain');
-      try { await api(`/api/orders/${id}`, 'DELETE'); toast('Naar prullenbak verplaatst'); loadBoard(); }
+      try { await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo('Naar prullenbak verplaatst', () => restoreOrders([id])); }
       catch (err) { toast(err.message, true); }
     };
   } else if (tz) { tz.hidden = true; }
@@ -809,7 +830,7 @@ function openOrderModal(id, pool) {
   };
   if (o && canWrite) $('#f-delete').onclick = async () => {
     if (!confirm('Opdracht verwijderen?')) return;
-    try { await api(`/api/orders/${o.id}`, 'DELETE'); closeModal(); toast('Verwijderd'); loadBoard(); }
+    try { await api(`/api/orders/${o.id}`, 'DELETE'); closeModal(); loadBoard(); toastUndo('Verwijderd', () => restoreOrders([o.id])); }
     catch (err) { toast(err.message, true); }
   };
 }
@@ -1712,15 +1733,17 @@ function bindButtons() {
     if (!confirm(`${visible} kaart(en) van "${naam}" nu inklappen in een gedateerde bundel? Het bord wordt leeg; je vindt ze terug onder "Ingeklapte agenda's" en kunt ze altijd weer openen.`)) return;
     try {
       const r = await api('/api/archives/collapse', 'POST', { channel: state.channel });
-      toast(r.count ? `${r.count} kaart(en) ingeklapt` : 'Niets ingeklapt');
       loadBoard();
+      if (r.count && r.key) {
+        toastUndo(`${r.count} kaart(en) ingeklapt`, async () => { await api('/api/archives/uncollapse', 'POST', { key: r.key }); toast('Inklappen ongedaan gemaakt'); loadBoard(); }, 12000);
+      } else { toast('Niets ingeklapt'); }
     } catch (err) { toast(err.message, true); }
   });
   $('#boardBulkDelete')?.addEventListener('click', async () => {
     const ids = selectedCardIds();
     if (!ids.length) return;
     if (!confirm(`${ids.length} kaart(en) naar de prullenbak verplaatsen?`)) return;
-    try { for (const id of ids) await api(`/api/orders/${id}`, 'DELETE'); toast(`${ids.length} naar prullenbak`); loadBoard(); }
+    try { for (const id of ids) await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo(`${ids.length} naar prullenbak`, () => restoreOrders(ids)); }
     catch (err) { toast(err.message, true); }
   });
   $('#boardBulkClear')?.addEventListener('click', () => { $$('.card-check').forEach((c) => (c.checked = false)); updateBoardBulk(); });

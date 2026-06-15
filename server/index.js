@@ -359,6 +359,18 @@ app.post('/api/archives/collapse', requireRole('admin', 'assistent'), (req, res)
   res.json({ ok: true, count, key, label });
 });
 
+// Een inklap-bundel ongedaan maken: haal de opdrachten weer terug op het bord.
+app.post('/api/archives/uncollapse', requireRole('admin', 'assistent'), (req, res) => {
+  const key = req.body && req.body.key;
+  if (!key) return res.status(400).json({ error: 'key vereist' });
+  let n = 0;
+  for (const o of db().orders) {
+    if (o.archivedWeek && o.archivedWeek.key === key) { delete o.archivedWeek; o.updatedAt = now(); n++; }
+  }
+  if (n) { logActivity(req.user.name, 'inklappen ongedaan gemaakt', `${n} opdrachten terug`); saveSoon(); }
+  res.json({ ok: true, restored: n });
+});
+
 // Eén bericht uit de gesprekshistorie van een opdracht verwijderen (opschonen van
 // verkeerd samengevoegde/spam-berichten).
 app.delete('/api/orders/:id/thread/:threadId', requireRole('admin', 'assistent'), (req, res) => {
