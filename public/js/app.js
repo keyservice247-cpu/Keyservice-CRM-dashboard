@@ -1648,6 +1648,53 @@ document.addEventListener('keydown', (e) => {
   if (search) { e.preventDefault(); search.focus(); }
 });
 
+// Command palette: Ctrl/⌘+K -> overal zoeken (opdrachten, klanten) en snel navigeren.
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCommandPalette(); }
+});
+async function openCommandPalette() {
+  if ($('#cmdPalette')) return;
+  const [orders, customers] = await Promise.all([api('/api/orders').catch(() => []), api('/api/customers').catch(() => [])]);
+  state.orders = orders; // zodat een gekozen opdracht netjes opent
+  const nav = [
+    { label: 'Overzicht', view: 'overview' }, { label: 'Opdrachten', view: 'board' },
+    { label: 'Inbox / AI', view: 'inbox' }, { label: 'Agenda', view: 'agenda' },
+    { label: 'Klanten & leads', view: 'customers' }, { label: 'Monteurs', view: 'monteurs' },
+    { label: 'AI Assistent', view: 'assistant' }, { label: 'Instellingen', view: 'settings' },
+  ].map((n) => ({ ...n, type: 'view' }));
+  const root = document.createElement('div'); root.id = 'cmdPalette'; root.className = 'cmd-root';
+  root.innerHTML = `<div class="cmd-box"><input id="cmd-input" class="cmd-input" placeholder="Zoek opdracht of klant, of ga naar…" autocomplete="off" spellcheck="false"><div id="cmd-results" class="cmd-results"></div><div class="cmd-hint">↑ ↓ kiezen · Enter openen · Esc sluiten</div></div>`;
+  document.body.appendChild(root);
+  const input = $('#cmd-input', root);
+  let items = []; let sel = 0;
+  const render = () => {
+    const q = input.value.toLowerCase().trim();
+    const res = nav.filter((n) => !q || n.label.toLowerCase().includes(q));
+    if (q) {
+      orders.filter((o) => `${o.title} ${o.customer?.name || ''} ${o.customer?.phone || ''} ${o.customer?.email || ''}`.toLowerCase().includes(q)).slice(0, 7)
+        .forEach((o) => res.push({ type: 'order', label: o.title, sub: o.customer?.name || '', id: o.id }));
+      customers.filter((c) => `${c.name} ${c.email || ''} ${c.phone || ''}`.toLowerCase().includes(q)).slice(0, 5)
+        .forEach((c) => res.push({ type: 'customer', label: c.name, sub: c.email || c.phone || '', obj: c }));
+    }
+    items = res; if (sel >= items.length) sel = 0;
+    $('#cmd-results', root).innerHTML = items.map((it, i) =>
+      `<div class="cmd-item ${i === sel ? 'sel' : ''}" data-i="${i}"><span class="cmd-type">${it.type === 'view' ? 'Ga naar' : it.type === 'order' ? 'Opdracht' : 'Klant'}</span> ${esc(it.label)}${it.sub ? ` <span class="muted">· ${esc(it.sub)}</span>` : ''}</div>`
+    ).join('') || '<div class="cmd-empty muted small">Geen resultaten</div>';
+  };
+  const close = () => { root.remove(); document.removeEventListener('keydown', onKey, true); };
+  const choose = (it) => { close(); if (!it) return; if (it.type === 'view') goView(it.view); else if (it.type === 'order') { markSeen(it.id); openOrderModal(it.id); } else openCustomerModal(it.obj); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, items.length - 1); render(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); render(); }
+    else if (e.key === 'Enter') { e.preventDefault(); choose(items[sel]); }
+  };
+  input.addEventListener('input', () => { sel = 0; render(); });
+  document.addEventListener('keydown', onKey, true);
+  root.addEventListener('click', (e) => { const it = e.target.closest('.cmd-item'); if (it) choose(items[Number(it.dataset.i)]); else if (e.target === root) close(); });
+  render(); input.focus();
+}
+
 // ---------- Foto-viewer (lightbox) ----------
 // Toont een foto schermvullend met kruisje, Esc om te sluiten en pijltjes ← → tussen foto's.
 function openLightbox(images, start = 0) {
