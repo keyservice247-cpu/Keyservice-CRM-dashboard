@@ -493,7 +493,7 @@ function setupBoardTabs() {
   try {
     if (state.me.role !== 'monteur' && !localStorage.getItem('ks_swipeHint')) {
       localStorage.setItem('ks_swipeHint', '1');
-      setTimeout(() => toast('Tip: veeg een kaart naar rechts = volgende kolom, naar links = prullenbak.'), 800);
+      setTimeout(() => toast('Tip: veeg een kaart naar rechts = volgende kolom, naar links = vorige kolom. Verwijderen via het prullenbak-icoon op de kaart.'), 800);
     }
   } catch {}
   const apply = () => $$('#board .column').forEach((col) => col.classList.toggle('tab-active', col.dataset.status === state.boardTab));
@@ -509,19 +509,21 @@ function setupBoardTabs() {
 window.addEventListener('resize', () => { if (state.view === 'board' && state.orders) setupBoardTabs(); });
 
 // Verzet een opdracht naar de volgende kolom (voor swipe-rechts op mobiel).
-function advanceStatus(id) {
+function advanceStatus(id, dir = 1) {
   const o = state.orders.find((x) => x.id === id); if (!o) return;
   const keys = (state.meta.statuses || []).map((s) => s.key);
   const i = keys.indexOf(o.status);
-  if (i < 0 || i >= keys.length - 1) { toast('Al in de laatste kolom', true); loadBoard(); return; }
-  const next = keys[i + 1];
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= keys.length) { toast(dir > 0 ? 'Al in de laatste kolom' : 'Al in de eerste kolom', true); loadBoard(); return; }
+  const next = keys[j];
   o.status = next;
   api(`/api/orders/${id}`, 'PATCH', { status: next })
     .then(() => { toast('Verzet naar ' + statusLabel(next)); loadBoard(); })
     .catch((e) => { toast(e.message, true); loadBoard(); });
 }
 
-// Swipe-acties op kaarten (alleen mobiel): links = prullenbak, rechts = volgende kolom.
+// Swipe-acties op kaarten (alleen mobiel): rechts = volgende kolom, links = vorige kolom.
+// (Verwijderen gaat NIET via swipe — daarvoor is het prullenbak-knopje op de kaart.)
 function bindCardSwipe() {
   if (!window.matchMedia('(max-width: 820px)').matches || state.me.role === 'monteur') return;
   $$('#board .card').forEach((card) => {
@@ -534,22 +536,17 @@ function bindCardSwipe() {
       if (!dragging) return;
       const t = e.touches[0]; dx = t.clientX - x0; const dy = t.clientY - y0;
       if (!decided && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) { decided = true; horiz = Math.abs(dx) > Math.abs(dy); }
-      if (horiz) { e.preventDefault(); card.style.transform = `translateX(${dx}px)`; card.style.opacity = String(Math.max(0.45, 1 - Math.abs(dx) / 320)); }
+      if (horiz) { e.preventDefault(); card.style.transform = `translateX(${dx}px)`; card.style.opacity = String(Math.max(0.55, 1 - Math.abs(dx) / 360)); }
     }, { passive: false });
-    card.addEventListener('touchend', async () => {
+    card.addEventListener('touchend', () => {
       if (!dragging) return; dragging = false;
       card.style.transition = 'transform .16s ease, opacity .16s ease';
+      card.style.transform = ''; card.style.opacity = '';
       const id = card.dataset.id;
       if (horiz && Math.abs(dx) >= 95) {
         card.dataset.swiped = '1'; setTimeout(() => { delete card.dataset.swiped; }, 400);
-        if (dx < 0) { // links -> prullenbak (terughaalbaar)
-          card.style.transform = 'translateX(-100%)'; card.style.opacity = '0';
-          try { await api(`/api/orders/${id}`, 'DELETE'); toast('Naar prullenbak'); loadBoard(); }
-          catch (e) { toast(e.message, true); loadBoard(); }
-        } else { // rechts -> volgende kolom
-          card.style.transform = ''; card.style.opacity = ''; advanceStatus(id);
-        }
-      } else { card.style.transform = ''; card.style.opacity = ''; }
+        advanceStatus(id, dx > 0 ? 1 : -1); // rechts = volgende, links = vorige
+      }
     });
   });
 }
@@ -909,10 +906,33 @@ function renderCustomers() {
   const canWrite = state.me.role !== 'monteur';
   $('#customerList').innerHTML = `
     <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>E-mail</th><th>Herkomst</th><th>Opdrachten</th>${canWrite ? '<th></th>' : ''}
-    </tr></thead><tbody> ${list.map((c) => { const sm = sourceMeta(c.source); return `<tr> <td><strong>${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td><td>${esc(c.email || '')}</td> <td><span class="chip ${sm.cls}">${sm.icon} ${esc(c.source || '')}</span></td> <td>${c.orderCount}</td> ${canWrite ? `<td><button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
+    </tr></thead><tbody> ${list.map((c) => { const sm = sourceMeta(c.source); return `<tr> <td><strong>${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td><td>${esc(c.email || '')}</td> <td><span class="chip ${sm.cls}">${sm.icon} ${esc(c.source || '')}</span></td> <td>${c.orderCount}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
     </tr>`; }).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
     </tbody></table>`;
   $$('[data-edit]').forEach((b) => b.onclick = () => openCustomerModal(state._customers.find((c) => c.id === b.dataset.edit)));
+  $$('[data-neworder]').forEach((b) => b.onclick = () => openNewOrderForCustomer(state._customers.find((c) => c.id === b.dataset.neworder)));
+}
+
+// Maak een nieuwe opdracht voor een BESTAANDE klant (uit het klantenbestand).
+function openNewOrderForCustomer(c) {
+  if (!c) return;
+  modal(`
+    <h2>Nieuwe opdracht voor ${esc(c.name)}</h2>
+    <p class="muted small">${esc(c.phone || '')}${c.email ? ' · ' + esc(c.email) : ''}${c.address ? ' · ' + esc(c.address) : ''}</p>
+    <label>Titel <input id="no-title" placeholder="bv. Cilinderslot vervangen"></label>
+    <div class="row"><label>Status <select id="no-status">${statusOptionsHTML()}</select></label><label>Herkomst ${sourceSelect('Handmatig')}</label></div>
+    <label>Omschrijving <textarea id="no-desc" rows="3" placeholder="Wat moet er gebeuren?"></textarea></label>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="no-cancel">Annuleren</button><button class="btn btn-primary" id="no-save">Opdracht aanmaken</button></div></div>`);
+  bindSourceSelect($('#modal [data-source]'));
+  $('#no-cancel').onclick = closeModal;
+  $('#no-save').onclick = async () => {
+    const title = $('#no-title').value.trim();
+    if (!title) return toast('Titel verplicht', true);
+    try {
+      await api('/api/orders', 'POST', { title, status: $('#no-status').value, description: $('#no-desc').value, source: $('#modal [data-source]')?.value || 'Handmatig', customerId: c.id });
+      closeModal(); toast('Opdracht aangemaakt'); goView('board');
+    } catch (err) { toast(err.message, true); }
+  };
 }
 function openCustomerModal(c) {
   modal(`
@@ -1724,8 +1744,10 @@ async function openCommandPalette() {
     { label: 'Overzicht', view: 'overview' }, { label: 'Opdrachten', view: 'board' },
     { label: 'Inbox / AI', view: 'inbox' }, { label: 'Agenda', view: 'agenda' },
     { label: 'Klanten & leads', view: 'customers' }, { label: 'Monteurs', view: 'monteurs' },
-    { label: 'AI Assistent', view: 'assistant' }, { label: 'Instellingen', view: 'settings' },
-  ].map((n) => ({ ...n, type: 'view' }));
+  ];
+  if (state.me.role !== 'monteur') { nav.push({ label: 'AI Assistent', view: 'assistant' }, { label: 'Prullenbak', view: 'trash' }); }
+  if (state.me.role === 'admin') { nav.push({ label: 'AI-controle', view: 'control' }, { label: 'Abonnementen', view: 'subs' }, { label: 'Instellingen', view: 'settings' }, { label: 'Gebruikers', view: 'users' }); }
+  nav.forEach((n) => { n.type = 'view'; });
   const root = document.createElement('div'); root.id = 'cmdPalette'; root.className = 'cmd-root';
   root.innerHTML = `<div class="cmd-box"><input id="cmd-input" class="cmd-input" placeholder="Zoek opdracht of klant, of ga naar…" autocomplete="off" spellcheck="false"><div id="cmd-results" class="cmd-results"></div><div class="cmd-hint">↑ ↓ kiezen · Enter openen · Esc sluiten</div></div>`;
   document.body.appendChild(root);
