@@ -720,8 +720,8 @@ function openOrderModal(id, pool) {
         <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}</div>
         <div class="chat" id="f-chat">
           ${o.thread.map((t) => { const q = splitQuoted(t.body || ''); return `
-          <div class="chat-msg ${t.outgoing ? 'out' : 'in'}">
-            <div class="chat-meta">${t.outgoing ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (t.outgoing ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)}</div>
+          <div class="chat-msg ${t.outgoing ? 'out' : 'in'}" data-thr="${esc(t.id || '')}">
+            <div class="chat-meta">${t.outgoing ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (t.outgoing ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)}${canWrite && t.id ? ` <button type="button" class="chat-del" data-thr="${esc(t.id)}" title="Dit bericht uit de historie verwijderen">${icon('x', 12)}</button>` : ''}</div>
             <div class="chat-bubble">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div>
           </div>`; }).join('')}
         </div>
@@ -732,6 +732,17 @@ function openOrderModal(id, pool) {
   bindSourceSelect($('#modal [data-source]'));
   // Gesprek meteen naar het nieuwste bericht scrollen.
   const chat = $('#f-chat'); if (chat) chat.scrollTop = chat.scrollHeight;
+  // Los bericht uit de historie verwijderen (opschonen van spam/verkeerd toegevoegd).
+  $$('.chat-del').forEach((b) => b.onclick = async (e) => {
+    e.stopPropagation();
+    if (!confirm('Dit bericht uit de gesprekshistorie verwijderen?')) return;
+    try {
+      await api(`/api/orders/${o.id}/thread/${b.dataset.thr}`, 'DELETE');
+      o.thread = (o.thread || []).filter((t) => t.id !== b.dataset.thr);
+      b.closest('.chat-msg')?.remove();
+      toast('Bericht verwijderd uit historie');
+    } catch (err) { toast(err.message, true); }
+  });
   if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
   if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
   if (o && canWrite) $('#f-send-monteur').onclick = () => openSendMonteurModal(o);

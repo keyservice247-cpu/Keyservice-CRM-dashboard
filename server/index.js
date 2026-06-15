@@ -359,6 +359,17 @@ app.post('/api/archives/collapse', requireRole('admin', 'assistent'), (req, res)
   res.json({ ok: true, count, key, label });
 });
 
+// Eén bericht uit de gesprekshistorie van een opdracht verwijderen (opschonen van
+// verkeerd samengevoegde/spam-berichten).
+app.delete('/api/orders/:id/thread/:threadId', requireRole('admin', 'assistent'), (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  order.thread = (order.thread || []).filter((t) => t.id !== req.params.threadId);
+  order.updatedAt = now();
+  saveSoon();
+  res.json(withRelations(order));
+});
+
 app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
   const b = req.body || {};
   let customerId = b.customerId;

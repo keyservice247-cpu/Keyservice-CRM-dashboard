@@ -383,6 +383,9 @@ tr:last-child td { border-bottom: none; }
 .chat-bubble { background: #fff; border: 1px solid var(--line); border-radius: 14px; border-top-left-radius: 4px; padding: 9px 12px; font-size: 14px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; word-break: break-word; box-shadow: var(--shadow-sm); }
 .chat-msg.out .chat-bubble { background: var(--accent); border-color: var(--accent); color: #fff; border-radius: 14px; border-top-right-radius: 4px; }
 .chat-msg.out .chat-bubble .att { border-color: rgba(255,255,255,.3); }
+.chat-del { border: none; background: none; cursor: pointer; color: var(--muted); padding: 0 2px; vertical-align: middle; opacity: .5; }
+.chat-del:hover { color: var(--danger); opacity: 1; }
+.chat-del svg { width: 12px; height: 12px; }
 /* Geciteerde tekst (oude mail) opklapbaar onder een bericht */
 .quote-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; padding: 3px 9px; font-size: 11px; font-weight: 500; color: var(--accent-ink); background: var(--accent-soft); border: none; border-radius: 999px; cursor: pointer; }
 .quote-toggle:hover { filter: brightness(.97); }

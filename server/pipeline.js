@@ -304,6 +304,18 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   suggestion.aiStatus = suggestion.status;
   suggestion.status = firstStatusKey();
 
+  // Verkeerde contactgegevens opschonen: nooit het eigen bedrijf, een reclame-/
+  // magazine- of no-reply-adres als KLANT bewaren. Anders worden losse mensen verkeerd
+  // samengevoegd en plakt reclame naar info@... aan kaarten.
+  const JUNK_EMAIL_RE = /(keyservice247\.nl|keyservice-crm|@microsoft\.com|@bing|noreply|no-?reply|norep|do-?not-?reply|redactie@|nieuwsbrief|newsletter|mailchimp|sendgrid|mailing|bouwmagazine|facebookmail|linkedin|google\.com)/i;
+  const COMPANY_PHONES = ['0850602359', '0031850602359']; // eigen bedrijfsnummer(s)
+  const normPhone = (v) => String(v || '').replace(/[^\d]/g, '');
+  if (suggestion.customerEmail && JUNK_EMAIL_RE.test(suggestion.customerEmail)) suggestion.customerEmail = '';
+  if (suggestion.customerPhone && COMPANY_PHONES.includes(normPhone(suggestion.customerPhone))) suggestion.customerPhone = '';
+  // Markeer overduidelijke marketing/niet-opdracht (mag nooit aan een kaart plakken).
+  const MARKETING_RE = /(bing|microsoft advertising|places for business|google ads|adwords|nieuwsbrief|newsletter|unsubscribe|afmelden|advertenti|\bseo\b|nieuwe manieren om je bedrijf)/i;
+  const looksMarketing = suggestion.aiNotOrder === true || MARKETING_RE.test(`${subject || ''} ${body || ''}`);
+
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
   const rel = scoreRelevance({ subject, body, hasAttachments: (attachments || []).length > 0 });
@@ -321,16 +333,18 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // De AI mag overrulen: zegt hij expliciet 'geen opdracht' (incasso/leverancier/
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
-  suggestion.relevant = aiSaysNotOrder ? false : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
-  suggestion.relevanceReason = blockAsChatter
-    ? `Collega-bericht uit groep "${group}" zonder duidelijke klantgegevens — naar Overige.`
+  suggestion.relevant = (aiSaysNotOrder || looksMarketing) ? false : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
+  if (looksMarketing) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
+  suggestion.relevanceReason = looksMarketing
+    ? 'Reclame/marketing of nieuwsbrief (bv. Bing/Microsoft/advertenties) — naar Overige.'
+    : blockAsChatter ? `Collega-bericht uit groep "${group}" zonder duidelijke klantgegevens — naar Overige.`
     : otherGroupButOrder ? `Klantgegevens (telefoon + adres) herkend in groep "${group}" — als opdracht voorgesteld.`
     : aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
 
   // Bestaande klant herkennen op TELEFOON/E-MAIL (sterke match). Zo hangt een
   // vervolgbericht aan de lopende opdracht, ZONDER dat losse klanten verkeerd op één
   // kaart belanden (naam alleen is te zwak — denk aan "Key Service" als afzender).
-  const existingCustomer = findCustomerStrong({
+  const existingCustomer = looksMarketing ? null : findCustomerStrong({
     phone: suggestion.customerPhone,
     email: suggestion.customerEmail,
   });

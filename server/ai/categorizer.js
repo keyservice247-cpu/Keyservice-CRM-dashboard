@@ -47,7 +47,7 @@ const CHATTER_ONLY = /^(ok|oké|oke|oke[ëe]|top|prima|bedankt|dankje|dank je|da
 // Sterke signalen dat het GEEN klantopdracht is (incasso/leverancier/reclame/admin).
 // LET OP: "offerte van" is hier bewust NIET opgenomen — klanten vragen juist een
 // offerte aan ("ik ontvang graag een offerte van jullie") en dat is een echte opdracht.
-const NOT_ORDER_WORDS = /(incasso|aanmaning|herinnering betaling|betalingsherinnering|deurwaarder|factuur|factuurnummer|automatische incasso|nieuwsbrief|uitschrijven|afmelden|leverancier|inkoop|bestelling bevestig|orderbevestiging|btw-aangifte|belastingdienst|kvk|verzekering|abonnement|webinar|vacature|sollicitat|no-?reply|noreply)/i;
+const NOT_ORDER_WORDS = /(incasso|aanmaning|herinnering betaling|betalingsherinnering|deurwaarder|factuur|factuurnummer|automatische incasso|nieuwsbrief|uitschrijven|afmelden|unsubscribe|leverancier|inkoop|bestelling bevestig|orderbevestiging|btw-aangifte|belastingdienst|kvk|verzekering|abonnement|webinar|vacature|sollicitat|no-?reply|noreply|bing|microsoft advertising|places for business|google ads|adwords|seo|advertenti|marketing|nieuwe manieren om je bedrijf)/i;
 
 export function scoreRelevance({ subject, body, hasAttachments }, strict = false) {
   const text = `${subject || ''} ${body || ''}`.trim();
