@@ -1484,12 +1484,17 @@ async function loadUsers() {
   });
 }
 function openUserModal() {
+  const monteurOpts = (state.monteurs || []).map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
   modal(`
-    <h2>Nieuwe gebruiker</h2> <label>Naam <input id="u-name"></label> <label>E-mail <input id="u-email" type="email"></label> <label>Wachtwoord <input id="u-pass" type="text" placeholder="minimaal 6 tekens"></label> <label>Rol <select id="u-role"> <option value="assistent">Assistent (alles behalve gebruikersbeheer)</option> <option value="monteur">Monteur (alleen opdrachten bekijken/bijwerken)</option> <option value="admin">Admin (volledige toegang)</option> </select></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="u-cancel">Annuleren</button><button class="btn btn-primary" id="u-save">Aanmaken</button> </div></div>`);
+    <h2>Nieuwe gebruiker</h2> <label>Naam <input id="u-name"></label> <label>E-mail <input id="u-email" type="email"></label> <label>Wachtwoord <input id="u-pass" type="text" placeholder="minimaal 6 tekens"></label> <label>Rol <select id="u-role"> <option value="assistent">Assistent (alles behalve gebruikersbeheer)</option> <option value="monteur">Monteur (ziet alleen eigen opdrachten)</option> <option value="admin">Admin (volledige toegang)</option> </select></label> <label id="u-monteur-wrap" hidden>Welke monteur is dit account? <select id="u-monteur"><option value="">— kies monteur —</option>${monteurOpts}</select></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="u-cancel">Annuleren</button><button class="btn btn-primary" id="u-save">Aanmaken</button> </div></div>`);
+  const syncMonteur = () => { $('#u-monteur-wrap').hidden = $('#u-role').value !== 'monteur'; };
+  $('#u-role').addEventListener('change', syncMonteur); syncMonteur();
   $('#u-cancel').onclick = closeModal;
   $('#u-save').onclick = async () => {
-    const payload = { name: $('#u-name').value, email: $('#u-email').value, password: $('#u-pass').value, role: $('#u-role').value };
+    const role = $('#u-role').value;
+    const payload = { name: $('#u-name').value, email: $('#u-email').value, password: $('#u-pass').value, role, monteurId: role === 'monteur' ? $('#u-monteur').value : null };
     if (!payload.name || !payload.email || payload.password.length < 6) return toast('Vul alles in (wachtwoord min. 6 tekens)', true);
+    if (role === 'monteur' && !payload.monteurId) return toast('Kies welke monteur dit account is', true);
     try { await api('/api/users', 'POST', payload); closeModal(); toast('Gebruiker aangemaakt'); loadUsers(); }
     catch (err) { toast(err.message, true); }
   };

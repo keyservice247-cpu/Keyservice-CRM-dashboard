@@ -103,7 +103,7 @@ app.get('/api/users', requireRole('admin'), (req, res) => {
 });
 
 app.post('/api/users', requireRole('admin'), (req, res) => {
-  const { name, email, password, role } = req.body || {};
+  const { name, email, password, role, monteurId } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Naam, e-mail en wachtwoord verplicht' });
   if (db().users.some((u) => u.email === email.toLowerCase())) {
     return res.status(409).json({ error: 'E-mailadres bestaat al' });
@@ -111,7 +111,7 @@ app.post('/api/users', requireRole('admin'), (req, res) => {
   if (!['admin', 'assistent', 'monteur'].includes(role)) {
     return res.status(400).json({ error: 'Ongeldige rol' });
   }
-  const user = createUser({ name, email, password, role });
+  const user = createUser({ name, email, password, role, monteurId: role === 'monteur' ? (monteurId || null) : null });
   logActivity(req.user.name, 'gebruiker aangemaakt', `${name} (${role})`);
   res.json(publicUser(user));
 });
@@ -283,6 +283,8 @@ app.delete('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) =>
 // ---------- Opdrachten ----------
 app.get('/api/orders', requireAuth, (req, res) => {
   let list = db().orders.map(withRelations);
+  // Monteurs zien ALLEEN hun eigen toegewezen opdrachten.
+  if (req.user.role === 'monteur') list = list.filter((o) => o.monteurId && o.monteurId === req.user.monteurId);
   // Standaard tonen we alleen actieve (niet-ingeklapte) opdrachten op het bord.
   if (req.query.archivedWeek) list = list.filter((o) => o.archivedWeek?.key === req.query.archivedWeek);
   else if (req.query.includeArchived !== '1') list = list.filter((o) => !o.archivedWeek);
@@ -1351,6 +1353,7 @@ app.get('/api/agenda', requireAuth, (req, res) => {
   const labels = getStatusLabels();
   const items = db().orders
     .filter((o) => o.appointmentAt && !o.archivedWeek && !['geannuleerd'].includes(o.status))
+    .filter((o) => req.user.role !== 'monteur' || (o.monteurId && o.monteurId === req.user.monteurId))
     .map((o) => {
       const c = db().customers.find((x) => x.id === o.customerId) || {};
       const m = db().monteurs.find((x) => x.id === o.monteurId) || null;

@@ -88,12 +88,13 @@ export function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
 }
 
-export function createUser({ name, email, password, role }) {
+export function createUser({ name, email, password, role, monteurId }) {
   const user = {
     id: id('user'),
     name,
     email: (email || '').toLowerCase(),
     role: role || 'assistent',
+    monteurId: monteurId || null, // koppeling naar een monteur-record (alleen voor rol 'monteur')
     passwordHash: hashPassword(password),
     createdAt: now(),
   };
