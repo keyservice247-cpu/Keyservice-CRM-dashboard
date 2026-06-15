@@ -157,7 +157,8 @@ async function startLiveUpdates() {
       if (badge) { badge.textContent = p.pendingReviews; badge.hidden = p.pendingReviews === 0; }
       // Alleen de inhoud verversen als er écht iets veranderd is.
       if (_lastPulse !== null && p.v !== _lastPulse) {
-        if (state.view === 'board') loadBoard();
+        if (state.view === 'overview') loadOverview();
+        else if (state.view === 'board') loadBoard();
         else if (state.view === 'inbox') loadInbox();
         else if (state.view === 'customers') loadCustomers();
       }
@@ -208,7 +209,7 @@ function showView(view, tab) {
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers };
+  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers };
   (map[view] || (() => {}))();
 }
 
@@ -242,8 +243,52 @@ function flash(elOrSelector) {
 async function refreshAll() {
   state.monteurs = await api('/api/monteurs');
   fillMonteurFilter();
-  await loadBoard();
+  await loadOverview();
   await refreshInboxBadge();
+}
+
+// Spring naar een weergave alsof je op het menu-item klikt (incl. actief-markering).
+function goView(view) {
+  const tab = $(`.nav-item[data-view="${view}"]`);
+  showView(view, tab);
+}
+
+// ---------- Overzicht / Home ----------
+async function loadOverview() {
+  const d = await api('/api/overview');
+  const k = d.kpis;
+  const first = (state.me.name || '').trim().split(' ')[0] || '';
+  $('#overviewHi').textContent = first ? `Hoi ${first}` : 'Overzicht';
+  $('#overviewDate').textContent = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const card = (num, label, view, cls = '') => `<button class="kpi-card ${cls}" data-go="${view}"><span class="kpi-num">${num}</span><span class="kpi-label">${esc(label)}</span></button>`;
+  const wa = d.whatsapp || {};
+  const list = (arr, empty) => arr.length
+    ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
+    : `<div class="muted small">${empty}</div>`;
+  $('#overviewPanel').innerHTML = `
+    <div class="kpi-grid">
+      ${card(k.teControleren, 'Te controleren', 'inbox', k.teControleren ? 'kpi-attn' : '')}
+      ${card(k.klantReacties, 'Klant reageerde', 'board', k.klantReacties ? 'kpi-attn' : '')}
+      ${card(k.afsprakenVandaag, 'Afspraken vandaag', 'agenda')}
+      ${card(k.nieuwVandaag, 'Nieuw vandaag', 'board')}
+      ${card(k.openOffertes, 'Open offertes', 'board')}
+      ${card(k.afgerondDezeWeek, 'Afgerond deze week', 'board')}
+      ${card(k.actief, 'Actieve opdrachten', 'board')}
+    </div>
+    <div class="ov-cols">
+      <div class="info-card"><h3>Afspraken vandaag</h3>${list(d.apptToday, 'Geen afspraken vandaag.')}</div>
+      <div class="info-card"><h3>Klant heeft gereageerd</h3>${list(d.repliedList, 'Niemand op dit moment.')}</div>
+      <div class="info-card"><h3>Offerte blijft liggen (3+ dagen)</h3>${list(d.staleQuotes, 'Niets blijft liggen.')}</div>
+    </div>
+    <div class="ov-cols">
+      <div class="info-card"><h3>Verdeling over kolommen</h3><div class="ov-bars">${d.byStatus.map((s) => `<div class="ov-bar" data-go="board"><span class="column-dot" style="background:${esc(statusColor(s.key))}"></span><span class="ov-bar-label">${esc(s.label)}</span><span class="ov-bar-count">${s.count}</span></div>`).join('')}</div></div>
+      <div class="info-card"><h3>WhatsApp & recente activiteit</h3>
+        <div class="ov-wa ${wa.online ? 'on' : 'off'}">${wa.online ? 'WhatsApp-bridge: actief' : (wa.configured ? 'WhatsApp-bridge: GESTOPT' : 'WhatsApp: niet gekoppeld')}</div>
+        <ul class="ov-activity">${(d.activity || []).map((a) => `<li><span class="muted small">${fmtDate(a.at)}</span> ${esc(a.actor)} — ${esc(a.action)}${a.detail ? `: ${esc(a.detail)}` : ''}</li>`).join('') || '<li class="muted small">Nog geen activiteit.</li>'}</ul>
+      </div>
+    </div>`;
+  $$('#overviewPanel [data-go]').forEach((el) => el.onclick = () => goView(el.dataset.go));
+  $$('#overviewPanel [data-open]').forEach((el) => el.onclick = async () => { if (!state.orders.length) state.orders = await api('/api/orders'); markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
 }
 
 // ---------- Source <select> (met 'andere bron toevoegen') ----------
@@ -1553,6 +1598,7 @@ function bindButtons() {
     catch (err) { toast(err.message, true); }
   });
   $('#digestBtn')?.addEventListener('click', openDigestModal);
+  $('#ovDigestBtn')?.addEventListener('click', openDigestModal);
   $('#collapseBtn')?.addEventListener('click', async () => {
     const naam = state.channel === 'email' ? 'E-mail' : state.channel === 'whatsapp' ? 'WhatsApp' : 'Alle';
     const visible = filteredOrders().length;

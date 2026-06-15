@@ -800,6 +800,44 @@ app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
   res.json({ ok: true });
 });
 
+// Overzicht/Home: kerncijfers (KPI's) + lijstjes die aandacht vragen + activiteit.
+app.get('/api/overview', requireAuth, (req, res) => {
+  const active = db().orders.filter((o) => !o.archivedWeek);
+  const labels = getStatusLabels();
+  const custName = (o) => (db().customers.find((c) => c.id === o.customerId) || {}).name || '';
+  const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+  const endToday = startToday.getTime() + 86400000;
+  const weekAgo = Date.now() - 7 * 86400000;
+  const threeDays = Date.now() - 3 * 86400000;
+
+  const isToday = (d) => { const t = new Date(d).getTime(); return t >= startToday.getTime() && t < endToday; };
+  const apptToday = active.filter((o) => o.appointmentAt && isToday(o.appointmentAt) && !['afgerond', 'geannuleerd'].includes(o.status))
+    .sort((a, b) => new Date(a.appointmentAt) - new Date(b.appointmentAt))
+    .map((o) => ({ id: o.id, title: o.title, at: o.appointmentAt, customer: custName(o) }));
+  const repliedList = active.filter((o) => o.customerReplied).map((o) => ({ id: o.id, title: o.title, customer: custName(o) }));
+  const staleQuotes = active.filter((o) => o.status === 'offerte_verzonden' && !o.customerReplied && new Date(o.updatedAt).getTime() < threeDays)
+    .map((o) => ({ id: o.id, title: o.title, customer: custName(o) }));
+
+  const last = db().settings.whatsappLastSeen || null;
+  const ageSec = last ? (Date.now() - new Date(last).getTime()) / 1000 : null;
+
+  res.json({
+    kpis: {
+      nieuwVandaag: active.filter((o) => isToday(o.createdAt)).length,
+      teControleren: db().reviews.filter((r) => r.status === 'pending').length,
+      openOffertes: active.filter((o) => o.status === 'offerte_verzonden').length,
+      afsprakenVandaag: apptToday.length,
+      klantReacties: repliedList.length,
+      afgerondDezeWeek: db().orders.filter((o) => o.status === 'afgerond' && new Date(o.updatedAt).getTime() >= weekAgo).length,
+      actief: active.length,
+    },
+    whatsapp: { online: ageSec != null && ageSec < 180, configured: !!last, lastSeen: last },
+    apptToday, repliedList, staleQuotes,
+    byStatus: getStatusKeys().map((k) => ({ key: k, label: labels[k], count: active.filter((o) => o.status === k).length })),
+    activity: (db().activity || []).slice(0, 8).map((a) => ({ actor: a.actorName, action: a.action, detail: a.detail, at: a.at })),
+  });
+});
+
 // Status van de WhatsApp-bridge: draait hij nog? (geen seintje in 3 min = stil)
 app.get('/api/whatsapp/status', requireAuth, (req, res) => {
   const last = db().settings.whatsappLastSeen || null;
