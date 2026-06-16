@@ -85,19 +85,24 @@ function toastUndo(msg, undoFn, ms = 8000) {
 }
 
 // Bouwt een "Zet in Google Agenda"-link (opent Google met een vooraf ingevuld event).
+// De afspraaktijd is lokale NL-tijd; we geven 'm zo door + ctz=Europe/Amsterdam zodat
+// Google de juiste tijd toont (geen UTC-verschuiving).
 function googleCalUrl({ title, at, details, location }) {
-  const start = new Date(at);
-  if (isNaN(start)) return '#';
-  const end = new Date(start.getTime() + 60 * 60000); // 1 uur standaard
-  const fmt = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-  const p = new URLSearchParams({
+  const m = String(at || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return '#';
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]));
+  const p = (n) => String(n).padStart(2, '0');
+  const fmt = (dt) => `${dt.getUTCFullYear()}${p(dt.getUTCMonth() + 1)}${p(dt.getUTCDate())}T${p(dt.getUTCHours())}${p(dt.getUTCMinutes())}00`;
+  const end = new Date(d.getTime() + 60 * 60000);
+  const pr = new URLSearchParams({
     action: 'TEMPLATE',
     text: title || 'Keyservice afspraak',
-    dates: `${fmt(start)}/${fmt(end)}`,
+    dates: `${fmt(d)}/${fmt(end)}`,
     details: details || '',
     location: location || '',
+    ctz: 'Europe/Amsterdam',
   });
-  return 'https://calendar.google.com/calendar/render?' + p.toString();
+  return 'https://calendar.google.com/calendar/render?' + pr.toString();
 }
 
 // Verwijderde opdracht(en) terughalen uit de prullenbak (voor de undo-knop).

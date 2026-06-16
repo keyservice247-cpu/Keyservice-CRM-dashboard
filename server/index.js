@@ -1359,16 +1359,26 @@ function getCalendarToken() {
 // Google ververst periodiek, dus nieuwe/gewijzigde afspraken verschijnen vanzelf.
 app.get('/api/calendar.ics', (req, res) => {
   if (!req.query.token || req.query.token !== getCalendarToken()) return res.status(401).send('Ongeldig of ontbrekend token');
-  const fmt = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const stamp = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); // UTC voor DTSTAMP
+  // Afspraaktijd is ingevoerd als lokale (NL) tijd zonder tijdzone. We geven 'm als
+  // "floating" lokale tijd door (geen Z), zodat Google de tijd toont zoals ingevoerd.
+  const local = (dtstr, addMin = 0) => {
+    const m = String(dtstr).match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    if (!m) return null;
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]));
+    d.setUTCMinutes(d.getUTCMinutes() + addMin);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}T${p(d.getUTCHours())}${p(d.getUTCMinutes())}00`;
+  };
   const esc = (s) => String(s || '').replace(/([,;\\])/g, '\\$1').replace(/\r?\n/g, '\\n');
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Keyservice CRM//NL', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Keyservice afspraken'];
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Keyservice CRM//NL', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Keyservice afspraken', 'X-WR-TIMEZONE:Europe/Amsterdam'];
   for (const o of db().orders) {
     if (!o.appointmentAt || o.archivedWeek || o.status === 'geannuleerd') continue;
-    const start = new Date(o.appointmentAt); if (isNaN(start)) continue;
-    const end = new Date(start.getTime() + 60 * 60000);
+    const ds = local(o.appointmentAt); if (!ds) continue;
+    const de = local(o.appointmentAt, 60);
     const c = db().customers.find((x) => x.id === o.customerId) || {};
-    lines.push('BEGIN:VEVENT', `UID:${o.id}@keyservice-crm`, `DTSTAMP:${fmt(new Date())}`,
-      `DTSTART:${fmt(start)}`, `DTEND:${fmt(end)}`,
+    lines.push('BEGIN:VEVENT', `UID:${o.id}@keyservice-crm`, `DTSTAMP:${stamp(new Date())}`,
+      `DTSTART:${ds}`, `DTEND:${de}`,
       `SUMMARY:${esc(o.title + (c.name ? ' - ' + c.name : ''))}`,
       `DESCRIPTION:${esc([c.phone ? 'Tel: ' + c.phone : '', o.description || ''].filter(Boolean).join('\n'))}`,
       `LOCATION:${esc(c.address || '')}`, 'END:VEVENT');
