@@ -825,6 +825,15 @@ app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
   res.json({ ok: true });
 });
 
+// Begin (maandag 00:00) en einde (volgende maandag 00:00) van de kalenderweek rond ref.
+function weekBounds(ref = new Date()) {
+  const d = new Date(ref);
+  const dow = (d.getDay() + 6) % 7; // 0 = maandag ... 6 = zondag
+  const start = new Date(d); start.setHours(0, 0, 0, 0); start.setDate(d.getDate() - dow);
+  const end = new Date(start); end.setDate(start.getDate() + 7);
+  return { start: start.getTime(), end: end.getTime() };
+}
+
 // Overzicht/Home: kerncijfers (KPI's) + lijstjes die aandacht vragen + activiteit.
 app.get('/api/overview', requireAuth, (req, res) => {
   const active = db().orders.filter((o) => !o.archivedWeek);
@@ -832,7 +841,7 @@ app.get('/api/overview', requireAuth, (req, res) => {
   const custName = (o) => (db().customers.find((c) => c.id === o.customerId) || {}).name || '';
   const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
   const endToday = startToday.getTime() + 86400000;
-  const weekAgo = Date.now() - 7 * 86400000;
+  const wk = weekBounds();
   const threeDays = Date.now() - 3 * 86400000;
 
   const isToday = (d) => { const t = new Date(d).getTime(); return t >= startToday.getTime() && t < endToday; };
@@ -853,7 +862,7 @@ app.get('/api/overview', requireAuth, (req, res) => {
       openOffertes: active.filter((o) => o.status === 'offerte_verzonden').length,
       afsprakenVandaag: apptToday.length,
       klantReacties: repliedList.length,
-      afgerondDezeWeek: db().orders.filter((o) => o.status === 'afgerond' && new Date(o.updatedAt).getTime() >= weekAgo).length,
+      afgerondDezeWeek: db().orders.filter((o) => o.status === 'afgerond' && new Date(o.updatedAt).getTime() >= wk.start && new Date(o.updatedAt).getTime() < wk.end).length,
       actief: active.length,
     },
     whatsapp: { online: ageSec != null && ageSec < 180, configured: !!last, lastSeen: last },
@@ -1456,17 +1465,17 @@ app.get('/api/digest', requireAuth, (req, res) => {
     .map((o) => ({ id: o.id, title: o.title, since: o.updatedAt }));
 
   const custName = (o) => (db().customers.find((c) => c.id === o.customerId) || {}).name;
-  // Afspraken: vandaag en de komende 7 dagen.
+  // Afspraken: vandaag, en deze kalenderweek (maandag t/m zondag).
   const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
   const endToday = startToday.getTime() + 86400000;
-  const endWeek = startToday.getTime() + 7 * 86400000;
+  const wk = weekBounds();
   const apptList = active
     .filter((o) => o.appointmentAt && !['afgerond', 'geannuleerd'].includes(o.status))
     .map((o) => ({ id: o.id, title: o.title, customer: custName(o), at: o.appointmentAt, t: new Date(o.appointmentAt).getTime() }))
     .filter((a) => !isNaN(a.t))
     .sort((a, b) => a.t - b.t);
   const todayAppointments = apptList.filter((a) => a.t >= startToday.getTime() && a.t < endToday);
-  const weekAppointments = apptList.filter((a) => a.t >= startToday.getTime() && a.t < endWeek);
+  const weekAppointments = apptList.filter((a) => a.t >= wk.start && a.t < wk.end);
   // Offertes die blijven liggen: verzonden, 3+ dagen geen reactie van de klant.
   const threeDays = Date.now() - 3 * 86400000;
   const staleQuotes = active
