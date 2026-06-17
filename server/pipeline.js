@@ -317,6 +317,10 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // Markeer overduidelijke marketing/niet-opdracht (mag nooit aan een kaart plakken).
   const MARKETING_RE = /(bing|microsoft advertising|places for business|google ads|adwords|nieuwsbrief|newsletter|unsubscribe|afmelden|advertenti|\bseo\b|nieuwe manieren om je bedrijf)/i;
   const looksMarketing = suggestion.aiNotOrder === true || MARKETING_RE.test(`${subject || ''} ${body || ''}`);
+  // Status-/afrond-RAPPORTAGE van een medewerker is GEEN nieuwe opdracht (mag nooit een
+  // kaart worden of naar de monteur). Bv. "Afgerond: Rosmalen 5247 HS", weekfactuur/omzet.
+  const REPORT_RE = /(\bafgerond\b|\bafgehandeld\b|\bgereed\b|klus\s*(af|klaar|geklaard)|\bopgelost\b|reeds\s*(gedaan|uitgevoerd)|weekfactuur|\bomzet\b|rapportage|dagrapport)/i;
+  const looksReport = REPORT_RE.test(`${subject || ''} ${body || ''}`);
 
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
@@ -335,9 +339,11 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // De AI mag overrulen: zegt hij expliciet 'geen opdracht' (incasso/leverancier/
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
-  suggestion.relevant = (aiSaysNotOrder || looksMarketing) ? false : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
-  if (looksMarketing) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
-  suggestion.relevanceReason = looksMarketing
+  suggestion.relevant = (aiSaysNotOrder || looksMarketing || looksReport) ? false : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
+  if (looksMarketing || looksReport) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
+  suggestion.relevanceReason = looksReport
+    ? 'Status-/afrond-rapport van een medewerker — geen nieuwe opdracht (naar Overige).'
+    : looksMarketing
     ? 'Reclame/marketing of nieuwsbrief (bv. Bing/Microsoft/advertenties) — naar Overige.'
     : blockAsChatter ? `Collega-bericht uit groep "${group}" zonder duidelijke klantgegevens — naar Overige.`
     : otherGroupButOrder ? `Klantgegevens (telefoon + adres) herkend in groep "${group}" — als opdracht voorgesteld.`
