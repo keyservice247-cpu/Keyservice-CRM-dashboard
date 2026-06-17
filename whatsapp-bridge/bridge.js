@@ -127,6 +127,15 @@ async function resolveGroupId(groupName, forceRefresh = false) {
     || groupCache.find((g) => (g.name || '').toLowerCase().includes(wanted));
   return hit ? hit.id._serialized : null;
 }
+// Zet een (Nederlands) telefoonnummer om naar een WhatsApp chat-id (internationaal).
+function toChatId(phone) {
+  let n = String(phone || '').replace(/[^\d]/g, '');
+  if (!n) return null;
+  if (n.startsWith('00')) n = n.slice(2);          // 0031... -> 31...
+  else if (n.startsWith('0')) n = '31' + n.slice(1); // 06... -> 316...
+  if (n.length < 10) return null;
+  return `${n}@c.us`;
+}
 function startOutbox() {
   console.log(`[outbox] poller actief — checkt ${DASHBOARD_URL}/api/outbox elke 8s`);
   let warned = false;
@@ -143,10 +152,17 @@ function startOutbox() {
       for (const it of items) {
         let ok = false;
         try {
-          let gid = await resolveGroupId(it.group);
-          if (!gid) gid = await resolveGroupId(it.group, true); // cache verversen en opnieuw
-          if (gid) { await client.sendMessage(gid, it.text); ok = true; console.log(`[outbox] -> verstuurd naar monteur-groep "${it.group}"`); }
-          else { console.error(`[outbox] Groep NIET gevonden: "${it.group}" — controleer de exacte groepsnaam bij Monteurs`); }
+          if (it.phone) {
+            // 1-op-1 naar een klant (bv. offerte follow-up). Nummer naar internationaal formaat.
+            const chatId = toChatId(it.phone);
+            if (chatId) { await client.sendMessage(chatId, it.text); ok = true; console.log(`[outbox] -> follow-up verstuurd naar klant ${it.phone}`); }
+            else console.error(`[outbox] ongeldig telefoonnummer: "${it.phone}"`);
+          } else {
+            let gid = await resolveGroupId(it.group);
+            if (!gid) gid = await resolveGroupId(it.group, true); // cache verversen en opnieuw
+            if (gid) { await client.sendMessage(gid, it.text); ok = true; console.log(`[outbox] -> verstuurd naar monteur-groep "${it.group}"`); }
+            else { console.error(`[outbox] Groep NIET gevonden: "${it.group}" — controleer de exacte groepsnaam bij Monteurs`); }
+          }
         } catch (e) { console.error('[outbox] versturen mislukt:', e.message); }
         await fetch(`${DASHBOARD_URL}/api/outbox/${it.id}/done`, {
           method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },

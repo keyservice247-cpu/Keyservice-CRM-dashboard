@@ -10,6 +10,7 @@
 import { db, id, now, saveSoon, logActivity } from '../db.js';
 import { ingestMessage, findCustomer } from '../pipeline.js';
 import { saveBuffer } from '../storage.js';
+import { maybeSendAutoReply } from '../autoreply.js';
 
 let polling = false;
 
@@ -139,7 +140,7 @@ async function processInbox(client, simpleParser, since) {
         const saved = saveBuffer(att.content, { mime: att.contentType, filename: att.filename });
         if (saved) attachments.push(saved);
       }
-      await ingestMessage({
+      const result = await ingestMessage({
         channel: 'email',
         sender: parsed.from?.text || '',
         subject: parsed.subject || '',
@@ -147,6 +148,8 @@ async function processInbox(client, simpleParser, since) {
         externalId: mid,
         attachments,
       });
+      // Automatische ontvangstbevestiging naar de klant (indien aangezet).
+      await maybeSendAutoReply(result).catch(() => {});
     }
   } finally {
     lock.release();

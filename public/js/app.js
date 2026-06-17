@@ -1325,6 +1325,22 @@ async function loadSettings() {
     </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>Automatische ontvangstbevestiging (e-mail)</h3>
+      <p class="muted small">Stuurt automatisch een mailtje naar een nieuwe klant die per e-mail een aanvraag doet — bv. met het verzoek alvast foto's en adres te sturen. Alleen bij echte aanvragen, max. 1x per klant. (Handtekening wordt eronder gezet.)</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ar-enabled" style="width:auto" ${s.autoReply?.enabled ? 'checked' : ''}> Automatische ontvangstbevestiging aanzetten</label>
+      <label>Onderwerp <input id="ar-subject" value="${esc(s.autoReply?.subject || '')}"></label>
+      <label>Bericht <textarea id="ar-body" rows="6">${esc(s.autoReply?.body || '')}</textarea></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoReply">Opslaan</button></div>
+    </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>Automatische follow-up op offertes</h3>
+      <p class="muted small">Staat een offerte langer dan het ingestelde aantal dagen open zonder reactie van de klant? Dan stuurt het systeem automatisch een vriendelijke herinnering via e-mail én WhatsApp (1x per kaart). WhatsApp-follow-up loopt via de bridge naar het klant-nummer.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-enabled" style="width:auto" ${s.followUp?.enabled ? 'checked' : ''}> Automatische follow-up aanzetten</label>
+      <label>Na hoeveel dagen zonder reactie? <input id="fu-days" type="number" min="1" max="30" value="${esc(String(s.followUp?.days || 3))}" style="max-width:120px"></label>
+      <label>E-mail onderwerp <input id="fu-emailSubject" value="${esc(s.followUp?.emailSubject || '')}"></label>
+      <label>E-mail bericht <textarea id="fu-emailBody" rows="5">${esc(s.followUp?.emailBody || '')}</textarea></label>
+      <label>WhatsApp bericht <textarea id="fu-whatsappBody" rows="3">${esc(s.followUp?.whatsappBody || '')}</textarea></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveFollowUp">Opslaan</button></div>
+    </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
@@ -1349,6 +1365,16 @@ async function loadSettings() {
   };
   $('#saveSignature').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value }); await refreshMeta(); toast('Handtekening opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveAutoReply').onclick = async () => {
+    const autoReply = { enabled: $('#ar-enabled').checked, subject: $('#ar-subject').value, body: $('#ar-body').value };
+    try { await api('/api/settings', 'PATCH', { autoReply }); toast('Ontvangstbevestiging opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveFollowUp').onclick = async () => {
+    const followUp = { enabled: $('#fu-enabled').checked, days: Number($('#fu-days').value) || 3, emailSubject: $('#fu-emailSubject').value, emailBody: $('#fu-emailBody').value, whatsappBody: $('#fu-whatsappBody').value };
+    try { await api('/api/settings', 'PATCH', { followUp }); toast('Follow-up opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#copyCalUrl')?.addEventListener('click', async () => {

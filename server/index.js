@@ -22,6 +22,8 @@ import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
+import { maybeSendAutoReply } from './autoreply.js';
+import { startFollowUps } from './followup.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -31,7 +33,7 @@ import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
-  getEmailSignature, isWhatsappOrderGroup,
+  getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -889,6 +891,7 @@ app.post('/api/ingest/email', checkIngestToken, async (req, res) => {
     body: body || text || html || '',
     externalId,
   });
+  await maybeSendAutoReply(result).catch(() => {});
   res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
 });
 
@@ -1000,6 +1003,7 @@ app.post('/api/simulate', requireRole('admin', 'assistent'), async (req, res) =>
     channel: channel === 'whatsapp' ? 'whatsapp' : 'email',
     sender, subject, body, group,
   });
+  await maybeSendAutoReply(result).catch(() => {});
   res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status });
 });
 
@@ -1017,6 +1021,8 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
     imapAddress: process.env.IMAP_USER || '',
     calendarToken: getCalendarToken(),
+    autoReply: getAutoReply(),
+    followUp: getFollowUp(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
 });
@@ -1051,6 +1057,24 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
   if ('emailSignature' in b) {
     db().settings.emailSignature = String(b.emailSignature || '').slice(0, 1000);
   }
+  if ('autoReply' in b) {
+    const a = b.autoReply || {};
+    db().settings.autoReply = {
+      enabled: !!a.enabled,
+      subject: String(a.subject || '').slice(0, 200),
+      body: String(a.body || '').slice(0, 2000),
+    };
+  }
+  if ('followUp' in b) {
+    const f = b.followUp || {};
+    db().settings.followUp = {
+      enabled: !!f.enabled,
+      days: Math.max(1, Math.min(30, Number(f.days) || 3)),
+      emailSubject: String(f.emailSubject || '').slice(0, 200),
+      emailBody: String(f.emailBody || '').slice(0, 2000),
+      whatsappBody: String(f.whatsappBody || '').slice(0, 2000),
+    };
+  }
   if ('monteurDispatch' in b) {
     const d = b.monteurDispatch || {};
     const trigger = ['approved', 'appointment', 'intake'].includes(d.trigger) ? d.trigger : 'approved';
@@ -1071,6 +1095,8 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     companyProfile: getCompanyProfile(),
     whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
     emailSignature: getEmailSignature(),
+    autoReply: getAutoReply(),
+    followUp: getFollowUp(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
 });
@@ -1553,5 +1579,6 @@ app.listen(PORT, () => {
   startWeeklyArchiver();
   startHealthMonitor();
   startBackups();
+  startFollowUps();
   console.log('');
 });

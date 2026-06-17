@@ -106,7 +106,55 @@ export function ensureSettings() {
   if (s.whatsappOrderGroups === undefined) s.whatsappOrderGroups = 'raf breda';
   // Standaard handtekening onder uitgaande e-mails vanuit het dashboard.
   if (s.emailSignature === undefined) s.emailSignature = DEFAULT_EMAIL_SIGNATURE;
+  if (s.autoReply === undefined) s.autoReply = structuredClone(DEFAULT_AUTOREPLY);
+  if (s.followUp === undefined) s.followUp = structuredClone(DEFAULT_FOLLOWUP);
   save();
+}
+
+// Automatische follow-up op offertes die X dagen blijven liggen (uit standaard).
+export const DEFAULT_FOLLOWUP = {
+  enabled: false,
+  days: 3,
+  emailSubject: 'Even checken — uw offerte van Keyservice',
+  emailBody: `Beste klant,
+
+Een tijdje geleden stuurden wij u een offerte. We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we het graag voor u in.
+
+Laat het ons gerust weten!`,
+  whatsappBody: `Hallo, een tijdje geleden stuurden we u een offerte voor uw aanvraag. Heeft u nog vragen of wilt u dat we het inplannen? Laat het ons gerust weten!`,
+};
+
+export function getFollowUp() {
+  const f = db().settings.followUp || {};
+  return {
+    enabled: !!f.enabled,
+    days: Math.max(1, Math.min(30, Number(f.days) || DEFAULT_FOLLOWUP.days)),
+    emailSubject: f.emailSubject || DEFAULT_FOLLOWUP.emailSubject,
+    emailBody: f.emailBody || DEFAULT_FOLLOWUP.emailBody,
+    whatsappBody: f.whatsappBody || DEFAULT_FOLLOWUP.whatsappBody,
+  };
+}
+
+// Automatische ontvangstbevestiging (uit standaard). De gebruiker zet dit aan in Instellingen.
+export const DEFAULT_AUTOREPLY = {
+  enabled: false,
+  subject: 'Bedankt voor uw aanvraag bij Keyservice',
+  body: `Beste klant,
+
+Bedankt voor uw aanvraag. Om u zo goed mogelijk te kunnen helpen, kunt u ons alvast het volgende toesturen:
+- Foto's of een video van de situatie
+- Uw woonplaats of volledige adresgegevens
+
+Dan nemen we contact met u op zodra een collega beschikbaar is.`,
+};
+
+export function getAutoReply() {
+  const a = db().settings.autoReply || {};
+  return {
+    enabled: !!a.enabled,
+    subject: a.subject || DEFAULT_AUTOREPLY.subject,
+    body: a.body || DEFAULT_AUTOREPLY.body,
+  };
 }
 
 // Nette standaard-handtekening onder elke mail die vanuit het dashboard wordt verstuurd.
