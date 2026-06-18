@@ -1483,7 +1483,14 @@ app.get('/api/digest', requireAuth, (req, res) => {
   const neverOpened = active.filter((o) => !o.openedAt)
     .map((o) => ({ id: o.id, title: o.title }));
   // Wacht op ons antwoord: offerte-fase of open, nog geen antwoord gestuurd.
-  const awaitingReply = active.filter((o) => !o.lastReplyAt && ['open', firstStatusKey(), 'offerte_verzonden'].includes(o.status))
+  // NIET tonen als: al naar de monteur gestuurd (die belt de klant), of als er een
+  // notitie staat dat het contact al via WhatsApp loopt.
+  const viaWhatsappNote = (o) => /whats\s?app/i.test(o.notes || '');
+  const awaitingReply = active.filter((o) =>
+    !o.lastReplyAt &&
+    !o.sentToMonteur &&
+    !viaWhatsappNote(o) &&
+    ['open', firstStatusKey(), 'offerte_verzonden'].includes(o.status))
     .map((o) => ({ id: o.id, title: o.title }));
   // Lang stil: geen update in 5+ dagen, niet afgerond/geannuleerd.
   const fiveDays = Date.now() - 5 * 86400000;
