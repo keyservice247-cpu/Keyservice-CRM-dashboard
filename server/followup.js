@@ -37,8 +37,11 @@ export async function runFollowUps() {
     }
 
     if (c.phone) {
-      // Via de outbox: de bridge stuurt dit naar het WhatsApp-nummer van de klant.
-      db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, text: cfg.whatsappBody, orderId: o.id, status: 'queued', createdAt: now(), by: 'follow-up' });
+      // Via de outbox: de NIEUWE bridge stuurt dit naar het WhatsApp-nummer van de klant.
+      // 'group' is een nep-naam die met geen enkele echte groep matcht: een OUDE bridge
+      // (zonder klant-DM-ondersteuning) weigert het dan veilig i.p.v. het naar de
+      // verkeerde groep te sturen.
+      db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: cfg.whatsappBody, orderId: o.id, status: 'queued', createdAt: now(), by: 'follow-up' });
       o.thread = o.thread || [];
       o.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (automatische follow-up)', body: cfg.whatsappBody, at: now() });
       sent = true;

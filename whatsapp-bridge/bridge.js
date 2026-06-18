@@ -123,6 +123,9 @@ async function resolveGroupId(groupName, forceRefresh = false) {
     console.log(`[outbox] ${groupCache.length} groepen bekend: ${groupCache.map((g) => g.name).join(' | ')}`);
   }
   const wanted = (groupName || '').toLowerCase().trim();
+  if (wanted.length < 2) return null; // lege/onzin-naam mag NOOIT de eerste groep pakken
+  // Een nep-naam voor klant-DM's hoort hier niet thuis.
+  if (wanted.includes('klant_dm') || wanted.includes('__')) return null;
   const hit = groupCache.find((g) => (g.name || '').toLowerCase().trim() === wanted)
     || groupCache.find((g) => (g.name || '').toLowerCase().includes(wanted));
   return hit ? hit.id._serialized : null;
