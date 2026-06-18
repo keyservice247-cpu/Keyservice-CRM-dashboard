@@ -25,7 +25,17 @@ export async function runFollowUps() {
     const c = db().customers.find((x) => x.id === o.customerId) || {};
     let sent = false;
 
-    if (cfg.emailEnabled && c.email && smtpConfigured()) {
+    // Kies ÉÉN kanaal per offerte (geen dubbele berichten). Voorkeur = het kanaal waar
+    // de opdracht vandaan kwam: WhatsApp-opdracht -> WhatsApp, anders e-mail.
+    const src = `${o.source || ''} ${o.originGroup || ''}`.toLowerCase();
+    const fromWhatsapp = /whatsapp|groep|app/.test(src);
+    const canEmail = cfg.emailEnabled && c.email && smtpConfigured();
+    const canWa = cfg.whatsappEnabled && c.phone;
+    let useEmail = false; let useWa = false;
+    if (canEmail && canWa) { if (fromWhatsapp) useWa = true; else useEmail = true; }
+    else { useEmail = canEmail; useWa = canWa; }
+
+    if (useEmail) {
       try {
         const sig = getEmailSignature();
         const text = sig ? `${cfg.emailBody}\n\n${sig}` : cfg.emailBody;
@@ -36,7 +46,7 @@ export async function runFollowUps() {
       } catch (e) { console.error('Follow-up e-mail mislukt:', e.message); }
     }
 
-    if (cfg.whatsappEnabled && c.phone) {
+    if (useWa) {
       // Nep-groep zodat een oude bridge dit veilig weigert i.p.v. naar een groep stuurt.
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: cfg.whatsappBody, orderId: o.id, status: 'queued', createdAt: now(), by: 'follow-up' });
       o.thread = o.thread || [];
