@@ -123,6 +123,13 @@ Een tijdje geleden stuurden wij u een offerte. We horen graag of u nog vragen he
 
 Laat het ons gerust weten!`,
   whatsappBody: `Hallo, een tijdje geleden stuurden we u een offerte voor uw aanvraag. Heeft u nog vragen of wilt u dat we het inplannen? Laat het ons gerust weten!`,
+  // Follow-up op klanten die we gemaild hebben maar waar nog geen reactie op kwam.
+  noReplyEnabled: false,
+  noReplyDays: 3,
+  noReplyEmailSubject: 'Heeft u onze e-mail ontvangen? — Keyservice',
+  noReplyEmailBody: `Beste klant,
+
+Een paar dagen geleden stuurden wij u een e-mail, maar we hebben nog geen reactie van u mogen ontvangen. We willen u graag verder helpen — laat gerust weten of u nog vragen heeft of hoe u verder wilt.`,
 };
 
 export function getFollowUp() {
@@ -135,6 +142,10 @@ export function getFollowUp() {
     emailSubject: f.emailSubject || DEFAULT_FOLLOWUP.emailSubject,
     emailBody: f.emailBody || DEFAULT_FOLLOWUP.emailBody,
     whatsappBody: f.whatsappBody || DEFAULT_FOLLOWUP.whatsappBody,
+    noReplyEnabled: !!f.noReplyEnabled,
+    noReplyDays: Math.max(1, Math.min(30, Number(f.noReplyDays) || DEFAULT_FOLLOWUP.noReplyDays)),
+    noReplyEmailSubject: f.noReplyEmailSubject || DEFAULT_FOLLOWUP.noReplyEmailSubject,
+    noReplyEmailBody: f.noReplyEmailBody || DEFAULT_FOLLOWUP.noReplyEmailBody,
   };
 }
 

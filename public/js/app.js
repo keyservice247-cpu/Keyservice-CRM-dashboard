@@ -1350,6 +1350,13 @@ async function loadSettings() {
       <label>E-mail onderwerp <input id="fu-emailSubject" value="${esc(s.followUp?.emailSubject || '')}"></label>
       <label>E-mail bericht <textarea id="fu-emailBody" rows="5">${esc(s.followUp?.emailBody || '')}</textarea></label>
       <label>WhatsApp bericht <textarea id="fu-whatsappBody" rows="3">${esc(s.followUp?.whatsappBody || '')}</textarea></label>
+      <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+      <h3 style="font-size:14px">Follow-up: gemaild, maar geen reactie</h3>
+      <p class="muted small">Heeft een klant op onze e-mail nog niet gereageerd na X dagen? Dan stuurt het systeem automatisch een vriendelijke herinnering via e-mail (1x per kaart). Geldt niet voor offertes (die hierboven) of ingeplande afspraken.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-noreply" style="width:auto" ${s.followUp?.noReplyEnabled ? 'checked' : ''}> Follow-up op gemailde klanten zonder reactie aanzetten</label>
+      <label>Na hoeveel dagen zonder reactie? <input id="fu-noReplyDays" type="number" min="1" max="30" value="${esc(String(s.followUp?.noReplyDays || 3))}" style="max-width:120px"></label>
+      <label>E-mail onderwerp <input id="fu-noReplySubject" value="${esc(s.followUp?.noReplyEmailSubject || '')}"></label>
+      <label>E-mail bericht <textarea id="fu-noReplyBody" rows="5">${esc(s.followUp?.noReplyEmailBody || '')}</textarea></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveFollowUp">Opslaan</button></div>
     </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
@@ -1384,7 +1391,7 @@ async function loadSettings() {
     catch (err) { toast(err.message, true); }
   };
   $('#saveFollowUp').onclick = async () => {
-    const followUp = { emailEnabled: $('#fu-email').checked, whatsappEnabled: $('#fu-whatsapp').checked, days: Number($('#fu-days').value) || 3, emailSubject: $('#fu-emailSubject').value, emailBody: $('#fu-emailBody').value, whatsappBody: $('#fu-whatsappBody').value };
+    const followUp = { emailEnabled: $('#fu-email').checked, whatsappEnabled: $('#fu-whatsapp').checked, days: Number($('#fu-days').value) || 3, emailSubject: $('#fu-emailSubject').value, emailBody: $('#fu-emailBody').value, whatsappBody: $('#fu-whatsappBody').value, noReplyEnabled: $('#fu-noreply').checked, noReplyDays: Number($('#fu-noReplyDays').value) || 3, noReplyEmailSubject: $('#fu-noReplySubject').value, noReplyEmailBody: $('#fu-noReplyBody').value };
     try { await api('/api/settings', 'PATCH', { followUp }); toast('Follow-up opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };

@@ -1074,6 +1074,10 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
       emailSubject: String(f.emailSubject || '').slice(0, 200),
       emailBody: String(f.emailBody || '').slice(0, 2000),
       whatsappBody: String(f.whatsappBody || '').slice(0, 2000),
+      noReplyEnabled: !!f.noReplyEnabled,
+      noReplyDays: Math.max(1, Math.min(30, Number(f.noReplyDays) || 3)),
+      noReplyEmailSubject: String(f.noReplyEmailSubject || '').slice(0, 200),
+      noReplyEmailBody: String(f.noReplyEmailBody || '').slice(0, 2000),
     };
   }
   if ('monteurDispatch' in b) {
