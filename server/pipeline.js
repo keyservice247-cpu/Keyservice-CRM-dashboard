@@ -317,10 +317,17 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // Markeer overduidelijke marketing/niet-opdracht (mag nooit aan een kaart plakken).
   const MARKETING_RE = /(bing|microsoft advertising|places for business|google ads|adwords|nieuwsbrief|newsletter|unsubscribe|afmelden|advertenti|\bseo\b|nieuwe manieren om je bedrijf)/i;
   const looksMarketing = suggestion.aiNotOrder === true || MARKETING_RE.test(`${subject || ''} ${body || ''}`);
-  // Status-/afrond-RAPPORTAGE van een medewerker is GEEN nieuwe opdracht (mag nooit een
-  // kaart worden of naar de monteur). Bv. "Afgerond: Rosmalen 5247 HS", weekfactuur/omzet.
-  const REPORT_RE = /(\bafgerond\b|\bafgehandeld\b|\bgereed\b|klus\s*(af|klaar|geklaard)|\bopgelost\b|reeds\s*(gedaan|uitgevoerd)|weekfactuur|\bomzet\b|rapportage|dagrapport)/i;
-  const looksReport = REPORT_RE.test(`${subject || ''} ${body || ''}`);
+  // Heeft dit bericht duidelijke KLANTGEGEVENS? Dan is het een echte opdracht — ook al
+  // staat er toevallig een woord als "afgerond/opgelost" in (klantwens). Zo voorkomen we
+  // dat een echte aanvraag per ongeluk als "rapport" wordt weggefilterd.
+  const hasPostcode = /\b\d{4}\s?[a-z]{2}\b/i.test(body || '');
+  const hasCustomerData = !!(suggestion.customerPhone && (suggestion.customerAddress || hasPostcode))
+    || /(volgende klant|nieuwe klant|naam\s*:\s*\S)/i.test(`${subject || ''} ${body || ''}`);
+  // Status-/afrond-RAPPORTAGE van een medewerker (GEEN nieuwe opdracht), bv.
+  // "Afgerond: Rosmalen 5247 HS", weekfactuur/omzet. Alleen als er GEEN klantgegevens
+  // in staan (anders is het gewoon een opdracht).
+  const REPORT_RE = /(\bafgerond\b|\bafgehandeld\b|\bgereed\b|klus\s*(af|klaar|geklaard)|weekfactuur|\bomzet\b|rapportage|dagrapport)/i;
+  const looksReport = !hasCustomerData && REPORT_RE.test(`${subject || ''} ${body || ''}`);
 
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
@@ -332,7 +339,6 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // (telefoon + adres of postcode), dan is het wél een opdracht. Zo blijft de inbox
   // overzichtelijk én missen we geen echte intake.
   const fromOtherGroup = channel === 'whatsapp' && group && !isWhatsappOrderGroup(group);
-  const hasPostcode = /\b\d{4}\s?[a-z]{2}\b/i.test(body || '');
   const hasIntakeData = !!(suggestion.customerPhone && (suggestion.customerAddress || hasPostcode));
   const otherGroupButOrder = fromOtherGroup && hasIntakeData;
   const blockAsChatter = fromOtherGroup && !hasIntakeData;
