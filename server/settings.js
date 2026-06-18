@@ -113,7 +113,8 @@ export function ensureSettings() {
 
 // Automatische follow-up op offertes die X dagen blijven liggen (uit standaard).
 export const DEFAULT_FOLLOWUP = {
-  enabled: false,
+  emailEnabled: false,
+  whatsappEnabled: false,
   days: 3,
   emailSubject: 'Even checken — uw offerte van Keyservice',
   emailBody: `Beste klant,
@@ -126,8 +127,10 @@ Laat het ons gerust weten!`,
 
 export function getFollowUp() {
   const f = db().settings.followUp || {};
+  const legacy = f.enabled; // oude enkele aan/uit-schakelaar -> beide kanalen
   return {
-    enabled: !!f.enabled,
+    emailEnabled: f.emailEnabled !== undefined ? !!f.emailEnabled : !!legacy,
+    whatsappEnabled: f.whatsappEnabled !== undefined ? !!f.whatsappEnabled : !!legacy,
     days: Math.max(1, Math.min(30, Number(f.days) || DEFAULT_FOLLOWUP.days)),
     emailSubject: f.emailSubject || DEFAULT_FOLLOWUP.emailSubject,
     emailBody: f.emailBody || DEFAULT_FOLLOWUP.emailBody,

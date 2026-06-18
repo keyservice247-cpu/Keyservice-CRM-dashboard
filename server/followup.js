@@ -14,7 +14,7 @@ export function startFollowUps() {
 
 export async function runFollowUps() {
   const cfg = getFollowUp();
-  if (!cfg.enabled) return { sent: 0 };
+  if (!cfg.emailEnabled && !cfg.whatsappEnabled) return { sent: 0 };
   const cutoff = Date.now() - cfg.days * 86400000;
   let count = 0;
   for (const o of db().orders) {
@@ -25,7 +25,7 @@ export async function runFollowUps() {
     const c = db().customers.find((x) => x.id === o.customerId) || {};
     let sent = false;
 
-    if (c.email && smtpConfigured()) {
+    if (cfg.emailEnabled && c.email && smtpConfigured()) {
       try {
         const sig = getEmailSignature();
         const text = sig ? `${cfg.emailBody}\n\n${sig}` : cfg.emailBody;
@@ -36,11 +36,8 @@ export async function runFollowUps() {
       } catch (e) { console.error('Follow-up e-mail mislukt:', e.message); }
     }
 
-    if (c.phone) {
-      // Via de outbox: de NIEUWE bridge stuurt dit naar het WhatsApp-nummer van de klant.
-      // 'group' is een nep-naam die met geen enkele echte groep matcht: een OUDE bridge
-      // (zonder klant-DM-ondersteuning) weigert het dan veilig i.p.v. het naar de
-      // verkeerde groep te sturen.
+    if (cfg.whatsappEnabled && c.phone) {
+      // Nep-groep zodat een oude bridge dit veilig weigert i.p.v. naar een groep stuurt.
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: cfg.whatsappBody, orderId: o.id, status: 'queued', createdAt: now(), by: 'follow-up' });
       o.thread = o.thread || [];
       o.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (automatische follow-up)', body: cfg.whatsappBody, at: now() });

@@ -1344,7 +1344,8 @@ async function loadSettings() {
     </div>
     <div class="info-card" style="margin-bottom:18px"> <h3>Automatische follow-up op offertes</h3>
       <p class="muted small">Staat een offerte langer dan het ingestelde aantal dagen open zonder reactie van de klant? Dan stuurt het systeem automatisch een vriendelijke herinnering via e-mail én WhatsApp (1x per kaart). WhatsApp-follow-up loopt via de bridge naar het klant-nummer.</p>
-      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-enabled" style="width:auto" ${s.followUp?.enabled ? 'checked' : ''}> Automatische follow-up aanzetten</label>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-email" style="width:auto" ${s.followUp?.emailEnabled ? 'checked' : ''}> Follow-up via <strong>e-mail</strong> aanzetten</label>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-whatsapp" style="width:auto" ${s.followUp?.whatsappEnabled ? 'checked' : ''}> Follow-up via <strong>WhatsApp</strong> aanzetten</label>
       <label>Na hoeveel dagen zonder reactie? <input id="fu-days" type="number" min="1" max="30" value="${esc(String(s.followUp?.days || 3))}" style="max-width:120px"></label>
       <label>E-mail onderwerp <input id="fu-emailSubject" value="${esc(s.followUp?.emailSubject || '')}"></label>
       <label>E-mail bericht <textarea id="fu-emailBody" rows="5">${esc(s.followUp?.emailBody || '')}</textarea></label>
@@ -1383,7 +1384,7 @@ async function loadSettings() {
     catch (err) { toast(err.message, true); }
   };
   $('#saveFollowUp').onclick = async () => {
-    const followUp = { enabled: $('#fu-enabled').checked, days: Number($('#fu-days').value) || 3, emailSubject: $('#fu-emailSubject').value, emailBody: $('#fu-emailBody').value, whatsappBody: $('#fu-whatsappBody').value };
+    const followUp = { emailEnabled: $('#fu-email').checked, whatsappEnabled: $('#fu-whatsapp').checked, days: Number($('#fu-days').value) || 3, emailSubject: $('#fu-emailSubject').value, emailBody: $('#fu-emailBody').value, whatsappBody: $('#fu-whatsappBody').value };
     try { await api('/api/settings', 'PATCH', { followUp }); toast('Follow-up opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };

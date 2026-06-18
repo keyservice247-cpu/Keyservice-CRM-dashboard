@@ -1068,7 +1068,8 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
   if ('followUp' in b) {
     const f = b.followUp || {};
     db().settings.followUp = {
-      enabled: !!f.enabled,
+      emailEnabled: !!f.emailEnabled,
+      whatsappEnabled: !!f.whatsappEnabled,
       days: Math.max(1, Math.min(30, Number(f.days) || 3)),
       emailSubject: String(f.emailSubject || '').slice(0, 200),
       emailBody: String(f.emailBody || '').slice(0, 2000),
