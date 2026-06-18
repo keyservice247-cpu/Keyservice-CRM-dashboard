@@ -314,6 +314,14 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   const normPhone = (v) => String(v || '').replace(/[^\d]/g, '');
   if (suggestion.customerEmail && JUNK_EMAIL_RE.test(suggestion.customerEmail)) suggestion.customerEmail = '';
   if (suggestion.customerPhone && COMPANY_PHONES.includes(normPhone(suggestion.customerPhone))) suggestion.customerPhone = '';
+  // Website-formulieren komen van ons EIGEN adres (info@...); de echte klant staat in de
+  // body bij "Email: ...". Als er nog geen geldig klant-adres is, haal het eerste
+  // niet-bedrijfsadres uit de body. Zo gaat ook de auto-bevestiging naar de juiste klant.
+  if (!suggestion.customerEmail) {
+    const found = String(body || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+    const real = found.find((e) => !JUNK_EMAIL_RE.test(e));
+    if (real) suggestion.customerEmail = real;
+  }
   // Markeer overduidelijke marketing/niet-opdracht (mag nooit aan een kaart plakken).
   const MARKETING_RE = /(bing|microsoft advertising|places for business|google ads|adwords|nieuwsbrief|newsletter|unsubscribe|afmelden|advertenti|\bseo\b|nieuwe manieren om je bedrijf)/i;
   const looksMarketing = suggestion.aiNotOrder === true || MARKETING_RE.test(`${subject || ''} ${body || ''}`);
