@@ -319,7 +319,7 @@ async function loadOverview() {
   const first = (state.me.name || '').trim().split(' ')[0] || '';
   $('#overviewHi').textContent = first ? `Hoi ${first}` : 'Overzicht';
   $('#overviewDate').textContent = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  const card = (num, label, view, cls = '') => `<button class="kpi-card ${cls}" data-go="${view}"><span class="kpi-num">${num}</span><span class="kpi-label">${esc(label)}</span></button>`;
+  const card = (num, label, view, cls = '', col = '') => `<button class="kpi-card ${cls}" data-go="${view}"${col ? ` data-col="${esc(col)}"` : ''}><span class="kpi-num">${num}</span><span class="kpi-label">${esc(label)}</span></button>`;
   const wa = d.whatsapp || {};
   const list = (arr, empty) => arr.length
     ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
@@ -329,9 +329,9 @@ async function loadOverview() {
       ${card(k.teControleren, 'Te controleren', 'inbox', k.teControleren ? 'kpi-attn' : '')}
       ${card(k.klantReacties, 'Klant reageerde', 'board', k.klantReacties ? 'kpi-attn' : '')}
       ${card(k.afsprakenVandaag, 'Afspraken vandaag', 'agenda')}
-      ${card(k.nieuwVandaag, 'Nieuw vandaag', 'board')}
-      ${card(k.openOffertes, 'Open offertes', 'board')}
-      ${card(k.afgerondDezeWeek, 'Afgerond deze week', 'board')}
+      ${card(k.nieuwVandaag, 'Nieuw vandaag', 'board', '', 'nieuw')}
+      ${card(k.openOffertes, 'Open offertes', 'board', '', 'offerte_verzonden')}
+      ${card(k.afgerondDezeWeek, 'Afgerond deze week', 'board', '', 'afgerond')}
       ${card(k.actief, 'Actieve opdrachten', 'board')}
     </div>
     <div class="ov-cols">
@@ -340,13 +340,17 @@ async function loadOverview() {
       <div class="info-card"><h3>Offerte blijft liggen (3+ dagen)</h3>${list(d.staleQuotes, 'Niets blijft liggen.')}</div>
     </div>
     <div class="ov-cols">
-      <div class="info-card"><h3>Verdeling over kolommen</h3><div class="ov-bars">${d.byStatus.map((s) => `<div class="ov-bar" data-go="board"><span class="column-dot" style="background:${esc(statusColor(s.key))}"></span><span class="ov-bar-label">${esc(s.label)}</span><span class="ov-bar-count">${s.count}</span></div>`).join('')}</div></div>
+      <div class="info-card"><h3>Verdeling over kolommen</h3><div class="ov-bars">${d.byStatus.map((s) => `<div class="ov-bar" data-go="board" data-col="${esc(s.key)}"><span class="column-dot" style="background:${esc(statusColor(s.key))}"></span><span class="ov-bar-label">${esc(s.label)}</span><span class="ov-bar-count">${s.count}</span></div>`).join('')}</div></div>
       <div class="info-card"><h3>WhatsApp & recente activiteit</h3>
         <div class="ov-wa ${wa.online ? 'on' : 'off'}">${wa.online ? 'WhatsApp-bridge: actief' : (wa.configured ? 'WhatsApp-bridge: GESTOPT' : 'WhatsApp: niet gekoppeld')}</div>
         <ul class="ov-activity">${(d.activity || []).map((a) => `<li><span class="muted small">${fmtDate(a.at)}</span> ${esc(a.actor)} — ${esc(a.action)}${a.detail ? `: ${esc(a.detail)}` : ''}</li>`).join('') || '<li class="muted small">Nog geen activiteit.</li>'}</ul>
       </div>
     </div>`;
-  $$('#overviewPanel [data-go]').forEach((el) => el.onclick = () => goView(el.dataset.go));
+  $$('#overviewPanel [data-go]').forEach((el) => el.onclick = () => {
+    const col = el.dataset.col;
+    if (col) { state.boardTab = col; state._focusCol = col; } // open meteen de juiste kolom
+    goView(el.dataset.go);
+  });
   $$('#overviewPanel [data-open]').forEach((el) => el.onclick = async () => { if (!state.orders.length) state.orders = await api('/api/orders'); markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
 }
 
@@ -527,6 +531,12 @@ function renderBoard() {
   } else if (tz) { tz.hidden = true; }
 
   setupBoardTabs();
+  // Kwam je via een KPI/kolom-klik? Spring meteen naar die kolom (mobiel = tab, pc = scroll).
+  if (state._focusCol) {
+    const colEl = $(`#board .column[data-status="${state._focusCol}"]`);
+    if (colEl) { colEl.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); flash(colEl); }
+    state._focusCol = null;
+  }
 }
 
 // Mobiel: kolom-tabs bovenaan het bord (kies één kolom i.p.v. horizontaal scrollen).
