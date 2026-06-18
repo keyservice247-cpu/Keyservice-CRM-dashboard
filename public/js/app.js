@@ -983,7 +983,7 @@ async function loadCustomers() {
 }
 function renderCustomers() {
   const q = ($('#customerSearch').value || '').toLowerCase();
-  const list = (state._customers || []).filter((c) => !q || `${c.name} ${c.phone} ${c.email}`.toLowerCase().includes(q));
+  const list = (state._customers || []).filter((c) => !q || `${c.name} ${c.phone} ${c.email} ${c.address || ''}`.toLowerCase().includes(q));
   const canWrite = state.me.role !== 'monteur';
   $('#customerList').innerHTML = `
     <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>E-mail</th><th>Herkomst</th><th>Opdrachten</th>${canWrite ? '<th></th>' : ''}
