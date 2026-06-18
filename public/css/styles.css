@@ -518,7 +518,7 @@ tr:last-child td { border-bottom: none; }
   .nav-sep { display: none; }
   .sidebar-foot { border-top: none; margin: 0; padding: 0; flex-direction: row; align-items: center; gap: 8px; }
   .sidebar-foot .pill { display: none; }
-  .content { padding: 16px 14px; }
+  .content { padding: 16px 14px 100px; } /* extra ruimte onderaan zodat knoppen niet achter de onderbalk vallen */
   .view-head { flex-direction: column; align-items: stretch; }
   .view-actions input[type=search] { min-width: 0; width: 100%; }
 
