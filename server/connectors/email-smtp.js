@@ -35,6 +35,19 @@ export async function sendMail({ to, subject, text }) {
   if (!tx) throw new Error('SMTP niet geconfigureerd op de server');
   if (!to) throw new Error('Geen ontvanger (e-mailadres) opgegeven');
   const from = process.env.SMTP_FROM || process.env.SMTP_USER;
-  const info = await tx.sendMail({ from, to, subject: subject || 'Keyservice', text: text || '' });
-  return { messageId: info.messageId };
+  try {
+    const info = await tx.sendMail({ from, to, subject: subject || 'Keyservice', text: text || '' });
+    return { messageId: info.messageId };
+  } catch (err) {
+    // Maak veelvoorkomende SMTP-fouten begrijpelijk voor het team.
+    const code = err && (err.responseCode || err.code);
+    const msg = String((err && err.message) || '');
+    if (code === 535 || /auth|login|credential|password/i.test(msg)) {
+      throw new Error('E-mailwachtwoord klopt niet meer. Werk SMTP_PASSWORD (en IMAP_PASSWORD) bij op Render met je nieuwe mailboxwachtwoord.');
+    }
+    if (code === 'ETIMEDOUT' || code === 'ECONNECTION' || /timed?out|connect/i.test(msg)) {
+      throw new Error('Geen verbinding met de e-mailserver. Probeer het zo nog eens; blijft het fout, controleer SMTP_HOST/SMTP_PORT op Render.');
+    }
+    throw err;
+  }
 }
