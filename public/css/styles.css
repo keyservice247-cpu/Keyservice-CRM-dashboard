@@ -462,6 +462,9 @@ body.modal-open { overflow: hidden; }
 /* AI-statusscan voorstellen */
 .ss-item { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 8px; }
 .ss-bulkbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0 12px; }
+.ss-drs-head { margin: 18px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.ss-item.ss-drs { border-left-color: #25d366; }
+.ss-drs-text { margin-top: 8px; padding: 8px 10px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--radius-sm); font-size: 13px; white-space: pre-wrap; }
 
 /* Agenda */
 .agenda-wrap { display: flex; flex-direction: column; gap: 18px; }

@@ -1092,7 +1092,7 @@ async function loadAssistant() {
     </div>
     <div class="info-card" style="margin-top:18px">
       <h3>${icon('activity', 15)} AI-statusscan — sorteer alles in één keer</h3>
-      <p class="muted small">De AI scant al je lopende kaarten én de groeps-/e-mailberichten en zoekt uit welke opdrachten volgens de rapportages al <strong>afgerond</strong>, <strong>geannuleerd</strong> of <strong>offerte</strong> zijn. Je krijgt voorstellen die je per stuk of in één keer kunt toepassen.</p>
+      <p class="muted small">De AI scant al je lopende kaarten én de groeps-/e-mailberichten. Hij snapt de werkwijze: opdracht binnen → monteur stuurt 's avonds een rapport in de monteursgroep → kantoor koppelt terug in de Raf Breda-groep. Je krijgt <strong>(1)</strong> statusvoorstellen (afgerond / geannuleerd / offerte / afspraak) en <strong>(2)</strong> opdrachten die nog <strong>teruggekoppeld</strong> moeten worden in de Raf Breda-groep, met kant-en-klare tekst om te plakken.</p>
       <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
         <label style="margin:0">Periode berichten <select id="ss-days"><option value="14">laatste 14 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label>
         <button class="btn btn-primary" id="ss-run">Statusscan starten</button>
@@ -1106,30 +1106,53 @@ async function loadAssistant() {
     try {
       const out = await api('/api/assistant/status-scan', 'POST', { days: Number($('#ss-days').value) });
       const sugg = out.suggestions || [];
+      const todo = out.needsDrsUpdate || [];
+      let html = '';
       if (!sugg.length) {
-        $('#ss-result').innerHTML = `<div class="muted small">${esc(out.note || 'Geen statuswijzigingen voorgesteld — alles lijkt al goed te staan.')}</div>`;
+        html += `<div class="muted small">${esc(out.note || 'Geen statuswijzigingen voorgesteld — alles lijkt al goed te staan.')}</div>`;
       } else {
-        $('#ss-result').innerHTML = `<div class="ss-bulkbar"><span class="muted small">${sugg.length} voorstel(len) gevonden</span><button class="btn btn-sm btn-success" id="ss-apply-all">Alles toepassen</button></div>` + sugg.map((s, i) => `
+        html += `<div class="ss-bulkbar"><span class="muted small">${sugg.length} statusvoorstel(len) gevonden</span><button class="btn btn-sm btn-success" id="ss-apply-all">Alles toepassen</button></div>` + sugg.map((s, i) => `
           <div class="ss-item" data-i="${i}">
             <div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong></div>
             <div class="muted small">${esc(s.reason)}</div>
             ${s.evidence ? `<div class="muted small" style="font-style:italic">"${esc(s.evidence.slice(0, 160))}"</div>` : ''}
             <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}">Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
           </div>`).join('');
+      }
+      // Openstaande terugkoppelingen naar de Raf Breda-groep.
+      if (todo.length) {
+        html += `<div class="ss-drs-head"><strong>${icon('whatsapp', 14)} Nog terugkoppelen in de Raf Breda-groep (${todo.length})</strong><div class="muted small">Deze opdrachten hebben een bekende uitkomst, maar lijken nog niet teruggekoppeld in de DRS-groep. Kopieer de tekst en plak die in WhatsApp.</div></div>` + todo.map((t) => `
+          <div class="ss-item ss-drs" data-id="${esc(t.orderId)}">
+            <div><strong>${esc(t.title)}</strong>${t.address ? ` <span class="muted small">· ${esc(t.address)}</span>` : ''} <span class="muted small">(${esc(t.statusLabel)})</span></div>
+            <div class="muted small">${esc(t.reason)}</div>
+            ${t.suggestedText ? `<div class="ss-drs-text">${esc(t.suggestedText)}</div>` : ''}
+            <div style="margin-top:6px;display:flex;gap:6px">${t.suggestedText ? `<button class="btn btn-sm btn-primary ss-copy" data-text="${esc(t.suggestedText)}">Kopieer tekst</button>` : ''}<button class="btn btn-sm ss-ignore">Klaar / negeren</button></div>
+          </div>`).join('');
+      }
+      if (!sugg.length && !todo.length) html = `<div class="muted small">${esc(out.note || 'Niets te doen — alle kaarten staan goed en alles is teruggekoppeld in Raf Breda.')}</div>`;
+      $('#ss-result').innerHTML = html;
+      if (sugg.length) {
         $$('.ss-apply').forEach((b) => b.onclick = async () => {
           try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); toast('Status bijgewerkt'); b.closest('.ss-item').remove(); loadBoard(); }
           catch (err) { toast(err.message, true); }
         });
-        $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
         $('#ss-apply-all').onclick = async () => {
           const items = $$('.ss-apply');
           if (!items.length) return;
           if (!confirm(`${items.length} statuswijziging(en) in één keer toepassen?`)) return;
           let ok = 0;
           for (const b of items) { try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); ok++; } catch { /* skip */ } }
-          toast(`${ok} opdracht(en) bijgewerkt`); $('#ss-result').innerHTML = '<div class="muted small">Klaar — alles toegepast.</div>'; loadBoard();
+          toast(`${ok} opdracht(en) bijgewerkt`);
+          items.forEach((b) => b.closest('.ss-item')?.remove());
+          $('.ss-bulkbar')?.remove();
+          loadBoard();
         };
       }
+      $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
+      $$('.ss-copy').forEach((b) => b.onclick = async () => {
+        try { await navigator.clipboard.writeText(b.dataset.text); toast('Tekst gekopieerd — plak in de Raf Breda-groep'); b.textContent = 'Gekopieerd ✓'; }
+        catch { toast('Kopiëren niet gelukt', true); }
+      });
     } catch (err) { $('#ss-result').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
     btn.disabled = false; btn.textContent = 'Statusscan starten';
   };

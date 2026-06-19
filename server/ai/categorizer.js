@@ -9,6 +9,7 @@
 // De uitvoer is altijd hetzelfde formaat, zodat de rest van de app er niet om geeft
 // welke modus actief is.
 import { recordAIUsage } from '../usage.js';
+import { isWhatsappOrderGroup } from '../settings.js';
 
 // De vaste "denkcategorieën" die de AI gebruikt. De échte kolommen in het
 // dashboard zijn instelbaar (zie server/settings.js); na categorisatie wordt
@@ -542,43 +543,84 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
   if (!orders.length || !messages.length) return { suggestions: [], engine: 'n.v.t.' };
 
   const orderList = orders.slice(0, 250).map((o) =>
-    `${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | nu: ${o.status}`
+    `${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | herkomst: ${o.isDrs ? 'DRS/Raf Breda-groep' : 'overig'} | nu: ${o.status}`
   ).join('\n');
+  // Label elk bericht naar bron-type, zodat de Ai het verschil snapt tussen een
+  // tussentijds monteursrapport en een definitieve terugkoppeling in de DRS-groep.
   const msgList = messages.slice(0, 600).map((m) => {
     const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-    return `${when} (${m.group ? 'groep ' + m.group : m.channel}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 300)}`;
+    let src;
+    if (m.group) src = isWhatsappOrderGroup(m.group) ? `DRS-groep "${m.group}"` : `monteursgroep "${m.group}"`;
+    else src = m.channel === 'email' ? 'e-mail' : (m.channel || 'overig');
+    return `${when} [${src}] ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 300)}`;
   }).join('\n');
   const statusKeys = statuses.map((s) => `${s.key} (${s.label})`).join(', ');
 
   const system = `Je bent een assistent voor Keyservice (sleutel-/slotenmaker).
 ${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
-Je krijgt (1) een lijst lopende opdrachten (met klant, telefoon, ADRES/postcode en huidige
-status) en (2) recente WhatsApp/e-mailberichten (vooral monteur-rapportages, bv. "Afgerond:
-4561KZ Hulst"). Koppel rapporten aan de juiste opdracht — MATCH vooral op POSTCODE/ADRES en
-klantnaam — en stel een statuswijziging voor. Geldige statussen: ${statusKeys}.
-Stel ALLEEN iets voor bij duidelijk bewijs (bv. "klus klaar/afgerond", "offerte verstuurd",
-"klant geannuleerd/wil niet", "afspraak gepland") en bij een betrouwbare match (zelfde
+ZO WERKT KEYSERVICE (belangrijk om te snappen):
+1. Een opdracht komt binnen (vaak via de DRS/"Raf Breda" WhatsApp-groep, soms via e-mail of
+   telefoon) en wordt een kaart op het bord.
+2. De monteur of een collega stuurt LATER op de dag — vaak 's avonds na de drukte — een
+   RAPPORT in de MONTEURSGROEP: wat er met de opdracht is gebeurd (afgerond, geannuleerd,
+   afspraak gemaakt, offerte gegeven, prijs). Dit zijn tussentijdse rapporten.
+3. Daarna koppelt het kantoor de DEFINITIEVE uitkomst terug in de DRS/"Raf Breda"-groep met
+   een tekstje per opdracht (geannuleerd / afgerond / afspraak / offerte). ÉLKE opdracht uit
+   de Raf Breda-groep MOET zo'n terugkoppeling krijgen.
+
+Je krijgt (1) een lijst lopende opdrachten (met klant, telefoon, ADRES/postcode, herkomst en
+huidige status) en (2) recente berichten, elk gelabeld met de bron ([DRS-groep "..."],
+[monteursgroep "..."] of [e-mail]).
+
+JE HEBT TWEE TAKEN:
+
+TAAK A — STATUSWIJZIGINGEN ("statusChanges"):
+Koppel rapporten (uit monteursgroep, DRS-groep of e-mail) aan de juiste lopende opdracht —
+MATCH vooral op POSTCODE/ADRES en klantnaam — en stel de nieuwe status voor.
+Geldige statussen: ${statusKeys}.
+Stel ALLEEN iets voor bij duidelijk bewijs ("klus klaar/afgerond", "offerte verstuurd",
+"klant geannuleerd/wil niet", "afspraak gepland op ...") én een betrouwbare match (zelfde
 postcode/adres of klant). Verzin niets, gok niet bij twijfel.
-Antwoord UITSLUITEND met JSON: een array van objecten met velden:
-{"orderId": "...", "suggestedStatus": "<geldige statuskey>", "reason": "korte uitleg", "evidence": "het bericht waarop je je baseert"}.
-Geen tekst eromheen, alleen de JSON-array (leeg = []).`;
+
+TAAK B — OPENSTAANDE TERUGKOPPELING IN RAF BREDA ("needsDrsUpdate"):
+Kijk naar opdrachten met herkomst "DRS/Raf Breda-groep". Voor zulke opdrachten MOET de
+uitkomst teruggekoppeld worden in de Raf Breda-groep. Meld een opdracht als openstaande
+terugkoppeling wanneer:
+  - er een UITKOMST bekend is (bv. uit een monteursrapport of de huidige status laat zien dat
+    er iets gebeurd is: afgerond/geannuleerd/afspraak/offerte), MAAR
+  - er GEEN bericht in de DRS-groep "..." staat dat die uitkomst voor deze opdracht meldt.
+Geef per zo'n opdracht een korte, kant-en-klare tekst die het kantoor in de Raf Breda-groep
+kan plakken (bv. "Afgesproken di. langs voor offerte — Etten-Leur 4871LA" of
+"Afgerond — Hulst 4561KZ"). Geen losse terugkoppeling melden als er al een DRS-bericht over
+bestaat, of als er nog geen enkele uitkomst bekend is.
+
+Antwoord UITSLUITEND met één JSON-object, geen tekst eromheen:
+{"statusChanges":[{"orderId":"...","suggestedStatus":"<geldige statuskey>","reason":"korte uitleg","evidence":"het bericht waarop je je baseert"}],
+ "needsDrsUpdate":[{"orderId":"...","reason":"waarom dit nog terug moet","suggestedText":"tekst om in Raf Breda te plakken"}]}
+Beide lijsten mogen leeg zijn ([]).`;
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 3000, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
+    body: JSON.stringify({ model, max_tokens: 3500, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
   recordAIUsage(json.usage);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
-  let suggestions = [];
+  let statusChanges = [];
+  let needsDrsUpdate = [];
   try {
-    const m = text.match(/\[[\s\S]*\]/);
-    suggestions = m ? JSON.parse(m[0]) : [];
-  } catch { suggestions = []; }
-  if (!Array.isArray(suggestions)) suggestions = [];
-  return { suggestions, engine: `ai:${model}` };
+    const m = text.match(/\{[\s\S]*\}/);
+    const parsed = m ? JSON.parse(m[0]) : {};
+    if (Array.isArray(parsed.statusChanges)) statusChanges = parsed.statusChanges;
+    if (Array.isArray(parsed.needsDrsUpdate)) needsDrsUpdate = parsed.needsDrsUpdate;
+    // Terugvalcompat: als het model toch een kale array teruggaf.
+    if (!m) { const a = text.match(/\[[\s\S]*\]/); if (a) statusChanges = JSON.parse(a[0]); }
+  } catch { /* laat lijsten leeg */ }
+  if (!Array.isArray(statusChanges)) statusChanges = [];
+  if (!Array.isArray(needsDrsUpdate)) needsDrsUpdate = [];
+  return { statusChanges, needsDrsUpdate, engine: `ai:${model}` };
 }
 
 // Genereert een bondige "leerregel"-tekst op basis van het verkeer: wat IS en wat

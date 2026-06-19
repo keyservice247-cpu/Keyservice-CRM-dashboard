@@ -1364,7 +1364,10 @@ app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async 
     .filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
     .map((o) => {
       const c = db().customers.find((x) => x.id === o.customerId) || {};
-      return { id: o.id, title: o.title, status: o.status, customer: c.name, phone: c.phone || '', address: c.address || '' };
+      const src = (o.source || '').toLowerCase();
+      const isDrs = (o.originGroup && isWhatsappOrderGroup(o.originGroup))
+        || (!o.originGroup && /whatsapp|groep|app/.test(src));
+      return { id: o.id, title: o.title, status: o.status, customer: c.name, phone: c.phone || '', address: c.address || '', isDrs };
     })
     .slice(0, 250);
   const msgs = db().messages
@@ -1375,7 +1378,7 @@ app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async 
     const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile() });
     // Verrijk met huidige opdracht-info + labels, en filter op geldige status/opdracht.
     const labels = getStatusLabels();
-    const valid = (out.suggestions || []).map((s) => {
+    const valid = (out.statusChanges || []).map((s) => {
       const order = db().orders.find((o) => o.id === s.orderId);
       if (!order || !isValidStatus(s.suggestedStatus)) return null;
       if (order.status === s.suggestedStatus) return null;
@@ -1386,7 +1389,19 @@ app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async 
         reason: s.reason || '', evidence: s.evidence || '',
       };
     }).filter(Boolean);
-    res.json({ suggestions: valid, engine: out.engine, note: out.note || '' });
+    // Openstaande terugkoppelingen naar de Raf Breda-groep (alleen geldige opdrachten).
+    const drsTodo = (out.needsDrsUpdate || []).map((s) => {
+      const order = db().orders.find((o) => o.id === s.orderId);
+      if (!order) return null;
+      const c = db().customers.find((x) => x.id === order.customerId) || {};
+      return {
+        orderId: order.id, title: order.title,
+        statusLabel: labels[order.status] || order.status,
+        customer: c.name || '', address: c.address || '',
+        reason: s.reason || '', suggestedText: s.suggestedText || '',
+      };
+    }).filter(Boolean);
+    res.json({ suggestions: valid, needsDrsUpdate: drsTodo, engine: out.engine, note: out.note || '' });
   } catch (err) {
     res.status(500).json({ error: 'Mislukt: ' + err.message });
   }
