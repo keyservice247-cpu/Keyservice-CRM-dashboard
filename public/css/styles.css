@@ -416,7 +416,8 @@ tr:last-child td { border-bottom: none; }
 .stat .lbl { color: var(--muted); font-size: 13px; margin-top: 2px; }
 
 /* Modal */
-.modal-root { position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.modal-root { position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.modal { overflow-x: hidden; }
 /* Achtergrond vastzetten zodra een venster open is (voorkomt meescrollen/doorzien) */
 body.modal-open { overflow: hidden; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(31,37,48,.38); animation: fadeIn .15s ease; }
@@ -527,7 +528,7 @@ body.modal-open { overflow: hidden; }
   .view-head { flex-direction: column; align-items: stretch; }
   .view-actions input[type=search] { min-width: 0; width: 100%; }
 
-  .modal-root { padding: 0; align-items: stretch; background: #fff; }
+  .modal-root { padding: 0; align-items: stretch; background: #fff; touch-action: pan-y; } /* alleen verticaal scrollen, geen horizontaal bouncen */
   .modal { width: 100%; max-width: 100%; min-height: 100%; border-radius: 0; border: none; padding: 20px 18px calc(40px + env(safe-area-inset-bottom)); animation: none; }
   .modal-backdrop { display: none; } /* niet nodig: de modal vult het hele scherm */
   .modal .row { flex-direction: column; gap: 0; }

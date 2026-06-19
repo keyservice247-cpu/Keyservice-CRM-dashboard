@@ -195,13 +195,20 @@ async function processSent(client, simpleParser, since) {
       const msg = await client.fetchOne(uid, { source: true }, { uid: true });
       if (!msg || !msg.source) continue;
       const parsed = await simpleParser(msg.source);
+      const sentBody = (parsed.text || parsed.html || '').toString().slice(0, 8000);
+      // Al verstuurd via het dashboard (zelf-antwoord, follow-up, auto-bevestiging)? Dan
+      // staat dit bericht al in de historie -> niet nóg een keer toevoegen.
+      const norm = (t) => (t || '').replace(/\s+/g, ' ').trim().slice(0, 160).toLowerCase();
+      const newNorm = norm(sentBody);
+      const alreadyInThread = (order.thread || []).some((t) => t.outgoing && newNorm && norm(t.body) === newNorm);
+      if (alreadyInThread) continue;
       order.thread = order.thread || [];
       order.thread.push({
         id: id('thr'),
         channel: 'email',
         sender: parsed.from?.text || 'Keyservice',
         subject: parsed.subject || '',
-        body: (parsed.text || parsed.html || '').toString().slice(0, 8000),
+        body: sentBody,
         at: (parsed.date || new Date()).toISOString(),
         outgoing: true,            // rechts/blauw in de chat (uitgaand)
         externalId: threadKey,     // ontdubbeling
