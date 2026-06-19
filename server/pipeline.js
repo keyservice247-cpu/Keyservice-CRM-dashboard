@@ -408,7 +408,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
       if (!existingCustomer.address && suggestion.customerAddress) existingCustomer.address = suggestion.customerAddress;
       saveSoon();
       logActivity('systeem', 'bericht aan bestaande opdracht', `${existingCustomer.name}: ${openOrder.title}`);
-      return { message, review: null, mergedIntoOrder: openOrder.id };
+      return { message, review: null, mergedIntoOrder: openOrder.id, suggestion };
     }
   }
 
