@@ -623,7 +623,10 @@ function updateBoardBulk() {
 
 function cardHTML(o) {
   const sm = sourceMeta(o.source);
-  const meta = [`<span class="chip ${sm.cls}">${sourceIcon(o.source)} ${esc(o.source || 'Handmatig')}</span>`];
+  // Duidelijke, gekleurde status-pill vooraan zodat de status meteen opvalt.
+  const stCol = statusColor(o.status);
+  const meta = [`<span class="chip status-pill" style="color:${esc(stCol)};background:${esc(stCol)}1f;border-color:${esc(stCol)}66">${esc(statusLabel(o.status))}</span>`];
+  meta.push(`<span class="chip ${sm.cls}">${sourceIcon(o.source)} ${esc(o.source || 'Handmatig')}</span>`);
   if (o.isDrs) meta.push('<span class="chip chip-drs" title="Afkomstig uit de DRS-groep (Raf Breda)">DRS</span>');
   if (o.monteur) meta.push(`<span class="chip mont">${icon('wrench', 13)} ${esc(o.monteur.name)}</span>`);
   if (o.sentToMonteur) meta.push(`<span class="chip src-whatsapp" title="Verstuurd naar ${esc(o.sentToMonteur.monteurName)}">${icon('whatsapp', 13)} naar ${esc(o.sentToMonteur.monteurName)}</span>`);
