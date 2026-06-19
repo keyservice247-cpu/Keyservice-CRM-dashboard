@@ -1091,10 +1091,10 @@ async function loadAssistant() {
       <div id="as-answer" style="margin-top:16px"></div>
     </div>
     <div class="info-card" style="margin-top:18px">
-      <h3>${icon('activity', 15)} AI-statusscan</h3>
-      <p class="muted small">De AI leest de recente groepsberichten (monteur-rapportages) en stelt statuswijzigingen voor op lopende opdrachten. Jij keurt elke wijziging zelf goed — er gebeurt niets automatisch.</p>
+      <h3>${icon('activity', 15)} AI-statusscan — sorteer alles in één keer</h3>
+      <p class="muted small">De AI scant al je lopende kaarten én de groeps-/e-mailberichten en zoekt uit welke opdrachten volgens de rapportages al <strong>afgerond</strong>, <strong>geannuleerd</strong> of <strong>offerte</strong> zijn. Je krijgt voorstellen die je per stuk of in één keer kunt toepassen.</p>
       <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-        <label style="margin:0">Periode <select id="ss-days"><option value="7">laatste 7 dagen</option><option value="14" selected>laatste 14 dagen</option><option value="30">laatste 30 dagen</option></select></label>
+        <label style="margin:0">Periode berichten <select id="ss-days"><option value="14">laatste 14 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label>
         <button class="btn btn-primary" id="ss-run">Statusscan starten</button>
       </div>
       <div id="ss-result" style="margin-top:14px"></div>
@@ -1102,14 +1102,14 @@ async function loadAssistant() {
   $$('.as-ex').forEach((b) => b.onclick = () => { $('#as-q').value = b.textContent; });
   $('#ss-run').onclick = async () => {
     const btn = $('#ss-run'); btn.disabled = true; btn.textContent = 'Bezig met scannen…';
-    $('#ss-result').innerHTML = '<div class="muted small">De AI leest de groepsberichten… ~10-30 sec.</div>';
+    $('#ss-result').innerHTML = '<div class="muted small">De AI leest alle kaarten en groepsberichten… ~10-40 sec.</div>';
     try {
       const out = await api('/api/assistant/status-scan', 'POST', { days: Number($('#ss-days').value) });
       const sugg = out.suggestions || [];
       if (!sugg.length) {
-        $('#ss-result').innerHTML = `<div class="muted small">${esc(out.note || 'Geen statuswijzigingen voorgesteld.')}</div>`;
+        $('#ss-result').innerHTML = `<div class="muted small">${esc(out.note || 'Geen statuswijzigingen voorgesteld — alles lijkt al goed te staan.')}</div>`;
       } else {
-        $('#ss-result').innerHTML = sugg.map((s, i) => `
+        $('#ss-result').innerHTML = `<div class="ss-bulkbar"><span class="muted small">${sugg.length} voorstel(len) gevonden</span><button class="btn btn-sm btn-success" id="ss-apply-all">Alles toepassen</button></div>` + sugg.map((s, i) => `
           <div class="ss-item" data-i="${i}">
             <div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong></div>
             <div class="muted small">${esc(s.reason)}</div>
@@ -1121,6 +1121,14 @@ async function loadAssistant() {
           catch (err) { toast(err.message, true); }
         });
         $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
+        $('#ss-apply-all').onclick = async () => {
+          const items = $$('.ss-apply');
+          if (!items.length) return;
+          if (!confirm(`${items.length} statuswijziging(en) in één keer toepassen?`)) return;
+          let ok = 0;
+          for (const b of items) { try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); ok++; } catch { /* skip */ } }
+          toast(`${ok} opdracht(en) bijgewerkt`); $('#ss-result').innerHTML = '<div class="muted small">Klaar — alles toegepast.</div>'; loadBoard();
+        };
       }
     } catch (err) { $('#ss-result').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
     btn.disabled = false; btn.textContent = 'Statusscan starten';

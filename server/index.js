@@ -1358,15 +1358,19 @@ app.post('/api/assistant/daily-check', requireRole('admin', 'assistent'), async 
 // AI-statusscan: leest recente groepsberichten en stelt statuswijzigingen voor lopende
 // opdrachten voor. Past zelf NIETS aan — geeft alleen voorstellen terug.
 app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async (req, res) => {
-  const days = Number(req.body?.days) || 14;
+  const days = Number(req.body?.days) || 30;
   const since = Date.now() - days * 86400000;
   const active = db().orders
     .filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
-    .map((o) => ({ id: o.id, title: o.title, status: o.status, customer: (db().customers.find((c) => c.id === o.customerId) || {}).name }));
+    .map((o) => {
+      const c = db().customers.find((x) => x.id === o.customerId) || {};
+      return { id: o.id, title: o.title, status: o.status, customer: c.name, phone: c.phone || '', address: c.address || '' };
+    })
+    .slice(0, 250);
   const msgs = db().messages
     .filter((m) => new Date(m.receivedAt).getTime() >= since)
     .sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt))
-    .slice(0, 300);
+    .slice(0, 600);
   try {
     const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile() });
     // Verrijk met huidige opdracht-info + labels, en filter op geldige status/opdracht.

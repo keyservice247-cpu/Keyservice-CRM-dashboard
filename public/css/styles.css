@@ -461,6 +461,7 @@ body.modal-open { overflow: hidden; }
 .mont-line:hover { color: var(--accent-ink); }
 /* AI-statusscan voorstellen */
 .ss-item { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 8px; }
+.ss-bulkbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0 12px; }
 
 /* Agenda */
 .agenda-wrap { display: flex; flex-direction: column; gap: 18px; }

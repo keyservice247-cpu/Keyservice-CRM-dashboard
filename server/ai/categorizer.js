@@ -541,22 +541,24 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
   if (!apiKey) return { suggestions: [], engine: 'demo', note: 'Zet de AI aan (ANTHROPIC_API_KEY) voor de statusscan.' };
   if (!orders.length || !messages.length) return { suggestions: [], engine: 'n.v.t.' };
 
-  const orderList = orders.slice(0, 80).map((o) =>
-    `${o.id} | "${o.title}" | klant: ${o.customer || '?'} | nu: ${o.status}`
+  const orderList = orders.slice(0, 250).map((o) =>
+    `${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | nu: ${o.status}`
   ).join('\n');
-  const msgList = messages.slice(0, 300).map((m) => {
+  const msgList = messages.slice(0, 600).map((m) => {
     const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-    return `${when} (${m.group ? 'groep ' + m.group : m.channel}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 250)}`;
+    return `${when} (${m.group ? 'groep ' + m.group : m.channel}) ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 300)}`;
   }).join('\n');
   const statusKeys = statuses.map((s) => `${s.key} (${s.label})`).join(', ');
 
   const system = `Je bent een assistent voor Keyservice (sleutel-/slotenmaker).
 ${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
-Je krijgt (1) een lijst lopende opdrachten met hun huidige status en (2) recente WhatsApp/
-e-mailberichten (vooral monteur-rapportages). Zoek berichten die duidelijk melden wat er met
-een opdracht is gebeurd en stel een statuswijziging voor. Geldige statussen: ${statusKeys}.
+Je krijgt (1) een lijst lopende opdrachten (met klant, telefoon, ADRES/postcode en huidige
+status) en (2) recente WhatsApp/e-mailberichten (vooral monteur-rapportages, bv. "Afgerond:
+4561KZ Hulst"). Koppel rapporten aan de juiste opdracht — MATCH vooral op POSTCODE/ADRES en
+klantnaam — en stel een statuswijziging voor. Geldige statussen: ${statusKeys}.
 Stel ALLEEN iets voor bij duidelijk bewijs (bv. "klus klaar/afgerond", "offerte verstuurd",
-"klant geannuleerd", "afspraak gepland"). Verzin niets, gok niet.
+"klant geannuleerd/wil niet", "afspraak gepland") en bij een betrouwbare match (zelfde
+postcode/adres of klant). Verzin niets, gok niet bij twijfel.
 Antwoord UITSLUITEND met JSON: een array van objecten met velden:
 {"orderId": "...", "suggestedStatus": "<geldige statuskey>", "reason": "korte uitleg", "evidence": "het bericht waarop je je baseert"}.
 Geen tekst eromheen, alleen de JSON-array (leeg = []).`;
@@ -564,7 +566,7 @@ Geen tekst eromheen, alleen de JSON-array (leeg = []).`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 1500, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
+    body: JSON.stringify({ model, max_tokens: 3000, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
