@@ -1143,7 +1143,7 @@ async function loadAgenda() {
   renderAgenda();
 }
 function renderAgenda() {
-  const scope = $('#agendaScope')?.value || 'drs';
+  const scope = $('#agendaScope')?.value || 'all';
   let items = state._agenda || [];
   if (scope === 'drs') items = items.filter((a) => a.isDrs);
   const wrap = $('#agendaList');
