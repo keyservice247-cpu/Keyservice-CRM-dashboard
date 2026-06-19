@@ -28,6 +28,11 @@ import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
+import {
+  googleConfigured, isConnected as googleConnected, connectionInfo as googleInfo,
+  getAuthUrl as googleAuthUrl, exchangeCode as googleExchange, disconnect as googleDisconnect,
+  listCalendars as googleListCalendars, setDefaultCalendarId, syncOrderToGoogle, removeOrderFromGoogle,
+} from './google.js';
 import { usageSummary } from './usage.js';
 import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
@@ -256,7 +261,7 @@ app.get('/api/monteurs', requireAuth, (req, res) => {
 app.post('/api/monteurs', requireRole('admin', 'assistent'), (req, res) => {
   const { name, phone, email, waGroup } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Naam verplicht' });
-  const m = { id: id('mont'), name, phone: phone || '', email: email || '', waGroup: waGroup || '', createdAt: now() };
+  const m = { id: id('mont'), name, phone: phone || '', email: email || '', waGroup: waGroup || '', calendarId: '', createdAt: now() };
   db().monteurs.push(m);
   logActivity(req.user.name, 'monteur toegevoegd', name);
   saveSoon();
@@ -266,7 +271,7 @@ app.post('/api/monteurs', requireRole('admin', 'assistent'), (req, res) => {
 app.patch('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) => {
   const m = db().monteurs.find((x) => x.id === req.params.id);
   if (!m) return res.status(404).json({ error: 'Niet gevonden' });
-  for (const k of ['name', 'phone', 'email', 'waGroup']) if (k in (req.body || {})) m[k] = req.body[k];
+  for (const k of ['name', 'phone', 'email', 'waGroup', 'calendarId']) if (k in (req.body || {})) m[k] = req.body[k];
   saveSoon();
   res.json(m);
 });
@@ -416,6 +421,7 @@ app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
   db().orders.push(order);
   logActivity(req.user.name, 'opdracht aangemaakt', order.title);
   saveSoon();
+  if (order.appointmentAt) syncOrderToGoogle(order); // best-effort, niet awaiten
   res.json(withRelations(order));
 });
 
@@ -455,6 +461,9 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   // Auto-versturen naar monteur bij het inplannen van een afspraak (indien ingesteld).
   if ('appointmentAt' in b && b.appointmentAt) maybeAutoSendToMonteur(order, 'appointment');
   saveSoon();
+  // Google Agenda bijwerken zodra afspraak/monteur/status wijzigt (maakt, verplaatst,
+  // of verwijdert het event). Best-effort — niet awaiten.
+  if ('appointmentAt' in b || 'monteurId' in b || 'status' in b) syncOrderToGoogle(order);
   res.json(withRelations(order));
 });
 
@@ -501,6 +510,7 @@ app.delete('/api/orders/:id', requireRole('admin', 'assistent'), (req, res) => {
   const [removed] = orders.splice(i, 1);
   removed.deletedAt = now();
   removed.deletedBy = req.user.name;
+  if (removed.googleEvent) removeOrderFromGoogle(removed); // event uit Google halen
   db().trash.unshift(removed);
   if (db().trash.length > 500) {
     // oudste boven de 500 definitief opruimen (incl. bestanden)
@@ -1104,6 +1114,62 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     followUp: getFollowUp(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
+});
+
+// ---------- Google Agenda (OAuth 2-weg) ----------
+const _googleStates = new Map(); // state -> vervaltijd (CSRF-bescherming)
+function newGoogleState() {
+  const s = id('gst');
+  _googleStates.set(s, Date.now() + 10 * 60 * 1000);
+  // opruimen van verlopen states
+  for (const [k, exp] of _googleStates) if (exp < Date.now()) _googleStates.delete(k);
+  return s;
+}
+
+// Start de koppeling: stuur de admin door naar Google's toestemmingsscherm.
+app.get('/api/google/auth', requireRole('admin'), (req, res) => {
+  if (!googleConfigured()) return res.status(400).send('Google is niet geconfigureerd op de server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET).');
+  res.redirect(googleAuthUrl(req, newGoogleState()));
+});
+
+// Terugkomst vanaf Google: ruil de code in voor tokens en ga terug naar Instellingen.
+app.get('/api/google/callback', requireRole('admin'), async (req, res) => {
+  const { code, state, error } = req.query;
+  if (error) return res.redirect('/?google=geweigerd');
+  if (!code || !state || !_googleStates.has(String(state))) return res.redirect('/?google=fout');
+  _googleStates.delete(String(state));
+  try {
+    await googleExchange(String(code), req);
+    logActivity(req.user.name, 'Google Agenda verbonden', googleInfo().email || '');
+    res.redirect('/?google=verbonden');
+  } catch (e) {
+    console.error('[google] koppeling mislukt:', e.message);
+    res.redirect('/?google=fout');
+  }
+});
+
+// Status + (indien verbonden) lijst met agenda's voor de instellingen-UI.
+app.get('/api/google/status', requireAuth, async (req, res) => {
+  const info = googleInfo();
+  let calendars = [];
+  if (info.connected) {
+    try { calendars = await googleListCalendars(); }
+    catch (e) { info.error = e.message; }
+  }
+  res.json({ ...info, calendars });
+});
+
+// Standaardagenda kiezen (voor opdrachten zonder gekoppelde monteur).
+app.post('/api/google/default-calendar', requireRole('admin'), (req, res) => {
+  setDefaultCalendarId(String((req.body || {}).calendarId || 'primary'));
+  res.json({ ok: true, defaultCalendarId: googleInfo().defaultCalendarId });
+});
+
+// Koppeling verbreken.
+app.post('/api/google/disconnect', requireRole('admin'), (req, res) => {
+  googleDisconnect();
+  logActivity(req.user.name, 'Google Agenda losgekoppeld', '');
+  res.json({ ok: true });
 });
 
 // Sjablonen ophalen (alle ingelogde gebruikers mogen ze gebruiken)

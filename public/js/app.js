@@ -155,6 +155,16 @@ const statusColor = (key) => {
   bindNav();
   bindButtons();
   await refreshAll();
+  // Terugkomst van de Google Agenda-koppeling.
+  try {
+    const gp = new URLSearchParams(location.search).get('google');
+    if (gp) {
+      history.replaceState({}, '', location.pathname);
+      if (gp === 'verbonden') { toast('Google Agenda verbonden'); goView('settings'); }
+      else if (gp === 'geweigerd') toast('Google-koppeling geweigerd', true);
+      else if (gp === 'fout') toast('Google-koppeling mislukt — probeer opnieuw', true);
+    }
+  } catch { /* geen probleem */ }
   refreshWaStatus();
   setInterval(refreshWaStatus, 60000);
   startLiveUpdates();
@@ -1233,12 +1243,25 @@ function renderTrash() {
   });
 }
 
-function openMonteurModal(m) {
+async function openMonteurModal(m) {
+  // Google-agenda's ophalen (alleen tonen als de koppeling actief is).
+  let calField = '';
+  try {
+    const g = await api('/api/google/status');
+    if (g.connected) {
+      const opts = ['<option value="">— geen (gebruik standaardagenda) —</option>']
+        .concat((g.calendars || []).map((c) => `<option value="${esc(c.id)}" ${m?.calendarId === c.id ? 'selected' : ''}>${esc(c.name)}${c.primary ? ' (hoofd)' : ''}</option>`)).join('');
+      calField = `<label>Google Agenda van deze monteur <select id="m-cal">${opts}</select><span class="muted small">Afspraken van deze monteur komen in deze agenda.</span></label>`;
+    } else if (g.configured) {
+      calField = `<p class="muted small">Wil je afspraken in de Google Agenda van deze monteur? Verbind eerst Google Agenda bij <strong>Instellingen</strong>.</p>`;
+    }
+  } catch { /* google-status optioneel */ }
   modal(`
-    <h2>${m ? 'Monteur bewerken' : 'Nieuwe monteur'}</h2> <label>Naam <input id="m-name" value="${esc(m?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="m-phone" value="${esc(m?.phone || '')}"></label> <label>E-mail <input id="m-email" value="${esc(m?.email || '')}"></label> </div> <label>WhatsApp-groep (voor opdrachten) <input id="m-wagroup" value="${esc(m?.waGroup || '')}" placeholder="exacte naam van de WhatsApp-groep"></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="m-cancel">Annuleren</button><button class="btn btn-primary" id="m-save">Opslaan</button> </div></div>`);
+    <h2>${m ? 'Monteur bewerken' : 'Nieuwe monteur'}</h2> <label>Naam <input id="m-name" value="${esc(m?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="m-phone" value="${esc(m?.phone || '')}"></label> <label>E-mail <input id="m-email" value="${esc(m?.email || '')}"></label> </div> <label>WhatsApp-groep (voor opdrachten) <input id="m-wagroup" value="${esc(m?.waGroup || '')}" placeholder="exacte naam van de WhatsApp-groep"></label> ${calField} <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="m-cancel">Annuleren</button><button class="btn btn-primary" id="m-save">Opslaan</button> </div></div>`);
   $('#m-cancel').onclick = closeModal;
   $('#m-save').onclick = async () => {
     const payload = { name: $('#m-name').value, phone: $('#m-phone').value, email: $('#m-email').value, waGroup: $('#m-wagroup').value };
+    if ($('#m-cal')) payload.calendarId = $('#m-cal').value;
     if (!payload.name) return toast('Naam verplicht', true);
     try {
       if (m) await api(`/api/monteurs/${m.id}`, 'PATCH', payload);
@@ -1361,8 +1384,12 @@ async function loadSettings() {
       </div>
       <div id="backupList" class="muted small" style="margin-top:12px">Back-ups laden…</div>
     </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>Agenda koppelen aan Google Agenda</h3>
-      <p class="muted small">Abonneer Google Agenda op onderstaande link, dan verschijnen alle CRM-afspraken automatisch in je Google Agenda (Google ververst periodiek). In Google Agenda: <strong>Andere agenda's → Via URL → plak de link</strong>.</p>
+    <div class="info-card admin-only" style="margin-bottom:18px"> <h3>${icon('calendar', 15)} Google Agenda — directe 2-weg koppeling</h3>
+      <p class="muted small">Verbind één Google-account. Afspraken die je in het dashboard inplant, verschijnen <strong>direct</strong> in Google Agenda (en passen mee bij wijzigen/annuleren). Wijs per monteur een agenda toe bij <strong>Monteurs</strong>, dan komt elke afspraak in de agenda van de juiste monteur.</p>
+      <div id="googlePanel" class="muted small" style="margin-top:10px">Status laden…</div>
+    </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>Agenda via abonnementslink (alleen-lezen, alternatief)</h3>
+      <p class="muted small">Liever geen koppeling? Abonneer Google Agenda op onderstaande link, dan verschijnen alle CRM-afspraken automatisch (Google ververst periodiek, dus iets vertraagd). In Google Agenda: <strong>Andere agenda's → Via URL → plak de link</strong>.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
         <input id="calUrl" type="text" readonly value="${esc(location.origin + '/api/calendar.ics?token=' + (s.calendarToken || ''))}" style="flex:1;min-width:220px;font-size:12px">
         <button class="btn" id="copyCalUrl">Kopieer link</button>
@@ -1436,6 +1463,42 @@ async function loadSettings() {
     try { await navigator.clipboard.writeText(v); toast('Agenda-link gekopieerd'); }
     catch { $('#calUrl').select(); document.execCommand('copy'); toast('Agenda-link gekopieerd'); }
   });
+
+  // Google Agenda 2-weg: status, verbinden, standaardagenda, loskoppelen.
+  const loadGoogle = async () => {
+    const box = $('#googlePanel'); if (!box) return;
+    let g; try { g = await api('/api/google/status'); } catch { box.innerHTML = '<span class="error">Status ophalen mislukt.</span>'; return; }
+    if (!g.configured) {
+      box.innerHTML = `<div class="error">Nog niet ingesteld op de server. Voeg <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code> en <code>APP_URL</code> toe op Render. Vraag het stappenplan op.</div>`;
+      return;
+    }
+    if (!g.connected) {
+      box.innerHTML = `<div style="margin-bottom:10px">Status: <strong>niet verbonden</strong></div><a class="btn btn-primary" href="/api/google/auth">${icon('calendar', 14)} Verbind Google Agenda</a>`;
+      return;
+    }
+    const opts = (g.calendars || []).map((c) => `<option value="${esc(c.id)}" ${c.id === g.defaultCalendarId ? 'selected' : ''}>${esc(c.name)}${c.primary ? ' (hoofd)' : ''}</option>`).join('');
+    box.innerHTML = `
+      <div style="margin-bottom:8px">Status: <strong style="color:var(--ok,#10b981)">verbonden</strong>${g.email ? ` — ${esc(g.email)}` : ''}</div>
+      ${g.error ? `<div class="error small">Let op: ${esc(g.error)}</div>` : ''}
+      <label style="display:block;margin:8px 0">Standaardagenda (voor opdrachten zonder gekoppelde monteur)
+        <select id="g-defcal" style="margin-top:4px">${opts || '<option value="primary">primary</option>'}</select></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn btn-sm" id="g-savecal">Standaardagenda opslaan</button>
+        <a class="btn btn-sm" href="/api/google/auth">Opnieuw verbinden</a>
+        <button class="btn btn-sm btn-danger" id="g-disconnect">Loskoppelen</button>
+      </div>
+      <p class="muted small" style="margin-top:8px">Tip: maak in Google Agenda per monteur een aparte agenda (of deel hun agenda met dit account) en koppel die bij <strong>Monteurs → monteur bewerken</strong>.</p>`;
+    $('#g-savecal').onclick = async () => {
+      try { await api('/api/google/default-calendar', 'POST', { calendarId: $('#g-defcal').value }); toast('Standaardagenda opgeslagen'); }
+      catch (err) { toast(err.message, true); }
+    };
+    $('#g-disconnect').onclick = async () => {
+      if (!confirm('Google Agenda loskoppelen? Bestaande events blijven in Google staan, maar worden niet meer bijgewerkt.')) return;
+      try { await api('/api/google/disconnect', 'POST'); toast('Losgekoppeld'); loadGoogle(); }
+      catch (err) { toast(err.message, true); }
+    };
+  };
+  loadGoogle();
   const loadBackups = async () => {
     try {
       const r = await api('/api/backups');
