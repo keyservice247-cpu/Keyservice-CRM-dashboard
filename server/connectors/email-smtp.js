@@ -43,7 +43,7 @@ export async function sendMail({ to, subject, text }) {
     const code = err && (err.responseCode || err.code);
     const msg = String((err && err.message) || '');
     if (code === 535 || /auth|login|credential|password/i.test(msg)) {
-      throw new Error('E-mailwachtwoord klopt niet meer. Werk SMTP_PASSWORD (en IMAP_PASSWORD) bij op Render met je nieuwe mailboxwachtwoord.');
+      throw new Error('E-mailwachtwoord voor versturen klopt niet meer. Werk SMTP_PASSWORD bij op Render met het nieuwe wachtwoord van het verzendadres.');
     }
     if (code === 'ETIMEDOUT' || code === 'ECONNECTION' || /timed?out|connect/i.test(msg)) {
       throw new Error('Geen verbinding met de e-mailserver. Probeer het zo nog eens; blijft het fout, controleer SMTP_HOST/SMTP_PORT op Render.');
