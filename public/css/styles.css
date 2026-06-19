@@ -308,6 +308,7 @@ tr:last-child td { border-bottom: none; }
 .info-card { background: #fff; border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow-sm); border: 1px solid var(--line); }
 .info-card h3 { font-size: 15px; margin-bottom: 4px; font-weight: 500; }
 .chip-drs { background: #eaf1fb; color: var(--accent-ink); font-weight: 700; letter-spacing: .03em; }
+.chip-ack { background: #e7f6ee; color: #137a43; }
 /* Workflow-uitleg */
 .flow-box { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .flow-line { background: #fcfcfd; border: 1px solid var(--line-soft); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; line-height: 1.5; color: var(--ink-soft); }
@@ -415,7 +416,9 @@ tr:last-child td { border-bottom: none; }
 .stat .lbl { color: var(--muted); font-size: 13px; margin-top: 2px; }
 
 /* Modal */
-.modal-root { position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; }
+.modal-root { position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+/* Achtergrond vastzetten zodra een venster open is (voorkomt meescrollen/doorzien) */
+body.modal-open { overflow: hidden; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(31,37,48,.38); animation: fadeIn .15s ease; }
 .modal { position: relative; background: #fff; border-radius: var(--radius); width: 580px; max-width: 100%; box-shadow: var(--shadow-lg); border: 1px solid var(--line); padding: 24px 26px; animation: modalIn .18s ease; }
 .modal h2 { margin-bottom: 18px; font-size: 17px; font-weight: 500; }
@@ -522,8 +525,9 @@ tr:last-child td { border-bottom: none; }
   .view-head { flex-direction: column; align-items: stretch; }
   .view-actions input[type=search] { min-width: 0; width: 100%; }
 
-  .modal-root { padding: 0; align-items: stretch; }
-  .modal { width: 100%; max-width: 100%; min-height: 100%; border-radius: 0; border: none; padding: 20px 18px calc(20px + env(safe-area-inset-bottom)); }
+  .modal-root { padding: 0; align-items: stretch; background: #fff; }
+  .modal { width: 100%; max-width: 100%; min-height: 100%; border-radius: 0; border: none; padding: 20px 18px calc(40px + env(safe-area-inset-bottom)); animation: none; }
+  .modal-backdrop { display: none; } /* niet nodig: de modal vult het hele scherm */
   .modal .row { flex-direction: column; gap: 0; }
   .modal-actions { position: sticky; bottom: 0; background: #fff; padding-top: 14px; margin-top: 18px; border-top: 1px solid var(--line-soft); flex-direction: column-reverse; }
   .modal-actions .right { margin-left: 0; width: 100%; flex-direction: column-reverse; }

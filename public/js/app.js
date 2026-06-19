@@ -630,6 +630,7 @@ function cardHTML(o) {
   if (o.urgent) meta.push(`<span class="chip urgent">${icon('bolt', 13)} spoed</span>`);
   if (o.appointmentAt) meta.push(`<span class="chip">${icon('calendar', 13)} ${fmtDate(o.appointmentAt)}</span>`);
   if (o.attachments && o.attachments.length) meta.push(`<span class="chip">${icon('paperclip', 13)} ${o.attachments.length}</span>`);
+  if (o.autoReplied) meta.push(`<span class="chip chip-ack" title="Automatische ontvangstbevestiging verstuurd">${icon('mail', 12)} bevestigd</span>`);
   // Status-stip: beantwoord (groen) > geopend (blauw) > nieuw/ongelezen (geel).
   const st = o.lastReplyAt ? { c: 'replied', t: 'Beantwoord' }
     : o.openedAt ? { c: 'opened', t: 'Geopend' }
@@ -761,7 +762,7 @@ function openOrderModal(id, pool) {
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
     ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}</div>` : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label> ${!o ? `
-      <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> ` : `
+      <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}" ${isMonteur ? 'disabled' : ''}></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" ${isMonteur ? 'disabled' : ''}></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" ${isMonteur ? 'disabled' : ''} placeholder="e-mailadres klant"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}" ${isMonteur ? 'disabled' : ''}></label> </div>`}
     <div class="row"> <label>Status <select id="f-status">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak (datum/tijd) <input id="f-appt" type="datetime-local" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
@@ -860,6 +861,7 @@ function openOrderModal(id, pool) {
         payload.customerName = $('#f-cname').value;
         payload.customerPhone = $('#f-cphone').value;
         payload.customerEmail = $('#f-cemail').value;
+        payload.customerAddress = $('#f-caddress').value;
         if (!payload.title) return toast('Titel verplicht', true);
         if (!payload.customerName && !payload.customerPhone) return toast('Klantnaam of telefoon verplicht', true);
         await api('/api/orders', 'POST', payload);
@@ -1850,9 +1852,11 @@ function bindButtons() {
 function modal(html) {
   $('#modal').innerHTML = html;
   $('#modalRoot').hidden = false;
+  $('#modalRoot').scrollTop = 0;
+  document.body.classList.add('modal-open'); // achtergrond vastzetten
   $('.modal-backdrop').onclick = closeModal;
 }
-function closeModal() { $('#modalRoot').hidden = true; $('#modal').innerHTML = ''; }
+function closeModal() { $('#modalRoot').hidden = true; $('#modal').innerHTML = ''; document.body.classList.remove('modal-open'); }
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if ($('.lightbox')) return; // open foto-viewer handelt zijn eigen Esc af

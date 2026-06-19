@@ -391,7 +391,7 @@ app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
   let customerId = b.customerId;
   if (!customerId && (b.customerName || b.customerPhone || b.customerEmail)) {
     const { customer } = upsertCustomer({
-      name: b.customerName, phone: b.customerPhone, email: b.customerEmail, source: 'handmatig',
+      name: b.customerName, phone: b.customerPhone, email: b.customerEmail, address: b.customerAddress, source: 'handmatig',
     });
     customerId = customer.id;
   }

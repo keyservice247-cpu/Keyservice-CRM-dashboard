@@ -25,6 +25,9 @@ export async function maybeSendAutoReply(result) {
   try {
     await sendMail({ to: email, subject: cfg.subject, text });
     if (cust) cust.autoRepliedAt = now();
+    // Markeer het bericht, zodat de bevestiging straks in de kaart-historie verschijnt.
+    const msg = db().messages.find((m) => m.id === review.messageId);
+    if (msg) msg.autoReplied = { at: now(), to: email, subject: cfg.subject, body: text };
     logActivity('systeem', 'automatische ontvangstbevestiging verstuurd', email);
     saveSoon();
   } catch (e) {

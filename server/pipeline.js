@@ -203,6 +203,16 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     if (origMsg.attachments && origMsg.attachments.length) {
       order.attachments = origMsg.attachments.slice();
     }
+    // Is er bij binnenkomst een automatische ontvangstbevestiging gestuurd? Toon die in
+    // de historie en zet een vlag voor het icoontje op de kaart.
+    if (origMsg.autoReplied) {
+      order.thread.push({
+        id: id('thr'), channel: 'email', outgoing: true, autoReply: true,
+        sender: 'Keyservice (automatische bevestiging)',
+        subject: origMsg.autoReplied.subject, body: origMsg.autoReplied.body, at: origMsg.autoReplied.at,
+      });
+      order.autoReplied = { at: origMsg.autoReplied.at };
+    }
   }
   db().orders.push(order);
 
