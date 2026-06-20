@@ -1062,21 +1062,46 @@ async function loadMonteurs() {
       <h3>${icon('wrench', 15)} ${esc(m.name)}</h3>
       <div class="muted small">${esc(m.phone || '')}${m.email ? ' · ' + esc(m.email) : ''}${m.waGroup ? ' · groep: ' + esc(m.waGroup) : ' · <span style="color:var(--danger)">geen WhatsApp-groep</span>'}</div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
-        <span class="chip">${m.activeCount} actief</span>
-        <span class="chip">${m.sentCount || 0} verstuurd</span>
-        <span class="chip">${m.doneCount || 0} afgerond</span>
+        <span class="chip chip-click" data-mfilter="active" data-mid="${m.id}" data-mname="${esc(m.name)}">${m.activeCount} actief</span>
+        <span class="chip chip-click" data-mfilter="sent" data-mid="${m.id}" data-mname="${esc(m.name)}">${m.sentCount || 0} verstuurd</span>
+        <span class="chip chip-click" data-mfilter="done" data-mid="${m.id}" data-mname="${esc(m.name)}">${m.doneCount || 0} afgerond</span>
       </div>
       ${m.upcoming && m.upcoming.length ? `<div style="margin-top:12px"><div class="muted small" style="font-weight:500;margin-bottom:4px">Komende afspraken</div>${m.upcoming.slice(0, 5).map((o) => `<div class="mont-line" data-open="${o.id}"><strong>${esc(fmtAppt(o.at))}</strong> — ${esc(o.title)} <span class="muted">· ${esc(o.statusLabel)}</span></div>`).join('')}</div>` : ''}
       ${m.orders && m.orders.length ? `<details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Alle ${m.orders.length} actieve opdrachten</summary>${m.orders.map((o) => `<div class="mont-line" data-open="${o.id}">${esc(o.title)} <span class="muted">· ${esc(o.statusLabel)}${o.appointmentAt ? ' · ' + esc(fmtAppt(o.appointmentAt)) : ''}</span></div>`).join('')}</details>` : ''}
       ${canWrite ? `<div style="margin-top:12px"><button class="btn btn-sm" data-medit="${m.id}">Bewerk</button> <button class="btn btn-sm btn-danger" data-mdel="${m.id}">Verwijder</button></div>` : ''}
     </div>`).join('') || '<div class="empty">Nog geen monteurs</div>';
   $$('#monteurList .mont-line[data-open]').forEach((el) => el.onclick = async () => { if (!state.orders.length) state.orders = await api('/api/orders'); markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
+  $$('#monteurList .chip-click[data-mfilter]').forEach((el) => el.onclick = () => openMonteurOrders(el.dataset.mid, el.dataset.mname, el.dataset.mfilter));
   $$('[data-medit]').forEach((b) => b.onclick = () => openMonteurModal(state.monteurs.find((m) => m.id === b.dataset.medit)));
   $$('[data-mdel]').forEach((b) => b.onclick = async () => {
     if (!confirm('Monteur verwijderen?')) return;
     try { await api(`/api/monteurs/${b.dataset.mdel}`, 'DELETE'); toast('Verwijderd'); loadMonteurs(); }
     catch (err) { toast(err.message, true); }
   });
+}
+
+// Toont alle opdrachten van een monteur in een categorie (actief/verstuurd/afgerond),
+// elk klikbaar om de kaart te openen. Geopend via de klikbare pillen op de monteur-kaart.
+async function openMonteurOrders(mId, mName, filter) {
+  const titles = { active: 'Actieve opdrachten', sent: 'Verstuurd naar monteur', done: 'Afgeronde opdrachten' };
+  modal(`<h2>${esc(mName)} — ${esc(titles[filter] || 'Opdrachten')}</h2><div id="mo-list" class="muted small">Laden…</div><div class="modal-actions"><span></span><div class="right"><button class="btn" id="mo-close">Sluiten</button></div></div>`);
+  $('#mo-close').onclick = closeModal;
+  const fmtAppt = (s) => s ? new Date(s).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  try {
+    const data = await api(`/api/monteurs/${mId}/orders`);
+    const list = data[filter] || [];
+    if (!list.length) { $('#mo-list').textContent = 'Geen opdrachten in deze categorie.'; return; }
+    $('#mo-list').innerHTML = list.map((o) => `
+      <div class="mont-line" data-open="${o.id}" style="padding:10px 0;border-bottom:1px solid var(--line-soft)">
+        <div><strong>${esc(o.title)}</strong> <span class="muted">· ${esc(o.statusLabel)}</span>${o.archived ? ' <span class="chip" style="font-size:10px">ingeklapt</span>' : ''}</div>
+        <div class="muted small">${o.customer ? esc(o.customer) : ''}${o.address ? ' · ' + esc(o.address) : ''}${o.appointmentAt ? ' · ' + esc(fmtAppt(o.appointmentAt)) : ''}</div>
+      </div>`).join('');
+    $$('#mo-list .mont-line[data-open]').forEach((el) => el.onclick = async () => {
+      if (!state.orders.length) state.orders = await api('/api/orders?includeArchived=1');
+      else if (!state.orders.find((x) => x.id === el.dataset.open)) state.orders = await api('/api/orders?includeArchived=1');
+      markSeen(el.dataset.open); openOrderModal(el.dataset.open);
+    });
+  } catch (err) { $('#mo-list').innerHTML = `<span class="error">${esc(err.message)}</span>`; }
 }
 
 // ---------- Prullenbak ----------

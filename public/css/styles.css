@@ -288,6 +288,8 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 .chip.src-telefoon { background: var(--warn-soft); color: var(--warn); }
 .chip.mont { background: var(--line-soft); color: var(--ink-soft); }
 .chip.urgent { background: var(--danger-soft); color: var(--danger); }
+.chip-click { cursor: pointer; transition: background .12s, color .12s; }
+.chip-click:hover { background: var(--accent); color: #fff; }
 
 /* Tables */
 .table-wrap { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: auto; border: 1px solid var(--line); }

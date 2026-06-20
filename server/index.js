@@ -258,6 +258,34 @@ app.get('/api/monteurs', requireAuth, (req, res) => {
   }));
 });
 
+// Alle opdrachten van één monteur, opgesplitst in actief / verstuurd / afgerond
+// (inclusief ingeklapte/afgeronde historie). Voor de klikbare pillen op de
+// monteur-kaart. Monteurs zien alleen hun eigen lijst.
+app.get('/api/monteurs/:id/orders', requireAuth, (req, res) => {
+  const mId = req.params.id;
+  if (req.user.role === 'monteur' && req.user.monteurId !== mId) return res.status(403).json({ error: 'Geen toegang' });
+  const labels = getStatusLabels();
+  const summarize = (o) => {
+    const c = db().customers.find((x) => x.id === o.customerId) || {};
+    return {
+      id: o.id, title: o.title, status: o.status, statusLabel: labels[o.status] || o.status,
+      appointmentAt: o.appointmentAt || null, customer: c.name || '', address: c.address || '',
+      archived: !!o.archivedWeek, updatedAt: o.updatedAt || o.createdAt || '',
+    };
+  };
+  const mine = db().orders.filter((o) => o.monteurId === mId);
+  const active = mine.filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
+  const done = mine.filter((o) => o.status === 'afgerond');
+  // "verstuurd naar monteur" — gemarkeerd via sentToMonteur, ongeacht status/archief.
+  const sent = db().orders.filter((o) => o.sentToMonteur && o.sentToMonteur.monteurId === mId);
+  const bydate = (a, b) => (b.appointmentAt || b.updatedAt || '').localeCompare(a.appointmentAt || a.updatedAt || '');
+  res.json({
+    active: active.map(summarize).sort(bydate),
+    sent: sent.map(summarize).sort(bydate),
+    done: done.map(summarize).sort(bydate),
+  });
+});
+
 app.post('/api/monteurs', requireRole('admin', 'assistent'), (req, res) => {
   const { name, phone, email, waGroup } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Naam verplicht' });
