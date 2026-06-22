@@ -1408,6 +1408,18 @@ async function loadSettings() {
         <button class="btn" id="backupNow">Nu een back-up maken</button>
       </div>
       <div id="backupList" class="muted small" style="margin-top:12px">Back-ups laden…</div>
+      <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+      <h3 style="font-size:14px">Dagelijkse off-site back-up per e-mail</h3>
+      <p class="muted small">Stuurt elke dag automatisch een volledige kopie van alle gegevens als bijlage naar je e-mail. Zo heb je altijd een verse back-up <strong>buiten</strong> de server — gratis en zonder eraan te denken.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="bm-enabled" style="width:auto" ${s.backupMail?.enabled ? 'checked' : ''}> Dagelijkse back-up-mail aanzetten</label>
+      <div class="row">
+        <label>E-mailadres <input id="bm-email" type="email" value="${esc(s.backupMail?.email || '')}" placeholder="bv. ${esc(state.me?.email || 'jij@voorbeeld.nl')}"></label>
+        <label>Tijdstip (uur) <input id="bm-hour" type="number" min="0" max="23" value="${esc(String(s.backupMail?.hour ?? 6))}" style="max-width:120px"></label>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn btn-primary" id="saveBackupMail">Opslaan</button>
+        <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
+      </div>
     </div>
     <div class="info-card admin-only" style="margin-bottom:18px"> <h3>${icon('calendar', 15)} Google Agenda — directe 2-weg koppeling</h3>
       <p class="muted small">Verbind één Google-account. Afspraken die je in het dashboard inplant, verschijnen <strong>direct</strong> in Google Agenda (en passen mee bij wijzigen/annuleren). Wijs per monteur een agenda toe bij <strong>Monteurs</strong>, dan komt elke afspraak in de agenda van de juiste monteur.</p>
@@ -1477,6 +1489,20 @@ async function loadSettings() {
     const autoReply = { enabled: $('#ar-enabled').checked, subject: $('#ar-subject').value, body: $('#ar-body').value };
     try { await api('/api/settings', 'PATCH', { autoReply }); toast('Ontvangstbevestiging opgeslagen'); }
     catch (err) { toast(err.message, true); }
+  };
+  $('#saveBackupMail').onclick = async () => {
+    const backupMail = { enabled: $('#bm-enabled').checked, email: $('#bm-email').value.trim(), hour: Number($('#bm-hour').value) };
+    if (backupMail.enabled && !backupMail.email) return toast('Vul een e-mailadres in', true);
+    try { await api('/api/settings', 'PATCH', { backupMail }); toast('Back-up-mail opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#testBackupMail').onclick = async () => {
+    const email = $('#bm-email').value.trim();
+    if (!email) return toast('Vul eerst een e-mailadres in', true);
+    const btn = $('#testBackupMail'); btn.disabled = true; btn.textContent = 'Versturen…';
+    try { const r = await api('/api/backup/mail', 'POST', { email }); toast(`Back-up verstuurd naar ${r.to}`); }
+    catch (err) { toast(err.message, true); }
+    btn.disabled = false; btn.textContent = 'Stuur nu een testmail';
   };
   $('#saveFollowUp').onclick = async () => {
     const followUp = { emailEnabled: $('#fu-email').checked, whatsappEnabled: $('#fu-whatsapp').checked, days: Number($('#fu-days').value) || 3, emailSubject: $('#fu-emailSubject').value, emailBody: $('#fu-emailBody').value, whatsappBody: $('#fu-whatsappBody').value, noReplyEnabled: $('#fu-noreply').checked, noReplyDays: Number($('#fu-noReplyDays').value) || 3, noReplyEmailSubject: $('#fu-noReplySubject').value, noReplyEmailBody: $('#fu-noReplyBody').value };

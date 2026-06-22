@@ -108,7 +108,21 @@ export function ensureSettings() {
   if (s.emailSignature === undefined) s.emailSignature = DEFAULT_EMAIL_SIGNATURE;
   if (s.autoReply === undefined) s.autoReply = structuredClone(DEFAULT_AUTOREPLY);
   if (s.followUp === undefined) s.followUp = structuredClone(DEFAULT_FOLLOWUP);
+  if (s.backupMail === undefined) s.backupMail = structuredClone(DEFAULT_BACKUP_MAIL);
   save();
+}
+
+// Dagelijkse off-site back-up: stuurt een kopie van de database als bijlage naar
+// een e-mailadres, zodat er altijd een verse kopie buiten de server staat.
+export const DEFAULT_BACKUP_MAIL = { enabled: false, email: '', hour: 6 };
+
+export function getBackupMail() {
+  const b = db().settings.backupMail || {};
+  return {
+    enabled: !!b.enabled,
+    email: b.email || '',
+    hour: Math.max(0, Math.min(23, Number(b.hour) >= 0 ? Number(b.hour) : DEFAULT_BACKUP_MAIL.hour)),
+  };
 }
 
 // Automatische follow-up op offertes die X dagen blijven liggen (uit standaard).

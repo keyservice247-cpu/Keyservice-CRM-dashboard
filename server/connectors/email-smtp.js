@@ -30,13 +30,15 @@ async function getTransporter() {
   return transporter;
 }
 
-export async function sendMail({ to, subject, text }) {
+export async function sendMail({ to, subject, text, attachments }) {
   const tx = await getTransporter();
   if (!tx) throw new Error('SMTP niet geconfigureerd op de server');
   if (!to) throw new Error('Geen ontvanger (e-mailadres) opgegeven');
   const from = process.env.SMTP_FROM || process.env.SMTP_USER;
   try {
-    const info = await tx.sendMail({ from, to, subject: subject || 'Keyservice', text: text || '' });
+    const mail = { from, to, subject: subject || 'Keyservice', text: text || '' };
+    if (attachments && attachments.length) mail.attachments = attachments;
+    const info = await tx.sendMail(mail);
     return { messageId: info.messageId };
   } catch (err) {
     // Maak veelvoorkomende SMTP-fouten begrijpelijk voor het team.

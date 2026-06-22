@@ -24,6 +24,7 @@ import {
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { maybeSendAutoReply } from './autoreply.js';
 import { startFollowUps } from './followup.js';
+import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -38,7 +39,7 @@ import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
-  getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp,
+  getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp, getBackupMail,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1061,6 +1062,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     calendarToken: getCalendarToken(),
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
+    backupMail: getBackupMail(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
 });
@@ -1118,6 +1120,14 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
       noReplyEmailBody: String(f.noReplyEmailBody || '').slice(0, 2000),
     };
   }
+  if ('backupMail' in b) {
+    const bm = b.backupMail || {};
+    db().settings.backupMail = {
+      enabled: !!bm.enabled,
+      email: String(bm.email || '').slice(0, 200).trim(),
+      hour: Math.max(0, Math.min(23, Number(bm.hour) >= 0 ? Number(bm.hour) : 6)),
+    };
+  }
   if ('monteurDispatch' in b) {
     const d = b.monteurDispatch || {};
     const trigger = ['approved', 'appointment', 'intake'].includes(d.trigger) ? d.trigger : 'approved';
@@ -1140,8 +1150,19 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     emailSignature: getEmailSignature(),
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
+    backupMail: getBackupMail(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
+});
+
+// Nu meteen een off-site back-up naar de mail sturen (test / handmatig).
+app.post('/api/backup/mail', requireRole('admin'), async (req, res) => {
+  try {
+    const out = await sendBackupMail((req.body || {}).email);
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ---------- Google Agenda (OAuth 2-weg) ----------
@@ -1705,5 +1726,6 @@ app.listen(PORT, () => {
   startHealthMonitor();
   startBackups();
   startFollowUps();
+  startBackupMail();
   console.log('');
 });
