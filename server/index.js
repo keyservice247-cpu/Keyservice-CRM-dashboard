@@ -139,10 +139,24 @@ app.delete('/api/users/:id', requireRole('admin'), (req, res) => {
 // ---------- Klanten ----------
 app.get('/api/customers', requireAuth, (req, res) => {
   const orders = db().orders;
-  const list = db().customers.map((c) => ({
-    ...c,
-    orderCount: orders.filter((o) => o.customerId === c.id).length,
-  }));
+  const labels = getStatusLabels();
+  const list = db().customers.map((c) => {
+    const mine = orders.filter((o) => o.customerId === c.id);
+    const last = mine.slice().sort((a, b) =>
+      (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''))[0] || null;
+    const activeCount = mine.filter((o) => !['afgerond', 'geannuleerd'].includes(o.status) && !o.archivedWeek).length;
+    return {
+      ...c,
+      orderCount: mine.length,
+      activeCount,
+      lastOrder: last ? {
+        id: last.id, title: last.title, status: last.status,
+        statusLabel: labels[last.status] || last.status,
+        at: last.updatedAt || last.createdAt || '',
+        appointmentAt: last.appointmentAt || null,
+      } : null,
+    };
+  });
   res.json(list);
 });
 
