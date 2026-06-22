@@ -25,6 +25,7 @@ import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { maybeSendAutoReply } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
+import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -1153,6 +1154,25 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     backupMail: getBackupMail(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
   });
+});
+
+// ---------- Push-meldingen ----------
+app.get('/api/push/key', requireAuth, (req, res) => {
+  res.json({ publicKey: getPublicKey() });
+});
+app.post('/api/push/subscribe', requireAuth, (req, res) => {
+  const ok = addSubscription(req.body, req.user);
+  if (!ok) return res.status(400).json({ error: 'Ongeldig abonnement' });
+  res.json({ ok: true });
+});
+app.post('/api/push/unsubscribe', requireAuth, (req, res) => {
+  removeSubscription((req.body || {}).endpoint);
+  res.json({ ok: true });
+});
+// Testmelding naar de eigen toestellen.
+app.post('/api/push/test', requireAuth, async (req, res) => {
+  const out = await sendPush({ title: 'Keyservice CRM', body: 'Testmelding — meldingen werken!', url: '/' });
+  res.json(out);
 });
 
 // Nu meteen een off-site back-up naar de mail sturen (test / handmatig).

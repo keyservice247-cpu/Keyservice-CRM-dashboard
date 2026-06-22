@@ -3,6 +3,12 @@
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup } from './settings.js';
+import { sendPush } from './push.js';
+
+// Verstuur een push-melding zonder de verwerking te blokkeren of te laten falen.
+function notifyPush(title, body) {
+  try { sendPush({ title, body, url: '/' }).catch(() => {}); } catch { /* nooit blokkeren */ }
+}
 
 // Vat ALLE afwijzingen samen per reden ("12x spam/reclame, 5x leverancier"),
 // zodat de AI leert van het volledige beeld, niet alleen de losse voorbeelden.
@@ -408,6 +414,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
       if (!existingCustomer.address && suggestion.customerAddress) existingCustomer.address = suggestion.customerAddress;
       saveSoon();
       logActivity('systeem', 'bericht aan bestaande opdracht', `${existingCustomer.name}: ${openOrder.title}`);
+      notifyPush('Nieuwe reactie van klant', `${existingCustomer.name || 'Klant'} reageerde op: ${openOrder.title}`);
       return { message, review: null, mergedIntoOrder: openOrder.id, suggestion };
     }
   }
@@ -450,5 +457,11 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
 
   saveSoon();
   logActivity('systeem', 'bericht ontvangen', `${channel} van ${sender || 'onbekend'}`);
+  // Melding alleen bij een echte nieuwe aanvraag (niet bij geklets/overige).
+  if (review.status === 'pending') {
+    const who = suggestion.customerName || sender || 'Onbekend';
+    const what = (subject || body || '').replace(/\s+/g, ' ').slice(0, 80);
+    notifyPush('Nieuwe aanvraag', `${who}${what ? ' — ' + what : ''}`);
+  }
   return { message, review };
 }

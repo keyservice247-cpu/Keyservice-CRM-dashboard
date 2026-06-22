@@ -6,6 +6,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 // Dunne outline-iconen (Lucide-stijl) — strak en zakelijk, geen emoji.
 const ICON_PATHS = {
   whatsapp: '<path d="M3 21l1.7-5A8 8 0 1 1 8 19.3z"/>',
+  bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
   phone: '<path d="M5 4h3l1.5 5-2 1.5a11 11 0 0 0 5 5l1.5-2 5 1.5V19a2 2 0 0 1-2 2A16 16 0 0 1 4 6a2 2 0 0 1 1-2z"/>',
   tag: '<path d="M3 7v5l8 8 6-6-8-8H3z"/><circle cx="7" cy="11" r="1"/>',
@@ -1421,6 +1422,10 @@ async function loadSettings() {
         <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
       </div>
     </div>
+    <div class="info-card" style="margin-bottom:18px"> <h3>${icon('bell', 15)} Meldingen op je telefoon</h3>
+      <p class="muted small">Krijg een pushmelding op dit toestel zodra er een nieuwe aanvraag of een reactie van een klant binnenkomt — ook als de CRM dicht is. Zet het per toestel aan (telefoon én pc kan allebei).</p>
+      <div id="pushPanel" class="muted small" style="margin-top:10px">Laden…</div>
+    </div>
     <div class="info-card admin-only" style="margin-bottom:18px"> <h3>${icon('calendar', 15)} Google Agenda — directe 2-weg koppeling</h3>
       <p class="muted small">Verbind één Google-account. Afspraken die je in het dashboard inplant, verschijnen <strong>direct</strong> in Google Agenda (en passen mee bij wijzigen/annuleren). Wijs per monteur een agenda toe bij <strong>Monteurs</strong>, dan komt elke afspraak in de agenda van de juiste monteur.</p>
       <div id="googlePanel" class="muted small" style="margin-top:10px">Status laden…</div>
@@ -1550,6 +1555,7 @@ async function loadSettings() {
     };
   };
   loadGoogle();
+  loadPush();
   const loadBackups = async () => {
     try {
       const r = await api('/api/backups');
@@ -1681,6 +1687,65 @@ async function loadSettings() {
     try { await api('/api/settings', 'PATCH', { templates }); await refreshMeta(); toast('Sjablonen opgeslagen'); loadSettings(); }
     catch (err) { toast(err.message, true); }
   };
+}
+
+// ---------- Push-meldingen ----------
+function urlBase64ToUint8Array(base64) {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+async function loadPush() {
+  const box = $('#pushPanel'); if (!box) return;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    box.innerHTML = '<span class="muted">Dit toestel/browser ondersteunt geen pushmeldingen. Op iPhone: voeg de CRM eerst toe aan je beginscherm (deel-knop → "Zet op beginscherm") en open hem vandaaruit.</span>';
+    return;
+  }
+  let active = false;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    active = !!sub;
+  } catch { /* negeren */ }
+  const denied = Notification.permission === 'denied';
+  box.innerHTML = `
+    <div style="margin-bottom:8px">Status op dit toestel: <strong>${active ? 'aan' : 'uit'}</strong>${denied ? ' — <span class="error">meldingen geblokkeerd in je browserinstellingen</span>' : ''}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${active
+        ? '<button class="btn" id="push-off">Meldingen uitzetten</button><button class="btn btn-sm" id="push-test">Stuur testmelding</button>'
+        : `<button class="btn btn-primary" id="push-on" ${denied ? 'disabled' : ''}>${icon('bell', 14)} Meldingen aanzetten</button>`}
+    </div>`;
+  if ($('#push-on')) $('#push-on').onclick = enablePush;
+  if ($('#push-off')) $('#push-off').onclick = disablePush;
+  if ($('#push-test')) $('#push-test').onclick = async () => {
+    try { const r = await api('/api/push/test', 'POST'); toast(r.sent ? 'Testmelding verstuurd' : 'Geen toestellen aangemeld'); }
+    catch (err) { toast(err.message, true); }
+  };
+}
+
+async function enablePush() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Meldingen niet toegestaan', true); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const { publicKey } = await api('/api/push/key');
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    await api('/api/push/subscribe', 'POST', sub.toJSON());
+    toast('Meldingen aan op dit toestel');
+    loadPush();
+  } catch (err) { toast('Aanzetten mislukt: ' + err.message, true); }
+}
+
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) { await api('/api/push/unsubscribe', 'POST', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
+    toast('Meldingen uit op dit toestel');
+    loadPush();
+  } catch (err) { toast(err.message, true); }
 }
 
 // ---------- Users (admin) ----------
