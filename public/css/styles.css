@@ -535,12 +535,13 @@ body.modal-open { overflow: hidden; }
   .view-head { flex-direction: column; align-items: stretch; }
   .view-actions input[type=search] { min-width: 0; width: 100%; }
 
-  .modal-root { padding: 0; align-items: stretch; background: #fff; touch-action: pan-y; } /* alleen verticaal scrollen, geen horizontaal bouncen */
-  .modal { width: 100%; max-width: 100%; min-height: 100%; border-radius: 0; border: none; padding: 20px 18px calc(40px + env(safe-area-inset-bottom)); animation: none; }
+  .modal-root { padding: 0; align-items: stretch; background: #fff; touch-action: pan-y; overflow-y: auto; -webkit-overflow-scrolling: touch; } /* alleen verticaal scrollen, geen horizontaal bouncen */
+  .modal { width: 100%; max-width: 100%; min-height: 100%; border-radius: 0; border: none; padding: 20px 18px calc(28px + env(safe-area-inset-bottom)); animation: none; }
   .modal-backdrop { display: none; } /* niet nodig: de modal vult het hele scherm */
   .modal .row { flex-direction: column; gap: 0; }
-  .modal-actions { position: sticky; bottom: 0; background: #fff; padding-top: 14px; margin-top: 18px; border-top: 1px solid var(--line-soft); flex-direction: column-reverse; }
-  .modal-actions .right { margin-left: 0; width: 100%; flex-direction: column-reverse; }
+  /* Knoppen onderaan in de normale flow — NIET sticky, anders 'zweven' ze midden in beeld tijdens scrollen */
+  .modal-actions { position: static; background: #fff; padding-top: 16px; margin-top: 22px; border-top: 1px solid var(--line-soft); flex-direction: column-reverse; }
+  .modal-actions .right { margin-left: 0; width: 100%; flex-direction: column-reverse; gap: 8px; }
   .modal-actions .btn { width: 100%; text-align: center; padding: 12px; }
   .modal-actions #f-delete, .modal-actions .btn-danger { width: 100%; }
 
