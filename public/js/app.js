@@ -1500,6 +1500,11 @@ async function loadSettings() {
       <p class="muted small" id="md-hint" style="margin:6px 0 0"></p>
       <label style="margin:10px 0 4px">Alleen op deze dagen versturen</label>
       <div id="md-days" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+      <h3 style="font-size:14px">Trefwoord-routering (naar een specifieke monteur)</h3>
+      <p class="muted small">Bevat de opdracht een bepaald woord (bv. <strong>schuifpui</strong>), stuur 'm dan naar een andere monteur-groep i.p.v. de standaard. Handig om bv. alle schuifpui-klussen naar Abdel te sturen. Regels gaan vóór de standaardmonteur.</p>
+      <div id="md-routes"></div>
+      <button class="btn btn-sm" id="md-addroute" type="button" style="margin-top:6px">+ Regel toevoegen</button>
       <div style="margin-top:12px"><button class="btn btn-primary" id="md-save">Verstuur-instellingen opslaan</button></div>
     </div>
     <div class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
@@ -1618,9 +1623,24 @@ async function loadSettings() {
   const dayNames = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
   $('#md-days').innerHTML = dayNames.map((d, i) => `<button type="button" class="day-toggle ${(md.days || []).includes(i) ? 'on' : ''}" data-day="${i}">${d}</button>`).join('');
   $$('#md-days .day-toggle').forEach((b) => b.onclick = () => b.classList.toggle('on'));
+  // Trefwoord-routering: rijen met trefwoord -> monteur.
+  const monteurOptsFor = (sel) => '<option value="">— kies monteur —</option>' + mons.map((m) => `<option value="${m.id}" ${sel === m.id ? 'selected' : ''}>${esc(m.name)}${m.waGroup ? '' : ' (geen groep!)'}</option>`).join('');
+  const routeRow = (r = {}) => `<div class="md-route" style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+    <input class="md-route-kw" placeholder="trefwoord, bv. schuifpui" value="${esc(r.keyword || '')}" style="flex:1">
+    <span class="muted small">→</span>
+    <select class="md-route-mon" style="flex:1">${monteurOptsFor(r.monteurId)}</select>
+    <button type="button" class="btn btn-sm md-route-del" title="Verwijder">${icon('x', 13)}</button></div>`;
+  const renderRoutes = (routes) => { $('#md-routes').innerHTML = (routes || []).map(routeRow).join(''); bindRouteDel(); };
+  const bindRouteDel = () => $$('#md-routes .md-route-del').forEach((b) => b.onclick = () => b.closest('.md-route').remove());
+  renderRoutes(md.keywordRoutes || []);
+  $('#md-addroute').onclick = () => { $('#md-routes').insertAdjacentHTML('beforeend', routeRow()); bindRouteDel(); };
   $('#md-save').onclick = async () => {
     const days = $$('#md-days .day-toggle.on').map((b) => Number(b.dataset.day));
-    const cfg = { autoEnabled: $('#md-auto').checked, days, autoMonteurId: $('#md-monteur').value, trigger: $('#md-trigger').value, onlyDrs: $('#md-onlydrs').checked };
+    const keywordRoutes = $$('#md-routes .md-route').map((row) => ({
+      keyword: $('.md-route-kw', row).value.trim(),
+      monteurId: $('.md-route-mon', row).value,
+    })).filter((r) => r.keyword && r.monteurId);
+    const cfg = { autoEnabled: $('#md-auto').checked, days, autoMonteurId: $('#md-monteur').value, trigger: $('#md-trigger').value, onlyDrs: $('#md-onlydrs').checked, keywordRoutes };
     if (cfg.autoEnabled && !cfg.autoMonteurId) return toast('Kies eerst een monteur', true);
     if (cfg.autoEnabled && !days.length) return toast('Kies minstens één dag (anders wordt er nooit verstuurd)', true);
     try { await api('/api/settings', 'PATCH', { monteurDispatch: cfg }); toast('Verstuur-instellingen opgeslagen'); }

@@ -682,11 +682,30 @@ function maybeAutoSendToMonteur(order, event) {
   if (cfg.onlyDrs !== false && !isDrsOrder(order)) return; // standaard alleen DRS-opdrachten
   if (order.sentToMonteur) return; // al verstuurd
   if (!autoSendAllowedToday()) return;
-  const monteur = db().monteurs.find((m) => m.id === (cfg.autoMonteurId || order.monteurId));
+  // Trefwoord-routering (bv. "schuifpui" -> Abdel) gaat vóór de standaardmonteur.
+  const monteur = routeMonteurForOrder(order) || db().monteurs.find((m) => m.id === (cfg.autoMonteurId || order.monteurId));
   if (!monteur || !monteur.waGroup) return;
   if (!order.monteurId) order.monteurId = monteur.id;
   const r = queueToMonteur(order, monteur, 'automatisch');
   if (!r.error) { logActivity('systeem', 'automatisch naar monteur', `${order.title} -> ${monteur.name}`); saveSoon(); }
+}
+
+// Kiest op basis van trefwoorden in titel/omschrijving een specifieke monteur-groep.
+// Bv. een regel { keyword: "schuifpui", monteurId: <Abdel> } stuurt schuifpui-
+// opdrachten naar Abdel i.p.v. de standaardmonteur. Geeft null als niets matcht.
+function routeMonteurForOrder(order) {
+  const cfg = db().settings.monteurDispatch || {};
+  const routes = Array.isArray(cfg.keywordRoutes) ? cfg.keywordRoutes : [];
+  if (!routes.length) return null;
+  const hay = `${order.title || ''} ${order.description || ''}`.toLowerCase();
+  for (const r of routes) {
+    const kw = String(r.keyword || '').toLowerCase().trim();
+    if (kw && r.monteurId && hay.includes(kw)) {
+      const m = db().monteurs.find((x) => x.id === r.monteurId);
+      if (m && m.waGroup) return m;
+    }
+  }
+  return null;
 }
 
 // Volautomatisch (trigger 'intake'): zodra een DRS-opdracht binnenkomt, meteen zelf
@@ -716,9 +735,12 @@ function maybeIntakeAutoSend(result) {
   if (!order) { console.log('[intake] opdracht niet gevonden'); return; }
   if (cfg.onlyDrs !== false && !isDrsOrder(order)) { console.log('[intake] opdracht is geen DRS-opdracht'); return; }
   if (order.sentToMonteur) { console.log('[intake] al naar monteur verstuurd'); return; }
-  if (!order.monteurId) order.monteurId = monteur.id;
-  const r = queueToMonteur(order, monteur, 'volautomatisch');
-  if (!r.error) { console.log(`[intake] volautomatisch in wachtrij -> ${monteur.name} (${monteur.waGroup})`); logActivity('systeem', 'volautomatisch naar monteur', `${order.title} -> ${monteur.name}`); }
+  // Trefwoord-routering (bv. schuifpui -> Abdel) gaat vóór de standaardmonteur.
+  const target = routeMonteurForOrder(order) || monteur;
+  if (!target.waGroup) { console.log('[intake] doelmonteur heeft geen WhatsApp-groep'); return; }
+  if (!order.monteurId) order.monteurId = target.id;
+  const r = queueToMonteur(order, target, 'volautomatisch');
+  if (!r.error) { console.log(`[intake] volautomatisch in wachtrij -> ${target.name} (${target.waGroup})`); logActivity('systeem', 'volautomatisch naar monteur', `${order.title} -> ${target.name}`); }
   else console.log('[intake] queueToMonteur fout:', r.error);
   saveSoon();
 }
@@ -1078,7 +1100,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
     backupMail: getBackupMail(),
-    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
+    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true, keywordRoutes: [] },
   });
 });
 
@@ -1146,12 +1168,19 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
   if ('monteurDispatch' in b) {
     const d = b.monteurDispatch || {};
     const trigger = ['approved', 'appointment', 'intake'].includes(d.trigger) ? d.trigger : 'approved';
+    const keywordRoutes = Array.isArray(d.keywordRoutes)
+      ? d.keywordRoutes
+          .map((r) => ({ keyword: String(r.keyword || '').slice(0, 60).trim(), monteurId: String(r.monteurId || '') }))
+          .filter((r) => r.keyword && r.monteurId)
+          .slice(0, 30)
+      : (db().settings.monteurDispatch?.keywordRoutes || []);
     db().settings.monteurDispatch = {
       autoEnabled: !!d.autoEnabled,
       days: Array.isArray(d.days) ? d.days.filter((n) => n >= 0 && n <= 6) : [],
       autoMonteurId: d.autoMonteurId || '',
       trigger, // approved | appointment | intake (volautomatisch)
       onlyDrs: d.onlyDrs !== false, // standaard alleen DRS/Raf Breda-opdrachten
+      keywordRoutes, // [{keyword, monteurId}] -> trefwoord-routering
     };
   }
   save();
@@ -1166,7 +1195,7 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
     backupMail: getBackupMail(),
-    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true },
+    monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true, keywordRoutes: [] },
   });
 });
 
