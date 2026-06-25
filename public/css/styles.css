@@ -276,7 +276,9 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 /* Prullenbak-dropzone */
 .trash-zone { margin-top: 14px; padding: 16px; border: 1px dashed var(--line); border-radius: var(--radius); text-align: center; color: var(--muted); font-weight: 400; font-size: 13px; transition: border-color .15s, background .15s, color .15s; }
 .trash-zone.drag-over { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
-.card-customer { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 9px; display: flex; align-items: center; gap: 5px; }
+.card-customer { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 5px; display: flex; align-items: center; gap: 5px; }
+.card-place { font-size: 12.5px; color: var(--ink-soft); font-weight: 500; margin-bottom: 9px; display: flex; align-items: center; gap: 5px; }
+.card-place svg.i { vertical-align: -2px; opacity: .7; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .card-foot { margin-top: 8px; font-size: 11px; color: var(--muted); }
 

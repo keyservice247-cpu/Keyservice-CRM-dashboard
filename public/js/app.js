@@ -7,6 +7,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const ICON_PATHS = {
   whatsapp: '<path d="M3 21l1.7-5A8 8 0 1 1 8 19.3z"/>',
   bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
+  pin: '<path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
   phone: '<path d="M5 4h3l1.5 5-2 1.5a11 11 0 0 0 5 5l1.5-2 5 1.5V19a2 2 0 0 1-2 2A16 16 0 0 1 4 6a2 2 0 0 1 1-2z"/>',
   tag: '<path d="M3 7v5l8 8 6-6-8-8H3z"/><circle cx="7" cy="11" r="1"/>',
@@ -659,6 +660,7 @@ function cardHTML(o) {
       ${o.customerReplied ? `<div class="reply-banner">${icon('message', 12)} ${replyLabel}</div>` : ''}
       <div class="card-title"><span class="state-dot ${st.c}" title="${st.t}"></span><span class="card-title-txt">${esc(o.title)}</span>${replyCount ? `<span class="title-count" title="${replyLabel}">${replyCount}</span>` : ''}</div>
       ${o.customer ? `<div class="card-customer">${icon('user', 13)} ${esc(o.customer.name)}${o.customer.phone ? ' · ' + esc(o.customer.phone) : ''}</div>` : ''}
+      ${o.customer && placeName(o.customer.address) ? `<div class="card-place">${icon('pin', 13)} ${esc(placeName(o.customer.address))}</div>` : ''}
       <div class="card-meta">${meta.join('')}</div>
       <div class="card-foot">${icon('clock', 12)} Binnen: ${esc(fmtDateShort(o.createdAt))}</div>
     </div>`;
@@ -669,6 +671,17 @@ function fmtDate(s) {
   const d = new Date(s);
   if (isNaN(d)) return s;
   return d.toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+// Haalt de plaatsnaam uit een adres ("Straat 12, 1234 AB Plaats" -> "Plaats").
+// Valt terug op het laatste deel na een komma, of het adres zelf.
+function placeName(addr) {
+  if (!addr) return '';
+  const s = String(addr).trim();
+  const m = s.match(/\d{4}\s?[a-z]{2}\s+(.+)$/i); // tekst na de postcode = plaats
+  if (m) return m[1].replace(/,.*$/, '').trim();
+  const parts = s.split(',').map((x) => x.trim()).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : s;
 }
 
 // Splitst een e-mail/bericht in 'nieuwe tekst' en 'geciteerde tekst' (de >-regels en
