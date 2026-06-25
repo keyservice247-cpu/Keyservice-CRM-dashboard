@@ -677,17 +677,20 @@ function isDrsOrder(order) {
 // van vandaag, en de juiste trigger optreedt. Niet dubbel versturen.
 function maybeAutoSendToMonteur(order, event) {
   const cfg = db().settings.monteurDispatch || {};
-  if (!cfg.autoEnabled) return;
-  if (cfg.trigger !== event) return;
-  if (cfg.onlyDrs !== false && !isDrsOrder(order)) return; // standaard alleen DRS-opdrachten
-  if (order.sentToMonteur) return; // al verstuurd
-  if (!autoSendAllowedToday()) return;
+  if (!cfg.autoEnabled) { console.log(`[autosend] uit — automatisch versturen staat niet aan (${order.title})`); return; }
+  if (cfg.trigger !== event) { console.log(`[autosend] trigger '${cfg.trigger}' != gebeurtenis '${event}' — overgeslagen (${order.title})`); return; }
+  if (cfg.onlyDrs !== false && !isDrsOrder(order)) { console.log(`[autosend] geen DRS-opdracht — overgeslagen (${order.title})`); return; }
+  if (order.sentToMonteur) { console.log(`[autosend] al verstuurd — overgeslagen (${order.title})`); return; }
+  if (!autoSendAllowedToday()) { console.log(`[autosend] vandaag niet ingeschakeld (dag staat uit) — overgeslagen (${order.title})`); return; }
   // Trefwoord-routering (bv. "schuifpui" -> Abdel) gaat vóór de standaardmonteur.
-  const monteur = routeMonteurForOrder(order) || db().monteurs.find((m) => m.id === (cfg.autoMonteurId || order.monteurId));
-  if (!monteur || !monteur.waGroup) return;
+  const routed = routeMonteurForOrder(order);
+  const monteur = routed || db().monteurs.find((m) => m.id === (cfg.autoMonteurId || order.monteurId));
+  if (!monteur) { console.log(`[autosend] geen monteur gekozen (autoMonteurId leeg?) — overgeslagen (${order.title})`); return; }
+  if (!monteur.waGroup) { console.log(`[autosend] monteur ${monteur.name} heeft geen WhatsApp-groep — overgeslagen (${order.title})`); return; }
   if (!order.monteurId) order.monteurId = monteur.id;
   const r = queueToMonteur(order, monteur, 'automatisch');
-  if (!r.error) { logActivity('systeem', 'automatisch naar monteur', `${order.title} -> ${monteur.name}`); saveSoon(); }
+  if (!r.error) { console.log(`[autosend] in wachtrij -> ${monteur.name} (${monteur.waGroup})`); logActivity('systeem', 'automatisch naar monteur', `${order.title} -> ${monteur.name}`); saveSoon(); }
+  else console.log('[autosend] queueToMonteur fout:', r.error);
 }
 
 // Kiest op basis van trefwoorden in titel/omschrijving een specifieke monteur-groep.
