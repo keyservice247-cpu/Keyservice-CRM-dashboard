@@ -1538,8 +1538,11 @@ app.post('/api/assistant/daily-check', requireRole('admin', 'assistent'), async 
 
 // AI-statusscan: leest recente groepsberichten en stelt statuswijzigingen voor lopende
 // opdrachten voor. Past zelf NIETS aan — geeft alleen voorstellen terug.
-app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async (req, res) => {
-  const days = Number(req.body?.days) || 30;
+// De status-scan draait als ACHTERGROND-job op de server, zodat hij doorloopt
+// ook als de gebruiker de app wegswipet. Het laatste resultaat wordt bewaard.
+let _statusScan = { running: false, startedAt: null };
+
+async function computeStatusScan(days) {
   const since = Date.now() - days * 86400000;
   const active = db().orders
     .filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
@@ -1550,39 +1553,73 @@ app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async 
         || (!o.originGroup && /whatsapp|groep|app/.test(src));
       return { id: o.id, title: o.title, status: o.status, customer: c.name, phone: c.phone || '', address: c.address || '', isDrs };
     })
-    .slice(0, 250);
+    .slice(0, 300);
   const msgs = db().messages
     .filter((m) => new Date(m.receivedAt).getTime() >= since)
     .sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt))
-    .slice(0, 600);
+    .slice(0, 800);
+  const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile() });
+  const labels = getStatusLabels();
+  const suggestions = (out.statusChanges || []).map((s) => {
+    const order = db().orders.find((o) => o.id === s.orderId);
+    if (!order || !isValidStatus(s.suggestedStatus)) return null;
+    if (order.status === s.suggestedStatus) return null;
+    return {
+      orderId: order.id, title: order.title,
+      from: order.status, fromLabel: labels[order.status] || order.status,
+      to: s.suggestedStatus, toLabel: labels[s.suggestedStatus] || s.suggestedStatus,
+      reason: s.reason || '', evidence: s.evidence || '',
+    };
+  }).filter(Boolean);
+  const needsDrsUpdate = (out.needsDrsUpdate || []).map((s) => {
+    const order = db().orders.find((o) => o.id === s.orderId);
+    if (!order) return null;
+    const c = db().customers.find((x) => x.id === order.customerId) || {};
+    return {
+      orderId: order.id, title: order.title,
+      statusLabel: labels[order.status] || order.status,
+      customer: c.name || '', address: c.address || '',
+      reason: s.reason || '', suggestedText: s.suggestedText || '',
+    };
+  }).filter(Boolean);
+  return { at: now(), days, scanned: msgs.length, cards: active.length, suggestions, needsDrsUpdate, engine: out.engine, note: out.note || '' };
+}
+
+async function runStatusScanJob(days) {
+  if (_statusScan.running) return;
+  _statusScan = { running: true, startedAt: now() };
   try {
-    const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile() });
-    // Verrijk met huidige opdracht-info + labels, en filter op geldige status/opdracht.
-    const labels = getStatusLabels();
-    const valid = (out.statusChanges || []).map((s) => {
-      const order = db().orders.find((o) => o.id === s.orderId);
-      if (!order || !isValidStatus(s.suggestedStatus)) return null;
-      if (order.status === s.suggestedStatus) return null;
-      return {
-        orderId: order.id, title: order.title,
-        from: order.status, fromLabel: labels[order.status] || order.status,
-        to: s.suggestedStatus, toLabel: labels[s.suggestedStatus] || s.suggestedStatus,
-        reason: s.reason || '', evidence: s.evidence || '',
-      };
-    }).filter(Boolean);
-    // Openstaande terugkoppelingen naar de Raf Breda-groep (alleen geldige opdrachten).
-    const drsTodo = (out.needsDrsUpdate || []).map((s) => {
-      const order = db().orders.find((o) => o.id === s.orderId);
-      if (!order) return null;
-      const c = db().customers.find((x) => x.id === order.customerId) || {};
-      return {
-        orderId: order.id, title: order.title,
-        statusLabel: labels[order.status] || order.status,
-        customer: c.name || '', address: c.address || '',
-        reason: s.reason || '', suggestedText: s.suggestedText || '',
-      };
-    }).filter(Boolean);
-    res.json({ suggestions: valid, needsDrsUpdate: drsTodo, engine: out.engine, note: out.note || '' });
+    const result = await computeStatusScan(days);
+    db().settings._lastStatusScan = result; // bewaren zodat het bij heropenen blijft staan
+    save();
+  } catch (e) {
+    db().settings._lastStatusScan = { at: now(), days, error: e.message, suggestions: [], needsDrsUpdate: [] };
+    save();
+    console.error('[statusscan] mislukt:', e.message);
+  } finally {
+    _statusScan = { running: false, startedAt: null };
+  }
+}
+
+// Scan starten (achtergrond) — keert meteen terug; resultaat komt later via /result.
+app.post('/api/assistant/status-scan/start', requireRole('admin', 'assistent'), (req, res) => {
+  const days = Number(req.body?.days) || 30;
+  if (!_statusScan.running) runStatusScanJob(days); // niet awaiten: draait door
+  res.json({ running: true, startedAt: _statusScan.startedAt || now() });
+});
+
+// Status + laatste resultaat ophalen (voor pollen én tonen bij heropenen).
+app.get('/api/assistant/status-scan/result', requireRole('admin', 'assistent'), (req, res) => {
+  res.json({ running: _statusScan.running, startedAt: _statusScan.startedAt, last: db().settings._lastStatusScan || null });
+});
+
+// (Compat) directe synchrone scan — nog gebruikt door oudere clients.
+app.post('/api/assistant/status-scan', requireRole('admin', 'assistent'), async (req, res) => {
+  const days = Number(req.body?.days) || 30;
+  try {
+    const result = await computeStatusScan(days);
+    db().settings._lastStatusScan = result; save();
+    res.json({ suggestions: result.suggestions, needsDrsUpdate: result.needsDrsUpdate, engine: result.engine, note: result.note });
   } catch (err) {
     res.status(500).json({ error: 'Mislukt: ' + err.message });
   }

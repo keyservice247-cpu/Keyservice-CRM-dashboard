@@ -260,6 +260,7 @@ function bindNav() {
 
 function showView(view, tab) {
   state.view = view;
+  if (view !== 'assistant') ssPollActive = false; // statusscan-pollen stoppen buiten de AI-pagina
   // De drie board-menu's (Opdrachten/E-mail/WhatsApp) delen dezelfde weergave maar filteren op kanaal.
   state.channel = (tab && tab.dataset.channel) || 'all';
   $$('.nav-item').forEach((t) => t.classList.remove('active'));
@@ -1163,61 +1164,12 @@ async function loadAssistant() {
     </div>`;
   $$('.as-ex').forEach((b) => b.onclick = () => { $('#as-q').value = b.textContent; });
   $('#ss-run').onclick = async () => {
-    const btn = $('#ss-run'); btn.disabled = true; btn.textContent = 'Bezig met scannen…';
-    $('#ss-result').innerHTML = '<div class="muted small">De AI leest alle kaarten en groepsberichten… ~10-40 sec.</div>';
-    try {
-      const out = await api('/api/assistant/status-scan', 'POST', { days: Number($('#ss-days').value) });
-      const sugg = out.suggestions || [];
-      const todo = out.needsDrsUpdate || [];
-      let html = '';
-      if (!sugg.length) {
-        html += `<div class="muted small">${esc(out.note || 'Geen statuswijzigingen voorgesteld — alles lijkt al goed te staan.')}</div>`;
-      } else {
-        html += `<div class="ss-bulkbar"><span class="muted small">${sugg.length} statusvoorstel(len) gevonden</span><button class="btn btn-sm btn-success" id="ss-apply-all">Alles toepassen</button></div>` + sugg.map((s, i) => `
-          <div class="ss-item" data-i="${i}">
-            <div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong></div>
-            <div class="muted small">${esc(s.reason)}</div>
-            ${s.evidence ? `<div class="muted small" style="font-style:italic">"${esc(s.evidence.slice(0, 160))}"</div>` : ''}
-            <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}">Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
-          </div>`).join('');
-      }
-      // Openstaande terugkoppelingen naar de Raf Breda-groep.
-      if (todo.length) {
-        html += `<div class="ss-drs-head"><strong>${icon('whatsapp', 14)} Nog terugkoppelen in de Raf Breda-groep (${todo.length})</strong><div class="muted small">Deze opdrachten hebben een bekende uitkomst, maar lijken nog niet teruggekoppeld in de DRS-groep. Kopieer de tekst en plak die in WhatsApp.</div></div>` + todo.map((t) => `
-          <div class="ss-item ss-drs" data-id="${esc(t.orderId)}">
-            <div><strong>${esc(t.title)}</strong>${t.address ? ` <span class="muted small">· ${esc(t.address)}</span>` : ''} <span class="muted small">(${esc(t.statusLabel)})</span></div>
-            <div class="muted small">${esc(t.reason)}</div>
-            ${t.suggestedText ? `<div class="ss-drs-text">${esc(t.suggestedText)}</div>` : ''}
-            <div style="margin-top:6px;display:flex;gap:6px">${t.suggestedText ? `<button class="btn btn-sm btn-primary ss-copy" data-text="${esc(t.suggestedText)}">Kopieer tekst</button>` : ''}<button class="btn btn-sm ss-ignore">Klaar / negeren</button></div>
-          </div>`).join('');
-      }
-      if (!sugg.length && !todo.length) html = `<div class="muted small">${esc(out.note || 'Niets te doen — alle kaarten staan goed en alles is teruggekoppeld in Raf Breda.')}</div>`;
-      $('#ss-result').innerHTML = html;
-      if (sugg.length) {
-        $$('.ss-apply').forEach((b) => b.onclick = async () => {
-          try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); toast('Status bijgewerkt'); b.closest('.ss-item').remove(); loadBoard(); }
-          catch (err) { toast(err.message, true); }
-        });
-        $('#ss-apply-all').onclick = async () => {
-          const items = $$('.ss-apply');
-          if (!items.length) return;
-          if (!confirm(`${items.length} statuswijziging(en) in één keer toepassen?`)) return;
-          let ok = 0;
-          for (const b of items) { try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); ok++; } catch { /* skip */ } }
-          toast(`${ok} opdracht(en) bijgewerkt`);
-          items.forEach((b) => b.closest('.ss-item')?.remove());
-          $('.ss-bulkbar')?.remove();
-          loadBoard();
-        };
-      }
-      $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
-      $$('.ss-copy').forEach((b) => b.onclick = async () => {
-        try { await navigator.clipboard.writeText(b.dataset.text); toast('Tekst gekopieerd — plak in de Raf Breda-groep'); b.textContent = 'Gekopieerd ✓'; }
-        catch { toast('Kopiëren niet gelukt', true); }
-      });
-    } catch (err) { $('#ss-result').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
-    btn.disabled = false; btn.textContent = 'Statusscan starten';
+    try { await api('/api/assistant/status-scan/start', 'POST', { days: Number($('#ss-days').value) }); }
+    catch (err) { return toast(err.message, true); }
+    ssPollActive = true; pollStatusScan();
   };
+  // Bij openen: laatste resultaat tonen + verder pollen als er nog een scan loopt.
+  ssPollActive = true; pollStatusScan();
   $('#as-ask').onclick = async () => {
     const question = $('#as-q').value.trim();
     if (!question) return toast('Stel eerst een vraag', true);
@@ -1229,6 +1181,74 @@ async function loadAssistant() {
     } catch (err) { $('#as-answer').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
     btn.disabled = false; btn.innerHTML = `${icon('sparkles', 14)} Vraag de AI`;
   };
+}
+
+// Achtergrond-statusscan: pollt de server (scan loopt door ook als je wegswipet)
+// en toont het laatst opgehaalde resultaat. Stopt zodra je de pagina verlaat.
+let ssPollActive = false;
+async function pollStatusScan() {
+  const btn = $('#ss-run'); const box = $('#ss-result');
+  if (!btn || !box) { ssPollActive = false; return; } // pagina verlaten
+  let data;
+  try { data = await api('/api/assistant/status-scan/result'); }
+  catch { if (ssPollActive) setTimeout(pollStatusScan, 4000); return; }
+  if (data.running) {
+    btn.disabled = true; btn.textContent = 'Bezig met scannen…';
+    if (!box.innerHTML.includes('ss-item')) box.innerHTML = '<div class="muted small">De AI leest alle kaarten en groepsberichten op de achtergrond… je kunt gerust wegklikken, het loopt door.</div>';
+    if (ssPollActive) setTimeout(pollStatusScan, 3000);
+    return;
+  }
+  btn.disabled = false; btn.textContent = 'Statusscan starten';
+  if (data.last) renderStatusScan(data.last);
+}
+
+function renderStatusScan(out) {
+  const box = $('#ss-result'); if (!box) return;
+  const sugg = out.suggestions || [];
+  const todo = out.needsDrsUpdate || [];
+  const when = out.at ? `<div class="muted small" style="margin-bottom:8px">Laatste scan: ${esc(fmtDate(out.at))}${out.scanned ? ` · ${out.scanned} berichten doorzocht` : ''}</div>` : '';
+  let html = when;
+  if (out.error) html += `<div class="error small">Laatste scan mislukt: ${esc(out.error)}</div>`;
+  if (sugg.length) {
+    html += `<div class="ss-bulkbar"><span class="muted small">${sugg.length} statusvoorstel(len) gevonden</span><button class="btn btn-sm btn-success" id="ss-apply-all">Alles toepassen</button></div>` + sugg.map((s, i) => `
+      <div class="ss-item" data-i="${i}">
+        <div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong></div>
+        <div class="muted small">${esc(s.reason)}</div>
+        ${s.evidence ? `<div class="muted small" style="font-style:italic">"${esc(s.evidence.slice(0, 160))}"</div>` : ''}
+        <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}">Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
+      </div>`).join('');
+  }
+  if (todo.length) {
+    html += `<div class="ss-drs-head"><strong>${icon('whatsapp', 14)} Nog terugkoppelen in de Raf Breda-groep (${todo.length})</strong><div class="muted small">Deze opdrachten hebben een bekende uitkomst, maar lijken nog niet teruggekoppeld in de DRS-groep. Kopieer de tekst en plak die in WhatsApp.</div></div>` + todo.map((t) => `
+      <div class="ss-item ss-drs" data-id="${esc(t.orderId)}">
+        <div><strong>${esc(t.title)}</strong>${t.address ? ` <span class="muted small">· ${esc(t.address)}</span>` : ''} <span class="muted small">(${esc(t.statusLabel)})</span></div>
+        <div class="muted small">${esc(t.reason)}</div>
+        ${t.suggestedText ? `<div class="ss-drs-text">${esc(t.suggestedText)}</div>` : ''}
+        <div style="margin-top:6px;display:flex;gap:6px">${t.suggestedText ? `<button class="btn btn-sm btn-primary ss-copy" data-text="${esc(t.suggestedText)}">Kopieer tekst</button>` : ''}<button class="btn btn-sm ss-ignore">Klaar / negeren</button></div>
+      </div>`).join('');
+  }
+  if (!sugg.length && !todo.length) html += `<div class="muted small">${esc(out.note || 'Niets te doen — alle kaarten staan goed en alles is teruggekoppeld in Raf Breda.')}</div>`;
+  box.innerHTML = html;
+  $$('.ss-apply').forEach((b) => b.onclick = async () => {
+    try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); toast('Status bijgewerkt'); b.closest('.ss-item').remove(); loadBoard(); }
+    catch (err) { toast(err.message, true); }
+  });
+  if ($('#ss-apply-all')) $('#ss-apply-all').onclick = async () => {
+    const items = $$('.ss-apply');
+    if (!items.length) return;
+    if (!confirm(`${items.length} statuswijziging(en) in één keer toepassen?`)) return;
+    let ok = 0;
+    for (const b of items) { try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); ok++; } catch { /* skip */ } }
+    toast(`${ok} opdracht(en) bijgewerkt`);
+    items.forEach((b) => b.closest('.ss-item')?.remove());
+    $('.ss-bulkbar')?.remove();
+    loadBoard();
+  };
+  $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
+  $$('.ss-copy').forEach((b) => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.text); toast('Tekst gekopieerd — plak in de Raf Breda-groep'); b.textContent = 'Gekopieerd ✓'; }
+    catch { toast('Kopiëren niet gelukt', true); }
+  });
 }
 
 // ---------- Agenda ----------
