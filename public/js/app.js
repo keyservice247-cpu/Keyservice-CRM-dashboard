@@ -256,6 +256,17 @@ function bindNav() {
   }));
   $('#logoutBtn').addEventListener('click', async () => { await api('/api/logout', 'POST'); window.location.href = '/'; });
   $('#accountBtn').addEventListener('click', openAccountModal);
+  const themeBtn = $('#themeBtn');
+  if (themeBtn) {
+    const syncLabel = () => { themeBtn.textContent = document.documentElement.dataset.theme === 'dark' ? 'Lichte modus' : 'Nachtmodus'; };
+    syncLabel();
+    themeBtn.addEventListener('click', () => {
+      const dark = document.documentElement.dataset.theme === 'dark';
+      if (dark) { delete document.documentElement.dataset.theme; try { localStorage.setItem('ks_theme', 'light'); } catch {} }
+      else { document.documentElement.dataset.theme = 'dark'; try { localStorage.setItem('ks_theme', 'dark'); } catch {} }
+      syncLabel();
+    });
+  }
 }
 
 function showView(view, tab) {
