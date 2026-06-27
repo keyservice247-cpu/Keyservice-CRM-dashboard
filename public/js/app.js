@@ -1206,7 +1206,7 @@ function renderStatusScan(out) {
   const box = $('#ss-result'); if (!box) return;
   const sugg = out.suggestions || [];
   const todo = out.needsDrsUpdate || [];
-  const when = out.at ? `<div class="muted small" style="margin-bottom:8px">Laatste scan: ${esc(fmtDate(out.at))}${out.scanned ? ` · ${out.scanned} berichten doorzocht` : ''}</div>` : '';
+  const when = out.at ? `<div class="muted small" style="margin-bottom:8px">Laatste scan: ${esc(fmtDate(out.at))} · ${out.cards || 0} kaarten en ${out.scanned || 0} berichten doorzocht${out.engine ? ' · ' + esc(out.engine) : ''}</div>` : '';
   let html = when;
   if (out.error) html += `<div class="error small">Laatste scan mislukt: ${esc(out.error)}</div>`;
   if (sugg.length) {

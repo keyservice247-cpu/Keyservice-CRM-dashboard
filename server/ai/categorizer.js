@@ -542,9 +542,14 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
   if (!apiKey) return { suggestions: [], engine: 'demo', note: 'Zet de AI aan (ANTHROPIC_API_KEY) voor de statusscan.' };
   if (!orders.length || !messages.length) return { suggestions: [], engine: 'n.v.t.' };
 
-  const orderList = orders.slice(0, 250).map((o) =>
-    `${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | herkomst: ${o.isDrs ? 'DRS/Raf Breda-groep' : 'overig'} | nu: ${o.status}`
-  ).join('\n');
+  const orderList = orders.slice(0, 300).map((o) => {
+    let line = `${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | herkomst: ${o.isDrs ? 'DRS/Raf Breda-groep' : 'overig'} | nu: ${o.status}`;
+    if (o.appointmentAt) line += ` | afspraak: ${o.appointmentAt}`;
+    if (o.price) line += ` | prijs: ${o.price}`;
+    if (o.notes) line += ` | notitie: ${o.notes}`;
+    if (o.thread && o.thread.length) line += `\n   gesprek: ${o.thread.join(' || ')}`;
+    return line;
+  }).join('\n');
   // Label elk bericht naar bron-type, zodat de Ai het verschil snapt tussen een
   // tussentijds monteursrapport en een definitieve terugkoppeling in de DRS-groep.
   const msgList = messages.slice(0, 600).map((m) => {
@@ -568,9 +573,12 @@ huidige status) en (2) recente berichten, elk gelabeld met de bron ([DRS-groep "
 [monteursgroep "..."] of [e-mail]).
 
 TAAK A — STATUSWIJZIGINGEN ("statusChanges") — DIT IS DE BELANGRIJKSTE TAAK:
-Zoek in de berichten naar aanwijzingen dat er iets met een opdracht is gebeurd (afgerond,
-afspraak gepland, offerte verstuurd, geannuleerd) en koppel dat aan de juiste lopende
-opdracht. Match op wat je hebt: postcode, adres, plaatsnaam, klantnaam OF het onderwerp
+Bepaal voor elke lopende opdracht de juiste status. Gebruik TWEE bronnen van bewijs:
+ (a) het GESPREK en de NOTITIE die bij de opdracht zelf staan (regel "gesprek:"/"notitie:") —
+     dit is vaak het sterkste bewijs (bv. klant zegt "akkoord, plan maar in" -> afspraak;
+     "offerte verstuurd" -> offerte; monteur "klaar/afgerond" -> afgerond);
+ (b) de recente losse berichten (monteursrapport/DRS-groep/e-mail).
+Koppel berichten aan de juiste opdracht op postcode, adres, plaatsnaam, klantnaam OF onderwerp
 (bv. "schuifpui Etten-Leur"). Geldige statussen: ${statusKeys}.
 WEES RUIMHARTIG met voorstellen: een MENS controleert en bevestigt elke suggestie vóór die
 wordt toegepast, dus stel alles voor wat redelijk waarschijnlijk is. Liever een goede suggestie
@@ -591,7 +599,7 @@ Beide lijsten mogen leeg zijn ([]).`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 3500, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
+    body: JSON.stringify({ model, max_tokens: 4500, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();

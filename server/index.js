@@ -1551,7 +1551,17 @@ async function computeStatusScan(days) {
       const src = (o.source || '').toLowerCase();
       const isDrs = (o.originGroup && isWhatsappOrderGroup(o.originGroup))
         || (!o.originGroup && /whatsapp|groep|app/.test(src));
-      return { id: o.id, title: o.title, status: o.status, customer: c.name, phone: c.phone || '', address: c.address || '', isDrs };
+      // Het eigen verhaal van de kaart meegeven (gesprekshistorie + notities), want
+      // het bewijs van de juiste status staat vaak ÓP de kaart, niet in losse berichten.
+      const thread = (o.thread || []).slice(-4).map((t) =>
+        `${t.outgoing ? 'wij' : 'klant'}: ${(t.body || '').replace(/\s+/g, ' ').slice(0, 160)}`);
+      return {
+        id: o.id, title: o.title, status: o.status, customer: c.name, phone: c.phone || '',
+        address: c.address || '', isDrs,
+        appointmentAt: o.appointmentAt || '', price: o.price || '',
+        notes: (o.notes || '').replace(/\s+/g, ' ').slice(0, 200),
+        thread,
+      };
     })
     .slice(0, 300);
   const msgs = db().messages
