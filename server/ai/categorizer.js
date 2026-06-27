@@ -558,41 +558,30 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
 
   const system = `Je bent een assistent voor Keyservice (sleutel-/slotenmaker).
 ${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
-ZO WERKT KEYSERVICE (belangrijk om te snappen):
-1. Een opdracht komt binnen (vaak via de DRS/"Raf Breda" WhatsApp-groep, soms via e-mail of
-   telefoon) en wordt een kaart op het bord.
-2. De monteur of een collega stuurt LATER op de dag — vaak 's avonds na de drukte — een
-   RAPPORT in de MONTEURSGROEP: wat er met de opdracht is gebeurd (afgerond, geannuleerd,
-   afspraak gemaakt, offerte gegeven, prijs). Dit zijn tussentijdse rapporten.
-3. Daarna koppelt het kantoor de DEFINITIEVE uitkomst terug in de DRS/"Raf Breda"-groep met
-   een tekstje per opdracht (geannuleerd / afgerond / afspraak / offerte). ÉLKE opdracht uit
-   de Raf Breda-groep MOET zo'n terugkoppeling krijgen.
+ZO WERKT KEYSERVICE: een opdracht komt binnen (vaak via de DRS/"Raf Breda" WhatsApp-groep,
+soms e-mail/telefoon) en wordt een kaart. De monteur stuurt later een RAPPORT in de
+monteursgroep (afgerond / afspraak / offerte / geannuleerd / prijs). Het kantoor koppelt de
+uitkomst daarna terug in de Raf Breda-groep.
 
-Je krijgt (1) een lijst lopende opdrachten (met klant, telefoon, ADRES/postcode, herkomst en
+Je krijgt (1) een lijst lopende opdrachten (met klant, telefoon, adres/postcode, herkomst en
 huidige status) en (2) recente berichten, elk gelabeld met de bron ([DRS-groep "..."],
 [monteursgroep "..."] of [e-mail]).
 
-JE HEBT TWEE TAKEN:
+TAAK A — STATUSWIJZIGINGEN ("statusChanges") — DIT IS DE BELANGRIJKSTE TAAK:
+Zoek in de berichten naar aanwijzingen dat er iets met een opdracht is gebeurd (afgerond,
+afspraak gepland, offerte verstuurd, geannuleerd) en koppel dat aan de juiste lopende
+opdracht. Match op wat je hebt: postcode, adres, plaatsnaam, klantnaam OF het onderwerp
+(bv. "schuifpui Etten-Leur"). Geldige statussen: ${statusKeys}.
+WEES RUIMHARTIG met voorstellen: een MENS controleert en bevestigt elke suggestie vóór die
+wordt toegepast, dus stel alles voor wat redelijk waarschijnlijk is. Liever een goede suggestie
+die de gebruiker kan wegklikken dan een gemiste statuswijziging. Alleen bij echt geen enkele
+aanwijzing laat je een opdracht met rust.
 
-TAAK A — STATUSWIJZIGINGEN ("statusChanges"):
-Koppel rapporten (uit monteursgroep, DRS-groep of e-mail) aan de juiste lopende opdracht —
-MATCH vooral op POSTCODE/ADRES en klantnaam — en stel de nieuwe status voor.
-Geldige statussen: ${statusKeys}.
-Stel ALLEEN iets voor bij duidelijk bewijs ("klus klaar/afgerond", "offerte verstuurd",
-"klant geannuleerd/wil niet", "afspraak gepland op ...") én een betrouwbare match (zelfde
-postcode/adres of klant). Verzin niets, gok niet bij twijfel.
-
-TAAK B — OPENSTAANDE TERUGKOPPELING IN RAF BREDA ("needsDrsUpdate"):
-Kijk naar opdrachten met herkomst "DRS/Raf Breda-groep". Voor zulke opdrachten MOET de
-uitkomst teruggekoppeld worden in de Raf Breda-groep. Meld een opdracht als openstaande
-terugkoppeling wanneer:
-  - er een UITKOMST bekend is (bv. uit een monteursrapport of de huidige status laat zien dat
-    er iets gebeurd is: afgerond/geannuleerd/afspraak/offerte), MAAR
-  - er GEEN bericht in de DRS-groep "..." staat dat die uitkomst voor deze opdracht meldt.
-Geef per zo'n opdracht een korte, kant-en-klare tekst die het kantoor in de Raf Breda-groep
-kan plakken (bv. "Afgesproken di. langs voor offerte — Etten-Leur 4871LA" of
-"Afgerond — Hulst 4561KZ"). Geen losse terugkoppeling melden als er al een DRS-bericht over
-bestaat, of als er nog geen enkele uitkomst bekend is.
+TAAK B — OPENSTAANDE TERUGKOPPELING IN RAF BREDA ("needsDrsUpdate") — secundair:
+Voor opdrachten uit de "DRS/Raf Breda-groep" waarvan de uitkomst bekend is (uit een rapport
+of de huidige status) maar die nog niet is teruggekoppeld in de DRS-groep: geef een korte
+kant-en-klare tekst om in Raf Breda te plakken (bv. "Afgerond — Hulst 4561KZ"). Laat deze
+taak NOOIT ten koste gaan van Taak A.
 
 Antwoord UITSLUITEND met één JSON-object, geen tekst eromheen:
 {"statusChanges":[{"orderId":"...","suggestedStatus":"<geldige statuskey>","reason":"korte uitleg","evidence":"het bericht waarop je je baseert"}],
@@ -610,14 +599,20 @@ Beide lijsten mogen leeg zijn ([]).`;
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   let statusChanges = [];
   let needsDrsUpdate = [];
-  try {
-    const m = text.match(/\{[\s\S]*\}/);
-    const parsed = m ? JSON.parse(m[0]) : {};
-    if (Array.isArray(parsed.statusChanges)) statusChanges = parsed.statusChanges;
-    if (Array.isArray(parsed.needsDrsUpdate)) needsDrsUpdate = parsed.needsDrsUpdate;
-    // Terugvalcompat: als het model toch een kale array teruggaf.
-    if (!m) { const a = text.match(/\[[\s\S]*\]/); if (a) statusChanges = JSON.parse(a[0]); }
-  } catch { /* laat lijsten leeg */ }
+  // 1) Probeer het JSON-object met statusChanges/needsDrsUpdate te vinden.
+  const objMatch = text.match(/\{[\s\S]*"statusChanges"[\s\S]*\}/);
+  if (objMatch) {
+    try {
+      const parsed = JSON.parse(objMatch[0]);
+      if (Array.isArray(parsed.statusChanges)) statusChanges = parsed.statusChanges;
+      if (Array.isArray(parsed.needsDrsUpdate)) needsDrsUpdate = parsed.needsDrsUpdate;
+    } catch { /* val door naar array-fallback */ }
+  }
+  // 2) Terugvalcompat: model gaf een kale array van statusvoorstellen terug.
+  if (!statusChanges.length && !needsDrsUpdate.length) {
+    const arr = text.match(/\[[\s\S]*\]/);
+    if (arr) { try { const a = JSON.parse(arr[0]); if (Array.isArray(a)) statusChanges = a; } catch { /* laat leeg */ } }
+  }
   if (!Array.isArray(statusChanges)) statusChanges = [];
   if (!Array.isArray(needsDrsUpdate)) needsDrsUpdate = [];
   return { statusChanges, needsDrsUpdate, engine: `ai:${model}` };
