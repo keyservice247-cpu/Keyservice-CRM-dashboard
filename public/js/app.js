@@ -1282,7 +1282,7 @@ function renderAgenda() {
   const todayKey = new Date().toISOString().slice(0, 10);
   const groups = {};
   for (const a of items) { const k = dayKey(a.at); (groups[k] = groups[k] || []).push(a); }
-  wrap.innerHTML = Object.keys(groups).sort().map((k) => `
+  const dayBlock = (k) => `
     <div class="agenda-day">
       <div class="agenda-day-head">${k === todayKey ? '<span class="agenda-today">Vandaag</span> ' : ''}${esc(fmtDay(k))}<span class="count">${groups[k].length}</span></div>
       ${groups[k].map((a) => `
@@ -1295,7 +1295,17 @@ function renderAgenda() {
             <a class="agenda-gcal" target="_blank" rel="noopener" href="${esc(googleCalUrl({ title: a.title, at: a.at, location: a.address, details: a.phone ? 'Tel: ' + a.phone : '' }))}">${icon('calendar', 12)} Zet in Google Agenda</a>
           </div>
         </div>`).join('')}
-    </div>`).join('');
+    </div>`;
+  const allKeys = Object.keys(groups).sort();
+  const upcoming = allKeys.filter((k) => k >= todayKey);          // vandaag + toekomst
+  const past = allKeys.filter((k) => k < todayKey).reverse();      // voorbij: nieuwste eerst
+  const pastCount = past.reduce((n, k) => n + groups[k].length, 0);
+  let html = upcoming.length ? upcoming.map(dayBlock).join('')
+    : '<div class="empty" style="margin-bottom:10px">Geen openstaande afspraken meer.</div>';
+  if (past.length) {
+    html += `<details class="agenda-past"><summary>${icon('clock', 13)} Afgelopen afspraken (${pastCount}) — klik om te tonen</summary>${past.map(dayBlock).join('')}</details>`;
+  }
+  wrap.innerHTML = html;
   $$('.agenda-item[data-open]').forEach((el) => el.onclick = (e) => { if (e.target.closest('.agenda-gcal')) return; markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
 }
 
