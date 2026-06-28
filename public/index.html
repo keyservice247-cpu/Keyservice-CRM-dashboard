@@ -73,10 +73,14 @@
           </div>
         </div>
         <div id="boardBulkBar" class="bulk-bar perm-write" hidden>
-          <span id="boardBulkCount" class="muted small"></span>
-          <span style="flex:1"></span>
-          <button id="boardBulkDelete" class="btn btn-danger btn-sm">Geselecteerde naar prullenbak</button>
-          <button id="boardBulkClear" class="btn btn-sm">Selectie wissen</button>
+          <span id="boardBulkCount" class="bulk-count"></span>
+          <div class="bulk-actions">
+            <label class="bulk-status">Zet op <select id="boardBulkStatus"></select></label>
+            <button id="boardBulkApply" class="btn btn-primary btn-sm">Toepassen</button>
+            <span class="bulk-sep"></span>
+            <button id="boardBulkDelete" class="btn btn-danger btn-sm">Naar prullenbak</button>
+            <button id="boardBulkClear" class="btn btn-sm">Selectie wissen</button>
+          </div>
         </div>
         <div id="board" class="board"></div>
         <div id="trashZone" class="trash-zone">Sleep een kaart hierheen om naar de prullenbak te verplaatsen</div>

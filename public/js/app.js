@@ -2130,6 +2130,20 @@ function bindButtons() {
     try { for (const id of ids) await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo(`${ids.length} naar prullenbak`, () => restoreOrders(ids)); }
     catch (err) { toast(err.message, true); }
   });
+  // Status-kiezer vullen + bulk-status toepassen op alle geselecteerde kaarten.
+  const bulkSel = $('#boardBulkStatus');
+  if (bulkSel) bulkSel.innerHTML = statusOptionsHTML();
+  $('#boardBulkApply')?.addEventListener('click', async () => {
+    const ids = selectedCardIds();
+    const status = $('#boardBulkStatus')?.value;
+    if (!ids.length || !status) return;
+    const label = statusLabel(status);
+    if (!confirm(`${ids.length} kaart(en) op "${label}" zetten?`)) return;
+    let ok = 0;
+    for (const id of ids) { try { await api(`/api/orders/${id}`, 'PATCH', { status }); ok++; } catch { /* skip */ } }
+    toast(`${ok} kaart(en) → ${label}`);
+    loadBoard();
+  });
   $('#boardBulkClear')?.addEventListener('click', () => { $$('.card-check').forEach((c) => (c.checked = false)); updateBoardBulk(); });
   $('#dupBtn')?.addEventListener('click', openDuplicatesModal);
   $('#emptyTrashBtn')?.addEventListener('click', async () => {
