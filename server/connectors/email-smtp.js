@@ -41,11 +41,13 @@ export async function sendMail({ to, subject, text, attachments }) {
     const info = await tx.sendMail(mail);
     return { messageId: info.messageId };
   } catch (err) {
+    // Verbinding weggooien zodat de volgende poging een verse maakt (bv. na wachtwoordwijziging).
+    transporter = null;
     // Maak veelvoorkomende SMTP-fouten begrijpelijk voor het team.
     const code = err && (err.responseCode || err.code);
     const msg = String((err && err.message) || '');
     if (code === 535 || /auth|login|credential|password/i.test(msg)) {
-      throw new Error('E-mailwachtwoord voor versturen klopt niet meer. Werk SMTP_PASSWORD bij op Render met het nieuwe wachtwoord van het verzendadres.');
+      throw new Error(`E-mail versturen mislukt (inloggen geweigerd door de mailserver). Controleer op Render: SMTP_USER = het verzendadres, SMTP_PASSWORD = het HUIDIGE wachtwoord daarvan, en dat de service opnieuw is gedeployd. Serverdetail: ${msg.slice(0, 140)}`);
     }
     if (code === 'ETIMEDOUT' || code === 'ECONNECTION' || /timed?out|connect/i.test(msg)) {
       throw new Error('Geen verbinding met de e-mailserver. Probeer het zo nog eens; blijft het fout, controleer SMTP_HOST/SMTP_PORT op Render.');
