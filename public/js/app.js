@@ -927,9 +927,15 @@ async function refreshInboxBadge() {
   } catch {}
 }
 
-async function loadInbox() {
+const INBOX_PAGE = 60; // aantal berichten per keer renderen (voorkomt vastlopen)
+async function loadInbox(append = false) {
   const filter = $('#inboxFilter')?.value || 'pending';
-  const reviews = await api('/api/reviews?status=' + filter);
+  if (!append) state._inboxOffset = 0;
+  const offset = state._inboxOffset || 0;
+  const resp = await api(`/api/reviews?status=${filter}&limit=${INBOX_PAGE}&offset=${offset}`);
+  const reviews = resp.items || [];
+  const total = resp.total || reviews.length;
+  state._inboxOffset = offset + reviews.length;
   const list = $('#reviewList');
   const bulkBar = $('#bulkBar');
   // Bulk-balk en "alle geklets afwijzen"-knop alleen tonen wanneer relevant.
@@ -940,7 +946,7 @@ async function loadInbox() {
   if ($('#emptyRejectedBtn')) $('#emptyRejectedBtn').style.display = (inTrash && state.me.role === 'admin') ? '' : 'none';
   if ($('#selectAll')) $('#selectAll').checked = false;
   updateBulkCount();
-  if (!reviews.length) {
+  if (!append && !reviews.length) {
     if (bulkBar) bulkBar.hidden = true;
     list.innerHTML = filter === 'rejected'
       ? '<div class="empty">De inbox-prullenbak is leeg.</div>'
@@ -949,9 +955,17 @@ async function loadInbox() {
       : '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>';
     return;
   }
-  list.innerHTML = reviews.map(reviewHTML).join('');
+  const rowsHTML = reviews.map(reviewHTML).join('');
+  if (append) { $('#inboxMoreWrap')?.remove(); list.insertAdjacentHTML('beforeend', rowsHTML); }
+  else list.innerHTML = rowsHTML;
   reviews.forEach((r) => bindReview(r));
   $$('.r-select').forEach((c) => c.addEventListener('change', updateBulkCount));
+  // "Toon meer"-knop als er nog berichten resteren.
+  const shown = state._inboxOffset || 0;
+  if (shown < total) {
+    list.insertAdjacentHTML('beforeend', `<div id="inboxMoreWrap" style="text-align:center;margin:14px 0"><button class="btn" id="inboxMore">Toon meer (${total - shown} van ${total} resterend)</button></div>`);
+    $('#inboxMore').onclick = () => loadInbox(true);
+  }
 }
 
 function selectedReviewIds() {

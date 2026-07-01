@@ -650,12 +650,15 @@ app.delete('/api/orders/:id/attachments/:attId', requireRole('admin', 'assistent
 // ---------- Inbox / AI-controlewachtrij ----------
 app.get('/api/reviews', requireAuth, (req, res) => {
   const status = req.query.status || 'pending';
-  const messages = db().messages;
-  const list = db().reviews
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 150));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  // Snelle O(1)-opzoeking van berichten (voorheen O(n²) -> traag bij veel berichten).
+  const msgById = new Map(db().messages.map((m) => [m.id, m]));
+  const all = db().reviews
     .filter((r) => (status === 'all' ? true : r.status === status))
-    .map((r) => ({ ...r, message: messages.find((m) => m.id === r.messageId) || null }))
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-  res.json(list);
+  const items = all.slice(offset, offset + limit).map((r) => ({ ...r, message: msgById.get(r.messageId) || null }));
+  res.json({ items, total: all.length, offset, limit });
 });
 
 app.post('/api/reviews/:id/approve', requireRole('admin', 'assistent'), (req, res) => {
