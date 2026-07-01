@@ -370,9 +370,21 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
   suggestion.relevant = (aiSaysNotOrder || looksMarketing || looksReport) ? false : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
+  // Website-formulieren (offerte/contact), ook als ze via FormSubmit worden doorgestuurd
+  // vanaf een noreply-adres, zijn ALTIJD een echte aanvraag. Herken de kenmerkende
+  // FormSubmit-/formuliertekst en behandel als lead (niet de activatie-mail van FormSubmit).
+  const hay = `${subject || ''} ${body || ''}`;
+  const isWebsiteForm = /submitted your form on/i.test(hay)
+    || /offerteaanvraag via keyservice247|nieuwe (offerte|contact)aanvraag via/i.test(hay)
+    || /aanvraag via de website/i.test(hay);
+  const isFormActivation = /activate formsubmit|one step away from making forms/i.test(hay);
   // Website-formulieren (offerte/contact) zijn altijd een echte aanvraag -> naar
   // de te-controleren inbox, ongeacht de tekst.
-  if (forceRelevant) { suggestion.relevant = true; suggestion.aiNotOrder = false; }
+  if ((forceRelevant || (isWebsiteForm && !isFormActivation)) && !looksMarketing) {
+    suggestion.relevant = true;
+    suggestion.aiNotOrder = false;
+    suggestion.relevanceReason = 'Website-formulier (offerte/contactaanvraag) — als opdracht voorgesteld.';
+  }
   if (looksMarketing || looksReport) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
   suggestion.relevanceReason = looksReport
     ? 'Status-/afrond-rapport van een medewerker — geen nieuwe opdracht (naar Overige).'
