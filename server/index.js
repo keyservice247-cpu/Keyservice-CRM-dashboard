@@ -19,7 +19,7 @@ import {
 import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
-  autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage,
+  autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { maybeSendAutoReply } from './autoreply.js';
@@ -138,10 +138,17 @@ app.delete('/api/users/:id', requireRole('admin'), (req, res) => {
 
 // ---------- Klanten ----------
 app.get('/api/customers', requireAuth, (req, res) => {
-  const orders = db().orders;
   const labels = getStatusLabels();
+  // Opdrachten ÉÉN keer groeperen per klant (O(n)) i.p.v. per klant de hele
+  // opdrachtenlijst doorzoeken (O(n²)).
+  const ordersByCustomer = new Map();
+  for (const o of db().orders) {
+    if (!o.customerId) continue;
+    const arr = ordersByCustomer.get(o.customerId) || [];
+    arr.push(o); ordersByCustomer.set(o.customerId, arr);
+  }
   const list = db().customers.map((c) => {
-    const mine = orders.filter((o) => o.customerId === c.id);
+    const mine = ordersByCustomer.get(c.id) || [];
     const last = mine.slice().sort((a, b) =>
       (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''))[0] || null;
     const activeCount = mine.filter((o) => !['afgerond', 'geannuleerd'].includes(o.status) && !o.archivedWeek).length;
@@ -251,17 +258,24 @@ app.post('/api/customers/merge', requireRole('admin', 'assistent'), (req, res) =
 
 // ---------- Monteurs ----------
 app.get('/api/monteurs', requireAuth, (req, res) => {
-  const orders = db().orders;
   const labels = getStatusLabels();
   const now2 = Date.now();
+  // Opdrachten ÉÉN keer groeperen per monteur (O(n)) i.p.v. per monteur de hele
+  // lijst meerdere keren doorzoeken (O(n²)).
+  const byMonteur = new Map();
+  const sentByMonteur = new Map();
+  for (const o of db().orders) {
+    if (o.monteurId && !o.archivedWeek) { const a = byMonteur.get(o.monteurId) || []; a.push(o); byMonteur.set(o.monteurId, a); }
+    if (o.sentToMonteur && o.sentToMonteur.monteurId) sentByMonteur.set(o.sentToMonteur.monteurId, (sentByMonteur.get(o.sentToMonteur.monteurId) || 0) + 1);
+  }
   res.json(db().monteurs.map((m) => {
-    const mine = orders.filter((o) => o.monteurId === m.id && !o.archivedWeek);
+    const mine = byMonteur.get(m.id) || [];
     const active = mine.filter((o) => !['afgerond', 'geannuleerd'].includes(o.status));
     const upcoming = mine
       .filter((o) => o.appointmentAt && new Date(o.appointmentAt).getTime() >= now2 - 12 * 3600 * 1000 && !['afgerond', 'geannuleerd'].includes(o.status))
       .sort((a, b) => new Date(a.appointmentAt) - new Date(b.appointmentAt))
       .map((o) => ({ id: o.id, title: o.title, at: o.appointmentAt, status: o.status, statusLabel: labels[o.status] || o.status }));
-    const sentCount = orders.filter((o) => o.sentToMonteur && o.sentToMonteur.monteurId === m.id).length;
+    const sentCount = sentByMonteur.get(m.id) || 0;
     const doneCount = mine.filter((o) => o.status === 'afgerond').length;
     return {
       ...m,
@@ -333,14 +347,16 @@ app.delete('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) =>
 
 // ---------- Opdrachten ----------
 app.get('/api/orders', requireAuth, (req, res) => {
-  let list = db().orders.map(withRelations);
-  // Monteurs zien ALLEEN hun eigen toegewezen opdrachten.
-  if (req.user.role === 'monteur') list = list.filter((o) => o.monteurId && o.monteurId === req.user.monteurId);
-  // Standaard tonen we alleen actieve (niet-ingeklapte) opdrachten op het bord.
-  if (req.query.archivedWeek) list = list.filter((o) => o.archivedWeek?.key === req.query.archivedWeek);
-  else if (req.query.includeArchived !== '1') list = list.filter((o) => !o.archivedWeek);
-  if (req.query.status) list = list.filter((o) => o.status === req.query.status);
-  if (req.query.monteurId) list = list.filter((o) => o.monteurId === req.query.monteurId);
+  // Eerst filteren op de RAUWE opdrachten (goedkoop), pas daarna de klant/monteur
+  // koppelen — en dat met snelle maps i.p.v. per opdracht de lijst doorzoeken.
+  let raw = db().orders;
+  if (req.user.role === 'monteur') raw = raw.filter((o) => o.monteurId && o.monteurId === req.user.monteurId);
+  if (req.query.archivedWeek) raw = raw.filter((o) => o.archivedWeek?.key === req.query.archivedWeek);
+  else if (req.query.includeArchived !== '1') raw = raw.filter((o) => !o.archivedWeek);
+  if (req.query.status) raw = raw.filter((o) => o.status === req.query.status);
+  if (req.query.monteurId) raw = raw.filter((o) => o.monteurId === req.query.monteurId);
+  const maps = buildMaps();
+  const list = raw.map((o) => withRelations(o, maps));
   list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   res.json(list);
 });
@@ -922,7 +938,8 @@ function weekBounds(ref = new Date()) {
 app.get('/api/overview', requireAuth, (req, res) => {
   const active = db().orders.filter((o) => !o.archivedWeek);
   const labels = getStatusLabels();
-  const custName = (o) => (db().customers.find((c) => c.id === o.customerId) || {}).name || '';
+  const custMap = new Map((db().customers || []).map((c) => [c.id, c]));
+  const custName = (o) => (custMap.get(o.customerId) || {}).name || '';
   const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
   const endToday = startToday.getTime() + 86400000;
   const wk = weekBounds();
@@ -1732,12 +1749,13 @@ app.get('/api/calendar.ics', (req, res) => {
 // isDrs = afkomstig uit de DRS/opdracht-WhatsApp-groep (originGroup of WhatsApp-bron).
 app.get('/api/agenda', requireAuth, (req, res) => {
   const labels = getStatusLabels();
+  const maps = buildMaps();
   const items = db().orders
     .filter((o) => o.appointmentAt && !o.archivedWeek && !['geannuleerd'].includes(o.status))
     .filter((o) => req.user.role !== 'monteur' || (o.monteurId && o.monteurId === req.user.monteurId))
     .map((o) => {
-      const c = db().customers.find((x) => x.id === o.customerId) || {};
-      const m = db().monteurs.find((x) => x.id === o.monteurId) || null;
+      const c = maps.customers.get(o.customerId) || {};
+      const m = maps.monteurs.get(o.monteurId) || null;
       const src = (o.source || '').toLowerCase();
       const isDrs = (o.originGroup && isWhatsappOrderGroup(o.originGroup))
         || (!o.originGroup && /whatsapp|groep|app/.test(src));

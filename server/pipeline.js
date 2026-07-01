@@ -116,9 +116,21 @@ export function upsertCustomer({ name, phone, email, address, source }) {
   return { customer: c, created: true };
 }
 
-export function withRelations(order) {
-  const customer = db().customers.find((c) => c.id === order.customerId) || null;
-  const monteur = db().monteurs.find((m) => m.id === order.monteurId) || null;
+// Bouw snelle opzoek-maps (id -> klant/monteur). Geef die mee aan withRelations
+// bij het verwerken van een LIJST opdrachten, zodat je niet per opdracht de hele
+// klant-/monteurlijst doorzoekt (O(n²) -> O(n)).
+export function buildMaps() {
+  return {
+    customers: new Map((db().customers || []).map((c) => [c.id, c])),
+    monteurs: new Map((db().monteurs || []).map((m) => [m.id, m])),
+  };
+}
+
+export function withRelations(order, maps) {
+  const customer = maps ? (maps.customers.get(order.customerId) || null)
+    : (db().customers.find((c) => c.id === order.customerId) || null);
+  const monteur = maps ? (maps.monteurs.get(order.monteurId) || null)
+    : (db().monteurs.find((m) => m.id === order.monteurId) || null);
   // DRS = afkomstig uit de opdracht-WhatsApp-groep (bv. "Raf Breda…").
   const isDrs = order.originGroup ? isWhatsappOrderGroup(order.originGroup) : false;
   return { ...order, customer, monteur, isDrs };
