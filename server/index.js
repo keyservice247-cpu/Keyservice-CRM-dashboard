@@ -974,6 +974,56 @@ app.post('/api/ingest/email', checkIngestToken, async (req, res) => {
   res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
 });
 
+// Website-formulieren (keyservice247.nl): contact- en offerteformulieren POSTen
+// hierheen zodat elke lead direct als opdracht in de inbox komt.
+// CORS: de statische site draait op een ander domein, dus we staan cross-origin toe.
+// Token: eigen FORM_TOKEN (aanbevolen, want zichtbaar in de client) of anders INGEST_TOKEN.
+// De impact van een gelekte form-token is beperkt: leads komen ALTIJD eerst in de
+// te-controleren inbox (nooit automatisch een opdracht/dispatch).
+function formCors(req, res) {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, x-ingest-token, x-form-token');
+  res.set('Access-Control-Max-Age', '86400');
+}
+app.options('/api/ingest/form', (req, res) => { formCors(req, res); res.sendStatus(204); });
+app.post('/api/ingest/form', async (req, res) => {
+  formCors(req, res);
+  const expected = process.env.FORM_TOKEN || process.env.INGEST_TOKEN;
+  const got = req.get('x-form-token') || req.get('x-ingest-token') || (req.body && req.body.token) || req.query.token;
+  if (!expected) return res.status(503).json({ error: 'FORM_TOKEN/INGEST_TOKEN niet ingesteld' });
+  if (got !== expected) return res.status(401).json({ error: 'Ongeldig token' });
+  const b = req.body || {};
+  const name = (b.name || '').toString().trim();
+  const phone = (b.phone || '').toString().trim();
+  const email = (b.email || '').toString().trim();
+  const address = (b.address || '').toString().trim();
+  const subject = (b.subject || '').toString().trim();
+  const message = (b.message || b.comment || '').toString().trim();
+  const formType = (b.formType || b.form || 'website').toString().trim();
+  if (!name && !phone && !email && !message) return res.status(400).json({ error: 'Lege aanvraag' });
+
+  // Nette, gestructureerde tekst zodat naam/telefoon/e-mail/adres betrouwbaar worden
+  // opgeslagen (geen AI-giswerk nodig).
+  const lines = [`Nieuwe aanvraag via de website (${formType}).`, ''];
+  if (name) lines.push(`Naam: ${name}`);
+  if (phone) lines.push(`Telefoon: ${phone}`);
+  if (email) lines.push(`E-mail: ${email}`);
+  if (address) lines.push(`Adres: ${address}`);
+  if (subject) lines.push(`Onderwerp: ${subject}`);
+  if (message) lines.push('', message);
+
+  const result = await ingestMessage({
+    channel: 'email',
+    sender: email ? `${name || 'Website'} <${email}>` : (name || 'Website-aanvraag'),
+    subject: subject || (/offerte/i.test(formType) ? 'Offerteaanvraag via website' : 'Contactaanvraag via website'),
+    body: lines.join('\n'),
+    externalId: b.externalId || '',
+    forceRelevant: true, // website-aanvraag = altijd een echte lead
+  });
+  res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
+});
+
 app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
   const { from, sender, name, body, text, message, group, externalId } = req.body || {};
   const result = await ingestMessage({

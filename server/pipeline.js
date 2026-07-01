@@ -257,7 +257,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
 
 // Verwerk een binnenkomend bericht: ontdubbelen -> opslaan -> AI categoriseren
 // -> review aanmaken -> eventueel automatisch goedkeuren bij hoge zekerheid.
-export async function ingestMessage({ channel, sender, subject, body, group, externalId, attachments = [] }) {
+export async function ingestMessage({ channel, sender, subject, body, group, externalId, attachments = [], forceRelevant = false }) {
   // Ontdubbelen: zelfde bericht (zelfde externe id) nooit twee keer verwerken.
   if (externalId) {
     const existing = db().messages.find((m) => m.externalId && m.externalId === externalId);
@@ -370,6 +370,9 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
   suggestion.relevant = (aiSaysNotOrder || looksMarketing || looksReport) ? false : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
+  // Website-formulieren (offerte/contact) zijn altijd een echte aanvraag -> naar
+  // de te-controleren inbox, ongeacht de tekst.
+  if (forceRelevant) { suggestion.relevant = true; suggestion.aiNotOrder = false; }
   if (looksMarketing || looksReport) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
   suggestion.relevanceReason = looksReport
     ? 'Status-/afrond-rapport van een medewerker — geen nieuwe opdracht (naar Overige).'
