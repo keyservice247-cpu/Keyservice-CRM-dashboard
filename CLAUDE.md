@@ -69,6 +69,16 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
 - Bridge op VPS bijwerken na elke wijziging in `whatsapp-bridge/` (git pull + pm2 restart wa);
   monteur-groep koppelen bij Monteurs; wegwerp-nummer moet lid zijn van de monteur-groep.
 
+## Koppeling met de website (keyservice247.nl) — NIET SLOPEN
+- De statische site `keyservice247.nl` (aparte repo, apart Claude-project) POST elke
+  formulier-lead rechtstreeks naar dit CRM: `POST /api/ingest/form`.
+- Endpoint accepteert leads van het eigen domein ZONDER token (origin-check op
+  keyservice247.nl; instelbaar via env `FORM_ALLOWED_ORIGINS`), of met FORM_TOKEN/INGEST_TOKEN.
+- Velden: name, phone, email, subject, message (of comment), formType. Leads komen altijd
+  eerst in de te-controleren inbox (nooit auto-opdracht). Zie docs/WEBSITE-CRM-KOPPELING.md.
+- Website-kant: `axios.post` in `src/hooks/useFormSubmission.js` + `connect-src`-regel in
+  `public/.htaccess`. Wijzig dit endpoint-contract niet zonder beide kanten bij te werken.
+
 ## Test/run
 - Lokaal: `npm install && npm start` (poort 3000). Demo-login admin@keyservice.nl / admin123.
 - Deploy: push naar `main` → Render auto-deploy. Branch voor werk: `claude/busy-bardeen-cr8tX`.
