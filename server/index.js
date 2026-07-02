@@ -1058,6 +1058,8 @@ app.post('/api/ingest/form', async (req, res) => {
     externalId: b.externalId || '',
     forceRelevant: true, // website-aanvraag = altijd een echte lead
   });
+  // Ook website-leads krijgen automatisch de ontvangstbevestiging (indien aan).
+  await maybeSendAutoReply(result).catch(() => {});
   res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
 });
 
