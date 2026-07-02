@@ -449,7 +449,7 @@ ${history ? `\nGesprekshistorie:\n${history.slice(0, 2000)}` : ''}`;
 export async function analyzeTraffic({ messages = [], companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   // Voor een grondige analyse gebruiken we een sterker model als dat kan.
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-4-6';
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
   if (!apiKey) return { text: 'Zet eerst de AI aan (ANTHROPIC_API_KEY) om analyses te draaien.', engine: 'demo' };
   if (!messages.length) return { text: 'Geen berichten om te analyseren.', engine: 'n.v.t.' };
 
@@ -471,7 +471,7 @@ Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je zie
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 1500, system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }),
+    body: JSON.stringify({ model, max_tokens: 4000, system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
@@ -485,7 +485,7 @@ Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je zie
 // "wat is er met de opdracht van mevrouw Jansen gebeurd?".
 export async function askAssistant({ question, messages = [], companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-4-6';
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
   if (!apiKey) return { text: 'Zet eerst de AI aan (ANTHROPIC_API_KEY) om de vraagbaak te gebruiken.', engine: 'demo' };
   if (!question) return { text: 'Stel een vraag.', engine: 'n.v.t.' };
   if (!messages.length) return { text: 'Er zijn nog geen berichten om in te zoeken.', engine: 'n.v.t.' };
@@ -523,7 +523,7 @@ ALGEMEEN:
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 2500, system, messages: [{ role: 'user', content: `Berichten (chronologisch):\n${corpus}\n\n---\nVraag: ${question}` }] }),
+    body: JSON.stringify({ model, max_tokens: 6000, system, messages: [{ role: 'user', content: `Berichten (chronologisch):\n${corpus}\n\n---\nVraag: ${question}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
@@ -538,7 +538,7 @@ ALGEMEEN:
 // een mens nog moet goedkeuren — past zelf NIETS aan.
 export async function suggestStatusChanges({ orders = [], messages = [], statuses = [], companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-4-6';
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
   if (!apiKey) return { suggestions: [], engine: 'demo', note: 'Zet de AI aan (ANTHROPIC_API_KEY) voor de statusscan.' };
   if (!orders.length || !messages.length) return { suggestions: [], engine: 'n.v.t.' };
 
@@ -599,7 +599,7 @@ Beide lijsten mogen leeg zijn ([]).`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 4500, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
+    body: JSON.stringify({ model, max_tokens: 10000, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
@@ -631,7 +631,7 @@ Beide lijsten mogen leeg zijn ([]).`;
 // toe te voegen, zodat de AI scherper filtert in de inbox.
 export async function learnFilterRules({ messages = [], companyProfile = '', feedback = [] }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-4-6';
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
   if (!apiKey) return { text: '', engine: 'demo' };
   if (!messages.length) return { text: '', engine: 'n.v.t.' };
 
@@ -653,7 +653,7 @@ Begin met de kop "FILTERREGELS (op basis van werkelijk verkeer):".`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 800, system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }),
+    body: JSON.stringify({ model, max_tokens: 3000, system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
