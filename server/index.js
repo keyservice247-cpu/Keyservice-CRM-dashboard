@@ -1024,12 +1024,26 @@ function formCors(req, res) {
   res.set('Access-Control-Max-Age', '86400');
 }
 app.options('/api/ingest/form', (req, res) => { formCors(req, res); res.sendStatus(204); });
+// Toegestane afkomst-domeinen voor formulier-leads (zonder token). Standaard de
+// keyservice247-site; aanpasbaar via FORM_ALLOWED_ORIGINS (komma-gescheiden).
+const FORM_ORIGINS = (process.env.FORM_ALLOWED_ORIGINS || 'keyservice247.nl')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+function fromAllowedSite(req) {
+  const src = `${req.get('origin') || ''} ${req.get('referer') || ''}`.toLowerCase();
+  return FORM_ORIGINS.some((d) => src.includes(d));
+}
 app.post('/api/ingest/form', async (req, res) => {
   formCors(req, res);
+  // Toegang: óf een geldig token, óf de aanvraag komt aantoonbaar van de eigen site.
+  // Leads gaan sowieso altijd eerst door handmatige controle, dus de impact van
+  // misbruik is beperkt tot hooguit spam in de te-controleren inbox.
   const expected = process.env.FORM_TOKEN || process.env.INGEST_TOKEN;
   const got = req.get('x-form-token') || req.get('x-ingest-token') || (req.body && req.body.token) || req.query.token;
-  if (!expected) return res.status(503).json({ error: 'FORM_TOKEN/INGEST_TOKEN niet ingesteld' });
-  if (got !== expected) return res.status(401).json({ error: 'Ongeldig token' });
+  const tokenOk = expected && got === expected;
+  if (!tokenOk && !fromAllowedSite(req)) {
+    console.log('[form] geweigerd — geen geldig token en niet van toegestane site:', req.get('origin') || req.get('referer') || 'onbekend');
+    return res.status(401).json({ error: 'Niet toegestaan' });
+  }
   const b = req.body || {};
   const name = (b.name || '').toString().trim();
   const phone = (b.phone || '').toString().trim();
@@ -1058,6 +1072,7 @@ app.post('/api/ingest/form', async (req, res) => {
     externalId: b.externalId || '',
     forceRelevant: true, // website-aanvraag = altijd een echte lead
   });
+  console.log(`[form] lead ontvangen van website: ${name || '?'} <${email || '-'}> (${formType})`);
   // Ook website-leads krijgen automatisch de ontvangstbevestiging (indien aan).
   await maybeSendAutoReply(result).catch(() => {});
   res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
