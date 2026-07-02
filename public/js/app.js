@@ -8,6 +8,7 @@ const ICON_PATHS = {
   whatsapp: '<path d="M3 21l1.7-5A8 8 0 1 1 8 19.3z"/>',
   bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
   pin: '<path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+  shield: '<path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
   phone: '<path d="M5 4h3l1.5 5-2 1.5a11 11 0 0 0 5 5l1.5-2 5 1.5V19a2 2 0 0 1-2 2A16 16 0 0 1 4 6a2 2 0 0 1 1-2z"/>',
   tag: '<path d="M3 7v5l8 8 6-6-8-8H3z"/><circle cx="7" cy="11" r="1"/>',
@@ -369,13 +370,47 @@ async function loadOverview() {
         <div class="ov-wa ${wa.online ? 'on' : 'off'}">${wa.online ? 'WhatsApp-bridge: actief' : (wa.configured ? 'WhatsApp-bridge: GESTOPT' : 'WhatsApp: niet gekoppeld')}</div>
         <ul class="ov-activity">${(d.activity || []).map((a) => `<li><span class="muted small">${fmtDate(a.at)}</span> ${esc(a.actor)} — ${esc(a.action)}${a.detail ? `: ${esc(a.detail)}` : ''}</li>`).join('') || '<li class="muted small">Nog geen activiteit.</li>'}</ul>
       </div>
-    </div>`;
+    </div>
+    ${state.me.role !== 'monteur' ? `
+    <div class="info-card" style="margin-top:18px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <h3 style="margin:0">${icon('activity', 15)} Weekrapport</h3>
+        <select id="wr-offset" style="max-width:170px;margin-left:auto"><option value="0">Deze week</option><option value="1">Vorige week</option><option value="2">2 weken terug</option></select>
+      </div>
+      <div id="wr-body" class="muted small" style="margin-top:10px">Laden…</div>
+    </div>` : ''}`;
   $$('#overviewPanel [data-go]').forEach((el) => el.onclick = () => {
     const col = el.dataset.col;
     if (col) { state.boardTab = col; state._focusCol = col; } // open meteen de juiste kolom
     goView(el.dataset.go);
   });
   $$('#overviewPanel [data-open]').forEach((el) => el.onclick = async () => { if (!state.orders.length) state.orders = await api('/api/orders'); markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
+  if ($('#wr-offset')) {
+    const euro = (n) => '€ ' + Number(n || 0).toLocaleString('nl-NL', { maximumFractionDigits: 0 });
+    const loadWeek = async () => {
+      const box = $('#wr-body'); if (!box) return;
+      box.textContent = 'Laden…';
+      try {
+        const r = await api('/api/report/week?offset=' + $('#wr-offset').value);
+        const range = `${new Date(r.weekStart).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })} t/m ${new Date(new Date(r.weekEnd).getTime() - 1).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })}`;
+        box.innerHTML = `
+          <div class="muted small" style="margin-bottom:8px">${esc(range)}</div>
+          <div class="wr-kpis">
+            <div class="wr-kpi"><span class="wr-num">${r.aanvragen}</span><span>aanvragen</span></div>
+            <div class="wr-kpi"><span class="wr-num">${r.newOrders}</span><span>nieuwe opdrachten</span></div>
+            <div class="wr-kpi"><span class="wr-num">${r.apptCount}</span><span>afspraken</span></div>
+            <div class="wr-kpi"><span class="wr-num">${r.doneCount}</span><span>afgerond</span></div>
+            <div class="wr-kpi"><span class="wr-num">${euro(r.omzet)}</span><span>omzet (prijsveld)</span></div>
+            <div class="wr-kpi"><span class="wr-num">${r.conversie === null ? '—' : r.conversie + '%'}</span><span>conversie</span></div>
+          </div>
+          <table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th><th>Omzet</th><th>Afspraken</th><th>Nu actief</th></tr></thead>
+          <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table>
+          <p class="muted small" style="margin-top:8px">Omzet komt uit het <strong>prijsveld</strong> op afgeronde kaarten — vul die in voor een kloppend rapport.</p>`;
+      } catch (err) { box.innerHTML = `<span class="error">${esc(err.message)}</span>`; }
+    };
+    $('#wr-offset').onchange = loadWeek;
+    loadWeek();
+  }
 }
 
 // ---------- Source <select> (met 'andere bron toevoegen') ----------
@@ -656,6 +691,8 @@ function cardHTML(o) {
   if (o.sentToMonteur) meta.push(`<span class="chip src-whatsapp" title="Verstuurd naar ${esc(o.sentToMonteur.monteurName)}">${icon('whatsapp', 13)} naar ${esc(o.sentToMonteur.monteurName)}</span>`);
   if (o.urgent) meta.push(`<span class="chip urgent">${icon('bolt', 13)} spoed</span>`);
   if (o.appointmentAt) meta.push(`<span class="chip">${icon('calendar', 13)} ${fmtDate(o.appointmentAt)}</span>`);
+  if (o.snoozeDue) meta.push(`<span class="chip urgent" title="De opvolg-herinnering is verlopen — actie nodig">${icon('clock', 13)} opvolgen!</span>`);
+  else if (o.snoozeAt) meta.push(`<span class="chip" title="Opvolg-herinnering ingesteld">${icon('clock', 13)} ${fmtDate(o.snoozeAt)}</span>`);
   if (o.attachments && o.attachments.length) meta.push(`<span class="chip">${icon('paperclip', 13)} ${o.attachments.length}</span>`);
   if (o.autoReplied) meta.push(`<span class="chip chip-ack" title="Automatische ontvangstbevestiging verstuurd">${icon('mail', 12)} bevestigd</span>`);
   // Status-stip: beantwoord (groen) > geopend (blauw) > nieuw/ongelezen (geel).
@@ -820,7 +857,7 @@ function openOrderModal(id, pool) {
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
   // Gesprek meteen naar het nieuwste bericht scrollen.
@@ -846,6 +883,7 @@ function openOrderModal(id, pool) {
   }; }
   if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
   if (o && canWrite) $('#f-send-monteur').onclick = () => openSendMonteurModal(o);
+  if (o && canWrite && $('#f-snooze')) $('#f-snooze').onclick = () => openSnoozeModal(o);
 
   // Bijlagen toevoegen
   if (o) {
@@ -1157,6 +1195,76 @@ async function openMonteurOrders(mId, mName, filter) {
   } catch (err) { $('#mo-list').innerHTML = `<span class="error">${esc(err.message)}</span>`; }
 }
 
+// Snelle telefonische intake: compact formulier voor tijdens een telefoongesprek.
+// Alleen de essentie (naam/tel/plaats/probleem) — de rest vul je later aan op de kaart.
+function openPhoneIntakeModal() {
+  const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
+  modal(`
+    <h2>📞 Telefonische aanvraag</h2>
+    <p class="muted small">Noteer snel de essentie tijdens het gesprek. Aanvullen kan later op de kaart.</p>
+    <div class="row"><label>Naam klant <input id="pi-name" placeholder="naam"></label><label>Telefoon <input id="pi-phone" placeholder="06-…"></label></div>
+    <label>Plaats of adres <input id="pi-address" placeholder="bv. Breda, of straat + postcode"></label>
+    <label>Wat is het probleem? <textarea id="pi-problem" rows="3" placeholder="bv. buitengesloten, cilinder vervangen, schuifpui klemt…"></textarea></label>
+    <div class="row"><label>Monteur <select id="pi-monteur">${monteurOpts}</select></label><label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:24px"><input type="checkbox" id="pi-urgent" style="width:auto"> Spoed</label></div>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="pi-cancel">Annuleren</button><button class="btn btn-primary" id="pi-save">Kaart aanmaken</button></div></div>`);
+  $('#pi-name').focus();
+  $('#pi-cancel').onclick = closeModal;
+  $('#pi-save').onclick = async () => {
+    const name = $('#pi-name').value.trim();
+    const problem = $('#pi-problem').value.trim();
+    if (!name && !$('#pi-phone').value.trim()) return toast('Vul minimaal een naam of telefoonnummer in', true);
+    const place = $('#pi-address').value.trim();
+    try {
+      await api('/api/orders', 'POST', {
+        title: `${problem ? problem.split('\n')[0].slice(0, 60) : 'Telefonische aanvraag'}${place ? ' - ' + placeName(place) : ''}`,
+        description: problem,
+        status: 'nieuw',
+        source: 'Telefoon',
+        customerName: name || 'Onbekend (telefoon)',
+        customerPhone: $('#pi-phone').value.trim(),
+        customerAddress: place,
+        monteurId: $('#pi-monteur').value || null,
+        urgent: $('#pi-urgent').checked,
+      });
+      closeModal(); toast('Kaart aangemaakt'); loadBoard();
+    } catch (err) { toast(err.message, true); }
+  };
+}
+
+// Opvolg-herinnering (snooze): kies wanneer deze kaart terug moet komen.
+// Op het gekozen moment krijg je een pushmelding en een "opvolgen!"-vlag op de kaart.
+function openSnoozeModal(o) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const toLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const at = (daysAhead, hour) => { const d = new Date(); d.setDate(d.getDate() + daysAhead); d.setHours(hour, 0, 0, 0); return toLocal(d); };
+  const nextMonday = () => { const d = new Date(); d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7)); d.setHours(9, 0, 0, 0); return toLocal(d); };
+  modal(`
+    <h2>${icon('clock', 16)} Herinnering — ${esc(o.title)}</h2>
+    <p class="muted small">Wanneer moet deze kaart terugkomen? Je krijgt dan een pushmelding en de kaart krijgt een "opvolgen!"-vlag.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+      <button class="btn sn-q" data-at="${at(0, 16)}">Vanmiddag 16:00</button>
+      <button class="btn sn-q" data-at="${at(1, 9)}">Morgen 09:00</button>
+      <button class="btn sn-q" data-at="${at(2, 9)}">Over 2 dagen</button>
+      <button class="btn sn-q" data-at="${nextMonday()}">Volgende week ma</button>
+    </div>
+    <label>Of kies zelf <input id="sn-custom" type="datetime-local" value="${esc((o.snoozeAt || '').slice(0, 16))}"></label>
+    <div class="modal-actions">
+      ${o.snoozeAt || o.snoozeDue ? '<button class="btn btn-danger" id="sn-clear">Herinnering weghalen</button>' : '<span></span>'}
+      <div class="right"><button class="btn" id="sn-cancel">Annuleren</button><button class="btn btn-primary" id="sn-save">Instellen</button></div>
+    </div>`);
+  const set = async (val) => {
+    try {
+      await api(`/api/orders/${o.id}`, 'PATCH', { snoozeAt: val });
+      toast(val ? 'Herinnering ingesteld' : 'Herinnering weggehaald');
+      closeModal(); loadBoard();
+    } catch (err) { toast(err.message, true); }
+  };
+  $$('.sn-q').forEach((b) => b.onclick = () => set(b.dataset.at));
+  $('#sn-save').onclick = () => { const v = $('#sn-custom').value; if (!v) return toast('Kies een moment', true); set(v); };
+  if ($('#sn-clear')) $('#sn-clear').onclick = () => set(null);
+  $('#sn-cancel').onclick = () => { closeModal(); };
+}
+
 // ---------- Prullenbak ----------
 // ---------- AI Assistent (vraagbaak) ----------
 async function loadAssistant() {
@@ -1185,8 +1293,17 @@ async function loadAssistant() {
         <label style="margin:0">Periode berichten <select id="ss-days"><option value="14">laatste 14 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label>
         <button class="btn btn-primary" id="ss-run">Statusscan starten</button>
       </div>
+      ${state.me.role === 'admin' ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:10px"><input type="checkbox" id="ss-auto" style="width:auto"> Elke nacht automatisch scannen (resultaat ligt 's ochtends klaar)</label>` : ''}
       <div id="ss-result" style="margin-top:14px"></div>
     </div>`;
+  // Nachtelijke auto-scan (alleen admin): huidige stand laden + direct opslaan bij wijzigen.
+  if ($('#ss-auto')) {
+    api('/api/settings').then((st) => { const el = $('#ss-auto'); if (el) el.checked = !!st.autoScan?.enabled; }).catch(() => {});
+    $('#ss-auto').onchange = async () => {
+      try { await api('/api/settings', 'PATCH', { autoScan: { enabled: $('#ss-auto').checked, hour: 5 } }); toast($('#ss-auto').checked ? 'Nachtelijke scan aan (rond 05:00)' : 'Nachtelijke scan uit'); }
+      catch (err) { toast(err.message, true); }
+    };
+  }
   $$('.as-ex').forEach((b) => b.onclick = () => { $('#as-q').value = b.textContent; });
   $('#ss-run').onclick = async () => {
     try { await api('/api/assistant/status-scan/start', 'POST', { days: Number($('#ss-days').value) }); }
@@ -1306,7 +1423,10 @@ function renderAgenda() {
             <div class="agenda-title"><span class="dot" style="background:${esc(statusColor(a.status))}"></span>${esc(a.title)} ${a.isDrs ? '<span class="chip src-whatsapp">DRS</span>' : ''}</div>
             <div class="muted small">${esc(a.customer || '')}${a.phone ? ' · ' + esc(a.phone) : ''}${a.address ? ' · ' + esc(a.address) : ''}</div>
             <div class="muted small">${esc(a.statusLabel)}${a.monteur ? ' · monteur ' + esc(a.monteur) : ' · geen monteur'}</div>
-            <a class="agenda-gcal" target="_blank" rel="noopener" href="${esc(googleCalUrl({ title: a.title, at: a.at, location: a.address, details: a.phone ? 'Tel: ' + a.phone : '' }))}">${icon('calendar', 12)} Zet in Google Agenda</a>
+            <div style="display:flex;gap:14px;flex-wrap:wrap">
+              ${a.address ? `<a class="agenda-gcal" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(a.address)}">${icon('pin', 12)} Navigeer</a>` : ''}
+              <a class="agenda-gcal" target="_blank" rel="noopener" href="${esc(googleCalUrl({ title: a.title, at: a.at, location: a.address, details: a.phone ? 'Tel: ' + a.phone : '' }))}">${icon('calendar', 12)} Zet in Google Agenda</a>
+            </div>
           </div>
         </div>`).join('')}
     </div>`;
@@ -1473,7 +1593,15 @@ function renderAnalysis(a) {
 async function loadSettings() {
   const s = await api('/api/settings');
   $('#settingsPanel').innerHTML = `
-    <div class="info-card" style="margin-bottom:18px"> <h3>Hoe alles werkt &amp; is verbonden</h3>
+    <div class="sg-nav">
+      <button class="chip sg-chip on" data-g="alles">Alles</button>
+      <button class="chip sg-chip" data-g="bericht">${icon('mail', 12)} Automatische berichten</button>
+      <button class="chip sg-chip" data-g="werk">${icon('wrench', 12)} Werkwijze &amp; bord</button>
+      <button class="chip sg-chip" data-g="koppel">${icon('calendar', 12)} Koppelingen</button>
+      <button class="chip sg-chip" data-g="ai">${icon('sparkles', 12)} AI</button>
+      <button class="chip sg-chip" data-g="systeem">${icon('shield', 12)} Systeem &amp; back-ups</button>
+    </div>
+    <div data-sg="systeem" class="info-card" style="margin-bottom:18px"> <h3>Hoe alles werkt &amp; is verbonden</h3>
       <p class="muted small">Een overzicht van alle routes waarlangs opdrachten binnenkomen en hoe ze in het dashboard belanden.</p>
       <div class="flow-box">
         <div class="flow-line"><strong>E-mail:</strong> klant / website-formulier → <code>info@keyservice247.nl</code> → (assistent stuurt door / wordt opgehaald) → <strong>IMAP</strong> leest mailbox <code>${esc(s.imapAddress || 'niet ingesteld')}</code> → AI deelt in → <strong>Inbox / AI</strong> → goedkeuren → kaart in <strong>Opdrachten</strong>.</div>
@@ -1483,7 +1611,7 @@ async function loadSettings() {
       </div>
       <p class="muted small" style="margin-top:10px">Verzendadres (SMTP): <strong>${esc(s.sendAddress || 'niet ingesteld in Render')}</strong> · Inkomende mailbox (IMAP): <strong>${esc(s.imapAddress || 'niet ingesteld')}</strong></p>
     </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>Back-ups &amp; veiligheid</h3>
+    <div data-sg="systeem" class="info-card" style="margin-bottom:18px"> <h3>Back-ups &amp; veiligheid</h3>
       <p class="muted small">Alle gegevens staan op de blijvende schijf van de server en worden <strong>automatisch elke 6 uur</strong> geback-upt (laatste 60 bewaard). Maak af en toe ook een kopie op je eigen computer — dan ben je veilig, zelfs als de server uitvalt.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <a class="btn btn-primary" href="/api/backup/download">Download back-up (kopie op je pc)</a>
@@ -1503,15 +1631,15 @@ async function loadSettings() {
         <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
       </div>
     </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>${icon('bell', 15)} Meldingen op je telefoon</h3>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('bell', 15)} Meldingen op je telefoon</h3>
       <p class="muted small">Krijg een pushmelding op dit toestel zodra er een nieuwe aanvraag of een reactie van een klant binnenkomt — ook als de CRM dicht is. Zet het per toestel aan (telefoon én pc kan allebei).</p>
       <div id="pushPanel" class="muted small" style="margin-top:10px">Laden…</div>
     </div>
-    <div class="info-card admin-only" style="margin-bottom:18px"> <h3>${icon('calendar', 15)} Google Agenda — directe 2-weg koppeling</h3>
+    <div data-sg="koppel" class="info-card admin-only" style="margin-bottom:18px"> <h3>${icon('calendar', 15)} Google Agenda — directe 2-weg koppeling</h3>
       <p class="muted small">Verbind één Google-account. Afspraken die je in het dashboard inplant, verschijnen <strong>direct</strong> in Google Agenda (en passen mee bij wijzigen/annuleren). Wijs per monteur een agenda toe bij <strong>Monteurs</strong>, dan komt elke afspraak in de agenda van de juiste monteur.</p>
       <div id="googlePanel" class="muted small" style="margin-top:10px">Status laden…</div>
     </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>Agenda via abonnementslink (alleen-lezen, alternatief)</h3>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>Agenda via abonnementslink (alleen-lezen, alternatief)</h3>
       <p class="muted small">Liever geen koppeling? Abonneer Google Agenda op onderstaande link, dan verschijnen alle CRM-afspraken automatisch (Google ververst periodiek, dus iets vertraagd). In Google Agenda: <strong>Andere agenda's → Via URL → plak de link</strong>.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
         <input id="calUrl" type="text" readonly value="${esc(location.origin + '/api/calendar.ics?token=' + (s.calendarToken || ''))}" style="flex:1;min-width:220px;font-size:12px">
@@ -1519,16 +1647,16 @@ async function loadSettings() {
       </div>
       <p class="muted small" style="margin-top:8px">Houd deze link privé (geeft toegang tot je afspraken). Losse afspraak nú toevoegen kan ook met de knop <strong>"Google Agenda"</strong> op een opdracht/agenda-item.</p>
     </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>Automatische ontvangstbevestiging (e-mail)</h3>
+    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Automatische ontvangstbevestiging (e-mail)</h3>
       <p class="muted small">Stuurt automatisch een mailtje naar een nieuwe klant die per e-mail een aanvraag doet — bv. met het verzoek alvast foto's en adres te sturen. Alleen bij echte aanvragen, max. 1x per klant. (Handtekening wordt eronder gezet.)</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ar-enabled" style="width:auto" ${s.autoReply?.enabled ? 'checked' : ''}> Automatische ontvangstbevestiging aanzetten</label>
       <label>Onderwerp <input id="ar-subject" value="${esc(s.autoReply?.subject || '')}"></label>
       <label>Bericht <textarea id="ar-body" rows="6">${esc(s.autoReply?.body || '')}</textarea></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoReply">Opslaan</button></div>
     </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>Automatische follow-up op offertes</h3>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Automatische follow-up op offertes</h3>
       <p class="muted small">Staat een offerte langer dan het ingestelde aantal dagen open zonder reactie van de klant? Dan stuurt het systeem automatisch een vriendelijke herinnering via e-mail én WhatsApp (1x per kaart). WhatsApp-follow-up loopt via de bridge naar het klant-nummer.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-email" style="width:auto" ${s.followUp?.emailEnabled ? 'checked' : ''}> Follow-up via <strong>e-mail</strong> aanzetten</label>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-whatsapp" style="width:auto" ${s.followUp?.whatsappEnabled ? 'checked' : ''}> Follow-up via <strong>WhatsApp</strong> aanzetten</label>
@@ -1545,10 +1673,34 @@ async function loadSettings() {
       <label>E-mail bericht <textarea id="fu-noReplyBody" rows="5">${esc(s.followUp?.noReplyEmailBody || '')}</textarea></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveFollowUp">Opslaan</button></div>
     </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
-    <div class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een kaart, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('calendar', 15)} Afspraakbevestiging &amp; herinnering (automatisch)</h3>
+      <p class="muted small">Plan je op een kaart een afspraak in? Dan krijgt de klant automatisch een bevestiging met datum en tijd — en optioneel een herinnering vooraf (minder no-shows). Gebruik <code>{naam}</code>, <code>{datum}</code> en <code>{tijd}</code> in de teksten; die worden automatisch ingevuld. E-mail heeft voorrang; geen e-mailadres bekend, dan WhatsApp.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ab-email" style="width:auto" ${s.appointmentMsg?.emailEnabled ? 'checked' : ''}> Bevestiging via <strong>e-mail</strong></label>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ab-whatsapp" style="width:auto" ${s.appointmentMsg?.whatsappEnabled ? 'checked' : ''}> Bevestiging via <strong>WhatsApp</strong></label>
+      <label>E-mail onderwerp <input id="ab-subject" value="${esc(s.appointmentMsg?.emailSubject || '')}"></label>
+      <label>E-mail bericht <textarea id="ab-body" rows="5">${esc(s.appointmentMsg?.emailBody || '')}</textarea></label>
+      <label>WhatsApp bericht <textarea id="ab-wabody" rows="3">${esc(s.appointmentMsg?.whatsappBody || '')}</textarea></label>
+      <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ab-reminder" style="width:auto" ${s.appointmentMsg?.reminderEnabled ? 'checked' : ''}> Herinnering vooraf aanzetten</label>
+      <label>Hoeveel uur vóór de afspraak? <input id="ab-hours" type="number" min="1" max="72" value="${esc(String(s.appointmentMsg?.reminderHours ?? 24))}" style="max-width:120px"></label>
+      <label>Herinnering (tekst) <textarea id="ab-rembody" rows="3">${esc(s.appointmentMsg?.reminderBody || '')}</textarea></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveApptMsg">Opslaan</button></div>
+    </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>⭐ Review-verzoek na afronding (automatisch)</h3>
+      <p class="muted small">Zodra een opdracht op <strong>Afgerond</strong> staat, krijgt de klant na het ingestelde aantal uren automatisch een vriendelijk mailtje met jullie review-link (bv. Google). Goede reviews = meer klanten. Gebruik <code>{naam}</code> en <code>{link}</code> in de tekst.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="rr-enabled" style="width:auto" ${s.reviewRequest?.enabled ? 'checked' : ''}> Review-verzoek aanzetten</label>
+      <div class="row">
+        <label>Review-link <input id="rr-link" value="${esc(s.reviewRequest?.link || '')}" placeholder="https://g.page/r/… (jullie Google-review-link)"></label>
+        <label>Na hoeveel uur? <input id="rr-hours" type="number" min="1" max="240" value="${esc(String(s.reviewRequest?.delayHours ?? 24))}" style="max-width:120px"></label>
+      </div>
+      <label>Onderwerp <input id="rr-subject" value="${esc(s.reviewRequest?.subject || '')}"></label>
+      <label>Bericht <textarea id="rr-body" rows="6">${esc(s.reviewRequest?.body || '')}</textarea></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveReview">Opslaan</button></div>
+    </div>
+    <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
+    <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
+    <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
+    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een kaart, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="md-auto" style="width:auto"> Automatisch versturen aanzetten</label>
       <div class="row"> <label>Welke monteur (auto) <select id="md-monteur"></select></label> <label>Wanneer <select id="md-trigger"><option value="approved">zodra ik de opdracht goedkeur</option><option value="appointment">zodra een afspraak is ingepland</option><option value="intake">volautomatisch — meteen bij binnenkomst</option></select></label> </div>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" id="md-onlydrs" style="width:auto"> Alleen opdrachten uit de DRS / Raf Breda-groep</label>
@@ -1560,10 +1712,40 @@ async function loadSettings() {
       <p class="muted small">Bevat de opdracht een bepaald woord (bv. <strong>schuifpui</strong>), stuur 'm dan naar een andere monteur-groep i.p.v. de standaard. Handig om bv. alle schuifpui-klussen naar Abdel te sturen. Regels gaan vóór de standaardmonteur.</p>
       <div id="md-routes"></div>
       <button class="btn btn-sm" id="md-addroute" type="button" style="margin-top:6px">+ Regel toevoegen</button>
+      <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+      <h3 style="font-size:14px">Automatische terugkoppeling (via controle-groep)</h3>
+      <p class="muted small">Krijgt een DRS-opdracht een uitkomst (Afgerond / Geannuleerd / Afspraak / Offerte)? Dan gaat er automatisch een WhatsApp-bericht naar de groep van de gekozen monteur (bv. <strong>Abdel</strong>), die het controleert en zelf doorstuurt naar de DRS-groep. Er wordt dus <strong>nooit</strong> rechtstreeks in de DRS-groep gepost. Werkt ook bij "Alles toepassen" in de AI-statusscan en bulk-statuswijzigingen.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="tk-enabled" style="width:auto" ${s.terugkoppeling?.enabled ? 'checked' : ''}> Automatische terugkoppeling aanzetten</label>
+      <label>Naar de groep van <select id="tk-monteur"></select></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="md-save">Verstuur-instellingen opslaan</button></div>
     </div>
-    <div class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
+    <div data-sg="werk" class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div data-sg="werk" class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
+  // Sectie-chips: filter de instellingen-kaarten per onderwerp (niets wordt verwijderd).
+  const applySGroup = (g) => {
+    $$('#settingsPanel [data-sg]').forEach((el) => { el.style.display = (g === 'alles' || el.dataset.sg === g) ? '' : 'none'; });
+    $$('#settingsPanel .sg-chip').forEach((c) => c.classList.toggle('on', c.dataset.g === g));
+    state._sgroup = g;
+  };
+  $$('#settingsPanel .sg-chip').forEach((c) => c.onclick = () => applySGroup(c.dataset.g));
+  if (state._sgroup && state._sgroup !== 'alles') applySGroup(state._sgroup);
+
+  $('#saveApptMsg').onclick = async () => {
+    const appointmentMsg = {
+      emailEnabled: $('#ab-email').checked, whatsappEnabled: $('#ab-whatsapp').checked,
+      emailSubject: $('#ab-subject').value, emailBody: $('#ab-body').value, whatsappBody: $('#ab-wabody').value,
+      reminderEnabled: $('#ab-reminder').checked, reminderHours: Number($('#ab-hours').value) || 24,
+      reminderEmailSubject: 'Herinnering: uw afspraak — Keyservice', reminderBody: $('#ab-rembody').value,
+    };
+    try { await api('/api/settings', 'PATCH', { appointmentMsg }); toast('Afspraakberichten opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveReview').onclick = async () => {
+    const reviewRequest = { enabled: $('#rr-enabled').checked, link: $('#rr-link').value.trim(), delayHours: Number($('#rr-hours').value) || 24, subject: $('#rr-subject').value, body: $('#rr-body').value };
+    if (reviewRequest.enabled && !reviewRequest.link) return toast('Vul eerst de review-link in', true);
+    try { await api('/api/settings', 'PATCH', { reviewRequest }); toast('Review-verzoek opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
   $('#saveProfile').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { companyProfile: $('#companyProfile').value }); toast('Bedrijfsprofiel opgeslagen'); }
     catch (err) { toast(err.message, true); }
@@ -1674,6 +1856,8 @@ async function loadSettings() {
   // monteurs vullen
   const mons = await api('/api/monteurs').catch(() => []);
   $('#md-monteur').innerHTML = '<option value="">— kies monteur —</option>' + mons.map((m) => `<option value="${m.id}" ${md.autoMonteurId === m.id ? 'selected' : ''}>${esc(m.name)}${m.waGroup ? '' : ' (geen groep!)'}</option>`).join('');
+  // Terugkoppeling: controle-monteur (bv. Abdel) wiens groep de terugkoppeling ontvangt.
+  $('#tk-monteur').innerHTML = '<option value="">— kies monteur —</option>' + mons.map((m) => `<option value="${m.id}" ${s.terugkoppeling?.monteurId === m.id ? 'selected' : ''}>${esc(m.name)}${m.waGroup ? '' : ' (geen groep!)'}</option>`).join('');
   // dagen als knopjes
   const dayNames = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
   $('#md-days').innerHTML = dayNames.map((d, i) => `<button type="button" class="day-toggle ${(md.days || []).includes(i) ? 'on' : ''}" data-day="${i}">${d}</button>`).join('');
@@ -1698,7 +1882,9 @@ async function loadSettings() {
     const cfg = { autoEnabled: $('#md-auto').checked, days, autoMonteurId: $('#md-monteur').value, trigger: $('#md-trigger').value, onlyDrs: $('#md-onlydrs').checked, keywordRoutes };
     if (cfg.autoEnabled && !cfg.autoMonteurId) return toast('Kies eerst een monteur', true);
     if (cfg.autoEnabled && !days.length) return toast('Kies minstens één dag (anders wordt er nooit verstuurd)', true);
-    try { await api('/api/settings', 'PATCH', { monteurDispatch: cfg }); toast('Verstuur-instellingen opgeslagen'); }
+    const terugkoppeling = { enabled: $('#tk-enabled').checked, monteurId: $('#tk-monteur').value };
+    if (terugkoppeling.enabled && !terugkoppeling.monteurId) return toast('Kies de monteur voor de terugkoppeling', true);
+    try { await api('/api/settings', 'PATCH', { monteurDispatch: cfg, terugkoppeling }); toast('Verstuur-instellingen opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   // Laatste analyse tonen indien aanwezig.
@@ -1962,6 +2148,16 @@ function openReplyModal(ctx = {}) {
     } catch (err) { toast(err.message, true); }
     aiBtn.disabled = false; aiBtn.innerHTML = `${icon('sparkles', 14)} AI-concept`;
   };
+  // AI-concept alvast klaarzetten bij het openen (alleen als het vak nog leeg is;
+  // typt de gebruiker intussen zelf, dan overschrijven we niets).
+  if (aiBtn && ctx.orderId && state.meta?.aiMode === 'ai' && !$('#rep-body').value.trim()) {
+    aiBtn.textContent = 'AI-concept laden…';
+    api(`/api/orders/${ctx.orderId}/suggest-reply`, 'POST').then((out) => {
+      const el = $('#rep-body');
+      if (el && !el.value.trim() && out.text) { el.value = out.text; flash('#rep-body'); }
+      const b = $('#rep-ai'); if (b) b.innerHTML = `${icon('sparkles', 14)} AI-concept`;
+    }).catch(() => { const b = $('#rep-ai'); if (b) b.innerHTML = `${icon('sparkles', 14)} AI-concept`; });
+  }
   // Sjabloon kiezen → tekst in het antwoordvak zetten (bestaande tekst wordt vervangen na bevestiging).
   const tplSel = $('#rep-select');
   if (tplSel) tplSel.onchange = () => {
@@ -2084,6 +2280,7 @@ async function openDuplicatesModal() {
 // ---------- Buttons & modal infra ----------
 function bindButtons() {
   $('#newOrderBtn')?.addEventListener('click', () => openOrderModal());
+  $('#phoneOrderBtn')?.addEventListener('click', openPhoneIntakeModal);
   $('#newCustomerBtn')?.addEventListener('click', () => openCustomerModal());
   $('#newMonteurBtn')?.addEventListener('click', () => openMonteurModal());
   $('#newUserBtn')?.addEventListener('click', () => openUserModal());

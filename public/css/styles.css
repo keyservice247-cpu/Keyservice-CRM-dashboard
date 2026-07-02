@@ -510,6 +510,18 @@ body.modal-open { overflow: hidden; }
 /* Monteur-overzicht regels */
 .mont-line { padding: 5px 0; border-top: 1px solid var(--line-soft); cursor: pointer; font-size: 13px; }
 .mont-line:hover { color: var(--accent-ink); }
+
+/* Instellingen: sectie-chips (filteren, niets wordt verwijderd) */
+.sg-nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 8px 0; }
+.sg-chip { cursor: pointer; border: 1px solid var(--line); background: var(--panel); padding: 7px 13px; font-size: 13px; }
+.sg-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sg-chip.on svg.i { color: #fff; }
+
+/* Weekrapport (Overzicht) */
+.wr-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.wr-kpi { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--ink-soft); }
+.wr-kpi .wr-num { font-size: 20px; font-weight: 600; color: var(--ink); }
+
 /* AI-statusscan voorstellen */
 .ss-item { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 8px; }
 .ss-bulkbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0 12px; }

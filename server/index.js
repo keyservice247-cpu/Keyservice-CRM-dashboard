@@ -26,6 +26,7 @@ import { maybeSendAutoReply } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm } from './automations.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -41,6 +42,7 @@ import {
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp, getBackupMail,
+  getTerugkoppeling, getAppointmentMsg, getReviewRequest,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -481,7 +483,10 @@ app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
   db().orders.push(order);
   logActivity(req.user.name, 'opdracht aangemaakt', order.title);
   saveSoon();
-  if (order.appointmentAt) syncOrderToGoogle(order); // best-effort, niet awaiten
+  if (order.appointmentAt) {
+    syncOrderToGoogle(order); // best-effort, niet awaiten
+    maybeSendAppointmentConfirm(order).catch(() => {});
+  }
   res.json(withRelations(order));
 });
 
@@ -493,7 +498,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   // Monteurs mogen alleen status, afspraak en notities aanpassen.
   const allowed = req.user.role === 'monteur'
     ? ['status', 'appointmentAt', 'notes']
-    : ['title', 'description', 'status', 'source', 'customerId', 'monteurId', 'appointmentAt', 'price', 'urgent', 'notes'];
+    : ['title', 'description', 'status', 'source', 'customerId', 'monteurId', 'appointmentAt', 'price', 'urgent', 'notes', 'snoozeAt'];
 
   if (b.status && !isValidStatus(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
 
@@ -516,10 +521,21 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
     }
   }
 
+  // Een nieuwe herinnering zetten haalt de "opvolgen"-vlag weg.
+  if ('snoozeAt' in b) order.snoozeDue = false;
   order.updatedAt = now();
-  if (changedStatus) logActivity(req.user.name, 'status gewijzigd', `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
+  if (changedStatus) {
+    logActivity(req.user.name, 'status gewijzigd', `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
+    if (order.status === 'afgerond' && !order.completedAt) order.completedAt = now();
+    // Terugkoppeling voor DRS-opdrachten via de controle-groep (bv. Abdel).
+    maybeSendTerugkoppeling(order);
+  }
   // Auto-versturen naar monteur bij het inplannen van een afspraak (indien ingesteld).
-  if ('appointmentAt' in b && b.appointmentAt) maybeAutoSendToMonteur(order, 'appointment');
+  if ('appointmentAt' in b && b.appointmentAt) {
+    maybeAutoSendToMonteur(order, 'appointment');
+    // Afspraakbevestiging naar de klant (indien aangezet). Best-effort.
+    maybeSendAppointmentConfirm(order).catch(() => {});
+  }
   saveSoon();
   // Google Agenda bijwerken zodra afspraak/monteur/status wijzigt (maakt, verplaatst,
   // of verwijdert het event). Best-effort — niet awaiten.
@@ -630,6 +646,7 @@ app.post('/api/orders/:id/seen', requireAuth, (req, res) => {
   // 'Klant heeft gereageerd'-melding wegklikken zodra je de kaart opent.
   if (order.customerReplied) { order.customerReplied = false; changed = true; }
   if (order.unreadReplies) { order.unreadReplies = 0; changed = true; }
+  if (order.snoozeDue) { order.snoozeDue = false; changed = true; } // opvolg-vlag gezien
   if (changed) saveSoon();
   res.json({ ok: true });
 });
@@ -1173,6 +1190,10 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
     backupMail: getBackupMail(),
+    terugkoppeling: getTerugkoppeling(),
+    appointmentMsg: getAppointmentMsg(),
+    reviewRequest: getReviewRequest(),
+    autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true, keywordRoutes: [] },
   });
 });
@@ -1236,6 +1257,45 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
       enabled: !!bm.enabled,
       email: String(bm.email || '').slice(0, 200).trim(),
       hour: Math.max(0, Math.min(23, Number(bm.hour) >= 0 ? Number(bm.hour) : 6)),
+    };
+  }
+  if ('terugkoppeling' in b) {
+    const t = b.terugkoppeling || {};
+    db().settings.terugkoppeling = {
+      enabled: !!t.enabled,
+      monteurId: String(t.monteurId || ''),
+      statuses: Array.isArray(t.statuses) ? t.statuses.filter((k) => isValidStatus(k)) : getTerugkoppeling().statuses,
+    };
+  }
+  if ('appointmentMsg' in b) {
+    const a = b.appointmentMsg || {};
+    db().settings.appointmentMsg = {
+      emailEnabled: !!a.emailEnabled,
+      whatsappEnabled: !!a.whatsappEnabled,
+      emailSubject: String(a.emailSubject || '').slice(0, 200),
+      emailBody: String(a.emailBody || '').slice(0, 2000),
+      whatsappBody: String(a.whatsappBody || '').slice(0, 1000),
+      reminderEnabled: !!a.reminderEnabled,
+      reminderHours: Math.max(1, Math.min(72, Number(a.reminderHours) || 24)),
+      reminderEmailSubject: String(a.reminderEmailSubject || '').slice(0, 200),
+      reminderBody: String(a.reminderBody || '').slice(0, 1000),
+    };
+  }
+  if ('reviewRequest' in b) {
+    const r = b.reviewRequest || {};
+    db().settings.reviewRequest = {
+      enabled: !!r.enabled,
+      delayHours: Math.max(1, Math.min(240, Number(r.delayHours) || 24)),
+      link: String(r.link || '').slice(0, 500).trim(),
+      subject: String(r.subject || '').slice(0, 200),
+      body: String(r.body || '').slice(0, 2000),
+    };
+  }
+  if ('autoScan' in b) {
+    const a = b.autoScan || {};
+    db().settings.autoScan = {
+      enabled: !!a.enabled,
+      hour: Math.max(0, Math.min(23, Number(a.hour) >= 0 ? Number(a.hour) : 5)),
     };
   }
   if ('monteurDispatch' in b) {
@@ -1847,6 +1907,55 @@ app.get('/api/digest', requireAuth, (req, res) => {
   });
 });
 
+// Prijsveld ("740", "€ 740,-", "1.250,50") -> getal in euro's. 0 als onleesbaar.
+function parsePrice(str) {
+  let s = String(str || '').replace(/[^\d.,]/g, '');
+  if (!s) return 0;
+  if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(s)) s = s.replace(/\./g, ''); // 1.250 -> 1250
+  s = s.replace(',', '.');
+  const n = parseFloat(s);
+  return isFinite(n) ? n : 0;
+}
+
+// Weekrapport: aantallen, omzet en conversie per monteur (maandag t/m zondag).
+// ?offset=0 is deze week, 1 = vorige week, enz.
+app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
+  const offset = Math.max(0, Math.min(52, Number(req.query.offset) || 0));
+  const ref = new Date(Date.now() - offset * 7 * 86400000);
+  const wk = weekBounds(ref);
+  const inWeek = (d) => { const t = new Date(d).getTime(); return !isNaN(t) && t >= wk.start && t < wk.end; };
+
+  const monteurMap = new Map(db().monteurs.map((m) => [m.id, { id: m.id, name: m.name, afgerond: 0, omzet: 0, afspraken: 0, actief: 0 }]));
+  const none = { id: '', name: 'Geen monteur', afgerond: 0, omzet: 0, afspraken: 0, actief: 0 };
+
+  let newOrders = 0, doneCount = 0, cancelCount = 0, omzet = 0, apptCount = 0;
+  for (const o of db().orders.concat(db().trash || [])) {
+    const row = monteurMap.get(o.monteurId) || none;
+    if (inWeek(o.createdAt)) newOrders++;
+    if (o.appointmentAt && inWeek(o.appointmentAt)) { apptCount++; row.afspraken++; }
+    const doneAt = o.completedAt || (o.status === 'afgerond' ? o.updatedAt : null);
+    if (o.status === 'afgerond' && doneAt && inWeek(doneAt)) {
+      doneCount++; row.afgerond++;
+      const p = parsePrice(o.price);
+      omzet += p; row.omzet += p;
+    }
+    if (o.status === 'geannuleerd' && inWeek(o.updatedAt)) cancelCount++;
+    if (!o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status) && o.monteurId && monteurMap.has(o.monteurId)) {
+      monteurMap.get(o.monteurId).actief++;
+    }
+  }
+  const aanvragen = db().reviews.filter((r) => inWeek(r.createdAt)).length;
+  const perMonteur = [...monteurMap.values(), ...(none.afgerond || none.afspraken || none.omzet ? [none] : [])]
+    .sort((a, b) => b.omzet - a.omzet || b.afgerond - a.afgerond);
+  res.json({
+    weekStart: new Date(wk.start).toISOString(), weekEnd: new Date(wk.end).toISOString(),
+    aanvragen, newOrders, apptCount, doneCount, cancelCount,
+    omzet: Math.round(omzet * 100) / 100,
+    conversie: newOrders ? Math.round((doneCount / newOrders) * 100) : null,
+    perMonteur,
+  });
+});
+
 // Abonnementen-overzicht + (geschat) AI-verbruik via dit dashboard.
 app.get('/api/subscriptions', requireRole('admin'), (req, res) => {
   res.json({
@@ -1911,5 +2020,6 @@ app.listen(PORT, () => {
   startBackups();
   startFollowUps();
   startBackupMail();
+  startAutomations({ runStatusScan: runStatusScanJob });
   console.log('');
 });

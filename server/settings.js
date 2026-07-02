@@ -109,7 +109,85 @@ export function ensureSettings() {
   if (s.autoReply === undefined) s.autoReply = structuredClone(DEFAULT_AUTOREPLY);
   if (s.followUp === undefined) s.followUp = structuredClone(DEFAULT_FOLLOWUP);
   if (s.backupMail === undefined) s.backupMail = structuredClone(DEFAULT_BACKUP_MAIL);
+  if (s.terugkoppeling === undefined) s.terugkoppeling = structuredClone(DEFAULT_TERUGKOPPELING);
+  if (s.appointmentMsg === undefined) s.appointmentMsg = structuredClone(DEFAULT_APPOINTMENT_MSG);
+  if (s.reviewRequest === undefined) s.reviewRequest = structuredClone(DEFAULT_REVIEW_REQUEST);
+  if (s.autoScan === undefined) s.autoScan = { enabled: false, hour: 5 };
   save();
+}
+
+// Automatische terugkoppeling: zodra een DRS-opdracht een uitkomst-status krijgt,
+// gaat er een WhatsApp-bericht naar de CONTROLE-groep (bv. Abdel), die het
+// controleert en doorstuurt naar de DRS-groep. Bewust NIET rechtstreeks naar DRS.
+export const DEFAULT_TERUGKOPPELING = {
+  enabled: false,
+  monteurId: '',                 // monteur wiens groep de terugkoppeling ontvangt
+  statuses: ['afgerond', 'geannuleerd', 'afspraak_ingepland', 'offerte_verzonden'],
+};
+export function getTerugkoppeling() {
+  const t = db().settings.terugkoppeling || {};
+  return {
+    enabled: !!t.enabled,
+    monteurId: t.monteurId || '',
+    statuses: Array.isArray(t.statuses) && t.statuses.length ? t.statuses : DEFAULT_TERUGKOPPELING.statuses,
+  };
+}
+
+// Afspraakbevestiging naar de klant (+ herinnering X uur vooraf).
+export const DEFAULT_APPOINTMENT_MSG = {
+  emailEnabled: false,
+  whatsappEnabled: false,
+  emailSubject: 'Afspraakbevestiging — Keyservice',
+  emailBody: `Beste {naam},
+
+Hierbij bevestigen wij uw afspraak op {datum} om {tijd}.
+
+Onze monteur komt bij u langs. Mocht de afspraak onverhoopt niet uitkomen, laat het ons gerust weten.`,
+  whatsappBody: `Hallo {naam}, hierbij bevestigen we uw afspraak op {datum} om {tijd}. Komt de afspraak niet uit? Laat het ons even weten. — Keyservice`,
+  reminderEnabled: false,
+  reminderHours: 24,
+  reminderEmailSubject: 'Herinnering: uw afspraak — Keyservice',
+  reminderBody: `Hallo {naam}, een korte herinnering: morgen ({datum} om {tijd}) komt onze monteur bij u langs. Tot dan! — Keyservice`,
+};
+export function getAppointmentMsg() {
+  const a = db().settings.appointmentMsg || {};
+  return {
+    emailEnabled: !!a.emailEnabled,
+    whatsappEnabled: !!a.whatsappEnabled,
+    emailSubject: a.emailSubject || DEFAULT_APPOINTMENT_MSG.emailSubject,
+    emailBody: a.emailBody || DEFAULT_APPOINTMENT_MSG.emailBody,
+    whatsappBody: a.whatsappBody || DEFAULT_APPOINTMENT_MSG.whatsappBody,
+    reminderEnabled: !!a.reminderEnabled,
+    reminderHours: Math.max(1, Math.min(72, Number(a.reminderHours) || DEFAULT_APPOINTMENT_MSG.reminderHours)),
+    reminderEmailSubject: a.reminderEmailSubject || DEFAULT_APPOINTMENT_MSG.reminderEmailSubject,
+    reminderBody: a.reminderBody || DEFAULT_APPOINTMENT_MSG.reminderBody,
+  };
+}
+
+// Review-verzoek: X uur na "Afgerond" automatisch een mailtje met de review-link.
+export const DEFAULT_REVIEW_REQUEST = {
+  enabled: false,
+  delayHours: 24,
+  link: '',
+  subject: 'Hoe hebben wij het gedaan? — Keyservice',
+  body: `Beste {naam},
+
+Bedankt dat u voor Keyservice heeft gekozen! We hopen dat alles naar wens is opgelost.
+
+Zou u een korte review willen achterlaten? Daar helpt u ons enorm mee:
+{link}
+
+Alvast hartelijk dank!`,
+};
+export function getReviewRequest() {
+  const r = db().settings.reviewRequest || {};
+  return {
+    enabled: !!r.enabled,
+    delayHours: Math.max(1, Math.min(240, Number(r.delayHours) || DEFAULT_REVIEW_REQUEST.delayHours)),
+    link: r.link || '',
+    subject: r.subject || DEFAULT_REVIEW_REQUEST.subject,
+    body: r.body || DEFAULT_REVIEW_REQUEST.body,
+  };
 }
 
 // Dagelijkse off-site back-up: stuurt een kopie van de database als bijlage naar
