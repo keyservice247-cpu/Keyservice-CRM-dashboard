@@ -473,6 +473,7 @@ app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
     customerId,
     monteurId: b.monteurId || null,
     appointmentAt: b.appointmentAt || null,
+    appointmentEndAt: b.appointmentEndAt || null,
     price: b.price || '',
     urgent: !!b.urgent,
     notes: b.notes || '',
@@ -497,8 +498,8 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
   // Monteurs mogen alleen status, afspraak en notities aanpassen.
   const allowed = req.user.role === 'monteur'
-    ? ['status', 'appointmentAt', 'notes']
-    : ['title', 'description', 'status', 'source', 'customerId', 'monteurId', 'appointmentAt', 'price', 'urgent', 'notes', 'snoozeAt'];
+    ? ['status', 'appointmentAt', 'appointmentEndAt', 'notes']
+    : ['title', 'description', 'status', 'source', 'customerId', 'monteurId', 'appointmentAt', 'appointmentEndAt', 'price', 'urgent', 'notes', 'snoozeAt'];
 
   if (b.status && !isValidStatus(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
 
@@ -539,7 +540,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   saveSoon();
   // Google Agenda bijwerken zodra afspraak/monteur/status wijzigt (maakt, verplaatst,
   // of verwijdert het event). Best-effort — niet awaiten.
-  if ('appointmentAt' in b || 'monteurId' in b || 'status' in b) syncOrderToGoogle(order);
+  if ('appointmentAt' in b || 'appointmentEndAt' in b || 'monteurId' in b || 'status' in b) syncOrderToGoogle(order);
   res.json(withRelations(order));
 });
 
@@ -1809,7 +1810,9 @@ app.get('/api/calendar.ics', (req, res) => {
   for (const o of db().orders) {
     if (!o.appointmentAt || o.archivedWeek || o.status === 'geannuleerd') continue;
     const ds = local(o.appointmentAt); if (!ds) continue;
-    const de = local(o.appointmentAt, 60);
+    // Eindtijd: gebruik de opgegeven eindtijd als die ná de begintijd ligt, anders +1 uur.
+    let de = o.appointmentEndAt ? local(o.appointmentEndAt) : null;
+    if (!de || de <= ds) de = local(o.appointmentAt, 60);
     const c = db().customers.find((x) => x.id === o.customerId) || {};
     lines.push('BEGIN:VEVENT', `UID:${o.id}@keyservice-crm`, `DTSTAMP:${stamp(new Date())}`,
       `DTSTART:${ds}`, `DTEND:${de}`,
@@ -1837,7 +1840,7 @@ app.get('/api/agenda', requireAuth, (req, res) => {
       const isDrs = (o.originGroup && isWhatsappOrderGroup(o.originGroup))
         || (!o.originGroup && /whatsapp|groep|app/.test(src));
       return {
-        id: o.id, title: o.title, at: o.appointmentAt, status: o.status, statusLabel: labels[o.status] || o.status,
+        id: o.id, title: o.title, at: o.appointmentAt, endAt: o.appointmentEndAt || null, status: o.status, statusLabel: labels[o.status] || o.status,
         customer: c.name || '', phone: c.phone || '', address: c.address || '',
         monteur: m ? m.name : '', source: o.source || '', isDrs,
       };

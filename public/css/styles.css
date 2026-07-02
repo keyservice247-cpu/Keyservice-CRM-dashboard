@@ -544,6 +544,8 @@ body.modal-open { overflow: hidden; }
 .agenda-item:first-of-type { border-top: none; }
 .agenda-item:hover { background: var(--accent-soft); }
 .agenda-time { font-weight: 600; font-size: 14px; color: var(--accent-ink); min-width: 48px; }
+.agenda-endtime { display: block; font-weight: 500; font-size: 12px; color: var(--muted); }
+.agenda-endtime::before { content: "t/m "; font-size: 10px; }
 .agenda-body { flex: 1; min-width: 0; }
 .agenda-title { font-weight: 500; display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
 .agenda-title .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }

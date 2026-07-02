@@ -90,17 +90,21 @@ function toastUndo(msg, undoFn, ms = 8000) {
 // Bouwt een "Zet in Google Agenda"-link (opent Google met een vooraf ingevuld event).
 // De afspraaktijd is lokale NL-tijd; we geven 'm zo door + ctz=Europe/Amsterdam zodat
 // Google de juiste tijd toont (geen UTC-verschuiving).
-function googleCalUrl({ title, at, details, location }) {
+function googleCalUrl({ title, at, end, details, location }) {
   const m = String(at || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
   if (!m) return '#';
   const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]));
   const p = (n) => String(n).padStart(2, '0');
   const fmt = (dt) => `${dt.getUTCFullYear()}${p(dt.getUTCMonth() + 1)}${p(dt.getUTCDate())}T${p(dt.getUTCHours())}${p(dt.getUTCMinutes())}00`;
-  const end = new Date(d.getTime() + 60 * 60000);
+  // Eindtijd: gebruik de opgegeven eindtijd als die geldig is en ná de begintijd ligt,
+  // anders standaard +1 uur.
+  const em = String(end || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  let endDt = em ? new Date(Date.UTC(+em[1], +em[2] - 1, +em[3], +em[4], +em[5])) : null;
+  if (!endDt || endDt.getTime() <= d.getTime()) endDt = new Date(d.getTime() + 60 * 60000);
   const pr = new URLSearchParams({
     action: 'TEMPLATE',
     text: title || 'Keyservice afspraak',
-    dates: `${fmt(d)}/${fmt(end)}`,
+    dates: `${fmt(d)}/${fmt(endDt)}`,
     details: details || '',
     location: location || '',
     ctz: 'Europe/Amsterdam',
@@ -840,7 +844,7 @@ function openOrderModal(id, pool) {
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}" ${isMonteur ? 'disabled' : ''}></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" ${isMonteur ? 'disabled' : ''}></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" ${isMonteur ? 'disabled' : ''} placeholder="e-mailadres klant"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}" ${isMonteur ? 'disabled' : ''}></label> </div>`}
-    <div class="row"> <label>Status <select id="f-status">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak (datum/tijd) <input id="f-appt" type="datetime-local" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
+    <div class="row"> <label>Status <select id="f-status">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div> <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     ${o ? `
       <div class="attach"> <div class="thread-head">${icon('paperclip', 15)} Foto's &amp; bestanden${o.attachments && o.attachments.length ? ` (${o.attachments.length})` : ''}
@@ -860,6 +864,20 @@ function openOrderModal(id, pool) {
       <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
+  // Eindtijd automatisch op +1 uur zetten zodra je een begintijd kiest (en de eindtijd
+  // nog leeg is of vóór de begintijd ligt). Je kunt 'm daarna altijd handmatig aanpassen.
+  {
+    const apptEl = $('#f-appt'), apptEndEl = $('#f-appt-end');
+    if (apptEl && apptEndEl) apptEl.addEventListener('change', () => {
+      if (!apptEl.value) return;
+      if (!apptEndEl.value || apptEndEl.value <= apptEl.value) {
+        const d = new Date(apptEl.value);
+        d.setMinutes(d.getMinutes() + 60);
+        const p = (n) => String(n).padStart(2, '0');
+        apptEndEl.value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+      }
+    });
+  }
   // Gesprek meteen naar het nieuwste bericht scrollen.
   const chat = $('#f-chat'); if (chat) chat.scrollTop = chat.scrollHeight;
   // Los bericht uit de historie verwijderen (opschonen van spam/verkeerd toegevoegd).
@@ -879,7 +897,7 @@ function openOrderModal(id, pool) {
     const appt = $('#f-appt')?.value;
     if (!appt) { e.preventDefault(); toast('Vul eerst een afspraak (datum/tijd) in', true); return; }
     const det = [o.customer?.phone ? 'Tel: ' + o.customer.phone : '', $('#f-notes')?.value || '', 'Via Keyservice CRM'].filter(Boolean).join('\n');
-    g.href = googleCalUrl({ title: $('#f-title')?.value || o.title, at: appt, details: det, location: o.customer?.address || '' });
+    g.href = googleCalUrl({ title: $('#f-title')?.value || o.title, at: appt, end: $('#f-appt-end')?.value, details: det, location: o.customer?.address || '' });
   }; }
   if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
   if (o && canWrite) $('#f-send-monteur').onclick = () => openSendMonteurModal(o);
@@ -917,6 +935,7 @@ function openOrderModal(id, pool) {
     const payload = {
       status: $('#f-status').value,
       appointmentAt: $('#f-appt').value || null,
+      appointmentEndAt: $('#f-appt-end') ? ($('#f-appt-end').value || null) : null,
       notes: $('#f-notes').value,
     };
     if (canWrite) {
@@ -1418,7 +1437,7 @@ function renderAgenda() {
       <div class="agenda-day-head">${k === todayKey ? '<span class="agenda-today">Vandaag</span> ' : ''}${esc(fmtDay(k))}<span class="count">${groups[k].length}</span></div>
       ${groups[k].map((a) => `
         <div class="agenda-item" data-open="${a.id}">
-          <div class="agenda-time">${esc(fmtTime(a.at))}</div>
+          <div class="agenda-time">${esc(fmtTime(a.at))}${a.endAt ? '<span class="agenda-endtime">' + esc(fmtTime(a.endAt)) + '</span>' : ''}</div>
           <div class="agenda-body">
             <div class="agenda-title"><span class="dot" style="background:${esc(statusColor(a.status))}"></span>${esc(a.title)} ${a.isDrs ? '<span class="chip src-whatsapp">DRS</span>' : ''}</div>
             <div class="muted small">${esc(a.customer || '')}${a.phone ? ' · ' + esc(a.phone) : ''}${a.address ? ' · ' + esc(a.address) : ''}</div>

@@ -185,7 +185,9 @@ function wallClock(dtstr, addMin = 0) {
 
 function buildEventBody(order, customer) {
   const start = wallClock(order.appointmentAt);
-  const end = wallClock(order.appointmentAt, 60);
+  // Eindtijd: gebruik de opgegeven eindtijd als die ná de begintijd ligt, anders +1 uur.
+  let end = order.appointmentEndAt ? wallClock(order.appointmentEndAt) : null;
+  if (!end || end <= start) end = wallClock(order.appointmentAt, 60);
   const descParts = [];
   if (customer.phone) descParts.push('Tel: ' + customer.phone);
   if (customer.email) descParts.push('E-mail: ' + customer.email);
