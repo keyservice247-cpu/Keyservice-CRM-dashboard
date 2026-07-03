@@ -26,7 +26,7 @@ import { maybeSendAutoReply } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm } from './automations.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel } from './automations.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -503,6 +503,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
   if (b.status && !isValidStatus(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
 
+  const prevAppt = order.appointmentAt; // om wijziging/annulering van de afspraak te herkennen
   let changedStatus = false;
   for (const k of allowed) {
     if (k in b) {
@@ -534,8 +535,14 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   // Auto-versturen naar monteur bij het inplannen van een afspraak (indien ingesteld).
   if ('appointmentAt' in b && b.appointmentAt) {
     maybeAutoSendToMonteur(order, 'appointment');
-    // Afspraakbevestiging naar de klant (indien aangezet). Best-effort.
+    // Nieuwe of gewijzigde afspraak -> bevestiging met (nieuwe) datum naar de klant.
+    // maybeSendAppointmentConfirm stuurt opnieuw zodra de datum/tijd verandert.
     maybeSendAppointmentConfirm(order).catch(() => {});
+  }
+  // Afspraak weggehaald (geannuleerd): event verdwijnt via de Google-sync hieronder en
+  // uit de CRM-agenda; klant krijgt (indien gevraagd) een annuleringsbericht.
+  if ('appointmentAt' in b && !b.appointmentAt && prevAppt) {
+    maybeSendAppointmentCancel(order, prevAppt, { notify: !!b.notifyCustomer }).catch(() => {});
   }
   saveSoon();
   // Google Agenda bijwerken zodra afspraak/monteur/status wijzigt (maakt, verplaatst,

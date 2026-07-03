@@ -91,6 +91,50 @@ export async function maybeSendAppointmentConfirm(order) {
   } catch (e) { console.error('[afspraakbevestiging]', e.message); }
 }
 
+// ---------- 2b. Afspraak geannuleerd -> klant op de hoogte ----------
+// Wordt aangeroepen wanneer een afspraakdatum van een opdracht wordt weggehaald.
+// Stuurt (indien gevraagd of als de afspraakberichten aanstaan) een net annulerings-
+// bericht naar de klant, via hetzelfde kanaal als de bevestiging.
+export async function maybeSendAppointmentCancel(order, prevAppt, opts = {}) {
+  try {
+    const cfg = getAppointmentMsg();
+    // Alleen sturen als expliciet gevraagd (knop) OF de afspraakberichten aanstaan.
+    if (!opts.notify && !cfg.emailEnabled && !cfg.whatsappEnabled) return;
+    const c = custOf(order);
+    const m = String(prevAppt || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    let wanneer = '';
+    if (m) {
+      const d = new Date(+m[1], +m[2] - 1, +m[3]);
+      wanneer = `${d.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' })} om ${m[4]}:${m[5]}`;
+    }
+    const naam = c.name || 'klant';
+    const body = `Beste ${naam},\n\nUw geplande afspraak${wanneer ? ` van ${wanneer}` : ''} is geannuleerd. Wilt u een nieuwe afspraak inplannen? Neem gerust contact met ons op, dan plannen we samen een nieuw moment.\n\nMet vriendelijke groet,\nKeyservice`;
+    const subject = 'Uw afspraak is geannuleerd';
+    let sent = false;
+    if ((opts.notify || cfg.emailEnabled) && c.email && smtpConfigured()) {
+      const sig = getEmailSignature();
+      try {
+        await sendMail({ to: c.email, subject, text: sig ? `${body}\n\n${sig}` : body });
+        order.thread = order.thread || [];
+        order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (annulering)', subject, body, at: now() });
+        sent = true;
+      } catch (e) { console.error('[annulering] e-mail mislukt:', e.message); }
+    } else if ((opts.notify || cfg.whatsappEnabled) && c.phone) {
+      db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: body, orderId: order.id, status: 'queued', createdAt: now(), by: 'afspraak-annulering' });
+      order.thread = order.thread || [];
+      order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (annulering)', body, at: now() });
+      sent = true;
+    }
+    if (sent) {
+      // Reset de bevestig-status zodat een nieuwe afspraak later weer netjes bevestigd wordt.
+      order.apptMsg = { ...(order.apptMsg || {}), confirmedFor: null, cancelledAt: now() };
+      order.updatedAt = now();
+      logActivity('systeem', 'annuleringsbericht verstuurd', order.title);
+      saveSoon();
+    }
+  } catch (e) { console.error('[annulering]', e.message); }
+}
+
 // ---------- 3. Afspraakherinnering (X uur vooraf) ----------
 async function runAppointmentReminders() {
   const cfg = getAppointmentMsg();
