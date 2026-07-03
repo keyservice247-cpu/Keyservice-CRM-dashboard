@@ -22,6 +22,32 @@ const SCOPES = [
 
 const TIMEZONE = 'Europe/Amsterdam';
 
+// ---------- Welke opdrachten horen in Google Agenda ----------
+// Op verzoek: ALLEEN opdrachten van monteur Abdel Rafour, OF schuifpui-/schuifdeur-
+// opdrachten (herkenbaar aan de titel/omschrijving). Alle andere opdrachten worden
+// NIET naar Google gesynct (en een bestaand event wordt weer verwijderd).
+// Pas de monteurnaam of de trefwoorden hieronder aan als de regels veranderen.
+const GOOGLE_SYNC_MONTEUR = 'abdel';                        // monteurnaam bevat dit (kleine letters)
+const GOOGLE_SYNC_KEYWORDS = /schuifpui|schuifdeur|schuifwand|schuifsysteem/i;
+
+function shouldSyncToGoogle(order, monteur) {
+  const monteurName = ((monteur && monteur.name) || '').toLowerCase();
+  if (GOOGLE_SYNC_MONTEUR && monteurName.includes(GOOGLE_SYNC_MONTEUR)) return true;
+  const text = `${order.title || ''} ${order.description || ''}`;
+  return GOOGLE_SYNC_KEYWORDS.test(text);
+}
+
+// Haalt de plaatsnaam uit een adres (tekst na de postcode, of het laatste deel).
+// Zelfde logica als in de frontend, zodat de Google-titel altijd met de plaats begint.
+function placeName(addr) {
+  if (!addr) return '';
+  const s = String(addr).trim();
+  const m = s.match(/\d{4}\s?[a-z]{2}\s+(.+)$/i);
+  if (m) return m[1].replace(/,.*$/, '').trim();
+  const parts = s.split(',').map((x) => x.trim()).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : s;
+}
+
 // ---------- Configuratie / status ----------
 export function googleConfigured() {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
@@ -194,8 +220,11 @@ function buildEventBody(order, customer) {
   if (order.description) descParts.push(order.description);
   if (order.price) descParts.push('Prijs: ' + order.price);
   descParts.push('— Keyservice CRM');
+  // Titel begint ALTIJD met de plaatsnaam (als die bekend is), daarna de opdracht + klant.
+  const place = placeName(customer.address);
+  const summary = `${place ? place + ' — ' : ''}${order.title}${customer.name ? ' — ' + customer.name : ''}`;
   return {
-    summary: order.title + (customer.name ? ' — ' + customer.name : ''),
+    summary,
     location: customer.address || '',
     description: descParts.join('\n'),
     start: { dateTime: start, timeZone: TIMEZONE },
@@ -217,7 +246,9 @@ export async function syncOrderToGoogle(order) {
     const customer = db().customers.find((c) => c.id === order.customerId) || {};
     const monteur = order.monteurId ? db().monteurs.find((m) => m.id === order.monteurId) : null;
     const targetCal = (monteur && monteur.calendarId) || getDefaultCalendarId();
-    const shouldExist = !!order.appointmentAt && order.status !== 'geannuleerd' && !order.archivedWeek;
+    // Alleen Abdel Rafour + schuifpui-opdrachten horen in Google Agenda (zie boven).
+    const shouldExist = shouldSyncToGoogle(order, monteur)
+      && !!order.appointmentAt && order.status !== 'geannuleerd' && !order.archivedWeek;
     const existing = order.googleEvent; // { calendarId, eventId }
 
     if (!shouldExist) {
