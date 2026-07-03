@@ -22,9 +22,11 @@ export async function maybeSendAutoReply(result) {
   const email = (s.customerEmail || '').trim();
   if (!email || !EMAIL_RE.test(email)) { console.log('[bevestiging] geen geldig klant-e-mailadres gevonden — overgeslagen'); return; }
 
-  // Niet dubbel sturen: max 1 ontvangstbevestiging per klant per 7 dagen.
+  // Niet dubbel sturen bij dubbelklik/dubbele submit: max 1 bevestiging per klant
+  // per uur. Een échte nieuwe aanvraag (uren of dagen later) krijgt gewoon weer een
+  // bevestiging — dat hoort zo.
   const cust = db().customers.find((c) => c.email && c.email.toLowerCase() === email.toLowerCase());
-  if (cust && cust.autoRepliedAt && (Date.now() - new Date(cust.autoRepliedAt).getTime()) < 7 * 86400000) { console.log(`[bevestiging] klant kreeg al een bevestiging <7 dagen geleden (${email}) — overgeslagen`); return; }
+  if (cust && cust.autoRepliedAt && (Date.now() - new Date(cust.autoRepliedAt).getTime()) < 3600000) { console.log(`[bevestiging] klant kreeg al een bevestiging <1 uur geleden (${email}) — overgeslagen`); return; }
 
   const sig = getEmailSignature();
   const text = sig ? `${cfg.body}\n\n${sig}` : cfg.body;
