@@ -1424,11 +1424,17 @@ function renderAgenda() {
   let items = state._agenda || [];
   if (scope === 'drs') items = items.filter((a) => a.isDrs);
   const wrap = $('#agendaList');
-  if (!items.length) { wrap.innerHTML = '<div class="empty">Geen afspraken gepland.</div>'; return; }
+  // BELANGRIJK: één afspraak met een onleesbare datum mag NOOIT de hele agenda leeg
+  // maken. We slaan zulke afspraken over (en tellen ze) i.p.v. te crashen op toISOString().
+  const parse = (d) => { const x = new Date(d); return isNaN(x.getTime()) ? null : x; };
+  let skipped = 0;
+  items = items.filter((a) => { if (parse(a.at)) return true; skipped++; return false; });
+  const skipNote = skipped ? `<div class="muted small" style="margin-bottom:10px">${skipped} afspraak/afspraken met een onleesbare datum overgeslagen.</div>` : '';
+  if (!items.length) { wrap.innerHTML = skipNote + '<div class="empty">Geen afspraken gepland.</div>'; return; }
   // Groeperen per dag (datum als sleutel).
-  const fmtDay = (d) => new Date(d).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
-  const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
-  const fmtTime = (d) => new Date(d).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+  const fmtDay = (d) => parse(d).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
+  const dayKey = (d) => parse(d).toISOString().slice(0, 10);
+  const fmtTime = (d) => parse(d).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
   const todayKey = new Date().toISOString().slice(0, 10);
   const groups = {};
   for (const a of items) { const k = dayKey(a.at); (groups[k] = groups[k] || []).push(a); }
@@ -1453,8 +1459,8 @@ function renderAgenda() {
   const upcoming = allKeys.filter((k) => k >= todayKey);          // vandaag + toekomst
   const past = allKeys.filter((k) => k < todayKey).reverse();      // voorbij: nieuwste eerst
   const pastCount = past.reduce((n, k) => n + groups[k].length, 0);
-  let html = upcoming.length ? upcoming.map(dayBlock).join('')
-    : '<div class="empty" style="margin-bottom:10px">Geen openstaande afspraken meer.</div>';
+  let html = skipNote + (upcoming.length ? upcoming.map(dayBlock).join('')
+    : '<div class="empty" style="margin-bottom:10px">Geen openstaande afspraken meer.</div>');
   if (past.length) {
     html += `<details class="agenda-past"><summary>${icon('clock', 13)} Afgelopen afspraken (${pastCount}) — klik om te tonen</summary>${past.map(dayBlock).join('')}</details>`;
   }
