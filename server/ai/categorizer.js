@@ -552,38 +552,52 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
   }).join('\n');
   // Label elk bericht naar bron-type, zodat de Ai het verschil snapt tussen een
   // tussentijds monteursrapport en een definitieve terugkoppeling in de DRS-groep.
+  // BELANGRIJK: het dagrapport van de monteur is één LANG bericht met veel opdrachten.
+  // Groepsberichten (monteursgroep/DRS) daarom ruim meesturen (tot 2500 tekens); losse
+  // chat/e-mail kort houden zodat de prompt behapbaar blijft.
   const msgList = messages.slice(0, 600).map((m) => {
     const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-    let src;
+    let src; const isGroup = !!m.group;
     if (m.group) src = isWhatsappOrderGroup(m.group) ? `DRS-groep "${m.group}"` : `monteursgroep "${m.group}"`;
     else src = m.channel === 'email' ? 'e-mail' : (m.channel || 'overig');
-    return `${when} [${src}] ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, 300)}`;
+    const limit = isGroup ? 2500 : 220; // dagrapport volledig; geklets kort
+    return `${when} [${src}] ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, limit)}`;
   }).join('\n');
   const statusKeys = statuses.map((s) => `${s.key} (${s.label})`).join(', ');
 
   const system = `Je bent een assistent voor Keyservice (sleutel-/slotenmaker).
 ${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
-ZO WERKT KEYSERVICE: een opdracht komt binnen (vaak via de DRS/"Raf Breda" WhatsApp-groep,
-soms e-mail/telefoon) en wordt een kaart. De monteur stuurt later een RAPPORT in de
-monteursgroep (afgerond / afspraak / offerte / geannuleerd / prijs). Het kantoor koppelt de
-uitkomst daarna terug in de Raf Breda-groep.
+ZO WERKT KEYSERVICE (lees dit goed):
+- Een opdracht komt binnen via de DRS/"Raf Breda"-groep (of e-mail/telefoon) en wordt een kaart.
+- AAN HET EIND VAN ELKE DAG stuurt de monteur ÉÉN dagrapport in de monteursgroep met ALLE
+  opdrachten van die dag tegelijk: welke zijn GEREDEN/afgerond, welke kregen een AFSPRAAK,
+  welke een OFFERTE, welke zijn GEANNULEERD, en welke staan nog OPEN. Dit rapport is dus een
+  LIJST met meerdere opdrachten in één bericht (vaak per plaats/adres één regel).
+- Op basis van dat dagrapport moeten (1) de kaarten op de juiste status gezet worden en
+  (2) de relevante opdrachten teruggekoppeld worden in de Raf Breda-groep.
 
 Je krijgt (1) een lijst lopende opdrachten (met klant, telefoon, adres/postcode, herkomst en
-huidige status) en (2) recente berichten, elk gelabeld met de bron ([DRS-groep "..."],
-[monteursgroep "..."] of [e-mail]).
+huidige status, plus het gesprek/notitie óp de kaart) en (2) recente berichten, elk gelabeld
+met de bron ([DRS-groep "..."], [monteursgroep "..."] of [e-mail]).
 
 TAAK A — STATUSWIJZIGINGEN ("statusChanges") — DIT IS DE BELANGRIJKSTE TAAK:
-Bepaal voor elke lopende opdracht de juiste status. Gebruik TWEE bronnen van bewijs:
- (a) het GESPREK en de NOTITIE die bij de opdracht zelf staan (regel "gesprek:"/"notitie:") —
-     dit is vaak het sterkste bewijs (bv. klant zegt "akkoord, plan maar in" -> afspraak;
-     "offerte verstuurd" -> offerte; monteur "klaar/afgerond" -> afgerond);
- (b) de recente losse berichten (monteursrapport/DRS-groep/e-mail).
-Koppel berichten aan de juiste opdracht op postcode, adres, plaatsnaam, klantnaam OF onderwerp
-(bv. "schuifpui Etten-Leur"). Geldige statussen: ${statusKeys}.
-WEES RUIMHARTIG met voorstellen: een MENS controleert en bevestigt elke suggestie vóór die
-wordt toegepast, dus stel alles voor wat redelijk waarschijnlijk is. Liever een goede suggestie
-die de gebruiker kan wegklikken dan een gemiste statuswijziging. Alleen bij echt geen enkele
-aanwijzing laat je een opdracht met rust.
+Loop het dagrapport (en het gesprek/notitie op elke kaart) na en bepaal per opdracht de status.
+REGELS:
+1. Een dagrapport bevat MEERDERE opdrachten — behandel ELKE regel apart en koppel 'm aan de
+   juiste kaart op postcode, adres, plaatsnaam, klantnaam OF onderwerp (bv. "schuifpui Etten-Leur").
+2. Betekeniswoorden -> status:
+   - "gereden / klaar / afgerond / gefixt / opgelost / vervangen / gemaakt / gedaan" -> afgerond
+   - "afspraak / ingepland / komt terug / (datum/tijd) / morgen langs" -> afspraak ingepland
+   - "offerte / prijs opgegeven / prijsopgave / mail gestuurd met prijs" -> offerte verzonden
+   - "geannuleerd / gaat niet door / geen gehoor / vervallen / afgezegd" -> geannuleerd
+   - "nog open / moet terug / niet gedaan / staat nog" -> in behandeling laten (niet wijzigen)
+3. Het gesprek/notitie ÓP de kaart is óók sterk bewijs (klant "akkoord, plan in" -> afspraak;
+   "offerte verstuurd" -> offerte; monteur "klaar" -> afgerond).
+Geldige statussen: ${statusKeys}.
+WEES RUIMHARTIG: een MENS controleert en bevestigt elke suggestie vóór die wordt toegepast.
+Stel dus alles voor wat redelijk waarschijnlijk is — liever een suggestie die weggeklikt kan
+worden dan een gemiste statuswijziging. Alleen bij écht geen enkele aanwijzing laat je een
+opdracht met rust.
 
 TAAK B — OPENSTAANDE TERUGKOPPELING IN RAF BREDA ("needsDrsUpdate") — secundair:
 Voor opdrachten uit de "DRS/Raf Breda-groep" waarvan de uitkomst bekend is (uit een rapport
