@@ -582,14 +582,33 @@ met de bron ([DRS-groep "..."], [monteursgroep "..."] of [e-mail]).
 
 TAAK A — STATUSWIJZIGINGEN ("statusChanges") — DIT IS DE BELANGRIJKSTE TAAK:
 Loop het dagrapport (en het gesprek/notitie op elke kaart) na en bepaal per opdracht de status.
+
+HET DAGRAPPORT-FORMAAT (heel belangrijk): de monteur zet een KOPJE (de uitkomst) en daaronder
+één of meer regels met een POSTCODE + plaats + detail. Elke regel onder een kopje krijgt de
+status van dat kopje, TOT het volgende kopje. Voorbeeld:
+   Vrijdag 03-07
+   Afgerond
+   5056AC Berkel-Enschot €556 pin
+   Offerte
+   4631 TB Hoogerheide offerte afgegeven
+   Afspraken
+   5171AE Kaatsheuvel maandag
+   4664 BS Lepelstraat maandag
+   Geannuleerd
+   5224BN Denbosch advies gegeven
+   4661ZD Halsteren heeft zelf opgelost
+Hieruit volgt: Berkel-Enschot -> afgerond, Hoogerheide -> offerte, Kaatsheuvel + Lepelstraat ->
+afspraak ingepland, Denbosch + Halsteren -> geannuleerd.
+
 REGELS:
-1. Een dagrapport bevat MEERDERE opdrachten — behandel ELKE regel apart en koppel 'm aan de
-   juiste kaart op postcode, adres, plaatsnaam, klantnaam OF onderwerp (bv. "schuifpui Etten-Leur").
-2. Betekeniswoorden -> status:
-   - "gereden / klaar / afgerond / gefixt / opgelost / vervangen / gemaakt / gedaan" -> afgerond
-   - "afspraak / ingepland / komt terug / (datum/tijd) / morgen langs" -> afspraak ingepland
-   - "offerte / prijs opgegeven / prijsopgave / mail gestuurd met prijs" -> offerte verzonden
-   - "geannuleerd / gaat niet door / geen gehoor / vervallen / afgezegd" -> geannuleerd
+1. Behandel ELKE regel van het rapport apart. Koppel 'm aan de juiste kaart primair op de
+   POSTCODE (bv. 5056AC / 4664 BS — let op: postcode kan met of zonder spatie staan), anders
+   op plaatsnaam, adres, klantnaam of onderwerp. Eén rapport = meerdere kaarten.
+2. De status komt van het KOPJE erboven. Kopjes en losse woorden -> status:
+   - "Afgerond / gereden / klaar / gefixt / opgelost / vervangen / gemaakt / pin / betaald" -> afgerond
+   - "Afspraken / afspraak / (weekdag) / maandag..zondag / ingepland / komt terug / plaatsen" -> afspraak ingepland
+   - "Offerte / prijs opgegeven / prijsopgave / offerte afgegeven" -> offerte verzonden
+   - "Geannuleerd / gaat niet door / geen gehoor / zelf opgelost / advies gegeven / vervallen" -> geannuleerd
    - "nog open / moet terug / niet gedaan / staat nog" -> in behandeling laten (niet wijzigen)
 3. Het gesprek/notitie ÓP de kaart is óók sterk bewijs (klant "akkoord, plan in" -> afspraak;
    "offerte verstuurd" -> offerte; monteur "klaar" -> afgerond).

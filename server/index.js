@@ -1719,10 +1719,21 @@ async function computeStatusScan(days) {
       };
     })
     .slice(0, 300);
-  const msgs = db().messages
-    .filter((m) => new Date(m.receivedAt).getTime() >= since)
-    .sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt))
-    .slice(0, 800);
+  // Berichten kiezen: groepsberichten (monteursrapport + DRS) ALTIJD meenemen — dat is
+  // het bewijs voor de statussen — aangevuld met recente losse chat/e-mail. Zo kan een
+  // stortvloed aan klantberichten de dagrapporten nooit verdringen.
+  const byDateDesc = (a, b) => new Date(b.receivedAt) - new Date(a.receivedAt);
+  const inWindow = db().messages.filter((m) => m.receivedAt && new Date(m.receivedAt).getTime() >= since);
+  const groupMsgs = inWindow.filter((m) => m.group).sort(byDateDesc);
+  const otherMsgs = inWindow.filter((m) => !m.group).sort(byDateDesc);
+  const msgs = [...groupMsgs.slice(0, 400), ...otherMsgs.slice(0, 400)].sort(byDateDesc).slice(0, 700);
+  // Telling per bron, zodat de gebruiker ziet of de monteursrapporten überhaupt binnenkomen.
+  const sources = { monteur: 0, drs: 0, email: 0, overig: 0 };
+  for (const m of inWindow) {
+    if (m.group) { if (isWhatsappOrderGroup(m.group)) sources.drs++; else sources.monteur++; }
+    else if (m.channel === 'email') sources.email++;
+    else sources.overig++;
+  }
   const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile() });
   const labels = getStatusLabels();
   const suggestions = (out.statusChanges || []).map((s) => {
@@ -1747,7 +1758,7 @@ async function computeStatusScan(days) {
       reason: s.reason || '', suggestedText: s.suggestedText || '',
     };
   }).filter(Boolean);
-  return { at: now(), days, scanned: msgs.length, cards: active.length, suggestions, needsDrsUpdate, engine: out.engine, note: out.note || '' };
+  return { at: now(), days, scanned: msgs.length, cards: active.length, sources, suggestions, needsDrsUpdate, engine: out.engine, note: out.note || '' };
 }
 
 async function runStatusScanJob(days) {

@@ -1380,7 +1380,15 @@ function renderStatusScan(out) {
   const sugg = out.suggestions || [];
   const todo = out.needsDrsUpdate || [];
   const when = out.at ? `<div class="muted small" style="margin-bottom:8px">Laatste scan: ${esc(fmtDate(out.at))} · ${out.cards || 0} kaarten en ${out.scanned || 0} berichten doorzocht${out.engine ? ' · ' + esc(out.engine) : ''}</div>` : '';
-  let html = when;
+  // Bron-telling: laat zien of de monteursrapporten überhaupt binnenkomen. 0 = probleem aan
+  // de WhatsApp-kant (bridge/groep), niet aan de AI.
+  let src = '';
+  if (out.sources) {
+    const s = out.sources;
+    const warn = (s.monteur || 0) === 0;
+    src = `<div class="muted small" style="margin-bottom:8px${warn ? ';color:var(--danger)' : ''}">Berichten: ${s.monteur || 0} uit monteursgroep · ${s.drs || 0} uit DRS/Raf Breda · ${s.email || 0} e-mail · ${s.overig || 0} overig.${warn ? ' ⚠ 0 monteursrapporten binnen — de dagrapporten bereiken het CRM niet. Controleer of het wegwerp-nummer in de monteursgroep zit én of de bridge die groep doorstuurt (GROUP_FILTER leeg laten). Zonder deze rapporten kan de AI de kaarten niet sorteren.' : ''}</div>`;
+  }
+  let html = when + src;
   if (out.error) html += `<div class="error small">Laatste scan mislukt: ${esc(out.error)}</div>`;
   if (sugg.length) {
     html += `<div class="ss-bulkbar"><span class="muted small">${sugg.length} statusvoorstel(len) gevonden</span><button class="btn btn-sm btn-success" id="ss-apply-all">Alles toepassen</button></div>` + sugg.map((s, i) => `
