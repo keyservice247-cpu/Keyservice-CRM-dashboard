@@ -55,6 +55,20 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 
+## AI-statusscan — NIET verzwakken (werkt, 6 juli bevestigd)
+- De statusscan leest de **dagrapporten** van de monteur (WhatsApp-monteursgroep, bv.
+  "Youssef Keyservice247"). Formaat: kopje (Afgerond/Offerte/Afspraken/Geannuleerd) +
+  regels met **postcode + plaats**; elke regel erft de status van het kopje erboven.
+- Kernpunten die het werkend maken (niet weghalen):
+  1. Groepsberichten worden tot **2500 tekens** meegestuurd (niet 300 — anders valt het
+     rapport af). Monteursgroep = elke `waGroup` van een monteur (labeling in `categorizer.js`).
+  2. Kaarten krijgen een **volgnummer (#1..#n)**; de AI verwijst daarmee (server accepteert
+     `#12` én het echte id). Afgekapt AI-antwoord wordt **gered** (bracket-parser), nooit stil leeg.
+  3. De scan draait **altijd minimaal op Sonnet 5** (Haiku-override wordt opgewaardeerd).
+     Instelbaar hoger via `ANTHROPIC_ANALYZE_MODEL` (sonnet/opus), nooit lager.
+- Kosten (indicatie, Sonnet 5): ~$0,12 per scan, nachtscan ~€3,50/mnd. Zie Abonnementen
+  (per-model uitsplitsing) + Claude Console → Usage voor het officiële verbruik.
+
 ## Belangrijke beslissingen
 - Onofficiële WhatsApp (whatsapp-web.js) op apart wegwerp-nummer i.p.v. Meta Cloud API, omdat
   de officiële API GEEN groepen kan lezen. Risico = blokkade nummer; daarom wegwerp-nummer.

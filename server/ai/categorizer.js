@@ -538,7 +538,11 @@ ALGEMEEN:
 // een mens nog moet goedkeuren — past zelf NIETS aan.
 export async function suggestStatusChanges({ orders = [], messages = [], statuses = [], companyProfile = '', monteurGroups = [] }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  // De statusscan draait ALTIJD minimaal op Sonnet 5 — dit is het denkwerk dat de
+  // kaarten sorteert. Een eventuele zwakkere override (bv. Haiku) wordt hier
+  // opgewaardeerd naar Sonnet 5, zodat de kwaliteit nooit stilletjes terugvalt.
+  const requested = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const model = /haiku/i.test(requested) ? 'claude-sonnet-5' : requested;
   if (!apiKey) return { suggestions: [], engine: 'demo', note: 'Zet de AI aan (ANTHROPIC_API_KEY) voor de statusscan.' };
   if (!orders.length || !messages.length) return { suggestions: [], engine: 'n.v.t.' };
 
