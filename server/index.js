@@ -1740,10 +1740,20 @@ async function computeStatusScan(days) {
   }
   const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile(), monteurGroups: db().monteurs.map((m) => m.waGroup).filter(Boolean) });
   const labels = getStatusLabels();
+  // De AI mag verwijzen met "#12" (volgnummer in de meegestuurde lijst) of het echte id.
+  // Volgnummers zijn betrouwbaarder dan lange hex-ids (één verhaspeld teken = weggegooid
+  // voorstel). Afgevallen voorstellen worden geteld en gemeld — nooit meer stil.
+  let dropped = 0;
+  const resolveOrder = (ref) => {
+    const r = String(ref || '').trim();
+    const num = r.match(/^#?(\d{1,3})$/);
+    if (num) { const a = active[Number(num[1]) - 1]; if (a) return db().orders.find((o) => o.id === a.id); }
+    return db().orders.find((o) => o.id === r);
+  };
   const suggestions = (out.statusChanges || []).map((s) => {
-    const order = db().orders.find((o) => o.id === s.orderId);
-    if (!order || !isValidStatus(s.suggestedStatus)) return null;
-    if (order.status === s.suggestedStatus) return null;
+    const order = resolveOrder(s.orderId);
+    if (!order || !isValidStatus(s.suggestedStatus)) { dropped++; return null; }
+    if (order.status === s.suggestedStatus) return null; // staat al goed — geen fout
     return {
       orderId: order.id, title: order.title,
       from: order.status, fromLabel: labels[order.status] || order.status,
@@ -1752,8 +1762,8 @@ async function computeStatusScan(days) {
     };
   }).filter(Boolean);
   const needsDrsUpdate = (out.needsDrsUpdate || []).map((s) => {
-    const order = db().orders.find((o) => o.id === s.orderId);
-    if (!order) return null;
+    const order = resolveOrder(s.orderId);
+    if (!order) { dropped++; return null; }
     const c = db().customers.find((x) => x.id === order.customerId) || {};
     return {
       orderId: order.id, title: order.title,
@@ -1762,7 +1772,10 @@ async function computeStatusScan(days) {
       reason: s.reason || '', suggestedText: s.suggestedText || '',
     };
   }).filter(Boolean);
-  return { at: now(), days, scanned: msgs.length, cards: active.length, sources, suggestions, needsDrsUpdate, engine: out.engine, note: out.note || '', rawSample: out.rawSample || '' };
+  let note = out.note || '';
+  if (dropped) note = `${note ? note + ' ' : ''}(${dropped} AI-voorstel(len) afgevallen wegens onherkenbaar kaart-id of ongeldige status.)`;
+  console.log(`[statusscan] AI gaf ${(out.statusChanges || []).length} statusvoorstellen; ${suggestions.length} bruikbaar, ${dropped} afgevallen.`);
+  return { at: now(), days, scanned: msgs.length, cards: active.length, sources, suggestions, needsDrsUpdate, engine: out.engine, note, rawSample: out.rawSample || '' };
 }
 
 async function runStatusScanJob(days) {

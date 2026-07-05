@@ -542,8 +542,8 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
   if (!apiKey) return { suggestions: [], engine: 'demo', note: 'Zet de AI aan (ANTHROPIC_API_KEY) voor de statusscan.' };
   if (!orders.length || !messages.length) return { suggestions: [], engine: 'n.v.t.' };
 
-  const orderList = orders.slice(0, 300).map((o) => {
-    let line = `${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | herkomst: ${o.isDrs ? 'DRS/Raf Breda-groep' : 'overig'} | nu: ${o.status}`;
+  const orderList = orders.slice(0, 300).map((o, i) => {
+    let line = `#${i + 1} | ${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | herkomst: ${o.isDrs ? 'DRS/Raf Breda-groep' : 'overig'} | nu: ${o.status}`;
     if (o.appointmentAt) line += ` | afspraak: ${o.appointmentAt}`;
     if (o.price) line += ` | prijs: ${o.price}`;
     if (o.notes) line += ` | notitie: ${o.notes}`;
@@ -632,8 +632,10 @@ kant-en-klare tekst om in Raf Breda te plakken (bv. "Afgerond — Hulst 4561KZ")
 taak NOOIT ten koste gaan van Taak A.
 
 Antwoord UITSLUITEND met één JSON-object, geen tekst eromheen:
-{"statusChanges":[{"orderId":"...","suggestedStatus":"<geldige statuskey>","reason":"korte uitleg","evidence":"kort citaat"}],
- "needsDrsUpdate":[{"orderId":"...","reason":"waarom dit nog terug moet","suggestedText":"tekst om in Raf Breda te plakken"}]}
+{"statusChanges":[{"orderId":"#12","suggestedStatus":"<geldige statuskey>","reason":"korte uitleg","evidence":"kort citaat"}],
+ "needsDrsUpdate":[{"orderId":"#12","reason":"waarom dit nog terug moet","suggestedText":"tekst om in Raf Breda te plakken"}]}
+Gebruik bij "orderId" bij voorkeur het VOLGNUMMER van de opdracht (bv. "#12"); het lange
+ord_-id mag ook, maar dan exact overgenomen.
 HOUD HET COMPACT: "reason" max 12 woorden, "evidence" max 100 tekens (alleen het relevante
 stukje citeren, niet het hele rapport). Beide lijsten mogen leeg zijn ([]).`;
 
