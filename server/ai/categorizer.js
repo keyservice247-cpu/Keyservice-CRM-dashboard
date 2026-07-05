@@ -355,7 +355,7 @@ Geef JSON met exact deze velden:
   }
 
   const json = await resp.json();
-  recordAIUsage(json.usage);
+  recordAIUsage(json.usage, model);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('Geen JSON in AI-antwoord');
@@ -439,7 +439,7 @@ ${history ? `\nGesprekshistorie:\n${history.slice(0, 2000)}` : ''}`;
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
-  recordAIUsage(json.usage);
+  recordAIUsage(json.usage, model);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   return { text, engine: `ai:${model}` };
 }
@@ -475,7 +475,7 @@ Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je zie
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
-  recordAIUsage(json.usage);
+  recordAIUsage(json.usage, model);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   return { text, engine: `ai:${model}`, analyzed: Math.min(messages.length, 200) };
 }
@@ -527,7 +527,7 @@ ALGEMEEN:
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
-  recordAIUsage(json.usage);
+  recordAIUsage(json.usage, model);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   return { text, engine: `ai:${model}`, searched: Math.min(messages.length, 1500) };
 }
@@ -646,7 +646,7 @@ stukje citeren, niet het hele rapport). Beide lijsten mogen leeg zijn ([]).`;
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
-  recordAIUsage(json.usage);
+  recordAIUsage(json.usage, model);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   const truncated = json.stop_reason === 'max_tokens';
   console.log(`[statusscan] AI-antwoord: ${text.length} tekens, stop_reason=${json.stop_reason}`);
@@ -732,7 +732,7 @@ Begin met de kop "FILTERREGELS (op basis van werkelijk verkeer):".`;
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
-  recordAIUsage(json.usage);
+  recordAIUsage(json.usage, model);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   return { text, engine: `ai:${model}` };
 }
