@@ -632,38 +632,71 @@ kant-en-klare tekst om in Raf Breda te plakken (bv. "Afgerond — Hulst 4561KZ")
 taak NOOIT ten koste gaan van Taak A.
 
 Antwoord UITSLUITEND met één JSON-object, geen tekst eromheen:
-{"statusChanges":[{"orderId":"...","suggestedStatus":"<geldige statuskey>","reason":"korte uitleg","evidence":"het bericht waarop je je baseert"}],
+{"statusChanges":[{"orderId":"...","suggestedStatus":"<geldige statuskey>","reason":"korte uitleg","evidence":"kort citaat"}],
  "needsDrsUpdate":[{"orderId":"...","reason":"waarom dit nog terug moet","suggestedText":"tekst om in Raf Breda te plakken"}]}
-Beide lijsten mogen leeg zijn ([]).`;
+HOUD HET COMPACT: "reason" max 12 woorden, "evidence" max 100 tekens (alleen het relevante
+stukje citeren, niet het hele rapport). Beide lijsten mogen leeg zijn ([]).`;
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 10000, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
+    body: JSON.stringify({ model, max_tokens: 16000, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
   recordAIUsage(json.usage);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
-  let statusChanges = [];
-  let needsDrsUpdate = [];
-  // 1) Probeer het JSON-object met statusChanges/needsDrsUpdate te vinden.
-  const objMatch = text.match(/\{[\s\S]*"statusChanges"[\s\S]*\}/);
-  if (objMatch) {
-    try {
-      const parsed = JSON.parse(objMatch[0]);
-      if (Array.isArray(parsed.statusChanges)) statusChanges = parsed.statusChanges;
-      if (Array.isArray(parsed.needsDrsUpdate)) needsDrsUpdate = parsed.needsDrsUpdate;
-    } catch { /* val door naar array-fallback */ }
-  }
-  // 2) Terugvalcompat: model gaf een kale array van statusvoorstellen terug.
-  if (!statusChanges.length && !needsDrsUpdate.length) {
+  const truncated = json.stop_reason === 'max_tokens';
+  console.log(`[statusscan] AI-antwoord: ${text.length} tekens, stop_reason=${json.stop_reason}`);
+
+  // Haalt een JSON-array met de gegeven sleutel uit de tekst, óók als het antwoord
+  // halverwege is afgekapt: complete objecten worden gered, het kapotte laatste object
+  // wordt weggegooid. Zo kan een lang antwoord nooit meer stilletjes "leeg" worden.
+  const extractArray = (src, key) => {
+    const ki = src.indexOf(`"${key}"`);
+    if (ki === -1) return null;
+    const start = src.indexOf('[', ki);
+    if (start === -1) return null;
+    let depth = 0, inStr = false, esc = false, lastComplete = start;
+    for (let i = start; i < src.length; i++) {
+      const ch = src[i];
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === '[' || ch === '{') depth++;
+      else if (ch === ']' || ch === '}') {
+        depth--;
+        if (depth === 1 && ch === '}') lastComplete = i; // einde van een compleet object
+        if (depth === 0) { // nette afsluiting van de array
+          try { return JSON.parse(src.slice(start, i + 1)); } catch { break; }
+        }
+      }
+    }
+    // Afgekapt: red alles t/m het laatste complete object.
+    if (lastComplete > start) {
+      try { return JSON.parse(src.slice(start, lastComplete + 1) + ']'); } catch { /* geef op */ }
+    }
+    return null;
+  };
+
+  let statusChanges = extractArray(text, 'statusChanges');
+  let needsDrsUpdate = extractArray(text, 'needsDrsUpdate');
+  // Terugvalcompat: model gaf een kale array terug.
+  if (!statusChanges && !needsDrsUpdate) {
     const arr = text.match(/\[[\s\S]*\]/);
     if (arr) { try { const a = JSON.parse(arr[0]); if (Array.isArray(a)) statusChanges = a; } catch { /* laat leeg */ } }
   }
   if (!Array.isArray(statusChanges)) statusChanges = [];
   if (!Array.isArray(needsDrsUpdate)) needsDrsUpdate = [];
-  return { statusChanges, needsDrsUpdate, engine: `ai:${model}` };
+  // Nooit meer stil falen: als er tekst was maar niets geparsed kon worden, meld het.
+  let note = '';
+  if (truncated && statusChanges.length) note = `Let op: het AI-antwoord was te lang en is afgekapt — ${statusChanges.length} voorstellen zijn gered; draai de scan eventueel nog eens voor de rest.`;
+  if (!statusChanges.length && !needsDrsUpdate.length && text.length > 50) {
+    note = 'De AI gaf een antwoord dat niet als voorstel-lijst te lezen was. Technische details hieronder.';
+    return { statusChanges, needsDrsUpdate, engine: `ai:${model}`, note, rawSample: text.slice(0, 1200) };
+  }
+  return { statusChanges, needsDrsUpdate, engine: `ai:${model}`, note };
 }
 
 // Genereert een bondige "leerregel"-tekst op basis van het verkeer: wat IS en wat

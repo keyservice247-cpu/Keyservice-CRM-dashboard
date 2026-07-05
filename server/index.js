@@ -1762,7 +1762,7 @@ async function computeStatusScan(days) {
       reason: s.reason || '', suggestedText: s.suggestedText || '',
     };
   }).filter(Boolean);
-  return { at: now(), days, scanned: msgs.length, cards: active.length, sources, suggestions, needsDrsUpdate, engine: out.engine, note: out.note || '' };
+  return { at: now(), days, scanned: msgs.length, cards: active.length, sources, suggestions, needsDrsUpdate, engine: out.engine, note: out.note || '', rawSample: out.rawSample || '' };
 }
 
 async function runStatusScanJob(days) {

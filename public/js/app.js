@@ -1408,7 +1408,9 @@ function renderStatusScan(out) {
         <div style="margin-top:6px;display:flex;gap:6px">${t.suggestedText ? `<button class="btn btn-sm btn-primary ss-copy" data-text="${esc(t.suggestedText)}">Kopieer tekst</button>` : ''}<button class="btn btn-sm ss-ignore">Klaar / negeren</button></div>
       </div>`).join('');
   }
+  if (out.note && (sugg.length || todo.length)) html += `<div class="muted small" style="margin-bottom:8px">${esc(out.note)}</div>`;
   if (!sugg.length && !todo.length) html += `<div class="muted small">${esc(out.note || 'Geen wijzigingen voorgesteld. De AI vond in het CRM geen duidelijk bewijs (een bericht of monteursmelding) om een kaart te verplaatsen. Staat er tóch een kaart in de verkeerde status? Dan mist de AI het bewijs — bijvoorbeeld omdat de "klaar"-melding van de monteur alleen in de WhatsApp-groep staat en niet in het CRM. Zet die kaart dan handmatig goed, of laat de monteursgroep meelezen.')}</div>`;
+  if (out.rawSample) html += `<details style="margin-top:8px"><summary class="muted small" style="cursor:pointer">Technische details (ruwe AI-antwoord, voor debugging)</summary><pre style="white-space:pre-wrap;font-size:11px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:300px;overflow:auto">${esc(out.rawSample)}</pre></details>`;
   box.innerHTML = html;
   $$('.ss-apply').forEach((b) => b.onclick = async () => {
     try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); toast('Status bijgewerkt'); b.closest('.ss-item').remove(); loadBoard(); }
