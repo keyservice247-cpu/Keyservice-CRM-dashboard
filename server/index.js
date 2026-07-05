@@ -1728,13 +1728,17 @@ async function computeStatusScan(days) {
   const otherMsgs = inWindow.filter((m) => !m.group).sort(byDateDesc);
   const msgs = [...groupMsgs.slice(0, 400), ...otherMsgs.slice(0, 400)].sort(byDateDesc).slice(0, 700);
   // Telling per bron, zodat de gebruiker ziet of de monteursrapporten überhaupt binnenkomen.
+  // Een groep die bij een monteur hoort (waGroup) telt als monteursgroep — betrouwbaarder
+  // dan het opdracht-groepen-filter (dat bij leeg alles als DRS zou tellen).
+  const monteurGroups = db().monteurs.map((m) => String(m.waGroup || '').toLowerCase().trim()).filter(Boolean);
+  const isMonteurGrp = (name) => { const n = String(name || '').toLowerCase().trim(); return monteurGroups.some((g) => n === g || n.includes(g) || g.includes(n)); };
   const sources = { monteur: 0, drs: 0, email: 0, overig: 0 };
   for (const m of inWindow) {
-    if (m.group) { if (isWhatsappOrderGroup(m.group)) sources.drs++; else sources.monteur++; }
+    if (m.group) { if (isMonteurGrp(m.group)) sources.monteur++; else if (isWhatsappOrderGroup(m.group)) sources.drs++; else sources.monteur++; }
     else if (m.channel === 'email') sources.email++;
     else sources.overig++;
   }
-  const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile() });
+  const out = await suggestStatusChanges({ orders: active, messages: msgs, statuses: getStatuses(), companyProfile: getCompanyProfile(), monteurGroups: db().monteurs.map((m) => m.waGroup).filter(Boolean) });
   const labels = getStatusLabels();
   const suggestions = (out.statusChanges || []).map((s) => {
     const order = db().orders.find((o) => o.id === s.orderId);

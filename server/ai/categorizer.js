@@ -536,7 +536,7 @@ ALGEMEEN:
 // stelt statuswijzigingen voor (bv. monteur meldt "klaar" -> Afgerond; "offerte gestuurd"
 // -> Offerte verzonden; "klant wil niet" -> Geannuleerd). Geeft voorstellen terug die
 // een mens nog moet goedkeuren — past zelf NIETS aan.
-export async function suggestStatusChanges({ orders = [], messages = [], statuses = [], companyProfile = '' }) {
+export async function suggestStatusChanges({ orders = [], messages = [], statuses = [], companyProfile = '', monteurGroups = [] }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
   if (!apiKey) return { suggestions: [], engine: 'demo', note: 'Zet de AI aan (ANTHROPIC_API_KEY) voor de statusscan.' };
@@ -555,11 +555,18 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
   // BELANGRIJK: het dagrapport van de monteur is één LANG bericht met veel opdrachten.
   // Groepsberichten (monteursgroep/DRS) daarom ruim meesturen (tot 2500 tekens); losse
   // chat/e-mail kort houden zodat de prompt behapbaar blijft.
+  // Een groep die bij een monteur hoort (waGroup) is ALTIJD een monteursgroep — dat is
+  // betrouwbaarder dan het opdracht-groepen-filter (dat bij leeg "alles" matcht en dan
+  // het dagrapport per ongeluk als DRS-groep zou labelen).
+  const mg = monteurGroups.map((g) => String(g || '').toLowerCase().trim()).filter(Boolean);
+  const isMonteurGroup = (name) => { const n = String(name || '').toLowerCase().trim(); return mg.some((g) => n === g || n.includes(g) || g.includes(n)); };
   const msgList = messages.slice(0, 600).map((m) => {
     const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
     let src; const isGroup = !!m.group;
-    if (m.group) src = isWhatsappOrderGroup(m.group) ? `DRS-groep "${m.group}"` : `monteursgroep "${m.group}"`;
-    else src = m.channel === 'email' ? 'e-mail' : (m.channel || 'overig');
+    if (m.group) {
+      if (isMonteurGroup(m.group)) src = `monteursgroep "${m.group}"`;
+      else src = isWhatsappOrderGroup(m.group) ? `DRS-groep "${m.group}"` : `monteursgroep "${m.group}"`;
+    } else src = m.channel === 'email' ? 'e-mail' : (m.channel || 'overig');
     const limit = isGroup ? 2500 : 220; // dagrapport volledig; geklets kort
     return `${when} [${src}] ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, limit)}`;
   }).join('\n');
