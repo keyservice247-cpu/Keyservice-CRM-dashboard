@@ -503,6 +503,14 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
   if (b.status && !isValidStatus(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
 
+  // Verplichte notitie: een monteur moet eerst een notitie/omschrijving invullen voordat
+  // hij een opdracht naar Offerte verzonden, Afgerond of Geannuleerd verplaatst.
+  const NOTE_REQUIRED_STATUSES = ['offerte_verzonden', 'afgerond', 'geannuleerd'];
+  if (req.user.role === 'monteur' && b.status && b.status !== order.status && NOTE_REQUIRED_STATUSES.includes(b.status)) {
+    const noteAfter = (('notes' in b ? b.notes : order.notes) || '').trim();
+    if (!noteAfter) return res.status(400).json({ error: 'Vul eerst een notitie/omschrijving in (wat is er gedaan/afgesproken) voordat je de opdracht op deze status zet.' });
+  }
+
   const prevAppt = order.appointmentAt; // om wijziging/annulering van de afspraak te herkennen
   let changedStatus = false;
   for (const k of allowed) {
@@ -1053,13 +1061,20 @@ app.post('/api/ingest/form', async (req, res) => {
     return res.status(401).json({ error: 'Niet toegestaan' });
   }
   const b = req.body || {};
-  const name = (b.name || '').toString().trim();
-  const phone = (b.phone || '').toString().trim();
-  const email = (b.email || '').toString().trim();
-  const address = (b.address || '').toString().trim();
-  const subject = (b.subject || '').toString().trim();
-  const message = (b.message || b.comment || '').toString().trim();
-  const formType = (b.formType || b.form || 'website').toString().trim();
+  const str = (v) => (v || '').toString().trim();
+  const name = str(b.name);
+  const phone = str(b.phone);
+  const email = str(b.email);
+  // Adres kan in losse velden binnenkomen (straat + postcode + plaats/woonplaats/stad).
+  // We voegen ze samen tot één adres, zodat de PLAATSNAAM altijd meekomt — ook als het
+  // website-formulier straat en plaats gescheiden verstuurt.
+  const street = str(b.address || b.street || b.straat || b.adres);
+  const postcode = str(b.postcode || b.zip || b.postalcode || b.postal_code);
+  const city = str(b.city || b.plaats || b.woonplaats || b.stad || b.place || b.town);
+  const address = [street, [postcode, city].filter(Boolean).join(' ')].filter(Boolean).join(', ').trim();
+  const subject = str(b.subject);
+  const message = str(b.message || b.comment);
+  const formType = str(b.formType || b.form) || 'website';
   if (!name && !phone && !email && !message) return res.status(400).json({ error: 'Lege aanvraag' });
 
   // Nette, gestructureerde tekst zodat naam/telefoon/e-mail/adres betrouwbaar worden
@@ -1546,6 +1561,33 @@ app.post('/api/outbox/:id/done', checkIngestToken, (req, res) => {
   if (order && order.sentToMonteur) order.sentToMonteur.status = item.status;
   saveSoon();
   res.json({ ok: true });
+});
+
+// Testmail: stuur één van de automatische mails (met voorbeeldgegevens) naar een gekozen
+// adres, zodat je ziet hoe het bij de klant binnenkomt. Verstuurt NIET naar klanten.
+app.post('/api/test-mail', requireRole('admin'), async (req, res) => {
+  const to = String(req.body?.to || '').trim();
+  const type = String(req.body?.type || 'ontvangstbevestiging');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Vul een geldig e-mailadres in' });
+  if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is nog niet ingesteld op de server.' });
+  const sample = { naam: 'Jan de Vries (voorbeeld)', datum: 'maandag 8 juli', tijd: '14:00', link: getReviewRequest().link || 'https://g.page/r/keyservice-review' };
+  const fill = (t) => String(t || '').replace(/\{(\w+)\}/g, (_, k) => (sample[k] ?? ''));
+  let subject; let body;
+  if (type === 'ontvangstbevestiging') { const c = getAutoReply(); subject = c.subject; body = c.body; }
+  else if (type === 'afspraak') { const c = getAppointmentMsg(); subject = c.emailSubject; body = c.emailBody; }
+  else if (type === 'herinnering') { const c = getAppointmentMsg(); subject = c.reminderEmailSubject; body = c.reminderBody; }
+  else if (type === 'review') { const c = getReviewRequest(); subject = c.subject; body = c.body; }
+  else if (type === 'annulering') { subject = 'Uw afspraak is geannuleerd'; body = `Beste ${sample.naam},\n\nUw geplande afspraak van ${sample.datum} om ${sample.tijd} is geannuleerd. Wilt u een nieuwe afspraak inplannen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nKeyservice`; }
+  else return res.status(400).json({ error: 'Onbekend maildtype' });
+  const sig = getEmailSignature();
+  let text = fill(body || '');
+  text += '\n\n———\n(Dit is een TESTMAIL vanuit je eigen CRM, met voorbeeldgegevens. De echte klant krijgt exact deze opmaak, zonder deze regel.)';
+  if (sig) text = `${text}\n\n${sig}`;
+  try {
+    await sendMail({ to, subject: '[TEST] ' + fill(subject || 'Keyservice'), text });
+    logActivity(req.user.name, 'testmail verstuurd', `${type} -> ${to}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) => {

@@ -157,10 +157,17 @@ const statusColor = (key) => {
   $('#aiMode').textContent = me.meta.aiMode === 'ai' ? 'AI actief' : 'AI: demo';
 
   if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => el.remove());
-  if (me.user.role === 'monteur') $$('.perm-write').forEach((el) => (el.hidden = true));
+  if (me.user.role === 'monteur') {
+    $$('.perm-write').forEach((el) => (el.hidden = true));
+    // Monteur ziet alleen zijn eigen werk: Opdrachten + Agenda. Overige functies weg.
+    const monteurAllowed = ['board', 'agenda'];
+    $$('.nav-item, .bn-item').forEach((el) => { if (!monteurAllowed.includes(el.dataset.view)) el.hidden = true; });
+  }
 
   bindNav();
   bindButtons();
+  // Monteur start op zijn opdrachten (Overzicht is voor hem verborgen).
+  if (me.user.role === 'monteur') goView('board');
   await refreshAll();
   // Terugkomst van de Google Agenda-koppeling.
   try {
@@ -844,7 +851,7 @@ function openOrderModal(id, pool) {
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}" ${isMonteur ? 'disabled' : ''}></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" ${isMonteur ? 'disabled' : ''}></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" ${isMonteur ? 'disabled' : ''} placeholder="e-mailadres klant"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}" ${isMonteur ? 'disabled' : ''}></label> </div>`}
-    <div class="row"> <label>Status <select id="f-status">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
+    <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     ${o ? `
       <div class="attach"> <div class="thread-head">${icon('paperclip', 15)} Foto's &amp; bestanden${o.attachments && o.attachments.length ? ` (${o.attachments.length})` : ''}
@@ -853,17 +860,30 @@ function openOrderModal(id, pool) {
       <div class="thread">
         <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}</div>
         <div class="chat" id="f-chat">
-          ${o.thread.map((t) => { const q = splitQuoted(t.body || ''); return `
-          <div class="chat-msg ${t.outgoing ? 'out' : 'in'}" data-thr="${esc(t.id || '')}">
-            <div class="chat-meta">${t.outgoing ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (t.outgoing ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)}${canWrite && t.id ? ` <button type="button" class="chat-del" data-thr="${esc(t.id)}" title="Dit bericht uit de historie verwijderen">${icon('x', 12)}</button>` : ''}</div>
-            <div class="chat-bubble">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div>
-          </div>`; }).join('')}
+          ${o.thread.map((t) => {
+            const q = splitQuoted(t.body || '');
+            // FormSubmit-notificaties (van de website) standaard inklappen — de directe
+            // CRM-aanvraag is leidend; de FormSubmit-kopie is alleen back-up.
+            const isForm = /formsubmit\.co/i.test(t.sender || '') || /submitted your form on|formsubmit/i.test(t.body || '');
+            const meta = `<div class="chat-meta">${t.outgoing ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (t.outgoing ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)}${canWrite && t.id ? ` <button type="button" class="chat-del" data-thr="${esc(t.id)}" title="Dit bericht uit de historie verwijderen">${icon('x', 12)}</button>` : ''}</div>`;
+            const bubble = `<div class="chat-bubble">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div>`;
+            if (isForm) return `<div class="chat-msg in form-msg" data-thr="${esc(t.id || '')}"><details class="form-collapse"><summary class="muted small">${icon('mail', 12)} FormSubmit-kopie (website) · ${fmtDate(t.at)} — klik om te tonen</summary>${meta}${bubble}</details></div>`;
+            return `<div class="chat-msg ${t.outgoing ? 'out' : 'in'}" data-thr="${esc(t.id || '')}">${meta}${bubble}</div>`;
+          }).join('')}
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
       <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
+  // Status-veld laten opvallen: kader kleurt mee met de gekozen status.
+  {
+    const stEl = $('#f-status');
+    if (stEl) {
+      const paint = () => { const c = statusColor(stEl.value); stEl.style.borderColor = c; stEl.style.boxShadow = `0 0 0 3px ${c}22`; };
+      paint(); stEl.addEventListener('change', paint);
+    }
+  }
   // Eindtijd automatisch op +1 uur zetten zodra je een begintijd kiest (en de eindtijd
   // nog leeg is of vóór de begintijd ligt). Je kunt 'm daarna altijd handmatig aanpassen.
   {
@@ -944,6 +964,13 @@ function openOrderModal(id, pool) {
 
   $('#f-cancel').onclick = closeModal;
   $('#f-save').onclick = async () => {
+    // Monteur: verplichte notitie voordat een opdracht naar offerte/afgerond/geannuleerd gaat.
+    const noteRequired = ['offerte_verzonden', 'afgerond', 'geannuleerd'];
+    if (isMonteur && o && $('#f-status').value !== o.status && noteRequired.includes($('#f-status').value) && !($('#f-notes').value || '').trim()) {
+      toast('Vul eerst een notitie in (wat is er gedaan/afgesproken) voordat je deze status kiest.', true);
+      $('#f-notes')?.focus();
+      return;
+    }
     const payload = {
       status: $('#f-status').value,
       appointmentAt: $('#f-appt').value || null,
@@ -1698,6 +1725,17 @@ async function loadSettings() {
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('mail', 15)} Testmail — zie hoe het bij de klant binnenkomt</h3>
+      <p class="muted small">Stuur een automatische mail met <strong>voorbeeldgegevens</strong> naar een eigen adres, zodat je de opmaak ziet zoals de klant 'm krijgt. Er gaat niets naar echte klanten.</p>
+      <label>Stuur test naar (e-mailadres) <input id="tm-to" type="email" value="${esc(state.me?.email || '')}" placeholder="jouw@email.nl"></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-sm tm-send" data-type="ontvangstbevestiging">Ontvangstbevestiging</button>
+        <button class="btn btn-sm tm-send" data-type="afspraak">Afspraakbevestiging</button>
+        <button class="btn btn-sm tm-send" data-type="herinnering">Herinnering</button>
+        <button class="btn btn-sm tm-send" data-type="review">Review-verzoek</button>
+        <button class="btn btn-sm tm-send" data-type="annulering">Annulering</button>
+      </div>
+    </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Automatische ontvangstbevestiging (e-mail)</h3>
       <p class="muted small">Stuurt automatisch een mailtje naar een nieuwe klant die per e-mail een aanvraag doet — bv. met het verzoek alvast foto's en adres te sturen. Alleen bij echte aanvragen, max. 1x per klant. (Handtekening wordt eronder gezet.)</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ar-enabled" style="width:auto" ${s.autoReply?.enabled ? 'checked' : ''}> Automatische ontvangstbevestiging aanzetten</label>
@@ -1807,6 +1845,15 @@ async function loadSettings() {
     try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value }); await refreshMeta(); toast('Handtekening opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
+  $$('.tm-send').forEach((btn) => btn.onclick = async () => {
+    const to = ($('#tm-to')?.value || '').trim();
+    if (!to) { toast('Vul eerst een e-mailadres in', true); $('#tm-to')?.focus(); return; }
+    const type = btn.dataset.type;
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Versturen…';
+    try { await api('/api/test-mail', 'POST', { to, type }); toast(`Testmail (${old}) verstuurd naar ${to} — check ook je spam`); }
+    catch (err) { toast(err.message, true); }
+    finally { btn.disabled = false; btn.textContent = old; }
+  });
   $('#saveAutoReply').onclick = async () => {
     const autoReply = { enabled: $('#ar-enabled').checked, subject: $('#ar-subject').value, body: $('#ar-body').value };
     try { await api('/api/settings', 'PATCH', { autoReply }); toast('Ontvangstbevestiging opgeslagen'); }
