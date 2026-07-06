@@ -381,7 +381,17 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // De AI mag overrulen: zegt hij expliciet 'geen opdracht' (incasso/leverancier/
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
-  suggestion.relevant = (aiSaysNotOrder || looksMarketing || looksReport) ? false : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
+  // Losse e-mail met DUIDELIJKE klant-intake (telefoon + adres/postcode) is vrijwel
+  // zeker een echte aanvraag -> "Te controleren" (een mens beoordeelt 'm), ook als de
+  // AI twijfelde. Alleen harde reclame/nieuwsbrief (unsubscribe/adverteren) blijft
+  // uitgesloten. Veilig, want Te controleren wordt handmatig gekeurd — nooit auto-opdracht.
+  const HARD_MARKETING_RE = /(nieuwsbrief|newsletter|unsubscribe|afmelden|advertenti|\bseo\b|bing|microsoft advertising|google ads|adwords|factuur|incasso|aanmaning)/i;
+  const emailIntake = channel === 'email' && hasIntakeData && !looksReport
+    && !HARD_MARKETING_RE.test(`${subject || ''} ${body || ''}`);
+  if (emailIntake) suggestion.aiNotOrder = false;
+  suggestion.relevant = emailIntake ? true
+    : (aiSaysNotOrder || looksMarketing || looksReport) ? false
+    : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
   // Website-formulieren (offerte/contact), ook als ze via FormSubmit worden doorgestuurd
   // vanaf een noreply-adres, zijn ALTIJD een echte aanvraag. Herken de kenmerkende
   // FormSubmit-/formuliertekst en behandel als lead (niet de activatie-mail van FormSubmit).
@@ -400,9 +410,11 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
     suggestion.relevant = true;
     suggestion.aiNotOrder = false;
   }
-  if ((looksMarketing || looksReport) && !isFormLead) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
+  if ((looksMarketing || looksReport) && !isFormLead && !emailIntake) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
   suggestion.relevanceReason = isFormLead
     ? 'Website-formulier (offerte/contactaanvraag) — als opdracht voorgesteld.'
+    : emailIntake
+    ? 'E-mail met duidelijke klantgegevens (telefoon + adres) — als aanvraag voorgesteld.'
     : looksReport
     ? 'Status-/afrond-rapport van een medewerker — geen nieuwe opdracht (naar Overige).'
     : looksMarketing
