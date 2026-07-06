@@ -390,15 +390,20 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
     || /offerteaanvraag via keyservice247|nieuwe (offerte|contact)aanvraag via/i.test(hay)
     || /aanvraag via de website/i.test(hay);
   const isFormActivation = /activate formsubmit|one step away from making forms/i.test(hay);
-  // Website-formulieren (offerte/contact) zijn altijd een echte aanvraag -> naar
-  // de te-controleren inbox, ongeacht de tekst.
-  if ((forceRelevant || (isWebsiteForm && !isFormActivation)) && !looksMarketing) {
+  // Website-formulieren zijn ALTIJD een echte aanvraag -> Te controleren.
+  // KEIHARD: een directe lead van de eigen site (forceRelevant) of een herkende
+  // formulier-mail mag door NIEMAND worden overruled — niet door de AI ('geen
+  // opdracht'), niet door het marketing- of rapportfilter. Eerder belandden
+  // ads-leads daardoor stil in Overige en kreeg de klant geen ontvangstbevestiging.
+  const isFormLead = forceRelevant || (isWebsiteForm && !isFormActivation);
+  if (isFormLead) {
     suggestion.relevant = true;
     suggestion.aiNotOrder = false;
-    suggestion.relevanceReason = 'Website-formulier (offerte/contactaanvraag) — als opdracht voorgesteld.';
   }
-  if (looksMarketing || looksReport) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
-  suggestion.relevanceReason = looksReport
+  if ((looksMarketing || looksReport) && !isFormLead) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
+  suggestion.relevanceReason = isFormLead
+    ? 'Website-formulier (offerte/contactaanvraag) — als opdracht voorgesteld.'
+    : looksReport
     ? 'Status-/afrond-rapport van een medewerker — geen nieuwe opdracht (naar Overige).'
     : looksMarketing
     ? 'Reclame/marketing of nieuwsbrief (bv. Bing/Microsoft/advertenties) — naar Overige.'
@@ -409,7 +414,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // Bestaande klant herkennen op TELEFOON/E-MAIL (sterke match). Zo hangt een
   // vervolgbericht aan de lopende opdracht, ZONDER dat losse klanten verkeerd op één
   // kaart belanden (naam alleen is te zwak — denk aan "Key Service" als afzender).
-  const existingCustomer = looksMarketing ? null : findCustomerStrong({
+  const existingCustomer = (looksMarketing && !isFormLead) ? null : findCustomerStrong({
     phone: suggestion.customerPhone,
     email: suggestion.customerEmail,
   });
@@ -480,6 +485,22 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // of berichten uit een niet-opdracht-groep).
   if (suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
+  }
+
+  // VANGNET: komt een website-lead via de FormSubmit-MAIL binnen zonder dat de
+  // directe website->CRM-koppeling dezelfde lead (telefoon/e-mail) in de afgelopen
+  // 20 min aanleverde, dan is de directe koppeling mogelijk stuk -> direct alarm.
+  if (isWebsiteForm && !forceRelevant && !isFormActivation) {
+    const cutoff = Date.now() - 20 * 60000;
+    const phone = (suggestion.customerPhone || '').replace(/[^\d]/g, '');
+    const mail = (suggestion.customerEmail || '').toLowerCase();
+    const directTwin = db().messages.find((m) => m.body && m.body.startsWith('Nieuwe aanvraag via de website')
+      && m.receivedAt && new Date(m.receivedAt).getTime() >= cutoff
+      && ((phone && m.body.replace(/[^\d]/g, '').includes(phone)) || (mail && m.body.toLowerCase().includes(mail))));
+    if (!directTwin) {
+      logActivity('systeem', 'VANGNET: lead alleen via FormSubmit-mail', suggestion.customerName || sender || '');
+      notifyPush('⚠ Website-lead alleen via e-mail binnen', 'De directe website→CRM-koppeling leverde deze lead niet aan. De lead is veilig binnen via de mail-route, maar check de koppeling op de site.');
+    }
   }
 
   saveSoon();

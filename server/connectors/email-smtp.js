@@ -34,11 +34,11 @@ export async function sendMail({ to, subject, text, attachments }) {
   const tx = await getTransporter();
   if (!tx) throw new Error('SMTP niet geconfigureerd op de server');
   if (!to) throw new Error('Geen ontvanger (e-mailadres) opgegeven');
-  // Altijd een nette afzendernaam ("Keyservice <info@…>"), anders tonen mail-apps
-  // alleen het kale adresdeel ("info"). SMTP_FROM (compleet) of SMTP_FROM_NAME
-  // (alleen de naam) op Render overschrijven de standaard.
+  // Altijd een nette afzendernaam, anders tonen mail-apps alleen het kale adresdeel
+  // ("info"). SMTP_FROM (compleet) of SMTP_FROM_NAME (alleen de naam) op Render
+  // overschrijven de standaard.
   const from = process.env.SMTP_FROM
-    || { name: process.env.SMTP_FROM_NAME || 'Keyservice', address: process.env.SMTP_USER };
+    || { name: process.env.SMTP_FROM_NAME || 'Key Service 24/7 contact', address: process.env.SMTP_USER };
   try {
     const mail = { from, to, subject: subject || 'Keyservice', text: text || '' };
     if (attachments && attachments.length) mail.attachments = attachments;
