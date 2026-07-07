@@ -1041,8 +1041,8 @@ function formCors(req, res) {
 }
 app.options('/api/ingest/form', (req, res) => { formCors(req, res); res.sendStatus(204); });
 // Toegestane afkomst-domeinen voor formulier-leads (zonder token). Standaard de
-// keyservice247-site; aanpasbaar via FORM_ALLOWED_ORIGINS (komma-gescheiden).
-const FORM_ORIGINS = (process.env.FORM_ALLOWED_ORIGINS || 'keyservice247.nl')
+// eigen sites; aanpasbaar/uit te breiden via FORM_ALLOWED_ORIGINS (komma-gescheiden).
+const FORM_ORIGINS = (process.env.FORM_ALLOWED_ORIGINS || 'keyservice247.nl,schuifpuiservice.com')
   .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 function fromAllowedSite(req) {
   const src = `${req.get('origin') || ''} ${req.get('referer') || ''}`.toLowerCase();
@@ -1076,10 +1076,14 @@ app.post('/api/ingest/form', async (req, res) => {
   const message = str(b.message || b.comment);
   const formType = str(b.formType || b.form) || 'website';
   if (!name && !phone && !email && !message) return res.status(400).json({ error: 'Lege aanvraag' });
+  // Van welke site komt de lead? (voor meerdere gekoppelde websites). Neem het meegestuurde
+  // 'site'-veld, anders de host uit origin/referer, anders 'website'.
+  const hostFrom = (v) => { const m = String(v || '').match(/^(?:https?:\/\/)?([^/?#]+)/i); return m ? m[1].replace(/^www\./, '') : ''; };
+  const site = str(b.site) || hostFrom(req.get('origin')) || hostFrom(req.get('referer')) || 'website';
 
   // Nette, gestructureerde tekst zodat naam/telefoon/e-mail/adres betrouwbaar worden
   // opgeslagen (geen AI-giswerk nodig).
-  const lines = [`Nieuwe aanvraag via de website (${formType}).`, ''];
+  const lines = [`Nieuwe aanvraag via de website ${site} (${formType}).`, ''];
   if (name) lines.push(`Naam: ${name}`);
   if (phone) lines.push(`Telefoon: ${phone}`);
   if (email) lines.push(`E-mail: ${email}`);
@@ -1090,12 +1094,12 @@ app.post('/api/ingest/form', async (req, res) => {
   const result = await ingestMessage({
     channel: 'email',
     sender: email ? `${name || 'Website'} <${email}>` : (name || 'Website-aanvraag'),
-    subject: subject || (/offerte/i.test(formType) ? 'Offerteaanvraag via website' : 'Contactaanvraag via website'),
+    subject: subject || `${/offerte/i.test(formType) ? 'Offerteaanvraag' : 'Contactaanvraag'} via ${site}`,
     body: lines.join('\n'),
     externalId: b.externalId || '',
     forceRelevant: true, // website-aanvraag = altijd een echte lead
   });
-  console.log(`[form] lead ontvangen van website: ${name || '?'} <${email || '-'}> (${formType})`);
+  console.log(`[form] lead ontvangen van ${site}: ${name || '?'} <${email || '-'}> (${formType})`);
   // Ook website-leads krijgen automatisch de ontvangstbevestiging (indien aan).
   await maybeSendAutoReply(result).catch(() => {});
   res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
