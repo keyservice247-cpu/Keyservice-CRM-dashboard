@@ -159,8 +159,8 @@ const statusColor = (key) => {
   if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => el.remove());
   if (me.user.role === 'monteur') {
     $$('.perm-write').forEach((el) => (el.hidden = true));
-    // Monteur ziet alleen zijn eigen werk: Opdrachten + Agenda. Overige functies weg.
-    const monteurAllowed = ['board', 'agenda'];
+    // Monteur ziet alleen zijn eigen werk: Opdrachten + Agenda + eigen Facturen.
+    const monteurAllowed = ['board', 'agenda', 'invoices'];
     $$('.nav-item, .bn-item').forEach((el) => { if (!monteurAllowed.includes(el.dataset.view)) el.hidden = true; });
   }
 
@@ -294,7 +294,7 @@ function showView(view, tab) {
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers };
+  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices };
   (map[view] || (() => {}))();
 }
 
@@ -873,7 +873,7 @@ function openOrderModal(id, pool) {
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Annuleren</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
   // Status-veld laten opvallen: kader kleurt mee met de gekozen status.
@@ -922,6 +922,8 @@ function openOrderModal(id, pool) {
   if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
   if (o && canWrite) $('#f-send-monteur').onclick = () => openSendMonteurModal(o);
   if (o && canWrite && $('#f-snooze')) $('#f-snooze').onclick = () => openSnoozeModal(o);
+  if (o && $('#f-werkbon')) $('#f-werkbon').onclick = () => openWerkbonModal(o);
+  if (o && $('#f-invoice')) $('#f-invoice').onclick = () => openInvoiceModal(o);
   // Afspraak annuleren: haalt de datum weg (verdwijnt uit de agenda + Google Agenda) en
   // brengt desgewenst de klant op de hoogte. De opdracht zelf blijft bestaan.
   if (o && canWrite && $('#f-cancel-appt')) $('#f-cancel-appt').onclick = async () => {
@@ -1323,6 +1325,117 @@ function openSnoozeModal(o) {
   $('#sn-cancel').onclick = () => { closeModal(); };
 }
 
+// ---------- Werkbon (uitgevoerd werk + materialen + handtekening klant) ----------
+function openWerkbonModal(o) {
+  const wb = o.werkbon || {};
+  modal(`
+    <h2>${icon('tag', 16)} Werkbon — ${esc(o.title)}</h2>
+    <p class="muted small">Vul in wat er is gedaan. De klant kan hieronder tekenen. De werkbon blijft op de kaart bewaard en kun je overnemen in de factuur.</p>
+    <label>Uitgevoerd werk <textarea id="wb-work" rows="4" placeholder="bv. Loopwagens schuifpui vervangen (2x), rail gereinigd en afgesteld">${esc(wb.work || '')}</textarea></label>
+    <label>Gebruikte materialen / onderdelen <textarea id="wb-mat" rows="2" placeholder="bv. 2x loopwagen GU 9-146, siliconenspray">${esc(wb.materials || '')}</textarea></label>
+    <label>Handtekening klant ${wb.signatureAttachmentId ? '<span class="muted small">(al gezet — opnieuw tekenen vervangt)</span>' : ''}</label>
+    <canvas id="wb-sign" width="600" height="160" style="width:100%;height:120px;border:1.5px dashed var(--border);border-radius:10px;background:#fff;touch-action:none"></canvas>
+    <button type="button" class="btn btn-sm" id="wb-clear" style="margin-top:6px">Handtekening wissen</button>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="wb-cancel">Annuleren</button><button class="btn btn-primary" id="wb-save">Werkbon opslaan</button></div></div>`);
+  // Simpel teken-canvas (muis + touch).
+  const cv = $('#wb-sign'); const ctx = cv.getContext('2d');
+  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.strokeStyle = '#111';
+  let drawing = false; let drew = false;
+  const pos = (e) => { const r = cv.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; return { x: (p.clientX - r.left) * (cv.width / r.width), y: (p.clientY - r.top) * (cv.height / r.height) }; };
+  const start = (e) => { drawing = true; drew = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); e.preventDefault(); };
+  const move = (e) => { if (!drawing) return; const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); e.preventDefault(); };
+  const end = () => { drawing = false; };
+  cv.addEventListener('mousedown', start); cv.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
+  cv.addEventListener('touchstart', start, { passive: false }); cv.addEventListener('touchmove', move, { passive: false }); cv.addEventListener('touchend', end);
+  $('#wb-clear').onclick = () => { ctx.clearRect(0, 0, cv.width, cv.height); drew = false; };
+  $('#wb-cancel').onclick = closeModal;
+  $('#wb-save').onclick = async () => {
+    try {
+      let signatureAttachmentId = '';
+      if (drew) {
+        const dataBase64 = cv.toDataURL('image/png');
+        const updated = await api(`/api/orders/${o.id}/attachments`, 'POST', { filename: `handtekening-${new Date().toISOString().slice(0, 10)}.png`, mime: 'image/png', dataBase64 });
+        const atts = updated.attachments || [];
+        signatureAttachmentId = atts.length ? (atts[atts.length - 1].id || '') : '';
+      }
+      const updatedOrder = await api(`/api/orders/${o.id}/werkbon`, 'POST', { work: $('#wb-work').value, materials: $('#wb-mat').value, signatureAttachmentId });
+      const idx = state.orders.findIndex((x) => x.id === o.id); if (idx >= 0) state.orders[idx] = updatedOrder;
+      toast('Werkbon opgeslagen'); closeModal(); loadBoard();
+    } catch (err) { toast(err.message, true); }
+  };
+}
+
+// ---------- Factuur (regels, btw, versturen als PDF) ----------
+function openInvoiceModal(o) {
+  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings }) => {
+    const inv = invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept' };
+    if (!inv.lines.length) {
+      // Startvoorstel: werkbon of titel als eerste regel, kaartprijs als bedrag.
+      const priceGuess = parseFloat(String(o.price || '').replace(/[^\d,.]/g, '').replace(',', '.')) || 0;
+      inv.lines = [{ description: (o.werkbon?.work || o.title || 'Uitgevoerde werkzaamheden').split('\n')[0].slice(0, 120), qty: 1, priceIncl: priceGuess }];
+    }
+    const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+    const lineRow = (l, i) => `
+      <div class="inv-line" data-i="${i}" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+        <input class="il-desc" value="${esc(l.description || '')}" placeholder="Omschrijving" style="flex:3">
+        <input class="il-qty" type="number" min="0" step="1" value="${esc(String(l.qty ?? 1))}" style="width:64px" title="Aantal">
+        <input class="il-price" type="number" min="0" step="0.01" value="${esc(String(l.priceIncl ?? 0))}" style="width:96px" title="Prijs per stuk (incl. btw)">
+        <button type="button" class="btn btn-sm il-del" title="Regel weghalen">${icon('x', 12)}</button>
+      </div>`;
+    modal(`
+      <h2>${icon('mail', 16)} Factuur — ${esc(o.title)}</h2>
+      <p class="muted small">${inv.number ? `Factuurnummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(inv.status)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : 'Nieuw concept — het factuurnummer wordt bij opslaan toegekend.'} Prijzen zijn <strong>incl. btw</strong>.</p>
+      <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
+      <button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
+      ${o.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}
+      <div class="row" style="margin-top:10px"> <label>Btw-tarief <select id="inv-btw"><option value="21" ${Number(inv.btwPct) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(inv.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(inv.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label>
+        <label>Opmerking op de factuur <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel"></label> </div>
+      <div id="inv-totals" class="muted small" style="margin:8px 0;font-size:14px"></div>
+      <div class="modal-actions">
+        ${inv.id && inv.status !== 'betaald' ? `<button class="btn btn-success" id="inv-paid">✓ Markeer betaald</button>` : '<span></span>'}
+        <div class="right">
+          ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('paperclip', 14)} Bekijk PDF</a>` : ''}
+          <button class="btn" id="inv-cancel">Sluiten</button>
+          <button class="btn" id="inv-save">Concept opslaan</button>
+          <button class="btn btn-primary" id="inv-send">${inv.status === 'verzonden' ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
+        </div>
+      </div>`);
+    const readLines = () => $$('#inv-lines .inv-line').map((row) => ({
+      description: $('.il-desc', row).value, qty: Number($('.il-qty', row).value) || 0, priceIncl: Number($('.il-price', row).value) || 0,
+    })).filter((l) => l.description || l.priceIncl > 0);
+    const renderTotals = () => {
+      const btw = Number($('#inv-btw').value);
+      const totalIncl = readLines().reduce((s, l) => s + l.qty * l.priceIncl, 0);
+      const excl = totalIncl / (1 + btw / 100);
+      $('#inv-totals').innerHTML = `Subtotaal excl. btw: <strong>${eur(excl)}</strong> · btw ${btw}%: <strong>${eur(totalIncl - excl)}</strong> · <span style="font-size:16px">Totaal: <strong>${eur(totalIncl)}</strong></span>`;
+    };
+    const bindRows = () => {
+      $$('#inv-lines input').forEach((i) => i.oninput = renderTotals);
+      $$('#inv-lines .il-del').forEach((b) => b.onclick = () => { b.closest('.inv-line').remove(); renderTotals(); });
+    };
+    bindRows(); renderTotals();
+    $('#inv-btw').onchange = renderTotals;
+    $('#il-add').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: '', qty: 1, priceIncl: 0 }, 99)); bindRows(); renderTotals(); };
+    if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (o.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceIncl: 0 }, 99)); bindRows(); renderTotals(); };
+    const saveConcept = async () => api(`/api/orders/${o.id}/invoice`, 'POST', { lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value });
+    $('#inv-cancel').onclick = closeModal;
+    $('#inv-save').onclick = async () => { try { await saveConcept(); toast('Concept opgeslagen'); closeModal(); } catch (err) { toast(err.message, true); } };
+    $('#inv-send').onclick = async () => {
+      if (!o.customer?.email) { toast('De klant heeft nog geen e-mailadres op de kaart — vul dat eerst in.', true); return; }
+      if (!confirm(`Factuur nu versturen naar ${o.customer.email}?`)) return;
+      try {
+        const saved = await saveConcept();
+        await api(`/api/invoices/${saved.id}/send`, 'POST', {});
+        toast('Factuur verstuurd naar de klant'); closeModal(); loadBoard();
+      } catch (err) { toast(err.message, true); }
+    };
+    if ($('#inv-paid')) $('#inv-paid').onclick = async () => {
+      try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status: 'betaald' }); toast('Gemarkeerd als betaald ✓'); closeModal(); }
+      catch (err) { toast(err.message, true); }
+    };
+  }).catch((err) => toast(err.message, true));
+}
+
 // ---------- Prullenbak ----------
 // ---------- AI Assistent (vraagbaak) ----------
 async function loadAssistant() {
@@ -1644,6 +1757,44 @@ async function loadHealth(run = false) {
   } catch (err) { el.innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
 }
 
+// ---------- Facturen ----------
+async function loadInvoices() {
+  state._invoices = await api('/api/invoices');
+  renderInvoices();
+}
+function renderInvoices() {
+  const wrap = $('#invoiceList'); if (!wrap) return;
+  const f = $('#invFilter')?.value || 'all';
+  let items = state._invoices || [];
+  if (f !== 'all') items = items.filter((i) => i.status === f);
+  const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+  const open = (state._invoices || []).filter((i) => i.status === 'verzonden').reduce((s, i) => s + (i.totalIncl || 0), 0);
+  const paid = (state._invoices || []).filter((i) => i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
+  const stColor = { concept: 'var(--muted)', verzonden: '#b06a00', betaald: '#167a3d' };
+  const stLabel = { concept: 'Concept', verzonden: 'Verzonden — open', betaald: 'Betaald ✓' };
+  let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong> · Betaald: <strong>${eur(paid)}</strong> · Totaal facturen: ${(state._invoices || []).length}</div>`;
+  if (!items.length) html += '<div class="empty">Geen facturen in deze weergave.</div>';
+  html += items.map((i) => `
+    <div class="info-card" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <div>
+        <div><strong>${esc(i.number)}</strong> · ${esc(i.customerName || 'klant')} <span class="muted small">— ${esc(i.orderTitle || '')}</span></div>
+        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span style="color:${stColor[i.status] || 'inherit'};font-weight:600">${esc(stLabel[i.status] || i.status)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <strong style="font-size:15px">${eur(i.totalIncl)}</strong>
+        <a class="btn btn-sm" target="_blank" rel="noopener" href="/api/invoices/${esc(i.id)}/pdf">PDF</a>
+        <button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Open kaart</button>
+        ${i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
+      </div>
+    </div>`).join('');
+  wrap.innerHTML = html;
+  $$('.inv-open').forEach((b) => b.onclick = async () => { const orders = await api('/api/orders?includeArchived=1'); state.orders = orders; openOrderModal(b.dataset.oid); });
+  $$('.inv-mark').forEach((b) => b.onclick = async () => {
+    try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status: 'betaald' }); toast('Betaald ✓'); loadInvoices(); }
+    catch (err) { toast(err.message, true); }
+  });
+}
+
 // ---------- Abonnementen & verbruik ----------
 async function loadSubs() {
   const d = await api('/api/subscriptions');
@@ -1725,6 +1876,16 @@ async function loadSettings() {
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Factuurgegevens (op elke factuur-PDF)</h3>
+      <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een kaart verstuurt (knop <strong>Factuur</strong>). Vul ze één keer goed in.</p>
+      <div class="row"> <label>Bedrijfsnaam <input id="is-name" value="${esc(s.invoiceSettings?.companyName || '')}"></label> <label>Telefoon <input id="is-phone" value="${esc(s.invoiceSettings?.phone || '')}"></label> </div>
+      <label>Adres (straat, postcode, plaats) <input id="is-address" value="${esc(s.invoiceSettings?.address || '')}"></label>
+      <div class="row"> <label>KvK-nummer <input id="is-kvk" value="${esc(s.invoiceSettings?.kvk || '')}"></label> <label>BTW-nummer <input id="is-btwnr" value="${esc(s.invoiceSettings?.btwNr || '')}"></label> </div>
+      <div class="row"> <label>IBAN <input id="is-iban" value="${esc(s.invoiceSettings?.iban || '')}" placeholder="NL00 BANK 0000 0000 00"></label> <label>E-mail op factuur <input id="is-email" value="${esc(s.invoiceSettings?.email || '')}"></label> </div>
+      <div class="row"> <label>Betaaltermijn (dagen) <input id="is-days" type="number" min="1" max="90" value="${esc(String(s.invoiceSettings?.paymentDays ?? 14))}" style="max-width:110px"></label> <label>Standaard btw-tarief <select id="is-btw"><option value="21" ${Number(s.invoiceSettings?.btwPct ?? 21) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(s.invoiceSettings?.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(s.invoiceSettings?.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label> </div>
+      <label>Voettekst op de factuur <input id="is-footer" value="${esc(s.invoiceSettings?.footer || '')}"></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveInvoiceSettings">Factuurgegevens opslaan</button></div>
+    </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-melding bij nieuwe aanvragen (team)</h3>
       <p class="muted small">Krijg een WhatsApp-seintje zodra er iets nieuws in het CRM staat: een <strong>nieuwe aanvraag om te controleren</strong> of een <strong>klantreactie</strong> op een lopende kaart. Aanbevolen: maak een WhatsApp-groep (bv. "CRM meldingen") met het <strong>wegwerp-nummer</strong> en je assistente erin — dan ziet het hele team het. Max 1 melding per 2 minuten; drukte wordt gebundeld ("+N andere").</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ca-enabled" style="width:auto" ${s.crmAlerts?.enabled ? 'checked' : ''}> Meldingen aanzetten</label>
@@ -1853,6 +2014,15 @@ async function loadSettings() {
   };
   $('#saveSignature').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value }); await refreshMeta(); toast('Handtekening opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveInvoiceSettings').onclick = async () => {
+    const invoiceSettings = {
+      companyName: $('#is-name').value, phone: $('#is-phone').value, address: $('#is-address').value,
+      kvk: $('#is-kvk').value, btwNr: $('#is-btwnr').value, iban: $('#is-iban').value, email: $('#is-email').value,
+      paymentDays: Number($('#is-days').value) || 14, btwPct: Number($('#is-btw').value), footer: $('#is-footer').value,
+    };
+    try { await api('/api/settings', 'PATCH', { invoiceSettings }); toast('Factuurgegevens opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveCrmAlerts').onclick = async () => {
@@ -2393,6 +2563,7 @@ function bindButtons() {
   $('#customerSearch')?.addEventListener('input', renderCustomers);
   $('#trashSearch')?.addEventListener('input', renderTrash);
   $('#agendaScope')?.addEventListener('change', renderAgenda);
+  $('#invFilter')?.addEventListener('change', renderInvoices);
   $('#inboxFilter')?.addEventListener('change', loadInbox);
   $('#selectAll')?.addEventListener('change', (e) => {
     $$('.r-select').forEach((c) => (c.checked = e.target.checked));
