@@ -1764,6 +1764,7 @@ async function loadSettings() {
       <p class="muted small">Plan je op een kaart een afspraak in? Dan krijgt de klant automatisch een bevestiging met datum en tijd — en optioneel een herinnering vooraf (minder no-shows). Gebruik <code>{naam}</code>, <code>{datum}</code> en <code>{tijdblok}</code> (bv. "tussen 15:00 en 18:00") in de teksten; die worden automatisch ingevuld. We werken met tijdsblokken van 3 uur. <code>{tijd}</code> mag ook — die toont nu óók het hele blok. E-mail heeft voorrang; geen e-mailadres bekend, dan WhatsApp.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ab-email" style="width:auto" ${s.appointmentMsg?.emailEnabled ? 'checked' : ''}> Bevestiging via <strong>e-mail</strong></label>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ab-whatsapp" style="width:auto" ${s.appointmentMsg?.whatsappEnabled ? 'checked' : ''}> Bevestiging via <strong>WhatsApp</strong></label>
+      <label>Lengte tijdsblok (uren) — de monteur komt binnen dit blok langs <input id="ab-block" type="number" min="1" max="8" value="${esc(String(s.appointmentMsg?.blockHours ?? 3))}" style="max-width:120px"><span class="muted small">Bij een afspraak om 15:00 en blok van 3 uur toont de klant "tussen 15:00 en 18:00". Zet je op de kaart zelf een eindtijd, dan gebruikt de bevestiging díe.</span></label>
       <label>E-mail onderwerp <input id="ab-subject" value="${esc(s.appointmentMsg?.emailSubject || '')}"></label>
       <label>E-mail bericht <textarea id="ab-body" rows="5">${esc(s.appointmentMsg?.emailBody || '')}</textarea></label>
       <label>WhatsApp bericht <textarea id="ab-wabody" rows="3">${esc(s.appointmentMsg?.whatsappBody || '')}</textarea></label>
@@ -1820,6 +1821,7 @@ async function loadSettings() {
   $('#saveApptMsg').onclick = async () => {
     const appointmentMsg = {
       emailEnabled: $('#ab-email').checked, whatsappEnabled: $('#ab-whatsapp').checked,
+      blockHours: Math.max(1, Math.min(8, Number($('#ab-block').value) || 3)),
       emailSubject: $('#ab-subject').value, emailBody: $('#ab-body').value, whatsappBody: $('#ab-wabody').value,
       reminderEnabled: $('#ab-reminder').checked, reminderHours: Number($('#ab-hours').value) || 24,
       reminderEmailSubject: 'Herinnering: uw afspraak — Keyservice', reminderBody: $('#ab-rembody').value,

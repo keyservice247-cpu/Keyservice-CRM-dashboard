@@ -1316,6 +1316,7 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
     db().settings.appointmentMsg = {
       emailEnabled: !!a.emailEnabled,
       whatsappEnabled: !!a.whatsappEnabled,
+      blockHours: Math.max(1, Math.min(8, Number(a.blockHours) || 3)),
       emailSubject: String(a.emailSubject || '').slice(0, 200),
       emailBody: String(a.emailBody || '').slice(0, 2000),
       whatsappBody: String(a.whatsappBody || '').slice(0, 1000),

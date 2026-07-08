@@ -137,6 +137,7 @@ export function getTerugkoppeling() {
 export const DEFAULT_APPOINTMENT_MSG = {
   emailEnabled: false,
   whatsappEnabled: false,
+  blockHours: 3,
   emailSubject: 'Afspraakbevestiging — Keyservice',
   emailBody: `Beste {naam},
 
@@ -157,6 +158,7 @@ export function getAppointmentMsg() {
     emailSubject: a.emailSubject || DEFAULT_APPOINTMENT_MSG.emailSubject,
     emailBody: a.emailBody || DEFAULT_APPOINTMENT_MSG.emailBody,
     whatsappBody: a.whatsappBody || DEFAULT_APPOINTMENT_MSG.whatsappBody,
+    blockHours: Math.max(1, Math.min(8, Number(a.blockHours) || DEFAULT_APPOINTMENT_MSG.blockHours)),
     reminderEnabled: !!a.reminderEnabled,
     reminderHours: Math.max(1, Math.min(72, Number(a.reminderHours) || DEFAULT_APPOINTMENT_MSG.reminderHours)),
     reminderEmailSubject: a.reminderEmailSubject || DEFAULT_APPOINTMENT_MSG.reminderEmailSubject,
