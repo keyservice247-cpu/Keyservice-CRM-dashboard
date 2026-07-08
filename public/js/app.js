@@ -2244,16 +2244,8 @@ function openReplyModal(ctx = {}) {
     } catch (err) { toast(err.message, true); }
     aiBtn.disabled = false; aiBtn.innerHTML = `${icon('sparkles', 14)} AI-concept`;
   };
-  // AI-concept alvast klaarzetten bij het openen (alleen als het vak nog leeg is;
-  // typt de gebruiker intussen zelf, dan overschrijven we niets).
-  if (aiBtn && ctx.orderId && state.meta?.aiMode === 'ai' && !$('#rep-body').value.trim()) {
-    aiBtn.textContent = 'AI-concept laden…';
-    api(`/api/orders/${ctx.orderId}/suggest-reply`, 'POST').then((out) => {
-      const el = $('#rep-body');
-      if (el && !el.value.trim() && out.text) { el.value = out.text; flash('#rep-body'); }
-      const b = $('#rep-ai'); if (b) b.innerHTML = `${icon('sparkles', 14)} AI-concept`;
-    }).catch(() => { const b = $('#rep-ai'); if (b) b.innerHTML = `${icon('sparkles', 14)} AI-concept`; });
-  }
+  // Bewust GEEN automatisch AI-concept bij openen: het antwoordvak blijft leeg totdat
+  // je zelf op "AI-concept" klikt. Scheelt ook AI-kosten bij elk antwoord.
   // Sjabloon kiezen → tekst in het antwoordvak zetten (bestaande tekst wordt vervangen na bevestiging).
   const tplSel = $('#rep-select');
   if (tplSel) tplSel.onchange = () => {
