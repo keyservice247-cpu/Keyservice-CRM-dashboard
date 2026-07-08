@@ -13,15 +13,24 @@ import { lastHealth } from './health.js';
 const custOf = (o) => db().customers.find((c) => c.id === o.customerId) || {};
 const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? ''));
 
+// We werken met TIJDSBLOKKEN van 3 uur (bv. 15:00–18:00). De eindtijd is de expliciete
+// afspraak-eindtijd als die er is, anders begintijd + 3 uur.
+const BLOCK_HOURS = 3;
 function apptVars(order, customer) {
   const m = String(order.appointmentAt || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-  let datum = '', tijd = '';
+  let datum = '', start = '', eind = '';
   if (m) {
     const d = new Date(+m[1], +m[2] - 1, +m[3]);
     datum = d.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
-    tijd = `${m[4]}:${m[5]}`;
+    start = `${m[4]}:${m[5]}`;
+    const em = String(order.appointmentEndAt || '').match(/T(\d{2}):(\d{2})/);
+    if (em) eind = `${em[1]}:${em[2]}`;
+    else eind = `${String((Number(m[4]) + BLOCK_HOURS) % 24).padStart(2, '0')}:${m[5]}`;
   }
-  return { naam: customer.name || 'klant', datum, tijd };
+  const tijdblok = start ? `tussen ${start} en ${eind}` : '';
+  // {tijd} toont voortaan het hele blok (bv. "15:00 - 18:00") zodat bestaande sjablonen
+  // met {tijd} meteen het tijdsblok tonen. {tijdblok} = "tussen 15:00 en 18:00".
+  return { naam: customer.name || 'klant', datum, tijd: start ? `${start} - ${eind}` : '', tijdblok, start, eind };
 }
 
 // ---------- 1. Terugkoppeling via de controle-groep (bv. Abdel) ----------
@@ -105,7 +114,8 @@ export async function maybeSendAppointmentCancel(order, prevAppt, opts = {}) {
     let wanneer = '';
     if (m) {
       const d = new Date(+m[1], +m[2] - 1, +m[3]);
-      wanneer = `${d.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' })} om ${m[4]}:${m[5]}`;
+      const eind = `${String((Number(m[4]) + BLOCK_HOURS) % 24).padStart(2, '0')}:${m[5]}`;
+      wanneer = `${d.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' })} tussen ${m[4]}:${m[5]} en ${eind}`;
     }
     const naam = c.name || 'klant';
     const body = `Beste ${naam},\n\nUw geplande afspraak${wanneer ? ` van ${wanneer}` : ''} is geannuleerd. Wilt u een nieuwe afspraak inplannen? Neem gerust contact met ons op, dan plannen we samen een nieuw moment.\n\nMet vriendelijke groet,\nKeyservice`;

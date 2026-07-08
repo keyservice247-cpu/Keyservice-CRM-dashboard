@@ -1574,14 +1574,14 @@ app.post('/api/test-mail', requireRole('admin'), async (req, res) => {
   const type = String(req.body?.type || 'ontvangstbevestiging');
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Vul een geldig e-mailadres in' });
   if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is nog niet ingesteld op de server.' });
-  const sample = { naam: 'Jan de Vries (voorbeeld)', datum: 'maandag 8 juli', tijd: '14:00', link: getReviewRequest().link || 'https://g.page/r/keyservice-review' };
+  const sample = { naam: 'Jan de Vries (voorbeeld)', datum: 'maandag 8 juli', tijd: '15:00 - 18:00', tijdblok: 'tussen 15:00 en 18:00', link: getReviewRequest().link || 'https://g.page/r/keyservice-review' };
   const fill = (t) => String(t || '').replace(/\{(\w+)\}/g, (_, k) => (sample[k] ?? ''));
   let subject; let body;
   if (type === 'ontvangstbevestiging') { const c = getAutoReply(); subject = c.subject; body = c.body; }
   else if (type === 'afspraak') { const c = getAppointmentMsg(); subject = c.emailSubject; body = c.emailBody; }
   else if (type === 'herinnering') { const c = getAppointmentMsg(); subject = c.reminderEmailSubject; body = c.reminderBody; }
   else if (type === 'review') { const c = getReviewRequest(); subject = c.subject; body = c.body; }
-  else if (type === 'annulering') { subject = 'Uw afspraak is geannuleerd'; body = `Beste ${sample.naam},\n\nUw geplande afspraak van ${sample.datum} om ${sample.tijd} is geannuleerd. Wilt u een nieuwe afspraak inplannen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nKeyservice`; }
+  else if (type === 'annulering') { subject = 'Uw afspraak is geannuleerd'; body = `Beste ${sample.naam},\n\nUw geplande afspraak van ${sample.datum} ${sample.tijdblok} is geannuleerd. Wilt u een nieuwe afspraak inplannen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nKeyservice`; }
   else return res.status(400).json({ error: 'Onbekend maildtype' });
   const sig = getEmailSignature();
   let text = fill(body || '');

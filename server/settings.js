@@ -140,14 +140,14 @@ export const DEFAULT_APPOINTMENT_MSG = {
   emailSubject: 'Afspraakbevestiging — Keyservice',
   emailBody: `Beste {naam},
 
-Hierbij bevestigen wij uw afspraak op {datum} om {tijd}.
+Hierbij bevestigen wij uw afspraak op {datum} {tijdblok}.
 
-Onze monteur komt bij u langs. Mocht de afspraak onverhoopt niet uitkomen, laat het ons gerust weten.`,
-  whatsappBody: `Hallo {naam}, hierbij bevestigen we uw afspraak op {datum} om {tijd}. Komt de afspraak niet uit? Laat het ons even weten. — Keyservice`,
+Onze monteur komt in dit tijdsblok bij u langs. Mocht de afspraak onverhoopt niet uitkomen, laat het ons gerust weten.`,
+  whatsappBody: `Hallo {naam}, hierbij bevestigen we uw afspraak op {datum} {tijdblok}. Onze monteur komt in dit tijdsblok langs. Komt het niet uit? Laat het ons even weten. — Keyservice`,
   reminderEnabled: false,
   reminderHours: 24,
   reminderEmailSubject: 'Herinnering: uw afspraak — Keyservice',
-  reminderBody: `Hallo {naam}, een korte herinnering: morgen ({datum} om {tijd}) komt onze monteur bij u langs. Tot dan! — Keyservice`,
+  reminderBody: `Hallo {naam}, een korte herinnering: {datum} {tijdblok} komt onze monteur bij u langs. Tot dan! — Keyservice`,
 };
 export function getAppointmentMsg() {
   const a = db().settings.appointmentMsg || {};
