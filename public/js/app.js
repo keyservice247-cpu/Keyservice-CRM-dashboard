@@ -1725,6 +1725,14 @@ async function loadSettings() {
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-melding bij nieuwe aanvragen (team)</h3>
+      <p class="muted small">Krijg een WhatsApp-seintje zodra er iets nieuws in het CRM staat: een <strong>nieuwe aanvraag om te controleren</strong> of een <strong>klantreactie</strong> op een lopende kaart. Aanbevolen: maak een WhatsApp-groep (bv. "CRM meldingen") met het <strong>wegwerp-nummer</strong> en je assistente erin — dan ziet het hele team het. Max 1 melding per 2 minuten; drukte wordt gebundeld ("+N andere").</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ca-enabled" style="width:auto" ${s.crmAlerts?.enabled ? 'checked' : ''}> Meldingen aanzetten</label>
+      <label>WhatsApp-groep (naam, wegwerp-nummer moet lid zijn) <input id="ca-group" value="${esc(s.crmAlerts?.group || 'CRM meldingen')}" placeholder="CRM meldingen"></label>
+      <label>Óf 1-op-1 naar dit nummer (laat leeg om de groep te gebruiken) <input id="ca-phone" value="${esc(s.crmAlerts?.phone || '')}" placeholder="bv. 0612345678 of +31612345678"></label>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ca-replies" style="width:auto" ${s.crmAlerts?.notifyReplies !== false ? 'checked' : ''}> Ook melden bij klantreacties op lopende kaarten</label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveCrmAlerts">Opslaan</button></div>
+    </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('mail', 15)} Testmail — zie hoe het bij de klant binnenkomt</h3>
       <p class="muted small">Stuur een automatische mail met <strong>voorbeeldgegevens</strong> naar een eigen adres, zodat je de opmaak ziet zoals de klant 'm krijgt. Er gaat niets naar echte klanten.</p>
       <label>Stuur test naar (e-mailadres) <input id="tm-to" type="email" value="${esc(state.me?.email || '')}" placeholder="jouw@email.nl"></label>
@@ -1845,6 +1853,11 @@ async function loadSettings() {
   };
   $('#saveSignature').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value }); await refreshMeta(); toast('Handtekening opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveCrmAlerts').onclick = async () => {
+    const crmAlerts = { enabled: $('#ca-enabled').checked, group: $('#ca-group').value, phone: $('#ca-phone').value, notifyReplies: $('#ca-replies').checked };
+    try { await api('/api/settings', 'PATCH', { crmAlerts }); toast('WhatsApp-meldingen opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $$('.tm-send').forEach((btn) => btn.onclick = async () => {

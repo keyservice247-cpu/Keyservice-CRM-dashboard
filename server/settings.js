@@ -133,6 +133,20 @@ export function getTerugkoppeling() {
   };
 }
 
+// WhatsApp-meldingen voor het team: seintje in een groep (of 1-op-1) bij elke
+// nieuwe te-controleren aanvraag en bij klantreacties. Groep aanbevolen: maak een
+// WhatsApp-groep (bv. "CRM meldingen") met het wegwerp-nummer + de assistente erin.
+export const DEFAULT_CRM_ALERTS = { enabled: false, group: 'CRM meldingen', phone: '', notifyReplies: true };
+export function getCrmAlerts() {
+  const c = db().settings.crmAlerts || {};
+  return {
+    enabled: !!c.enabled,
+    group: (c.group || DEFAULT_CRM_ALERTS.group).toString().slice(0, 100),
+    phone: (c.phone || '').toString().replace(/[^\d+]/g, '').slice(0, 20),
+    notifyReplies: c.notifyReplies !== false,
+  };
+}
+
 // Afspraakbevestiging naar de klant (+ herinnering X uur vooraf).
 export const DEFAULT_APPOINTMENT_MSG = {
   emailEnabled: false,

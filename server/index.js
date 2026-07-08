@@ -42,7 +42,7 @@ import {
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp, getBackupMail,
-  getTerugkoppeling, getAppointmentMsg, getReviewRequest,
+  getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1238,6 +1238,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     appointmentMsg: getAppointmentMsg(),
     reviewRequest: getReviewRequest(),
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
+    crmAlerts: getCrmAlerts(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true, keywordRoutes: [] },
   });
 });
@@ -1324,6 +1325,15 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
       reminderHours: Math.max(1, Math.min(72, Number(a.reminderHours) || 24)),
       reminderEmailSubject: String(a.reminderEmailSubject || '').slice(0, 200),
       reminderBody: String(a.reminderBody || '').slice(0, 1000),
+    };
+  }
+  if ('crmAlerts' in b) {
+    const c = b.crmAlerts || {};
+    db().settings.crmAlerts = {
+      enabled: !!c.enabled,
+      group: String(c.group || 'CRM meldingen').slice(0, 100),
+      phone: String(c.phone || '').replace(/[^\d+]/g, '').slice(0, 20),
+      notifyReplies: c.notifyReplies !== false,
     };
   }
   if ('reviewRequest' in b) {

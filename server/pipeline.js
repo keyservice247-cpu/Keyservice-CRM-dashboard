@@ -2,8 +2,30 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
-import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup } from './settings.js';
+import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts } from './settings.js';
 import { sendPush } from './push.js';
+
+// ---------- WhatsApp-melding naar het team (groep "CRM meldingen" of 1-op-1) ----------
+// Anti-spam: max 1 melding per 2 minuten; wat in de tussentijd binnenkomt wordt geteld
+// en meegenomen in de eerstvolgende melding ("+N andere"). Zo blijft de groep rustig,
+// ook als er een lading mails tegelijk binnenkomt.
+let _waAlertLast = 0;
+let _waAlertSuppressed = 0;
+export function queueCrmWhatsappAlert(text) {
+  try {
+    const cfg = getCrmAlerts();
+    if (!cfg.enabled) return;
+    const nowMs = Date.now();
+    if (nowMs - _waAlertLast < 2 * 60000) { _waAlertSuppressed++; return; }
+    if (_waAlertSuppressed > 0) { text += `\n(+${_waAlertSuppressed} andere nieuwe meldingen in de afgelopen minuten — zie de inbox)`; _waAlertSuppressed = 0; }
+    _waAlertLast = nowMs;
+    const item = { id: id('out'), text, status: 'queued', createdAt: now(), by: 'crm-melding' };
+    if (cfg.phone) { item.kind = 'whatsapp_customer'; item.phone = cfg.phone; item.group = '__klant_dm__'; }
+    else item.group = cfg.group;
+    db().outbox.unshift(item);
+    saveSoon();
+  } catch (e) { console.error('[crm-melding]', e.message); }
+}
 
 // Verstuur een push-melding zonder de verwerking te blokkeren of te laten falen.
 function notifyPush(title, body) {
@@ -459,6 +481,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
       saveSoon();
       logActivity('systeem', 'bericht aan bestaande opdracht', `${existingCustomer.name}: ${openOrder.title}`);
       notifyPush('Nieuwe reactie van klant', `${existingCustomer.name || 'Klant'} reageerde op: ${openOrder.title}`);
+      if (getCrmAlerts().notifyReplies) queueCrmWhatsappAlert(`💬 CRM: ${existingCustomer.name || 'een klant'} reageerde op de lopende kaart "${openOrder.title}". Even kijken in het dashboard.`);
       return { message, review: null, mergedIntoOrder: openOrder.id, suggestion };
     }
   }
@@ -522,6 +545,10 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
     const who = suggestion.customerName || sender || 'Onbekend';
     const what = (subject || body || '').replace(/\s+/g, ' ').slice(0, 80);
     notifyPush('Nieuwe aanvraag', `${who}${what ? ' — ' + what : ''}`);
+    // WhatsApp-seintje naar het team (groep "CRM meldingen" of de assistente 1-op-1).
+    const src = channel === 'email' ? 'e-mail/website' : channel;
+    const place = (suggestion.customerAddress || '').replace(/\s+/g, ' ').slice(0, 60);
+    queueCrmWhatsappAlert(`🔔 CRM: nieuwe aanvraag te controleren — ${who}${place ? ` (${place})` : ''} via ${src}.\nOpen de inbox: https://keyservice-crm.onrender.com`);
   }
   return { message, review };
 }
