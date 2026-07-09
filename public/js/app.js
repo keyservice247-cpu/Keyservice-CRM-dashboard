@@ -1367,24 +1367,26 @@ function openWerkbonModal(o) {
 
 // ---------- Factuur (regels, btw, versturen als PDF) ----------
 function openInvoiceModal(o) {
-  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings }) => {
+  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [] }) => {
     const inv = invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept' };
+    const toExcl = (l) => l.priceExcl !== undefined ? l.priceExcl : Math.round(((l.priceIncl || 0) / (1 + (Number(inv.btwPct) || 21) / 100)) * 100) / 100;
+    inv.lines = (inv.lines || []).map((l) => ({ ...l, priceExcl: toExcl(l) }));
     if (!inv.lines.length) {
-      // Startvoorstel: werkbon of titel als eerste regel, kaartprijs als bedrag.
-      const priceGuess = parseFloat(String(o.price || '').replace(/[^\d,.]/g, '').replace(',', '.')) || 0;
-      inv.lines = [{ description: (o.werkbon?.work || o.title || 'Uitgevoerde werkzaamheden').split('\n')[0].slice(0, 120), qty: 1, priceIncl: priceGuess }];
+      // Startvoorstel: werkbon of titel als eerste regel (prijs vul je excl. btw in).
+      inv.lines = [{ description: (o.werkbon?.work || o.title || 'Uitgevoerde werkzaamheden').split('\n')[0].slice(0, 120), qty: 1, priceExcl: 0 }];
     }
     const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
     const lineRow = (l, i) => `
       <div class="inv-line" data-i="${i}" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
         <input class="il-desc" value="${esc(l.description || '')}" placeholder="Omschrijving" style="flex:3">
         <input class="il-qty" type="number" min="0" step="1" value="${esc(String(l.qty ?? 1))}" style="width:64px" title="Aantal">
-        <input class="il-price" type="number" min="0" step="0.01" value="${esc(String(l.priceIncl ?? 0))}" style="width:96px" title="Prijs per stuk (incl. btw)">
+        <input class="il-price" type="number" min="0" step="0.01" value="${esc(String(l.priceExcl ?? 0))}" style="width:96px" title="Prijs per stuk (EXCL. btw)">
         <button type="button" class="btn btn-sm il-del" title="Regel weghalen">${icon('x', 12)}</button>
       </div>`;
     modal(`
       <h2>${icon('mail', 16)} Factuur — ${esc(o.title)}</h2>
-      <p class="muted small">${inv.number ? `Factuurnummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(inv.status)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : 'Nieuw concept — het factuurnummer wordt bij opslaan toegekend.'} Prijzen zijn <strong>incl. btw</strong>.</p>
+      <p class="muted small">${inv.number ? `Factuurnummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(inv.status)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : 'Nieuw concept — het factuurnummer wordt bij opslaan toegekend.'} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.</p>
+      ${priceList.length ? `<div class="muted small" style="margin-bottom:4px">Snel toevoegen uit de prijslijst:</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${priceList.map((p, pi) => `<button type="button" class="chip pl-add" data-pi="${pi}" title="€ ${Number(p.priceExcl).toFixed(2)} excl. btw" style="cursor:pointer">${esc(p.description.slice(0, 40))} · ${eur(p.priceExcl)}</button>`).join('')}</div>` : ''}
       <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
       <button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
       ${o.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}
@@ -1401,13 +1403,13 @@ function openInvoiceModal(o) {
         </div>
       </div>`);
     const readLines = () => $$('#inv-lines .inv-line').map((row) => ({
-      description: $('.il-desc', row).value, qty: Number($('.il-qty', row).value) || 0, priceIncl: Number($('.il-price', row).value) || 0,
-    })).filter((l) => l.description || l.priceIncl > 0);
+      description: $('.il-desc', row).value, qty: Number($('.il-qty', row).value) || 0, priceExcl: Number($('.il-price', row).value) || 0,
+    })).filter((l) => l.description || l.priceExcl > 0);
     const renderTotals = () => {
       const btw = Number($('#inv-btw').value);
-      const totalIncl = readLines().reduce((s, l) => s + l.qty * l.priceIncl, 0);
-      const excl = totalIncl / (1 + btw / 100);
-      $('#inv-totals').innerHTML = `Subtotaal excl. btw: <strong>${eur(excl)}</strong> · btw ${btw}%: <strong>${eur(totalIncl - excl)}</strong> · <span style="font-size:16px">Totaal: <strong>${eur(totalIncl)}</strong></span>`;
+      const excl = readLines().reduce((s, l) => s + l.qty * l.priceExcl, 0);
+      const btwBedrag = excl * (btw / 100);
+      $('#inv-totals').innerHTML = `Totaal excl. btw: <strong>${eur(excl)}</strong> · btw ${btw}%: <strong>${eur(btwBedrag)}</strong> · <span style="font-size:16px">Totaal incl. btw: <strong>${eur(excl + btwBedrag)}</strong></span>`;
     };
     const bindRows = () => {
       $$('#inv-lines input').forEach((i) => i.oninput = renderTotals);
@@ -1415,8 +1417,9 @@ function openInvoiceModal(o) {
     };
     bindRows(); renderTotals();
     $('#inv-btw').onchange = renderTotals;
-    $('#il-add').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: '', qty: 1, priceIncl: 0 }, 99)); bindRows(); renderTotals(); };
-    if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (o.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceIncl: 0 }, 99)); bindRows(); renderTotals(); };
+    $('#il-add').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: '', qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
+    $$('.pl-add').forEach((b) => b.onclick = () => { const p = priceList[Number(b.dataset.pi)]; if (!p) return; $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: p.description, qty: 1, priceExcl: p.priceExcl }, 99)); bindRows(); renderTotals(); });
+    if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (o.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
     const saveConcept = async () => api(`/api/orders/${o.id}/invoice`, 'POST', { lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value });
     $('#inv-cancel').onclick = closeModal;
     $('#inv-save').onclick = async () => { try { await saveConcept(); toast('Concept opgeslagen'); closeModal(); } catch (err) { toast(err.message, true); } };
@@ -1823,6 +1826,7 @@ async function loadSettings() {
     <div class="sg-nav">
       <button class="chip sg-chip on" data-g="alles">Alles</button>
       <button class="chip sg-chip" data-g="bericht">${icon('mail', 12)} Automatische berichten</button>
+      <button class="chip sg-chip" data-g="facturen">${icon('tag', 12)} Facturen</button>
       <button class="chip sg-chip" data-g="werk">${icon('wrench', 12)} Werkwijze &amp; bord</button>
       <button class="chip sg-chip" data-g="koppel">${icon('calendar', 12)} Koppelingen</button>
       <button class="chip sg-chip" data-g="ai">${icon('sparkles', 12)} AI</button>
@@ -1876,15 +1880,29 @@ async function loadSettings() {
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
-    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Factuurgegevens (op elke factuur-PDF)</h3>
-      <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een kaart verstuurt (knop <strong>Factuur</strong>). Vul ze één keer goed in.</p>
+    <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Factuurgegevens (op elke factuur-PDF)</h3>
+      <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een kaart verstuurt (knop <strong>Factuur</strong>). Het logo staat er automatisch op. Prijzen voer je <strong>excl. btw</strong> in.</p>
       <div class="row"> <label>Bedrijfsnaam <input id="is-name" value="${esc(s.invoiceSettings?.companyName || '')}"></label> <label>Telefoon <input id="is-phone" value="${esc(s.invoiceSettings?.phone || '')}"></label> </div>
-      <label>Adres (straat, postcode, plaats) <input id="is-address" value="${esc(s.invoiceSettings?.address || '')}"></label>
+      <div class="row"> <label>Adres (straat, postcode, plaats) <input id="is-address" value="${esc(s.invoiceSettings?.address || '')}"></label> <label>Website <input id="is-web" value="${esc(s.invoiceSettings?.website || '')}"></label> </div>
       <div class="row"> <label>KvK-nummer <input id="is-kvk" value="${esc(s.invoiceSettings?.kvk || '')}"></label> <label>BTW-nummer <input id="is-btwnr" value="${esc(s.invoiceSettings?.btwNr || '')}"></label> </div>
-      <div class="row"> <label>IBAN <input id="is-iban" value="${esc(s.invoiceSettings?.iban || '')}" placeholder="NL00 BANK 0000 0000 00"></label> <label>E-mail op factuur <input id="is-email" value="${esc(s.invoiceSettings?.email || '')}"></label> </div>
-      <div class="row"> <label>Betaaltermijn (dagen) <input id="is-days" type="number" min="1" max="90" value="${esc(String(s.invoiceSettings?.paymentDays ?? 14))}" style="max-width:110px"></label> <label>Standaard btw-tarief <select id="is-btw"><option value="21" ${Number(s.invoiceSettings?.btwPct ?? 21) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(s.invoiceSettings?.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(s.invoiceSettings?.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label> </div>
+      <div class="row"> <label>IBAN <input id="is-iban" value="${esc(s.invoiceSettings?.iban || '')}" placeholder="NL00 BANK 0000 0000 00"></label> <label>BIC <input id="is-bic" value="${esc(s.invoiceSettings?.bic || '')}" placeholder="BUNQNL2A"></label> </div>
+      <div class="row"> <label>E-mail op factuur <input id="is-email" value="${esc(s.invoiceSettings?.email || '')}"></label> <span></span> </div>
+      <div class="row"> <label>Betaaltermijn (dagen) <input id="is-days" type="number" min="1" max="90" value="${esc(String(s.invoiceSettings?.paymentDays ?? 7))}" style="max-width:110px"></label> <label>Standaard btw-tarief <select id="is-btw"><option value="21" ${Number(s.invoiceSettings?.btwPct ?? 21) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(s.invoiceSettings?.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(s.invoiceSettings?.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label> </div>
+      <label>Garantie-regel (dik gedrukt op de factuur) <input id="is-warranty" value="${esc(s.invoiceSettings?.warranty || '')}"></label>
+      <label>Juridische tekst (kleine lettertjes onderaan) <textarea id="is-legal" rows="3">${esc(s.invoiceSettings?.legal || '')}</textarea></label>
       <label>Voettekst op de factuur <input id="is-footer" value="${esc(s.invoiceSettings?.footer || '')}"></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveInvoiceSettings">Factuurgegevens opslaan</button></div>
+    </div>
+    <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Prijslijst — vaste producten &amp; werkzaamheden</h3>
+      <p class="muted small">Vul hier je vaste producten en werkzaamheden in mét prijs (<strong>excl. btw</strong>). De monteur klikt ze in de factuur met één tik aan — geen getyp meer. Bijvoorbeeld: "Voorrijkosten", "Afstellen sluitingen", "ROTO sluitingsmechanisme".</p>
+      <div id="plRows">${(s.priceList || []).map((p) => `
+        <div class="pl-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+          <input class="pl-desc" value="${esc(p.description)}" placeholder="Omschrijving" style="flex:3">
+          <input class="pl-price" type="number" min="0" step="0.01" value="${esc(String(p.priceExcl))}" style="width:110px" title="Prijs excl. btw">
+          <button type="button" class="btn btn-sm pl-del">${icon('x', 12)}</button>
+        </div>`).join('')}</div>
+      <button type="button" class="btn btn-sm" id="plAdd">+ Product/werkzaamheid toevoegen</button>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="savePriceList">Prijslijst opslaan</button></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-melding bij nieuwe aanvragen (team)</h3>
       <p class="muted small">Krijg een WhatsApp-seintje zodra er iets nieuws in het CRM staat: een <strong>nieuwe aanvraag om te controleren</strong> of een <strong>klantreactie</strong> op een lopende kaart. Aanbevolen: maak een WhatsApp-groep (bv. "CRM meldingen") met het <strong>wegwerp-nummer</strong> en je assistente erin — dan ziet het hele team het. Max 1 melding per 2 minuten; drukte wordt gebundeld ("+N andere").</p>
@@ -2019,10 +2037,21 @@ async function loadSettings() {
   $('#saveInvoiceSettings').onclick = async () => {
     const invoiceSettings = {
       companyName: $('#is-name').value, phone: $('#is-phone').value, address: $('#is-address').value,
-      kvk: $('#is-kvk').value, btwNr: $('#is-btwnr').value, iban: $('#is-iban').value, email: $('#is-email').value,
-      paymentDays: Number($('#is-days').value) || 14, btwPct: Number($('#is-btw').value), footer: $('#is-footer').value,
+      website: $('#is-web').value, kvk: $('#is-kvk').value, btwNr: $('#is-btwnr').value,
+      iban: $('#is-iban').value, bic: $('#is-bic').value, email: $('#is-email').value,
+      paymentDays: Number($('#is-days').value) || 7, btwPct: Number($('#is-btw').value),
+      warranty: $('#is-warranty').value, legal: $('#is-legal').value, footer: $('#is-footer').value,
     };
     try { await api('/api/settings', 'PATCH', { invoiceSettings }); toast('Factuurgegevens opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  // Prijslijst: rijen toevoegen/weghalen + opslaan.
+  const bindPl = () => $$('#plRows .pl-del').forEach((b) => b.onclick = () => b.closest('.pl-row').remove());
+  bindPl();
+  $('#plAdd').onclick = () => { $('#plRows').insertAdjacentHTML('beforeend', `<div class="pl-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center"><input class="pl-desc" placeholder="Omschrijving" style="flex:3"><input class="pl-price" type="number" min="0" step="0.01" value="0" style="width:110px" title="Prijs excl. btw"><button type="button" class="btn btn-sm pl-del">${icon('x', 12)}</button></div>`); bindPl(); };
+  $('#savePriceList').onclick = async () => {
+    const priceList = $$('#plRows .pl-row').map((r) => ({ description: $('.pl-desc', r).value, priceExcl: Number($('.pl-price', r).value) || 0 })).filter((p) => p.description);
+    try { await api('/api/settings', 'PATCH', { priceList }); toast('Prijslijst opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveCrmAlerts').onclick = async () => {

@@ -1241,6 +1241,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     crmAlerts: getCrmAlerts(),
     invoiceSettings: getInvoiceSettings(),
+    priceList: db().settings.priceList || [],
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true, keywordRoutes: [] },
   });
 });
@@ -1332,17 +1333,28 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
   if ('invoiceSettings' in b) {
     const v = b.invoiceSettings || {};
     db().settings.invoiceSettings = {
-      companyName: String(v.companyName || 'Key Service 24/7').slice(0, 100),
+      companyName: String(v.companyName || 'Key service 24/7').slice(0, 100),
       address: String(v.address || '').slice(0, 300),
       kvk: String(v.kvk || '').slice(0, 30),
       btwNr: String(v.btwNr || '').slice(0, 30),
       iban: String(v.iban || '').slice(0, 40),
+      bic: String(v.bic || '').slice(0, 20),
       email: String(v.email || '').slice(0, 100),
       phone: String(v.phone || '').slice(0, 30),
-      paymentDays: Math.max(1, Math.min(90, Number(v.paymentDays) || 14)),
+      website: String(v.website || '').slice(0, 120),
+      paymentDays: Math.max(1, Math.min(90, Number(v.paymentDays) || 7)),
       btwPct: Math.max(0, Math.min(21, Number(v.btwPct) || 21)),
+      warranty: String(v.warranty || '').slice(0, 300),
+      legal: String(v.legal || '').slice(0, 1200),
       footer: String(v.footer || '').slice(0, 300),
     };
+  }
+  // Prijslijst: vaste producten/werkzaamheden (excl. btw) voor snel factureren.
+  if ('priceList' in b) {
+    db().settings.priceList = (Array.isArray(b.priceList) ? b.priceList : [])
+      .map((p) => ({ description: String(p.description || '').slice(0, 200), priceExcl: Math.max(0, Math.min(999999, Number(p.priceExcl) || 0)) }))
+      .filter((p) => p.description)
+      .slice(0, 150);
   }
   if ('crmAlerts' in b) {
     const c = b.crmAlerts || {};
@@ -1626,7 +1638,7 @@ app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const inv = (db().invoices || []).find((i) => i.id === order.invoiceId) || null;
-  res.json({ invoice: inv, settings: getInvoiceSettings() });
+  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: db().settings.priceList || [] });
 });
 
 // Factuur aanmaken/bijwerken (concept).

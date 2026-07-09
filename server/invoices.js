@@ -1,22 +1,34 @@
 // Facturen + werkbon: monteur of kantoor maakt vanuit een opdracht een factuur,
 // verstuurt die als nette PDF per e-mail naar de klant, en markeert 'm betaald.
 // Factuurnummers lopen automatisch op (per jaar). Bedragen worden ingevoerd
-// INCLUSIEF btw (consumentenwerk); de PDF toont de excl/btw-uitsplitsing.
+// EXCLUSIEF btw; de btw wordt erbovenop gerekend (zoals de boekhouding wil).
+// De PDF volgt de eigen huisstijl: logo, excl/incl-kolommen, vervaldatum,
+// garantie-regel, juridische disclaimer en (indien aanwezig) de werkbon-handtekening.
 import PDFDocument from 'pdfkit';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { db, id, now, save, saveSoon } from './db.js';
+import { UPLOAD_DIR } from './storage.js';
+
+const LOGO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'img', 'logo-factuur.png');
 
 // ---------- Instellingen (bedrijfsgegevens op de factuur) ----------
 export const DEFAULT_INVOICE_SETTINGS = {
-  companyName: 'Key Service 24/7',
-  address: '',            // straat + postcode + plaats, mag meerregelig
-  kvk: '',
-  btwNr: '',
-  iban: '',
+  companyName: 'Key service 24/7',
+  address: 'Julianastraat 45, 3911HH Rhenen',
+  kvk: '73119695',
+  btwNr: 'NL002375027.B41',
+  iban: 'NL98 BUNQ 2067 1359 10',
+  bic: 'BUNQNL2A',
   email: 'info@keyservice247.nl',
-  phone: '',
-  paymentDays: 14,
+  phone: '+31 (0) 85 060 2359',
+  website: 'https://keyservice247.nl',
+  paymentDays: 7,
   btwPct: 21,             // standaardtarief; per factuur aan te passen
-  footer: 'Bedankt voor uw vertrouwen in Key Service 24/7.',
+  warranty: '3 jaar garantie op onze producten, 1 jaar garantie op arbeid.',
+  legal: 'Bij reparatie- en montagewerkzaamheden aan bestaande kozijnen, deuren, ramen en beglazing kan ondanks zorgvuldig werken lichte, redelijkerwijs onvermijdbare gebruiksschade ontstaan (zoals kleine krasjes, haarscheurtjes of loslatende verf/kit op verouderde delen). Dergelijke geringe schade valt binnen het acceptabele werkrisico en geeft geen recht op schadevergoeding of verrekening. Reclamaties binnen 48 uur na uitvoering melden.',
+  footer: 'Bedankt voor uw vertrouwen in Key Service 24/7 — Service is key.',
 };
 export function getInvoiceSettings() {
   const s = db().settings.invoiceSettings || {};
@@ -33,23 +45,29 @@ function nextInvoiceNumber() {
   return `${year}-${String(st._invoiceCounter.n).padStart(4, '0')}`;
 }
 
-// ---------- Rekenen (bedragen incl. btw ingevoerd) ----------
+// ---------- Rekenen (bedragen EXCL btw ingevoerd; btw erbovenop) ----------
+const r2 = (x) => Math.round(x * 100) / 100;
+export function lineExcl(l, btwPct) {
+  // Backward-compat: oude regels hadden priceIncl — reken die eenmalig terug.
+  if (l.priceExcl !== undefined) return Number(l.priceExcl) || 0;
+  if (l.priceIncl !== undefined) return r2((Number(l.priceIncl) || 0) / (1 + (Number(btwPct) || 0) / 100));
+  return 0;
+}
 export function computeTotals(lines, btwPct) {
-  const totalIncl = (lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.priceIncl) || 0), 0);
-  const totalExcl = totalIncl / (1 + (Number(btwPct) || 0) / 100);
-  const btw = totalIncl - totalExcl;
-  const r = (x) => Math.round(x * 100) / 100;
-  return { totalIncl: r(totalIncl), totalExcl: r(totalExcl), btw: r(btw) };
+  const pct = Number(btwPct) || 0;
+  const totalExcl = (lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * lineExcl(l, pct), 0);
+  const btw = totalExcl * (pct / 100);
+  return { totalExcl: r2(totalExcl), btw: r2(btw), totalIncl: r2(totalExcl + btw) };
 }
 
-function sanitizeLines(lines) {
+function sanitizeLines(lines, btwPct) {
   return (Array.isArray(lines) ? lines : [])
     .map((l) => ({
       description: String(l.description || '').slice(0, 300),
       qty: Math.max(0, Math.min(9999, Number(l.qty) || 1)),
-      priceIncl: Math.max(0, Math.min(999999, Number(l.priceIncl) || 0)),
+      priceExcl: Math.max(0, Math.min(999999, l.priceExcl !== undefined ? (Number(l.priceExcl) || 0) : lineExcl(l, btwPct))),
     }))
-    .filter((l) => l.description || l.priceIncl > 0)
+    .filter((l) => l.description || l.priceExcl > 0)
     .slice(0, 40);
 }
 
@@ -57,8 +75,8 @@ function sanitizeLines(lines) {
 export function upsertInvoice(order, body, actorName) {
   db().invoices = db().invoices || [];
   let inv = db().invoices.find((i) => i.id === order.invoiceId);
-  const lines = sanitizeLines(body.lines);
   const btwPct = Math.max(0, Math.min(21, Number(body.btwPct ?? getInvoiceSettings().btwPct)));
+  const lines = sanitizeLines(body.lines, btwPct);
   if (!inv) {
     inv = {
       id: id('inv'), number: nextInvoiceNumber(), orderId: order.id, customerId: order.customerId,
@@ -78,8 +96,9 @@ export function upsertInvoice(order, body, actorName) {
 }
 
 const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+const nlDate = (d) => new Date(d).toLocaleDateString('nl-NL', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
-// ---------- PDF ----------
+// ---------- PDF (huisstijl: zie voorbeeldfactuur van het oude pakket) ----------
 export function buildInvoicePdf(inv, order, customer) {
   const cfg = getInvoiceSettings();
   return new Promise((resolve, reject) => {
@@ -89,66 +108,104 @@ export function buildInvoicePdf(inv, order, customer) {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const blue = '#1d4ed8'; const ink = '#111827'; const muted = '#6b7280';
+    const blue = '#2b4b9b'; const ink = '#1b2430'; const muted = '#6b7280';
+    const invDate = inv.sentAt || inv.updatedAt || inv.createdAt || new Date();
+    const dueDate = new Date(new Date(invDate).getTime() + (cfg.paymentDays || 7) * 86400000);
 
-    // Kop
-    doc.fontSize(22).fillColor(blue).font('Helvetica-Bold').text(cfg.companyName, 50, 50);
-    doc.fontSize(9).fillColor(muted).font('Helvetica');
-    const koplines = [cfg.address, [cfg.phone, cfg.email].filter(Boolean).join(' · '),
-      [cfg.kvk ? 'KvK ' + cfg.kvk : '', cfg.btwNr ? 'BTW ' + cfg.btwNr : ''].filter(Boolean).join(' · ')].filter(Boolean);
-    doc.text(koplines.join('\n'), 50, 78);
+    // Kop: logo links, bedrijfsgegevens rechts.
+    try { if (fs.existsSync(LOGO_PATH)) doc.image(LOGO_PATH, 50, 42, { fit: [200, 92] }); } catch { /* logo optioneel */ }
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(ink).text(cfg.companyName, 320, 46, { width: 225, align: 'right' });
+    doc.font('Helvetica').fontSize(9).fillColor(muted);
+    const kop = [cfg.address,
+      cfg.phone ? `Tel.: ${cfg.phone}` : '', cfg.email ? `E-mail: ${cfg.email}` : '', cfg.website ? `Website: ${cfg.website}` : '',
+      cfg.iban ? `IBAN: ${cfg.iban}` : '', cfg.bic ? `BIC: ${cfg.bic}` : ''].filter(Boolean);
+    doc.text(kop.join('\n'), 320, 62, { width: 225, align: 'right', lineGap: 1.5 });
 
-    doc.fontSize(26).fillColor(ink).font('Helvetica-Bold').text('FACTUUR', 380, 50, { align: 'right', width: 165 });
-    doc.fontSize(10).font('Helvetica').fillColor(muted)
-      .text(`Factuurnummer: ${inv.number}`, 330, 84, { align: 'right', width: 215 })
-      .text(`Datum: ${new Date(inv.sentAt || inv.updatedAt || inv.createdAt).toLocaleDateString('nl-NL')}`, 330, 98, { align: 'right', width: 215 });
-
-    // Klant
-    let y = 140;
-    doc.fontSize(9).fillColor(muted).text('FACTUUR AAN', 50, y);
-    doc.fontSize(11).fillColor(ink).font('Helvetica-Bold').text(customer.name || 'Klant', 50, y + 14);
-    doc.font('Helvetica').fontSize(10).fillColor(ink);
+    // Klantblok links.
+    let y = 165;
+    doc.fontSize(11).fillColor(ink).font('Helvetica-Bold').text(customer.name || 'Klant', 50, y);
+    doc.font('Helvetica').fontSize(10);
     const custLines = [customer.address, customer.phone, customer.email].filter(Boolean);
-    doc.text(custLines.join('\n'), 50, y + 30);
-    if (order?.title) doc.fontSize(9).fillColor(muted).text(`Betreft: ${order.title}`, 50, y + 32 + custLines.length * 13);
+    if (custLines.length) doc.text(custLines.join('\n'), 50, y + 15, { lineGap: 1.5 });
 
-    // Tabel
-    y = 240;
-    doc.rect(50, y, 495, 22).fill('#eef2fb');
-    doc.fillColor(blue).fontSize(9).font('Helvetica-Bold')
-      .text('OMSCHRIJVING', 58, y + 7).text('AANTAL', 350, y + 7, { width: 50, align: 'right' })
-      .text('PRIJS', 410, y + 7, { width: 60, align: 'right' }).text('BEDRAG', 478, y + 7, { width: 60, align: 'right' });
+    // Factuurnummer + data.
+    y = 238;
+    doc.font('Helvetica-Bold').fontSize(12).fillColor(ink).text(`Factuur: ${inv.number}`, 50, y);
+    doc.font('Helvetica').fontSize(10).fillColor(muted)
+      .text(`Factuurdatum: ${nlDate(invDate)}`, 330, y - 12, { width: 215, align: 'right' })
+      .text(`Vervaldatum: ${nlDate(dueDate)}`, 330, y + 2, { width: 215, align: 'right' });
+
+    // Reparatielocatie + betreft.
     y += 26;
+    doc.fillColor(ink).fontSize(10);
+    if (customer.address) { doc.text(`Reparatielocatie: ${customer.address}`, 50, y); y += 14; }
+    if (order?.title) { doc.fillColor(muted).text(`Betreft: ${order.title}`, 50, y); y += 14; }
+
+    // Tabel: Aantal | Beschrijving | excl | incl (per regel klein het btw-tarief).
+    y += 8;
+    const pct = Number(inv.btwPct) || 0;
+    doc.rect(50, y, 495, 22).fill('#eef2fb');
+    doc.fillColor(blue).fontSize(8.5).font('Helvetica-Bold')
+      .text('AANTAL', 56, y + 7, { width: 40 })
+      .text('BESCHRIJVING', 102, y + 7)
+      .text('BEDRAG EXCL. BTW', 350, y + 7, { width: 90, align: 'right' })
+      .text('BEDRAG INCL. BTW', 448, y + 7, { width: 90, align: 'right' });
+    y += 28;
     doc.font('Helvetica').fillColor(ink).fontSize(10);
     for (const l of inv.lines || []) {
-      const h = doc.heightOfString(l.description, { width: 285 });
-      doc.text(l.description, 58, y, { width: 285 });
-      doc.text(String(l.qty), 350, y, { width: 50, align: 'right' });
-      doc.text(eur(l.priceIncl), 410, y, { width: 60, align: 'right' });
-      doc.text(eur(l.qty * l.priceIncl), 478, y, { width: 60, align: 'right' });
-      y += Math.max(16, h + 4);
-      doc.moveTo(50, y - 2).lineTo(545, y - 2).strokeColor('#e5e7eb').lineWidth(0.5).stroke();
-      if (y > 700) { doc.addPage(); y = 60; }
+      const ex = lineExcl(l, pct) * (Number(l.qty) || 0);
+      const inc = ex * (1 + pct / 100);
+      const h = Math.max(13, doc.heightOfString(l.description, { width: 235 }));
+      doc.fillColor(ink)
+        .text(String(l.qty), 56, y, { width: 40 })
+        .text(l.description, 102, y, { width: 235 })
+        .text(eur(ex), 350, y, { width: 90, align: 'right' })
+        .text(eur(inc), 448, y, { width: 90, align: 'right' });
+      doc.fillColor(muted).fontSize(7.5).text(`${pct}% btw`, 448, y + h + 1, { width: 90, align: 'right' });
+      doc.fontSize(10);
+      y += h + 14;
+      doc.moveTo(50, y - 4).lineTo(545, y - 4).strokeColor('#e5e7eb').lineWidth(0.5).stroke();
+      if (y > 640) { doc.addPage(); y = 60; }
     }
 
-    // Totalen (bedragen zijn incl. btw ingevoerd)
-    y += 8;
+    // Totalen.
+    y += 6;
     doc.fontSize(10).fillColor(muted)
-      .text(`Subtotaal (excl. btw)`, 350, y, { width: 120, align: 'right' }).fillColor(ink).text(eur(inv.totalExcl), 478, y, { width: 60, align: 'right' });
+      .text('Totaalbedrag excl. btw', 330, y, { width: 140, align: 'right' }).fillColor(ink).text(eur(inv.totalExcl), 478, y, { width: 60, align: 'right' });
     y += 16;
-    doc.fillColor(muted).text(`Btw ${inv.btwPct}%`, 350, y, { width: 120, align: 'right' }).fillColor(ink).text(eur(inv.btw), 478, y, { width: 60, align: 'right' });
+    doc.fillColor(muted).text(`Btw ${pct === 21 ? 'hoog' : pct === 9 ? 'laag' : ''} (${pct}%)`.replace('  ', ' '), 330, y, { width: 140, align: 'right' }).fillColor(ink).text(eur(inv.btw), 478, y, { width: 60, align: 'right' });
     y += 20;
-    doc.rect(340, y - 4, 205, 24).fill('#eef2fb');
+    doc.rect(320, y - 4, 225, 24).fill('#eef2fb');
     doc.fillColor(blue).font('Helvetica-Bold').fontSize(12)
-      .text('TOTAAL', 350, y + 2, { width: 120, align: 'right' }).text(eur(inv.totalIncl), 470, y + 2, { width: 68, align: 'right' });
+      .text('Totaalbedrag incl. btw', 328, y + 2, { width: 138 }).text(eur(inv.totalIncl), 470, y + 2, { width: 68, align: 'right' });
 
-    // Notitie + betaalinfo
-    y += 44;
+    // Betaalinstructie + garantie + eventuele notitie.
+    y += 40;
     doc.font('Helvetica').fontSize(10).fillColor(ink);
-    if (inv.note) { doc.text(inv.note, 50, y, { width: 495 }); y += doc.heightOfString(inv.note, { width: 495 }) + 12; }
-    const betaal = [`Graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. factuurnummer ${inv.number}.`];
-    doc.fillColor(muted).text(betaal.join('\n'), 50, y, { width: 495 });
-    if (cfg.footer) doc.fontSize(9).fillColor(muted).text(cfg.footer, 50, 770, { width: 495, align: 'center' });
+    doc.text(`Gelieve dit bedrag van ${eur(inv.totalIncl)} over te maken vóór ${nlDate(dueDate)} op rekeningnummer: ${cfg.iban} o.v.v. "Factuur ${inv.number}".`, 50, y, { width: 495 });
+    y += doc.heightOfString(`x`, { width: 495 }) + 20;
+    if (cfg.warranty) { doc.font('Helvetica-Bold').fillColor(ink).text(cfg.warranty, 50, y, { width: 495 }); y += doc.heightOfString(cfg.warranty, { width: 495 }) + 10; }
+    if (inv.note) { doc.font('Helvetica').fillColor(ink).text(inv.note, 50, y, { width: 495 }); y += doc.heightOfString(inv.note, { width: 495 }) + 10; }
+    if (cfg.legal) { doc.font('Helvetica').fontSize(7.5).fillColor(muted).text(cfg.legal, 50, y, { width: 495, lineGap: 1 }); y += doc.heightOfString(cfg.legal, { width: 495 }) + 12; doc.fontSize(10); }
+
+    // Handtekening van de werkbon (indien gezet): bewijs van akkoord door de klant.
+    try {
+      const sigId = order?.werkbon?.signatureAttachmentId;
+      const att = sigId ? (order.attachments || []).find((a) => a.id === sigId) : null;
+      const sigPath = att ? path.join(UPLOAD_DIR, att.file) : null;
+      if (sigPath && fs.existsSync(sigPath)) {
+        if (y > 640) { doc.addPage(); y = 60; }
+        doc.fontSize(9).fillColor(muted).text(`Voor akkoord getekend door klant (werkbon${order.werkbon.at ? ' d.d. ' + nlDate(order.werkbon.at) : ''}):`, 50, y);
+        doc.image(sigPath, 50, y + 14, { fit: [180, 60] });
+        doc.rect(50, y + 14, 190, 64).strokeColor('#e5e7eb').lineWidth(0.5).stroke();
+        y += 88;
+      }
+    } catch { /* handtekening optioneel */ }
+
+    // Voetregel: btw/kvk + slogan.
+    doc.fontSize(8.5).fillColor(muted)
+      .text(`Btw-nummer: ${cfg.btwNr}   ·   KVK-nummer: ${cfg.kvk}`, 50, 760, { width: 495, align: 'center' });
+    if (cfg.footer) doc.text(cfg.footer, 50, 774, { width: 495, align: 'center' });
 
     doc.end();
   });

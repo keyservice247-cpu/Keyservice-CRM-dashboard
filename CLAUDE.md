@@ -50,10 +50,13 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
   gekozen dagen). Kaart toont "naar Youssef" + verstuurstatus. Outbox-wachtrij; bridge haalt op
   en verstuurt naar de groep, meldt terug.
 - **Werkbon + Facturen:** knoppen op elke kaart. Werkbon = uitgevoerd werk + materialen +
-  handtekening-canvas (bijlage). Factuur = regels (prijzen INCL btw), btw 21/9/0%, nummer
-  per jaar (2026-0001…), nette PDF (pdfkit, `server/invoices.js`), mailen naar klant met
-  PDF-bijlage, status concept/verzonden/betaald, Facturen-overzicht (monteur ziet alleen
-  eigen). Bedrijfsgegevens (KvK/BTW/IBAN) in Instellingen → Factuurgegevens.
+  handtekening-canvas (bijlage). Factuur = regels (prijzen EXCL btw, btw erbovenop), btw
+  21/9/0%, nummer per jaar (2026-0001…), PDF in eigen huisstijl (logo public/img/
+  logo-factuur.png, excl/incl-kolommen, vervaldatum, garantie-regel, juridische disclaimer,
+  werkbon-handtekening op de factuur; server/invoices.js), mailen met PDF-bijlage, status
+  concept/verzonden/betaald, Facturen-overzicht (monteur alleen eigen). Bedrijfsgegevens
+  staan als standaard in de code (Rhenen/KvK/BTW/IBAN) en zijn aanpasbaar in Instellingen →
+  Facturen-pil, incl. PRIJSLIJST (vaste producten/werkzaamheden, 1-klik in de factuur).
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).
