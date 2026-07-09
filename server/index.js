@@ -27,7 +27,7 @@ import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
 import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel } from './automations.js';
-import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals } from './invoices.js';
+import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -1343,6 +1343,7 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
       phone: String(v.phone || '').slice(0, 30),
       website: String(v.website || '').slice(0, 120),
       paymentDays: Math.max(1, Math.min(90, Number(v.paymentDays) || 7)),
+      quoteValidDays: Math.max(1, Math.min(120, Number(v.quoteValidDays) || 30)),
       btwPct: Math.max(0, Math.min(21, Number(v.btwPct) || 21)),
       warranty: String(v.warranty || '').slice(0, 300),
       legal: String(v.legal || '').slice(0, 1200),
@@ -1632,6 +1633,16 @@ app.post('/api/orders/:id/werkbon', requireAuth, (req, res) => {
   res.json(withRelations(order));
 });
 
+// Rechten op een factuur/offerte: kantoor overal bij; monteur alleen bij zijn eigen
+// opdrachten of records die hij zelf heeft aangemaakt (losse facturen/offertes).
+function canTouchInvoice(req, inv) {
+  if (req.user.role !== 'monteur') return true;
+  if (inv.createdById && inv.createdById === req.user.id) return true;
+  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+  return !!(order && order.monteurId === req.user.monteurId);
+}
+const findInv = (invId) => (db().invoices || []).find((i) => i.id === invId);
+
 // Factuur ophalen (of leeg concept-voorstel op basis van de kaart).
 app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
@@ -1641,7 +1652,7 @@ app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
   res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: getPriceList() });
 });
 
-// Factuur aanmaken/bijwerken (concept).
+// Factuur aanmaken/bijwerken via de kaart (concept).
 app.post('/api/orders/:id/invoice', requireAuth, (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
@@ -1652,83 +1663,187 @@ app.post('/api/orders/:id/invoice', requireAuth, (req, res) => {
   res.json(out.invoice);
 });
 
-// Factuur als PDF bekijken/downloaden.
-app.get('/api/invoices/:id/pdf', requireAuth, async (req, res) => {
-  const inv = (db().invoices || []).find((i) => i.id === req.params.id);
+// LOSSE factuur of offerte: direct aan een klant (bestaand of nieuw) gekoppeld,
+// zonder kaart. Voor snelle offertes en losse verkopen.
+app.post('/api/invoices', requireAuth, (req, res) => {
+  const b = req.body || {};
+  const type = b.type === 'offerte' ? 'offerte' : 'factuur';
+  let customerId = b.customerId;
+  if (!customerId && b.newCustomer) {
+    const nc = b.newCustomer || {};
+    if (!String(nc.name || '').trim()) return res.status(400).json({ error: 'Vul minimaal de naam van de nieuwe klant in.' });
+    const { customer } = upsertCustomer({ name: nc.name, phone: nc.phone, email: nc.email, address: nc.address, source: 'handmatig' });
+    customerId = customer.id;
+  }
+  const customer = db().customers.find((c) => c.id === customerId);
+  if (!customer) return res.status(400).json({ error: 'Kies een klant of vul een nieuwe klant in.' });
+  const inv = createStandaloneInvoice({ customerId, type, actorName: req.user.name, createdById: req.user.id });
+  logActivity(req.user.name, `${type} aangemaakt (los)`, `${inv.number} — ${customer.name}`);
+  res.json({ invoice: inv, customer });
+});
+
+// Eén factuur/offerte ophalen (voor de editor).
+app.get('/api/invoices/:id', requireAuth, (req, res) => {
+  const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
-  const order = db().orders.find((o) => o.id === inv.orderId) || {};
-  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  const customer = db().customers.find((c) => c.id === inv.customerId) || {};
+  const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || null) : null;
+  res.json({ invoice: inv, customer, order: order ? { id: order.id, title: order.title, werkbon: order.werkbon || null } : null, settings: getInvoiceSettings(), priceList: getPriceList() });
+});
+
+// Regels/btw/notitie bijwerken. Betaald/geaccepteerd = vergrendeld.
+app.patch('/api/invoices/:id', requireAuth, (req, res) => {
+  const inv = findInv(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  const out = saveInvoiceFields(inv, req.body || {});
+  if (out.error) return res.status(400).json({ error: out.error });
+  res.json(out.invoice);
+});
+
+// Verwijderen: concept mag (eigen), verzonden alleen beheerder, betaald nooit.
+app.delete('/api/invoices/:id', requireAuth, (req, res) => {
+  const inv = findInv(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  if (inv.status === 'betaald') return res.status(400).json({ error: 'Een betaalde factuur kan niet worden verwijderd (boekhouding).' });
+  if (inv.status !== 'concept' && req.user.role !== 'admin') return res.status(403).json({ error: 'Een verzonden factuur/offerte kan alleen de beheerder verwijderen.' });
+  db().invoices = (db().invoices || []).filter((i) => i.id !== inv.id);
+  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+  if (order && order.invoiceId === inv.id) order.invoiceId = null;
+  saveSoon();
+  logActivity(req.user.name, `${inv.type === 'offerte' ? 'offerte' : 'factuur'} verwijderd`, inv.number);
+  res.json({ ok: true });
+});
+
+// Kopiëren (zelfde type) of omzetten (offerte → factuur via body.type='factuur').
+app.post('/api/invoices/:id/copy', requireAuth, (req, res) => {
+  const src = findInv(req.params.id);
+  if (!src) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchInvoice(req, src)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  const inv = copyInvoice(src, { actorName: req.user.name, createdById: req.user.id, copyType: req.body?.type });
+  // Offerte → factuur: koppel aan de kaart als die nog geen factuur heeft.
+  if (inv.type === 'factuur' && inv.orderId) {
+    const order = db().orders.find((o) => o.id === inv.orderId);
+    if (order && (!order.invoiceId || order.invoiceId === src.id) && src.type === 'offerte') { order.invoiceId = inv.id; saveSoon(); }
+  }
+  logActivity(req.user.name, `${src.number} gekopieerd`, `→ ${inv.number} (${inv.type})`);
+  res.json(inv);
+});
+
+// Factuur/offerte als PDF bekijken/downloaden.
+app.get('/api/invoices/:id/pdf', requireAuth, async (req, res) => {
+  const inv = findInv(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   try {
     const pdf = await buildInvoicePdf(inv, order, customer);
     res.set('Content-Type', 'application/pdf');
-    res.set('Content-Disposition', `inline; filename="factuur-${inv.number}.pdf"`);
+    res.set('Content-Disposition', `inline; filename="${inv.type === 'offerte' ? 'offerte' : 'factuur'}-${inv.number}.pdf"`);
     res.send(pdf);
   } catch (e) { res.status(500).json({ error: 'PDF maken mislukt: ' + e.message }); }
 });
 
-// Factuur per e-mail naar de klant (met PDF-bijlage).
+// Versturen per e-mail (factuur óf offerte) met PDF-bijlage.
 app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
-  const inv = (db().invoices || []).find((i) => i.id === req.params.id);
+  const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
-  const order = db().orders.find((o) => o.id === inv.orderId);
-  if (!order) return res.status(404).json({ error: 'Opdracht niet gevonden' });
-  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   const to = (req.body?.to || customer.email || '').trim();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Geen geldig e-mailadres van de klant. Vul het e-mailveld op de kaart in.' });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Geen geldig e-mailadres van de klant. Vul het e-mailveld in.' });
   if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
-  if (!inv.lines || !inv.lines.length) return res.status(400).json({ error: 'De factuur heeft nog geen regels.' });
+  if (!inv.lines || !inv.lines.length) return res.status(400).json({ error: 'Er staan nog geen regels op.' });
   const cfg = getInvoiceSettings();
+  const isQuote = inv.type === 'offerte';
   try {
-    const pdf = await buildInvoicePdf(inv, order, customer);
+    const pdf = await buildInvoicePdf(inv, order || {}, customer);
     const sig = getEmailSignature();
-    const body = `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number} voor de uitgevoerde werkzaamheden (${order.title}).\nTotaalbedrag: € ${inv.totalIncl.toFixed(2).replace('.', ',')} — graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`;
+    const bedrag = `€ ${inv.totalIncl.toFixed(2).replace('.', ',')}`;
+    const body = isQuote
+      ? `Beste ${customer.name || 'klant'},\n\nBedankt voor uw aanvraag. In de bijlage vindt u onze offerte ${inv.number}${order ? ` voor: ${order.title}` : ''}.\nTotaalbedrag: ${bedrag} incl. btw. Deze offerte is ${cfg.quoteValidDays || 30} dagen geldig.\n\nGaat u akkoord? Reageer op deze e-mail of bel ons — dan plannen we de werkzaamheden direct in.`
+      : `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ` voor de uitgevoerde werkzaamheden (${order.title})` : ''}.\nTotaalbedrag: ${bedrag} — graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`;
     await sendMail({
-      to, subject: `Factuur ${inv.number} — ${cfg.companyName}`,
+      to, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number} — ${cfg.companyName}`,
       text: sig ? `${body}\n\n${sig}` : body,
-      attachments: [{ filename: `factuur-${inv.number}.pdf`, content: pdf }],
+      attachments: [{ filename: `${isQuote ? 'offerte' : 'factuur'}-${inv.number}.pdf`, content: pdf }],
     });
     inv.status = 'verzonden';
     inv.sentAt = now();
     inv.sentTo = to;
-    order.thread = order.thread || [];
-    order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (factuur)`, subject: `Factuur ${inv.number}`, body, at: now() });
-    order.updatedAt = now();
+    if (order) {
+      order.thread = order.thread || [];
+      order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (${inv.type})`, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number}`, body, at: now() });
+      order.updatedAt = now();
+    }
     saveSoon();
-    logActivity(req.user.name, 'factuur verstuurd', `${inv.number} -> ${to}`);
+    logActivity(req.user.name, `${inv.type} verstuurd`, `${inv.number} → ${to}`);
     res.json({ ok: true, invoice: inv });
   } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
 
-// Factuur betaald / status terugzetten.
-app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
-  const inv = (db().invoices || []).find((i) => i.id === req.params.id);
+// Vriendelijke betaalherinnering (alleen verzonden facturen), met PDF opnieuw als bijlage.
+app.post('/api/invoices/:id/remind', requireAuth, async (req, res) => {
+  const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
-  const order = db().orders.find((o) => o.id === inv.orderId) || {};
-  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  if (inv.type === 'offerte') return res.status(400).json({ error: 'Herinnering is voor facturen. Verstuur de offerte desnoods opnieuw.' });
+  if (inv.status !== 'verzonden') return res.status(400).json({ error: 'Alleen voor verzonden (nog niet betaalde) facturen.' });
+  const customer = db().customers.find((c) => c.id === inv.customerId) || {};
+  const to = (req.body?.to || inv.sentTo || customer.email || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Geen geldig e-mailadres bekend.' });
+  if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
+  const cfg = getInvoiceSettings();
+  const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
+  try {
+    const pdf = await buildInvoicePdf(inv, order, customer);
+    const sig = getEmailSignature();
+    const body = `Beste ${customer.name || 'klant'},\n\nVolgens onze administratie staat factuur ${inv.number} (€ ${inv.totalIncl.toFixed(2).replace('.', ',')}) nog open. Mogelijk is het aan uw aandacht ontsnapt — dat kan gebeuren.\n\nWilt u het bedrag overmaken${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer? De factuur zit nogmaals in de bijlage.\n\nHeeft u al betaald of heeft u een vraag? Reageer gerust op deze e-mail.`;
+    await sendMail({
+      to, subject: `Betaalherinnering: factuur ${inv.number} — ${cfg.companyName}`,
+      text: sig ? `${body}\n\n${sig}` : body,
+      attachments: [{ filename: `factuur-${inv.number}.pdf`, content: pdf }],
+    });
+    inv.remindedAt = now();
+    inv.remindCount = (inv.remindCount || 0) + 1;
+    saveSoon();
+    logActivity(req.user.name, 'betaalherinnering verstuurd', `${inv.number} → ${to}`);
+    res.json({ ok: true, invoice: inv });
+  } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
+});
+
+// Status wijzigen. Factuur: concept/verzonden/betaald. Offerte: + goedgekeurd/afgekeurd.
+app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
+  const inv = findInv(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
   const s = String(req.body?.status || '');
-  if (!['concept', 'verzonden', 'betaald'].includes(s)) return res.status(400).json({ error: 'Ongeldige status' });
+  const allowed = inv.type === 'offerte' ? ['concept', 'verzonden', 'goedgekeurd', 'afgekeurd'] : ['concept', 'verzonden', 'betaald'];
+  if (!allowed.includes(s)) return res.status(400).json({ error: 'Ongeldige status' });
   inv.status = s;
   if (s === 'betaald') inv.paidAt = now();
+  if (s === 'goedgekeurd') inv.acceptedAt = now();
   saveSoon();
-  logActivity(req.user.name, `factuur ${s}`, inv.number);
+  logActivity(req.user.name, `${inv.type === 'offerte' ? 'offerte' : 'factuur'} ${s}`, inv.number);
   res.json(inv);
 });
 
-// Facturenoverzicht (admin/assistent alles; monteur alleen eigen).
+// Overzicht (kantoor alles; monteur alleen eigen kaarten + zelf aangemaakte losse).
 app.get('/api/invoices', requireAuth, (req, res) => {
   const maps = buildMaps();
   let list = db().invoices || [];
-  if (req.user.role === 'monteur') {
-    list = list.filter((i) => { const o = db().orders.find((x) => x.id === i.orderId); return o && o.monteurId === req.user.monteurId; });
-  }
+  if (req.user.role === 'monteur') list = list.filter((i) => canTouchInvoice(req, i));
   res.json(list.map((i) => {
     const c = maps.customers.get(i.customerId) || {};
-    const o = db().orders.find((x) => x.id === i.orderId) || {};
+    const o = i.orderId ? (db().orders.find((x) => x.id === i.orderId) || {}) : {};
     return { ...i, customerName: c.name || '', orderTitle: o.title || '' };
   }));
 });
+
 
 // Testmail: stuur één van de automatische mails (met voorbeeldgegevens) naar een gekozen
 // adres, zodat je ziet hoe het bij de klant binnenkomt. Verstuurt NIET naar klanten.

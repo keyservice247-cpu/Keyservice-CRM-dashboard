@@ -57,6 +57,12 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
   concept/verzonden/betaald, Facturen-overzicht (monteur alleen eigen). Bedrijfsgegevens
   staan als standaard in de code (Rhenen/KvK/BTW/IBAN) en zijn aanpasbaar in Instellingen →
   Facturen-pil, incl. PRIJSLIJST (vaste producten/werkzaamheden, 1-klik in de factuur).
+- **Offertes + losse facturen:** naast kaart-facturen ook LOSSTAANDE facturen/offertes
+  (Facturen-pagina → + Factuur / + Offerte → klant kiezen of nieuw). Offerte: nummer
+  OFF-2026-…, eigen PDF (geldigheidsdatum, Voor akkoord-blok), status concept/verzonden/
+  goedgekeurd/afgekeurd, 1-klik omzetten naar factuur. Verder: kopiëren, verwijderen
+  (betaald nooit, verzonden alleen admin), betaalherinnering (met teller), verlopen-detectie
+  in het overzicht. Rechten: monteur alleen eigen kaarten + zelf aangemaakte records.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).

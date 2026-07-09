@@ -192,7 +192,11 @@
       <section id="view-invoices" class="view" hidden>
         <div class="view-head"><div><h2>Facturen</h2>
           <div class="muted small">Alle facturen die vanuit het dashboard zijn gemaakt. Maak of verstuur een factuur via de knop <strong>Factuur</strong> op een opdracht-kaart.</div></div>
-          <div class="view-actions"><select id="invFilter"><option value="all">Alles</option><option value="concept">Concept</option><option value="verzonden">Verzonden (open)</option><option value="betaald">Betaald</option></select></div>
+          <div class="view-actions">
+            <select id="invFilter"><option value="all">Alles</option><option value="factuur">Facturen</option><option value="offerte">Offertes</option><option value="concept">Concepten</option><option value="verzonden">Verzonden (open)</option><option value="verlopen">Verlopen</option><option value="betaald">Betaald</option></select>
+            <button id="newQuoteBtn" class="btn">+ Offerte</button>
+            <button id="newInvoiceBtn" class="btn btn-primary">+ Factuur</button>
+          </div>
         </div>
         <div id="invoiceList"></div>
       </section>

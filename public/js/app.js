@@ -1366,76 +1366,154 @@ function openWerkbonModal(o) {
 }
 
 // ---------- Factuur (regels, btw, versturen als PDF) ----------
+// ---------- Factuur/offerte-editor (vanaf kaart óf losstaand) ----------
 function openInvoiceModal(o) {
   api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [] }) => {
-    const inv = invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept' };
-    const toExcl = (l) => l.priceExcl !== undefined ? l.priceExcl : Math.round(((l.priceIncl || 0) / (1 + (Number(inv.btwPct) || 21) / 100)) * 100) / 100;
-    inv.lines = (inv.lines || []).map((l) => ({ ...l, priceExcl: toExcl(l) }));
-    if (!inv.lines.length) {
-      // Startvoorstel: werkbon of titel als eerste regel (prijs vul je excl. btw in).
-      inv.lines = [{ description: '', qty: 1, priceExcl: 0 }];
-    }
-    const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
-    const lineRow = (l, i) => `
-      <div class="inv-line" data-i="${i}" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
-        <input class="il-desc" value="${esc(l.description || '')}" placeholder="Omschrijving" style="flex:3">
-        <input class="il-qty" type="number" min="0" step="1" value="${esc(String(l.qty ?? 1))}" style="width:64px" title="Aantal">
-        <input class="il-price" type="number" min="0" step="0.01" value="${esc(String(l.priceExcl ?? 0))}" style="width:96px" title="Prijs per stuk (EXCL. btw)">
-        <button type="button" class="btn btn-sm il-del" title="Regel weghalen">${icon('x', 12)}</button>
-      </div>`;
+    renderInvoiceEditor({
+      inv: invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept', type: 'factuur' },
+      customer: o.customer || {}, contextTitle: o.title, werkbon: o.werkbon || null, priceList,
+      save: (body) => api(`/api/orders/${o.id}/invoice`, 'POST', body),
+      after: () => loadBoard(),
+    });
+  }).catch((err) => toast(err.message, true));
+}
+
+function openStandaloneInvoice(invId) {
+  api(`/api/invoices/${invId}`).then(({ invoice, customer, order, priceList = [] }) => {
+    renderInvoiceEditor({
+      inv: invoice, customer: customer || {}, contextTitle: order?.title || (customer?.name || ''), werkbon: order?.werkbon || null, priceList,
+      save: (body) => api(`/api/invoices/${invoice.id}`, 'PATCH', body),
+      after: () => { if (state._invoices) loadInvoices(); },
+    });
+  }).catch((err) => toast(err.message, true));
+}
+
+function renderInvoiceEditor(ctx) {
+  const { inv, customer, priceList } = ctx;
+  const isQuote = inv.type === 'offerte';
+  const woord = isQuote ? 'Offerte' : 'Factuur';
+  const locked = inv.status === 'betaald' || inv.status === 'goedgekeurd';
+  const toExcl = (l) => l.priceExcl !== undefined ? l.priceExcl : Math.round(((l.priceIncl || 0) / (1 + (Number(inv.btwPct) || 21) / 100)) * 100) / 100;
+  inv.lines = (inv.lines || []).map((l) => ({ ...l, priceExcl: toExcl(l) }));
+  if (!inv.lines.length) inv.lines = [{ description: '', qty: 1, priceExcl: 0 }];
+  const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+  const stLabel = { concept: 'Concept', verzonden: 'Verzonden', betaald: 'Betaald ✓', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[inv.status] || inv.status;
+  const lineRow = (l, i) => `
+    <div class="inv-line" data-i="${i}" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <input class="il-desc" value="${esc(l.description || '')}" placeholder="Omschrijving" style="flex:3">
+      <input class="il-qty" type="number" min="0" step="1" value="${esc(String(l.qty ?? 1))}" style="width:64px" title="Aantal">
+      <input class="il-price" type="number" min="0" step="0.01" value="${esc(String(l.priceExcl ?? 0))}" style="width:96px" title="Prijs per stuk (EXCL. btw)">
+      <button type="button" class="btn btn-sm il-del" title="Regel weghalen">${icon('x', 12)}</button>
+    </div>`;
+  modal(`
+    <h2>${icon('mail', 16)} ${woord} — ${esc(customer.name || ctx.contextTitle || '')}</h2>
+    <p class="muted small">${inv.number ? `Nummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(stLabel)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : `Nieuw concept — het ${woord.toLowerCase()}nummer wordt bij opslaan toegekend.`} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.${locked ? ' <strong>Dit document is vergrendeld.</strong>' : ''}</p>
+    ${priceList.length && !locked ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('tag', 13)} Prijzenlijst — klik om te openen en snel toe te voegen</summary><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${priceList.map((p, pi) => `<button type="button" class="chip pl-add" data-pi="${pi}" title="€ ${Number(p.priceExcl).toFixed(2)} excl. btw" style="cursor:pointer">${esc(p.description.slice(0, 44))} · ${eur(p.priceExcl)}</button>`).join('')}</div></details>` : ''}
+    <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
+    ${locked ? '' : `<button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
+    ${ctx.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}`}
+    <div class="row" style="margin-top:10px"> <label>Btw-tarief <select id="inv-btw" ${locked ? 'disabled' : ''}><option value="21" ${Number(inv.btwPct) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(inv.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(inv.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label>
+      <label>Opmerking op de ${esc(woord.toLowerCase())} <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel" ${locked ? 'disabled' : ''}></label> </div>
+    <div id="inv-totals" class="muted small" style="margin:8px 0;font-size:14px"></div>
+    <div class="modal-actions">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${inv.id && !isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button><button class="btn" id="inv-remind">${icon('bell', 13)} Herinnering</button>` : ''}
+        ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button>` : ''}
+        ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">→ Maak factuur</button>` : ''}
+        ${inv.id ? `<button class="btn" id="inv-copy">${icon('merge', 13)} Kopieer</button>` : ''}
+        ${inv.id && inv.status !== 'betaald' ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}
+      </div>
+      <div class="right">
+        ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('paperclip', 14)} PDF</a>` : ''}
+        <button class="btn" id="inv-cancel">Sluiten</button>
+        ${locked ? '' : `<button class="btn" id="inv-save">Concept opslaan</button>
+        <button class="btn btn-primary" id="inv-send">${inv.status === 'verzonden' ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>`}
+      </div>
+    </div>`);
+  const readLines = () => $$('#inv-lines .inv-line').map((row) => ({
+    description: $('.il-desc', row).value, qty: Number($('.il-qty', row).value) || 0, priceExcl: Number($('.il-price', row).value) || 0,
+  })).filter((l) => l.description || l.priceExcl > 0);
+  const renderTotals = () => {
+    const btw = Number($('#inv-btw').value);
+    const excl = readLines().reduce((s, l) => s + l.qty * l.priceExcl, 0);
+    const btwBedrag = excl * (btw / 100);
+    $('#inv-totals').innerHTML = `Totaal excl. btw: <strong>${eur(excl)}</strong> · btw ${btw}%: <strong>${eur(btwBedrag)}</strong> · <span style="font-size:16px">Totaal incl. btw: <strong>${eur(excl + btwBedrag)}</strong></span>`;
+  };
+  const bindRows = () => {
+    $$('#inv-lines input').forEach((i) => i.oninput = renderTotals);
+    $$('#inv-lines .il-del').forEach((b) => b.onclick = () => { b.closest('.inv-line').remove(); renderTotals(); });
+  };
+  bindRows(); renderTotals();
+  $('#inv-btw').onchange = renderTotals;
+  if ($('#il-add')) $('#il-add').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: '', qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
+  $$('.pl-add').forEach((b) => b.onclick = () => { const p = priceList[Number(b.dataset.pi)]; if (!p) return; $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: p.description, qty: 1, priceExcl: p.priceExcl }, 99)); bindRows(); renderTotals(); });
+  if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (ctx.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
+  const saveConcept = async () => ctx.save({ lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value });
+  const done = (msg) => { toast(msg); closeModal(); if (ctx.after) ctx.after(); };
+  $('#inv-cancel').onclick = closeModal;
+  if ($('#inv-save')) $('#inv-save').onclick = async () => { try { await saveConcept(); done('Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
+  if ($('#inv-send')) $('#inv-send').onclick = async () => {
+    if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de kaart of bij Klanten).', true); return; }
+    if (!confirm(`${woord} nu versturen naar ${customer.email}?`)) return;
+    try {
+      const saved = await saveConcept();
+      await api(`/api/invoices/${saved.id}/send`, 'POST', {});
+      done(`${woord} verstuurd naar de klant`);
+    } catch (err) { toast(err.message, true); }
+  };
+  const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = async () => { try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }; };
+  statusBtn('#inv-paid', 'betaald', 'Gemarkeerd als betaald ✓');
+  statusBtn('#inv-accept', 'goedgekeurd', 'Offerte goedgekeurd ✓');
+  statusBtn('#inv-reject', 'afgekeurd', 'Offerte afgekeurd');
+  if ($('#inv-remind')) $('#inv-remind').onclick = async () => {
+    if (!confirm(`Vriendelijke betaalherinnering sturen naar ${inv.sentTo || customer.email}?`)) return;
+    try { await api(`/api/invoices/${inv.id}/remind`, 'POST', {}); done('Herinnering verstuurd'); } catch (err) { toast(err.message, true); }
+  };
+  if ($('#inv-copy')) $('#inv-copy').onclick = async () => {
+    try { const copy = await api(`/api/invoices/${inv.id}/copy`, 'POST', {}); toast(`Gekopieerd → ${copy.number}`); closeModal(); openStandaloneInvoice(copy.id); } catch (err) { toast(err.message, true); }
+  };
+  if ($('#inv-tofactuur')) $('#inv-tofactuur').onclick = async () => {
+    if (!confirm('Van deze offerte een factuur maken (nieuw factuurnummer)?')) return;
+    try { const f = await api(`/api/invoices/${inv.id}/copy`, 'POST', { type: 'factuur' }); toast(`Factuur ${f.number} aangemaakt`); closeModal(); openStandaloneInvoice(f.id); } catch (err) { toast(err.message, true); }
+  };
+  if ($('#inv-del')) $('#inv-del').onclick = async () => {
+    if (!confirm(`${woord} ${inv.number} definitief verwijderen?`)) return;
+    try { await api(`/api/invoices/${inv.id}`, 'DELETE'); done(`${woord} verwijderd`); } catch (err) { toast(err.message, true); }
+  };
+}
+
+// Nieuwe losse factuur/offerte: eerst klant kiezen (bestaand of nieuw).
+function openNewInvoiceFlow(type) {
+  const woord = type === 'offerte' ? 'Offerte' : 'Factuur';
+  api('/api/customers').then((customers) => {
     modal(`
-      <h2>${icon('mail', 16)} Factuur — ${esc(o.title)}</h2>
-      <p class="muted small">${inv.number ? `Factuurnummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(inv.status)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : 'Nieuw concept — het factuurnummer wordt bij opslaan toegekend.'} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.</p>
-      ${priceList.length ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('tag', 13)} Prijzenlijst — klik om te openen en snel toe te voegen</summary><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${priceList.map((p, pi) => `<button type="button" class="chip pl-add" data-pi="${pi}" title="€ ${Number(p.priceExcl).toFixed(2)} excl. btw" style="cursor:pointer">${esc(p.description.slice(0, 44))} · ${eur(p.priceExcl)}</button>`).join('')}</div></details>` : ''}
-      <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
-      <button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
-      ${o.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}
-      <div class="row" style="margin-top:10px"> <label>Btw-tarief <select id="inv-btw"><option value="21" ${Number(inv.btwPct) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(inv.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(inv.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label>
-        <label>Opmerking op de factuur <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel"></label> </div>
-      <div id="inv-totals" class="muted small" style="margin:8px 0;font-size:14px"></div>
-      <div class="modal-actions">
-        ${inv.id && inv.status !== 'betaald' ? `<button class="btn btn-success" id="inv-paid">✓ Markeer betaald</button>` : '<span></span>'}
-        <div class="right">
-          ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('paperclip', 14)} Bekijk PDF</a>` : ''}
-          <button class="btn" id="inv-cancel">Sluiten</button>
-          <button class="btn" id="inv-save">Concept opslaan</button>
-          <button class="btn btn-primary" id="inv-send">${inv.status === 'verzonden' ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
-        </div>
-      </div>`);
-    const readLines = () => $$('#inv-lines .inv-line').map((row) => ({
-      description: $('.il-desc', row).value, qty: Number($('.il-qty', row).value) || 0, priceExcl: Number($('.il-price', row).value) || 0,
-    })).filter((l) => l.description || l.priceExcl > 0);
-    const renderTotals = () => {
-      const btw = Number($('#inv-btw').value);
-      const excl = readLines().reduce((s, l) => s + l.qty * l.priceExcl, 0);
-      const btwBedrag = excl * (btw / 100);
-      $('#inv-totals').innerHTML = `Totaal excl. btw: <strong>${eur(excl)}</strong> · btw ${btw}%: <strong>${eur(btwBedrag)}</strong> · <span style="font-size:16px">Totaal incl. btw: <strong>${eur(excl + btwBedrag)}</strong></span>`;
-    };
-    const bindRows = () => {
-      $$('#inv-lines input').forEach((i) => i.oninput = renderTotals);
-      $$('#inv-lines .il-del').forEach((b) => b.onclick = () => { b.closest('.inv-line').remove(); renderTotals(); });
-    };
-    bindRows(); renderTotals();
-    $('#inv-btw').onchange = renderTotals;
-    $('#il-add').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: '', qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
-    $$('.pl-add').forEach((b) => b.onclick = () => { const p = priceList[Number(b.dataset.pi)]; if (!p) return; $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: p.description, qty: 1, priceExcl: p.priceExcl }, 99)); bindRows(); renderTotals(); });
-    if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (o.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
-    const saveConcept = async () => api(`/api/orders/${o.id}/invoice`, 'POST', { lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value });
-    $('#inv-cancel').onclick = closeModal;
-    $('#inv-save').onclick = async () => { try { await saveConcept(); toast('Concept opgeslagen'); closeModal(); } catch (err) { toast(err.message, true); } };
-    $('#inv-send').onclick = async () => {
-      if (!o.customer?.email) { toast('De klant heeft nog geen e-mailadres op de kaart — vul dat eerst in.', true); return; }
-      if (!confirm(`Factuur nu versturen naar ${o.customer.email}?`)) return;
-      try {
-        const saved = await saveConcept();
-        await api(`/api/invoices/${saved.id}/send`, 'POST', {});
-        toast('Factuur verstuurd naar de klant'); closeModal(); loadBoard();
-      } catch (err) { toast(err.message, true); }
-    };
-    if ($('#inv-paid')) $('#inv-paid').onclick = async () => {
-      try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status: 'betaald' }); toast('Gemarkeerd als betaald ✓'); closeModal(); }
+      <h2>${icon('mail', 16)} Nieuwe ${esc(woord.toLowerCase())} — kies de klant</h2>
+      <label>Zoek bestaande klant <input id="ni-search" placeholder="Typ naam, telefoon of e-mail…" autocomplete="off"></label>
+      <div id="ni-results" style="max-height:220px;overflow:auto;margin:6px 0 12px"></div>
+      <details id="ni-newcust"><summary style="cursor:pointer;font-weight:600;padding:6px 0">+ Of maak een nieuwe klant</summary>
+        <div class="row"><label>Naam <input id="ni-name"></label><label>Telefoon <input id="ni-phone"></label></div>
+        <div class="row"><label>E-mail <input id="ni-email"></label><label>Adres (straat, postcode, plaats) <input id="ni-address"></label></div>
+        <button class="btn btn-primary" id="ni-create" style="margin-top:8px">${esc(woord)} maken voor nieuwe klant</button>
+      </details>
+      <div class="modal-actions"><span></span><div class="right"><button class="btn" id="ni-cancel">Annuleren</button></div></div>`);
+    const start = async (payload) => {
+      try { const { invoice } = await api('/api/invoices', 'POST', { type, ...payload }); closeModal(); openStandaloneInvoice(invoice.id); }
       catch (err) { toast(err.message, true); }
     };
+    const renderResults = () => {
+      const q = ($('#ni-search').value || '').toLowerCase().trim();
+      const hits = !q ? customers.slice(0, 8) : customers.filter((c) => `${c.name} ${c.phone} ${c.email}`.toLowerCase().includes(q)).slice(0, 12);
+      $('#ni-results').innerHTML = hits.length ? hits.map((c) => `
+        <div class="ni-hit" data-id="${esc(c.id)}" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:5px;cursor:pointer">
+          <strong>${esc(c.name || 'Onbekend')}</strong> <span class="muted small">${esc(c.phone || '')}${c.email ? ' · ' + esc(c.email) : ''}${c.address ? ' · ' + esc(c.address) : ''}</span>
+        </div>`).join('') : '<div class="muted small" style="padding:6px">Geen klant gevonden — maak hieronder een nieuwe aan.</div>';
+      $$('.ni-hit').forEach((el) => el.onclick = () => start({ customerId: el.dataset.id }));
+    };
+    renderResults();
+    $('#ni-search').oninput = renderResults;
+    $('#ni-search').focus();
+    $('#ni-create').onclick = () => start({ newCustomer: { name: $('#ni-name').value, phone: $('#ni-phone').value, email: $('#ni-email').value, address: $('#ni-address').value } });
+    $('#ni-cancel').onclick = closeModal;
   }).catch((err) => toast(err.message, true));
 }
 
@@ -1768,34 +1846,51 @@ async function loadInvoices() {
 function renderInvoices() {
   const wrap = $('#invoiceList'); if (!wrap) return;
   const f = $('#invFilter')?.value || 'all';
-  let items = state._invoices || [];
-  if (f !== 'all') items = items.filter((i) => i.status === f);
+  const all = state._invoices || [];
   const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
-  const open = (state._invoices || []).filter((i) => i.status === 'verzonden').reduce((s, i) => s + (i.totalIncl || 0), 0);
-  const paid = (state._invoices || []).filter((i) => i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
-  const stColor = { concept: 'var(--muted)', verzonden: '#b06a00', betaald: '#167a3d' };
-  const stLabel = { concept: 'Concept', verzonden: 'Verzonden — open', betaald: 'Betaald ✓' };
-  let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong> · Betaald: <strong>${eur(paid)}</strong> · Totaal facturen: ${(state._invoices || []).length}</div>`;
-  if (!items.length) html += '<div class="empty">Geen facturen in deze weergave.</div>';
-  html += items.map((i) => `
+  // Verlopen = verzonden factuur waarvan de betaaltermijn is verstreken.
+  const days = 7;
+  const isOverdue = (i) => (i.type !== 'offerte') && i.status === 'verzonden' && i.sentAt && (Date.now() - new Date(i.sentAt).getTime()) > days * 86400000;
+  let items = all;
+  if (f === 'factuur') items = all.filter((i) => i.type !== 'offerte');
+  else if (f === 'offerte') items = all.filter((i) => i.type === 'offerte');
+  else if (f === 'verlopen') items = all.filter(isOverdue);
+  else if (f !== 'all') items = all.filter((i) => i.status === f);
+  const open = all.filter((i) => i.type !== 'offerte' && i.status === 'verzonden').reduce((s, i) => s + (i.totalIncl || 0), 0);
+  const paid = all.filter((i) => i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
+  const overdueCount = all.filter(isOverdue).length;
+  let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong>${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}</div>`;
+  if (!items.length) html += '<div class="empty">Niets in deze weergave. Maak er één met de knoppen rechtsboven, of via de knop Factuur op een kaart.</div>';
+  html += items.map((i) => {
+    const quote = i.type === 'offerte';
+    const overdue = isOverdue(i);
+    const stColor = overdue ? 'var(--danger)' : ({ concept: 'var(--muted)', verzonden: '#b06a00', betaald: '#167a3d', goedgekeurd: '#167a3d', afgekeurd: 'var(--danger)' }[i.status] || 'inherit');
+    const stLabel = overdue ? 'Nog niet betaald — VERLOPEN' : ({ concept: 'Concept', verzonden: quote ? 'Verzonden' : 'Verzonden — open', betaald: 'Betaald ✓', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[i.status] || i.status);
+    return `
     <div class="info-card" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
-        <div><strong>${esc(i.number)}</strong> · ${esc(i.customerName || 'klant')} <span class="muted small">— ${esc(i.orderTitle || '')}</span></div>
-        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span style="color:${stColor[i.status] || 'inherit'};font-weight:600">${esc(stLabel[i.status] || i.status)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}</div>
+        <div>${quote ? `<span class="chip" style="font-size:11px">OFFERTE</span> ` : ''}<strong>${esc(i.number)}</strong> · ${esc(i.customerName || 'klant')} <span class="muted small">${i.orderTitle ? '— ' + esc(i.orderTitle) : '(losstaand)'}</span></div>
+        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span style="color:${stColor};font-weight:600">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <strong style="font-size:15px">${eur(i.totalIncl)}</strong>
+        <button class="btn btn-sm btn-primary inv-edit" data-id="${esc(i.id)}">Openen</button>
         <a class="btn btn-sm" target="_blank" rel="noopener" href="/api/invoices/${esc(i.id)}/pdf">PDF</a>
-        <button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Open kaart</button>
-        ${i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
+        ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Kaart</button>` : ''}
+        ${!quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
+        ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   wrap.innerHTML = html;
+  $$('.inv-edit').forEach((b) => b.onclick = () => openStandaloneInvoice(b.dataset.id));
   $$('.inv-open').forEach((b) => b.onclick = async () => { const orders = await api('/api/orders?includeArchived=1'); state.orders = orders; openOrderModal(b.dataset.oid); });
-  $$('.inv-mark').forEach((b) => b.onclick = async () => {
-    try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status: 'betaald' }); toast('Betaald ✓'); loadInvoices(); }
+  const quickStatus = (sel, status, msg) => $$(sel).forEach((b) => b.onclick = async () => {
+    try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status }); toast(msg); loadInvoices(); }
     catch (err) { toast(err.message, true); }
   });
+  quickStatus('.inv-mark', 'betaald', 'Betaald ✓');
+  quickStatus('.inv-ok', 'goedgekeurd', 'Offerte goedgekeurd ✓');
 }
 
 // ---------- Abonnementen & verbruik ----------
@@ -2593,6 +2688,8 @@ function bindButtons() {
   $('#trashSearch')?.addEventListener('input', renderTrash);
   $('#agendaScope')?.addEventListener('change', renderAgenda);
   $('#invFilter')?.addEventListener('change', renderInvoices);
+  $('#newInvoiceBtn')?.addEventListener('click', () => openNewInvoiceFlow('factuur'));
+  $('#newQuoteBtn')?.addEventListener('click', () => openNewInvoiceFlow('offerte'));
   $('#inboxFilter')?.addEventListener('change', loadInbox);
   $('#selectAll')?.addEventListener('change', (e) => {
     $$('.r-select').forEach((c) => (c.checked = e.target.checked));

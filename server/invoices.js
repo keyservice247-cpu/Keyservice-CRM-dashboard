@@ -25,6 +25,7 @@ export const DEFAULT_INVOICE_SETTINGS = {
   phone: '+31 (0) 85 060 2359',
   website: 'https://keyservice247.nl',
   paymentDays: 7,
+  quoteValidDays: 30,     // geldigheid van offertes
   btwPct: 21,             // standaardtarief; per factuur aan te passen
   warranty: '3 jaar garantie op onze producten, 1 jaar garantie op arbeid.',
   legal: 'Bij reparatie- en montagewerkzaamheden aan bestaande kozijnen, deuren, ramen en beglazing kan ondanks zorgvuldig werken lichte, redelijkerwijs onvermijdbare gebruiksschade ontstaan (zoals kleine krasjes, haarscheurtjes of loslatende verf/kit op verouderde delen). Dergelijke geringe schade valt binnen het acceptabele werkrisico en geeft geen recht op schadevergoeding of verrekening. Reclamaties binnen 48 uur na uitvoering melden.',
@@ -35,14 +36,16 @@ export function getInvoiceSettings() {
   return { ...DEFAULT_INVOICE_SETTINGS, ...s };
 }
 
-// ---------- Nummering: 2026-0001, 2026-0002, ... (teller per jaar) ----------
-function nextInvoiceNumber() {
+// ---------- Nummering: factuur 2026-0001…, offerte OFF-2026-0001… (teller per jaar) ----------
+function nextInvoiceNumber(type = 'factuur') {
   const year = new Date().getFullYear();
   const st = db().settings;
-  if (!st._invoiceCounter || st._invoiceCounter.year !== year) st._invoiceCounter = { year, n: 0 };
-  st._invoiceCounter.n += 1;
+  const key = type === 'offerte' ? '_quoteCounter' : '_invoiceCounter';
+  if (!st[key] || st[key].year !== year) st[key] = { year, n: 0 };
+  st[key].n += 1;
   save();
-  return `${year}-${String(st._invoiceCounter.n).padStart(4, '0')}`;
+  const nr = `${year}-${String(st[key].n).padStart(4, '0')}`;
+  return type === 'offerte' ? `OFF-${nr}` : nr;
 }
 
 // ---------- Rekenen (bedragen EXCL btw ingevoerd; btw erbovenop) ----------
@@ -72,27 +75,62 @@ function sanitizeLines(lines, btwPct) {
 }
 
 // ---------- Aanmaken / bijwerken (concept) ----------
+// Gedeeld: regels/btw/notitie op een bestaand record zetten (met vergrendel-check).
+export function saveInvoiceFields(inv, body) {
+  if (inv.status === 'betaald') return { error: 'Deze factuur is al betaald en kan niet meer worden gewijzigd.' };
+  if (inv.status === 'goedgekeurd') return { error: 'Deze offerte is al goedgekeurd. Kopieer of zet om naar factuur.' };
+  const btwPct = Math.max(0, Math.min(21, Number(body.btwPct ?? inv.btwPct ?? getInvoiceSettings().btwPct)));
+  inv.lines = sanitizeLines(body.lines, btwPct);
+  inv.btwPct = btwPct;
+  inv.note = String(body.note || '').slice(0, 500);
+  Object.assign(inv, computeTotals(inv.lines, btwPct));
+  inv.updatedAt = now();
+  saveSoon();
+  return { invoice: inv };
+}
+
 export function upsertInvoice(order, body, actorName) {
   db().invoices = db().invoices || [];
   let inv = db().invoices.find((i) => i.id === order.invoiceId);
-  const btwPct = Math.max(0, Math.min(21, Number(body.btwPct ?? getInvoiceSettings().btwPct)));
-  const lines = sanitizeLines(body.lines, btwPct);
   if (!inv) {
+    const type = body.type === 'offerte' ? 'offerte' : 'factuur';
     inv = {
-      id: id('inv'), number: nextInvoiceNumber(), orderId: order.id, customerId: order.customerId,
+      id: id('inv'), number: nextInvoiceNumber(type), type, orderId: order.id, customerId: order.customerId,
       status: 'concept', createdAt: now(), createdBy: actorName || '',
     };
     db().invoices.unshift(inv);
     order.invoiceId = inv.id;
   }
-  if (inv.status === 'betaald') return { error: 'Deze factuur is al betaald en kan niet meer worden gewijzigd.' };
-  inv.lines = lines;
-  inv.btwPct = btwPct;
-  inv.note = String(body.note || '').slice(0, 500);
-  Object.assign(inv, computeTotals(lines, btwPct));
-  inv.updatedAt = now();
+  return saveInvoiceFields(inv, body);
+}
+
+// Losse factuur of offerte, direct aan een klant gekoppeld (niet via een kaart).
+export function createStandaloneInvoice({ customerId, type = 'factuur', actorName = '', createdById = '' }) {
+  db().invoices = db().invoices || [];
+  const t = type === 'offerte' ? 'offerte' : 'factuur';
+  const inv = {
+    id: id('inv'), number: nextInvoiceNumber(t), type: t, orderId: null, customerId,
+    status: 'concept', lines: [], btwPct: getInvoiceSettings().btwPct,
+    ...computeTotals([], getInvoiceSettings().btwPct),
+    createdAt: now(), createdBy: actorName, createdById,
+  };
+  db().invoices.unshift(inv);
   saveSoon();
-  return { invoice: inv };
+  return inv;
+}
+
+// Kopie (nieuw nummer, concept). copyType kan afwijken (offerte -> factuur = omzetten).
+export function copyInvoice(src, { actorName = '', createdById = '', copyType } = {}) {
+  const t = copyType === 'offerte' ? 'offerte' : copyType === 'factuur' ? 'factuur' : (src.type || 'factuur');
+  const inv = {
+    id: id('inv'), number: nextInvoiceNumber(t), type: t, orderId: src.orderId || null, customerId: src.customerId,
+    status: 'concept', lines: (src.lines || []).map((l) => ({ ...l })), btwPct: src.btwPct,
+    note: src.note || '', ...computeTotals(src.lines || [], src.btwPct),
+    createdAt: now(), createdBy: actorName, createdById, copiedFrom: src.number,
+  };
+  db().invoices.unshift(inv);
+  saveSoon();
+  return inv;
 }
 
 const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
@@ -128,12 +166,14 @@ export function buildInvoicePdf(inv, order, customer) {
     const custLines = [customer.address, customer.phone, customer.email].filter(Boolean);
     if (custLines.length) doc.text(custLines.join('\n'), 50, y + 15, { lineGap: 1.5 });
 
-    // Factuurnummer + data.
+    // Nummer + data (factuur of offerte).
+    const isQuote = inv.type === 'offerte';
+    const validUntil = new Date(new Date(invDate).getTime() + (cfg.quoteValidDays || 30) * 86400000);
     y = 238;
-    doc.font('Helvetica-Bold').fontSize(12).fillColor(ink).text(`Factuur: ${inv.number}`, 50, y);
+    doc.font('Helvetica-Bold').fontSize(12).fillColor(ink).text(`${isQuote ? 'Offerte' : 'Factuur'}: ${inv.number}`, 50, y);
     doc.font('Helvetica').fontSize(10).fillColor(muted)
-      .text(`Factuurdatum: ${nlDate(invDate)}`, 330, y - 12, { width: 215, align: 'right' })
-      .text(`Vervaldatum: ${nlDate(dueDate)}`, 330, y + 2, { width: 215, align: 'right' });
+      .text(`${isQuote ? 'Offertedatum' : 'Factuurdatum'}: ${nlDate(invDate)}`, 330, y - 12, { width: 215, align: 'right' })
+      .text(`Vervaldatum: ${nlDate(isQuote ? validUntil : dueDate)}`, 330, y + 2, { width: 215, align: 'right' });
 
     // Reparatielocatie + betreft.
     y += 26;
@@ -153,7 +193,9 @@ export function buildInvoicePdf(inv, order, customer) {
     y += 28;
     doc.font('Helvetica').fillColor(ink).fontSize(10);
     for (const l of inv.lines || []) {
-      const ex = lineExcl(l, pct) * (Number(l.qty) || 0);
+      const unit = lineExcl(l, pct);
+      const qty = Number(l.qty) || 0;
+      const ex = unit * qty;
       const inc = ex * (1 + pct / 100);
       const h = Math.max(13, doc.heightOfString(l.description, { width: 235 }));
       doc.fillColor(ink)
@@ -161,9 +203,12 @@ export function buildInvoicePdf(inv, order, customer) {
         .text(l.description, 102, y, { width: 235 })
         .text(eur(ex), 350, y, { width: 90, align: 'right' })
         .text(eur(inc), 448, y, { width: 90, align: 'right' });
+      // Bij meer dan 1 stuk: stuksprijs eronder (zoals het oude pakket).
+      let extraH = 0;
+      if (qty > 1) { doc.fillColor(muted).fontSize(7.5).text(`Stuksprijs: ${eur(unit)}`, 102, y + h + 1, { width: 235 }); extraH = 9; }
       doc.fillColor(muted).fontSize(7.5).text(`${pct}% btw`, 448, y + h + 1, { width: 90, align: 'right' });
       doc.fontSize(10);
-      y += h + 14;
+      y += h + 14 + extraH;
       doc.moveTo(50, y - 4).lineTo(545, y - 4).strokeColor('#e5e7eb').lineWidth(0.5).stroke();
       if (y > 640) { doc.addPage(); y = 60; }
     }
@@ -179,14 +224,33 @@ export function buildInvoicePdf(inv, order, customer) {
     doc.fillColor(blue).font('Helvetica-Bold').fontSize(12)
       .text('Totaalbedrag incl. btw', 328, y + 2, { width: 138 }).text(eur(inv.totalIncl), 470, y + 2, { width: 68, align: 'right' });
 
-    // Betaalinstructie + garantie + eventuele notitie.
+    // Betaalinstructie (factuur) of geldigheid + akkoord-blok (offerte).
     y += 40;
     doc.font('Helvetica').fontSize(10).fillColor(ink);
-    doc.text(`Gelieve dit bedrag van ${eur(inv.totalIncl)} over te maken vóór ${nlDate(dueDate)} op rekeningnummer: ${cfg.iban} o.v.v. "Factuur ${inv.number}".`, 50, y, { width: 495 });
-    y += doc.heightOfString(`x`, { width: 495 }) + 20;
+    if (isQuote) {
+      doc.text(`Deze offerte is geldig tot ${nlDate(validUntil)}. Gaat u akkoord? Reageer op de e-mail, bel ons, of stuur deze pagina getekend terug — dan plannen we de werkzaamheden direct in.`, 50, y, { width: 495 });
+      y += doc.heightOfString('x', { width: 495 }) + 28;
+    } else {
+      doc.text(`Gelieve dit bedrag van ${eur(inv.totalIncl)} over te maken vóór ${nlDate(dueDate)} op rekeningnummer: ${cfg.iban} o.v.v. "Factuur ${inv.number}".`, 50, y, { width: 495 });
+      y += doc.heightOfString(`x`, { width: 495 }) + 20;
+    }
     if (cfg.warranty) { doc.font('Helvetica-Bold').fillColor(ink).text(cfg.warranty, 50, y, { width: 495 }); y += doc.heightOfString(cfg.warranty, { width: 495 }) + 10; }
     if (inv.note) { doc.font('Helvetica').fillColor(ink).text(inv.note, 50, y, { width: 495 }); y += doc.heightOfString(inv.note, { width: 495 }) + 10; }
     if (cfg.legal) { doc.font('Helvetica').fontSize(7.5).fillColor(muted).text(cfg.legal, 50, y, { width: 495, lineGap: 1 }); y += doc.heightOfString(cfg.legal, { width: 495 }) + 12; doc.fontSize(10); }
+
+    // Offerte: "Voor akkoord"-blok (naam/datum/plaats/handtekening) zoals het oude pakket.
+    if (isQuote) {
+      if (y > 600) { doc.addPage(); y = 60; }
+      y += 8;
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(ink).text('Voor akkoord:', 320, y);
+      doc.font('Helvetica').fontSize(10).fillColor(ink);
+      for (const lbl of ['Naam:', 'Datum:', 'Plaats:', 'Handtekening:']) {
+        y += 22;
+        doc.text(lbl, 320, y);
+        doc.moveTo(400, y + 11).lineTo(545, y + 11).strokeColor('#9aa3b2').lineWidth(0.7).stroke();
+      }
+      y += 30;
+    }
 
     // Handtekening van de werkbon (indien gezet): bewijs van akkoord door de klant.
     try {
