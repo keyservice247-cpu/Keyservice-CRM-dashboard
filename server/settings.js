@@ -133,6 +133,28 @@ export function getTerugkoppeling() {
   };
 }
 
+// Standaard-prijslijst (alle bedragen EXCL. btw) — overgenomen van de website-tarieven.
+// Verschijnt totdat het team zelf een prijslijst opslaat (dan is die leidend).
+export const DEFAULT_PRICE_LIST = [
+  { description: 'Schuifpui reparatie kunststof (vanaf)', priceExcl: 520 },
+  { description: 'Schuifpui reparatie aluminium', priceExcl: 640 },
+  { description: 'Schuifpui reparatie hout', priceExcl: 740 },
+  { description: 'Deur openen (€90–€150)', priceExcl: 90 },
+  { description: 'Cilinderslot houten deur (€70–€120)', priceExcl: 70 },
+  { description: 'Cilinderslot kunststof/aluminium deur (vanaf)', priceExcl: 95 },
+  { description: 'LIPS oplegslot', priceExcl: 290 },
+  { description: 'Oplegslot (Cisa/Yale of vergelijkbaar)', priceExcl: 180 },
+  { description: 'Meerpuntssluiting gemiddeld', priceExcl: 300 },
+  { description: 'Infrezen meerpuntssluiting SKG3 (vanaf)', priceExcl: 640 },
+  { description: 'Anti-kerntrekbeslag (per deur)', priceExcl: 139.50 },
+  { description: 'Noodherstel na inbraak', priceExcl: 80 },
+  { description: 'Installatiekosten (€78,50–€98,50)', priceExcl: 78.50 },
+];
+export function getPriceList() {
+  const p = db().settings.priceList;
+  return Array.isArray(p) && p.length ? p : DEFAULT_PRICE_LIST;
+}
+
 // WhatsApp-meldingen voor het team: seintje in een groep (of 1-op-1) bij elke
 // nieuwe te-controleren aanvraag en bij klantreacties. Groep aanbevolen: maak een
 // WhatsApp-groep (bv. "CRM meldingen") met het wegwerp-nummer + de assistente erin.

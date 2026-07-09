@@ -43,7 +43,7 @@ import {
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp, getBackupMail,
-  getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts,
+  getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1241,7 +1241,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     crmAlerts: getCrmAlerts(),
     invoiceSettings: getInvoiceSettings(),
-    priceList: db().settings.priceList || [],
+    priceList: getPriceList(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true, keywordRoutes: [] },
   });
 });
@@ -1638,7 +1638,7 @@ app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const inv = (db().invoices || []).find((i) => i.id === order.invoiceId) || null;
-  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: db().settings.priceList || [] });
+  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: getPriceList() });
 });
 
 // Factuur aanmaken/bijwerken (concept).
