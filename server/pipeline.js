@@ -114,14 +114,34 @@ export function findCustomerStrong({ phone, email }) {
   return null;
 }
 
-export function upsertCustomer({ name, phone, email, address, source }) {
+// Vergelijkers: telefoon op cijfers, adres genormaliseerd. "Ander adres" = geen van
+// beide bevat de ander (zo telt "Lelystad" vs "Dorpsweg 1, Lelystad" NIET als anders,
+// maar "Oudenbosch" vs "Lelystad" wél).
+const normPhone = (p) => String(p || '').replace(/[^\d]/g, '').replace(/^0031/, '0').replace(/^31(?=\d{9})/, '0');
+const normAddr = (a) => String(a || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+export function phoneDiffers(a, b) { const x = normPhone(a), y = normPhone(b); return !!(x && y && x.length >= 8 && y.length >= 8 && x !== y); }
+export function addressDiffers(a, b) {
+  const x = normAddr(a), y = normAddr(b);
+  return !!(x && y && !x.includes(y) && !y.includes(x));
+}
+
+export function upsertCustomer({ name, phone, email, address, source }, opts = {}) {
   let c = findCustomer({ name, phone, email });
   if (c) {
+    const changes = [];
     if (!c.phone && phone) c.phone = phone;
     if (!c.email && email) c.email = email;
     if (!c.address && address) c.address = address;
+    // BELANGRIJK (goedkeur-moment): geeft de klant in een NIEUWE aanvraag een ander
+    // adres/telefoonnummer op, dan is de nieuwste opgave leidend — anders rijdt de
+    // monteur naar een oud adres. De wijziging wordt gemeld op de kaart (audit).
+    if (opts.updateChanged) {
+      if (address && addressDiffers(c.address, address)) { changes.push({ field: 'adres', from: c.address, to: address }); c.address = address; }
+      if (phone && phoneDiffers(c.phone, phone)) { changes.push({ field: 'telefoon', from: c.phone, to: phone }); c.phone = phone; }
+      if (email && c.email && email.toLowerCase() !== c.email.toLowerCase() && /@/.test(email)) { changes.push({ field: 'e-mail', from: c.email, to: email }); c.email = email; }
+    }
     if (c.type === 'lead') c.type = 'klant';
-    return { customer: c, created: false };
+    return { customer: c, created: false, changes };
   }
   c = {
     id: id('cust'),
@@ -135,7 +155,7 @@ export function upsertCustomer({ name, phone, email, address, source }) {
     createdAt: now(),
   };
   db().customers.push(c);
-  return { customer: c, created: true };
+  return { customer: c, created: true, changes: [] };
 }
 
 // Bouw snelle opzoek-maps (id -> klant/monteur). Geef die mee aan withRelations
@@ -162,13 +182,18 @@ export function withRelations(order, maps) {
 export function applyReview(review, { actorName, overrides = {}, auto = false }) {
   const s = review.suggestion;
   const status = normalizeStatus(overrides.status || s.status);
-  const { customer } = upsertCustomer({
+  // updateChanged: bij goedkeuren is de NIEUWSTE opgave van de klant leidend (ander
+  // adres/telefoon in deze aanvraag wordt overgenomen, met melding op de kaart).
+  const { customer, changes: custChanges = [] } = upsertCustomer({
     name: overrides.customerName ?? s.customerName,
     phone: overrides.customerPhone ?? s.customerPhone,
     email: overrides.customerEmail ?? s.customerEmail,
     address: overrides.customerAddress ?? s.customerAddress,
     source: review.channel,
-  });
+  }, { updateChanged: true });
+  const changeNote = custChanges.length
+    ? `⚠ Klantgegevens bijgewerkt op basis van deze aanvraag: ${custChanges.map((ch) => `${ch.field}: "${ch.from}" → "${ch.to}"`).join('; ')}. Even checken of dit klopt vóór het inplannen.`
+    : '';
 
   const defaultSource = review.channel === 'whatsapp' ? 'Keyservice WhatsApp'
     : review.channel === 'email' ? 'Keyservice e-mail'
@@ -195,6 +220,10 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
         if (origMsg0.attachments && origMsg0.attachments.length) {
           existingOrder.attachments = (existingOrder.attachments || []).concat(origMsg0.attachments);
         }
+      }
+      if (changeNote) {
+        existingOrder.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: changeNote, at: now() });
+        logActivity('systeem', 'klantgegevens bijgewerkt (bestaande kaart)', customer.name || '');
       }
       existingOrder.customerReplied = true;
       existingOrder.unreadReplies = (existingOrder.unreadReplies || 0) + 1;
@@ -253,6 +282,12 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
       });
       order.autoReplied = { at: origMsg.autoReplied.at };
     }
+  }
+  // Zichtbare melding op de kaart als klantgegevens zijn bijgewerkt (ander adres/tel).
+  if (changeNote) {
+    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: changeNote, at: now() });
+    order.notes = changeNote;
+    logActivity('systeem', 'klantgegevens bijgewerkt bij goedkeuren', `${customer.name}: ${custChanges.map((c) => c.field).join(', ')}`);
   }
   db().orders.push(order);
 
@@ -478,6 +513,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
       if (!existingCustomer.email && suggestion.customerEmail) existingCustomer.email = suggestion.customerEmail;
       if (!existingCustomer.phone && suggestion.customerPhone) existingCustomer.phone = suggestion.customerPhone;
       if (!existingCustomer.address && suggestion.customerAddress) existingCustomer.address = suggestion.customerAddress;
+      // Noemt het bericht een ÁNDER adres dan bekend? Niet stil overschrijven (nog geen
+      // mens naar gekeken), maar wél duidelijk waarschuwen op de kaart — anders rijdt de
+      // monteur straks naar het verkeerde adres.
+      if (suggestion.customerAddress && addressDiffers(existingCustomer.address, suggestion.customerAddress)) {
+        openOrder.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: `⚠ LET OP: in dit bericht staat een ANDER adres: "${suggestion.customerAddress}" — bekend op de kaart: "${existingCustomer.address}". Even bij de klant checken welk adres klopt vóór het inplannen.`, at: now() });
+      }
       saveSoon();
       logActivity('systeem', 'bericht aan bestaande opdracht', `${existingCustomer.name}: ${openOrder.title}`);
       notifyPush('Nieuwe reactie van klant', `${existingCustomer.name || 'Klant'} reageerde op: ${openOrder.title}`);
