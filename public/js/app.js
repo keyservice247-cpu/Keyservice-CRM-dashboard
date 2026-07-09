@@ -1373,7 +1373,7 @@ function openInvoiceModal(o) {
     inv.lines = (inv.lines || []).map((l) => ({ ...l, priceExcl: toExcl(l) }));
     if (!inv.lines.length) {
       // Startvoorstel: werkbon of titel als eerste regel (prijs vul je excl. btw in).
-      inv.lines = [{ description: (o.werkbon?.work || o.title || 'Uitgevoerde werkzaamheden').split('\n')[0].slice(0, 120), qty: 1, priceExcl: 0 }];
+      inv.lines = [{ description: '', qty: 1, priceExcl: 0 }];
     }
     const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
     const lineRow = (l, i) => `
@@ -1386,7 +1386,7 @@ function openInvoiceModal(o) {
     modal(`
       <h2>${icon('mail', 16)} Factuur — ${esc(o.title)}</h2>
       <p class="muted small">${inv.number ? `Factuurnummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(inv.status)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : 'Nieuw concept — het factuurnummer wordt bij opslaan toegekend.'} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.</p>
-      ${priceList.length ? `<div class="muted small" style="margin-bottom:4px">Snel toevoegen uit de prijslijst:</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${priceList.map((p, pi) => `<button type="button" class="chip pl-add" data-pi="${pi}" title="€ ${Number(p.priceExcl).toFixed(2)} excl. btw" style="cursor:pointer">${esc(p.description.slice(0, 40))} · ${eur(p.priceExcl)}</button>`).join('')}</div>` : ''}
+      ${priceList.length ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('tag', 13)} Prijzenlijst — klik om te openen en snel toe te voegen</summary><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${priceList.map((p, pi) => `<button type="button" class="chip pl-add" data-pi="${pi}" title="€ ${Number(p.priceExcl).toFixed(2)} excl. btw" style="cursor:pointer">${esc(p.description.slice(0, 44))} · ${eur(p.priceExcl)}</button>`).join('')}</div></details>` : ''}
       <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
       <button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
       ${o.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}
@@ -2709,11 +2709,14 @@ async function openCommandPalette() {
   if ($('#cmdPalette')) return;
   const [orders, customers] = await Promise.all([api('/api/orders').catch(() => []), api('/api/customers').catch(() => [])]);
   state.orders = orders; // zodat een gekozen opdracht netjes opent
-  const nav = [
-    { label: 'Overzicht', view: 'overview' }, { label: 'Opdrachten', view: 'board' },
-    { label: 'Inbox / AI', view: 'inbox' }, { label: 'Agenda', view: 'agenda' },
-    { label: 'Klanten & leads', view: 'customers' }, { label: 'Monteurs', view: 'monteurs' },
-  ];
+  const nav = state.me.role === 'monteur'
+    ? [{ label: 'Opdrachten', view: 'board' }, { label: 'Agenda', view: 'agenda' }, { label: 'Facturen', view: 'invoices' }]
+    : [
+      { label: 'Overzicht', view: 'overview' }, { label: 'Opdrachten', view: 'board' },
+      { label: 'Inbox / AI', view: 'inbox' }, { label: 'Agenda', view: 'agenda' },
+      { label: 'Klanten & leads', view: 'customers' }, { label: 'Monteurs', view: 'monteurs' },
+      { label: 'Facturen', view: 'invoices' },
+    ];
   if (state.me.role !== 'monteur') { nav.push({ label: 'AI Assistent', view: 'assistant' }, { label: 'Prullenbak', view: 'trash' }); }
   if (state.me.role === 'admin') { nav.push({ label: 'AI-controle', view: 'control' }, { label: 'Abonnementen', view: 'subs' }, { label: 'Instellingen', view: 'settings' }, { label: 'Gebruikers', view: 'users' }); }
   nav.forEach((n) => { n.type = 'view'; });
