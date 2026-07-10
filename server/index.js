@@ -150,8 +150,17 @@ app.get('/api/customers', requireAuth, (req, res) => {
     const arr = ordersByCustomer.get(o.customerId) || [];
     arr.push(o); ordersByCustomer.set(o.customerId, arr);
   }
+  // Gefactureerd totaal per klant (verzonden + betaald), voor het klantenoverzicht.
+  const invByCustomer = new Map();
+  for (const i of (db().invoices || [])) {
+    if (!i.customerId || i.type === 'offerte' || !['verzonden', 'betaald'].includes(i.status)) continue;
+    const cur = invByCustomer.get(i.customerId) || { total: 0, count: 0 };
+    cur.total += Number(i.totalIncl) || 0; cur.count += 1;
+    invByCustomer.set(i.customerId, cur);
+  }
   const list = db().customers.map((c) => {
     const mine = ordersByCustomer.get(c.id) || [];
+    const inv = invByCustomer.get(c.id) || { total: 0, count: 0 };
     const last = mine.slice().sort((a, b) =>
       (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''))[0] || null;
     const activeCount = mine.filter((o) => !['afgerond', 'geannuleerd'].includes(o.status) && !o.archivedWeek).length;
@@ -159,6 +168,8 @@ app.get('/api/customers', requireAuth, (req, res) => {
       ...c,
       orderCount: mine.length,
       activeCount,
+      invoicedTotal: Math.round(inv.total * 100) / 100,
+      invoiceCount: inv.count,
       lastOrder: last ? {
         id: last.id, title: last.title, status: last.status,
         statusLabel: labels[last.status] || last.status,

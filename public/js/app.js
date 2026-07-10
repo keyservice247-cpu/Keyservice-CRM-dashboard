@@ -1147,10 +1147,11 @@ function renderCustomers() {
       <span class="chip status-pill" style="color:${esc(col)};background:${esc(col)}1f;border-color:${esc(col)}66">${esc(lo.statusLabel)}</span>
       <span class="muted small" style="display:block;margin-top:2px">${esc(lo.title.slice(0, 28))}${when ? ' · ' + esc(when) : ''}</span></span>`;
   };
+  const eurC = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
   $('#customerList').innerHTML = `
-    <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>Laatste status</th><th>Opdrachten</th>${canWrite ? '<th></th>' : ''}
-    </tr></thead><tbody> ${list.map((c) => `<tr> <td><strong>${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}${c.email ? `<div class="muted small">${esc(c.email)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td> <td>${lastCell(c)}</td> <td>${c.orderCount}${c.activeCount ? ` <span class="muted small">(${c.activeCount} actief)</span>` : ''}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
-    </tr>`).join('') || `<tr><td colspan="6" class="empty">Geen klanten</td></tr>`}
+    <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>Laatste status</th><th>Opdrachten</th><th>Gefactureerd</th>${canWrite ? '<th></th>' : ''}
+    </tr></thead><tbody> ${list.map((c) => `<tr> <td><strong>${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}${c.email ? `<div class="muted small">${esc(c.email)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td> <td>${lastCell(c)}</td> <td>${c.orderCount}${c.activeCount ? ` <span class="muted small">(${c.activeCount} actief)</span>` : ''}</td> <td>${c.invoiceCount ? `<span class="cust-invoiced">${eurC(c.invoicedTotal)}<div class="muted small">${c.invoiceCount} factuur${c.invoiceCount > 1 ? 'en' : ''}</div></span>` : '<span class="muted small">—</span>'}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
+    </tr>`).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
     </tbody></table>`;
   $$('[data-edit]').forEach((b) => b.onclick = () => openCustomerModal(state._customers.find((c) => c.id === b.dataset.edit)));
   $$('[data-neworder]').forEach((b) => b.onclick = () => openNewOrderForCustomer(state._customers.find((c) => c.id === b.dataset.neworder)));
