@@ -2253,7 +2253,14 @@ app.get('/api/digest', requireAuth, (req, res) => {
 
   const customerReplied = active.filter((o) => o.customerReplied)
     .map((o) => ({ id: o.id, title: o.title, customer: (db().customers.find((c) => c.id === o.customerId) || {}).name }));
-  const neverOpened = active.filter((o) => !o.openedAt)
+  // WhatsApp/DRS/Raf Breda-opdrachten komen via de groep binnen en worden via de
+  // status-scan/monteur-flow afgehandeld — die horen NIET in "Nog niet bekeken".
+  // Die lijst is alleen voor opdrachten die een mens echt moet openen (e-mail/website/tel).
+  const isWhatsappOrder = (o) => {
+    const src = (o.source || '').toLowerCase();
+    return (o.originGroup && isWhatsappOrderGroup(o.originGroup)) || /whats\s?app|drs|raf breda|groep/.test(src);
+  };
+  const neverOpened = active.filter((o) => !o.openedAt && !isWhatsappOrder(o))
     .map((o) => ({ id: o.id, title: o.title }));
   // Wacht op ons antwoord: offerte-fase of open, nog geen antwoord gestuurd.
   // NIET tonen als: al naar de monteur gestuurd (die belt de klant), of als er een
