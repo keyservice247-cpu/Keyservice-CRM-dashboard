@@ -84,6 +84,16 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
   (per-model uitsplitsing) + Claude Console → Usage voor het officiële verbruik.
 
 
+## Cijfers/Financiën (Fase 3 gestart 12 jul)
+- Admin-only pagina **Cijfers**: handmatig inkomsten/uitgaven boeken per maand. Categorieën
+  volgens eigenaars-model (income: DRS opdracht/Schuifpui/Overig; expense: Marketing fee DRS
+  ~€65/wk, Fee per opdracht €42,50, Uitbetaling monteur (Youssef 50%), Google Ads, Producten,
+  Hulpmonteur, Benzine, Overig). Snelknoppen voor vaste bedragen. Koppel aan monteur/bron.
+- Overzicht: omzet/kosten/WINST + marge, per categorie, per bron, per monteur (netto),
+  6-maanden verloop (bars). server/finance.js, db().finance.entries.
+- Volgende stappen (nog te doen): auto-omzet uit monteursrapporten (€-bedragen parsen als
+  suggesties), uitgaven-scan/AI-suggesties, wekelijks CEO-rapport per e-mail op deze cijfers.
+
 ## DE NOORDSTER — visie van de eigenaar (interview 12 jul 2026, NOOIT VERGETEN)
 Hier werken we naartoe; elke feature moet hieraan bijdragen:
 1. **CLARITY & OVERZICHT boven alles.** Rustig, netjes, mobiel super gebruiksvriendelijk.

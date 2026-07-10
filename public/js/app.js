@@ -294,7 +294,7 @@ function showView(view, tab) {
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices };
+  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance };
   (map[view] || (() => {}))();
 }
 
@@ -1894,6 +1894,85 @@ function renderInvoices() {
   quickStatus('.inv-ok', 'goedgekeurd', 'Offerte goedgekeurd ✓');
 }
 
+// ---------- Cijfers / Financiën ----------
+const eurF = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+async function loadFinance() {
+  if (!$('#finMonth').value) $('#finMonth').value = new Date().toISOString().slice(0, 7);
+  state._finance = await api(`/api/finance?month=${$('#finMonth').value}`);
+  renderFinance();
+}
+function renderFinance() {
+  const d = state._finance; if (!d) return;
+  const r = d.report;
+  const maxTrend = Math.max(1, ...d.trend.map((t) => Math.max(t.income, t.expense)));
+  const bar = (val, color) => `<div style="height:6px;border-radius:3px;background:${color};width:${Math.round((val / maxTrend) * 100)}%;min-width:2px"></div>`;
+  const catRows = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:4px 0"><span class="muted small">${esc(k)}</span><strong>${eurF(v)}</strong></div>`).join('') || '<span class="muted small">Nog niets</span>';
+  $('#financePanel').innerHTML = `
+    <div class="stat-grid" style="margin-bottom:16px">
+      <div class="stat"><div class="num" style="color:var(--ok)">${eurF(r.income)}</div><div class="lbl">Omzet deze maand</div></div>
+      <div class="stat"><div class="num" style="color:var(--danger)">${eurF(r.expense)}</div><div class="lbl">Kosten deze maand</div></div>
+      <div class="stat"><div class="num" style="color:${r.profit >= 0 ? 'var(--ok)' : 'var(--danger)'}">${eurF(r.profit)}</div><div class="lbl">Winst (${r.marginPct}% marge)</div></div>
+      <div class="stat"><div class="num">${r.count}</div><div class="lbl">Boekingen</div></div>
+    </div>
+    <div class="settings-grid" style="margin-bottom:16px">
+      <div class="info-card"><h3>Omzet per categorie</h3>${catRows(r.incomeByCat)}${Object.keys(r.bySource).length ? `<hr style="border:none;border-top:1px solid var(--line-soft);margin:10px 0"><div class="muted small" style="margin-bottom:4px">Per bron:</div>${catRows(r.bySource)}` : ''}</div>
+      <div class="info-card"><h3>Kosten per categorie</h3>${catRows(r.expenseByCat)}</div>
+    </div>
+    ${r.monteurRows.length ? `<div class="info-card" style="margin-bottom:16px"><h3>Per monteur</h3>
+      <table><thead><tr><th>Monteur</th><th>Omzet</th><th>Kosten</th><th>Netto</th></tr></thead><tbody>
+      ${r.monteurRows.map((m) => `<tr><td><strong>${esc(m.name)}</strong></td><td>${eurF(m.income)}</td><td>${eurF(m.expense)}</td><td><strong style="color:${m.net >= 0 ? 'var(--ok)' : 'var(--danger)'}">${eurF(m.net)}</strong></td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+    <div class="info-card" style="margin-bottom:16px"><h3>Verloop (laatste 6 maanden)</h3>
+      <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">${d.trend.map((t) => `
+        <div style="flex:1;min-width:90px;text-align:center">
+          <div class="muted small" style="margin-bottom:4px">${eurF(t.profit)}</div>
+          <div style="display:flex;flex-direction:column;gap:3px">${bar(t.income, 'var(--ok)')}${bar(t.expense, 'var(--danger)')}</div>
+          <div class="muted small" style="margin-top:5px">${esc(t.month.slice(5))}/${esc(t.month.slice(2, 4))}</div>
+        </div>`).join('')}</div>
+      <div class="muted small" style="margin-top:8px">Groen = omzet · rood = kosten · getal = winst</div>
+    </div>
+    <div class="info-card"><h3>Boekingen (${r.month})</h3>
+      ${r.entries.length ? `<table><thead><tr><th>Datum</th><th>Soort</th><th>Categorie</th><th>Monteur/bron</th><th>Notitie</th><th style="text-align:right">Bedrag</th><th></th></tr></thead><tbody>
+      ${r.entries.map((e) => `<tr>
+        <td>${esc(e.date.slice(8) + '-' + e.date.slice(5, 7))}</td>
+        <td><span class="chip" style="color:${e.kind === 'income' ? 'var(--ok)' : 'var(--danger)'}">${e.kind === 'income' ? 'in' : 'uit'}</span></td>
+        <td>${esc(e.category)}</td>
+        <td class="muted small">${esc(e.monteurName || e.source || '')}</td>
+        <td class="muted small">${esc((e.note || '').slice(0, 40))}</td>
+        <td style="text-align:right"><strong style="color:${e.kind === 'income' ? 'var(--ok)' : 'var(--danger)'}">${e.kind === 'income' ? '+' : '−'}${eurF(e.amount).replace('€ ', '€')}</strong></td>
+        <td><button class="btn btn-sm fin-del" data-id="${esc(e.id)}" title="Verwijderen">${icon('x', 12)}</button></td>
+      </tr>`).join('')}
+      </tbody></table>` : '<div class="empty">Nog geen boekingen deze maand. Voeg een inkomst of uitgave toe met de knoppen rechtsboven.</div>'}
+    </div>`;
+  $$('.fin-del').forEach((b) => b.onclick = async () => {
+    if (!confirm('Deze boeking verwijderen?')) return;
+    try { await api(`/api/finance/${b.dataset.id}`, 'DELETE'); loadFinance(); } catch (err) { toast(err.message, true); }
+  });
+}
+function openFinanceEntry(kind) {
+  const d = state._finance || { monteurs: [], categories: { income: [], expense: [] }, quickExpenses: [] };
+  const income = kind === 'income';
+  const cats = income ? d.categories.income : d.categories.expense;
+  const quick = income ? [] : (d.quickExpenses || []);
+  modal(`
+    <h2>${icon(income ? 'tag' : 'mail', 16)} ${income ? 'Inkomst' : 'Uitgave'} toevoegen</h2>
+    ${quick.length ? `<div class="muted small" style="margin-bottom:4px">Snel invoeren:</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${quick.map((q, i) => `<button type="button" class="chip fq" data-i="${i}" style="cursor:pointer">${esc(q.category)} · ${eurF(q.amount)}</button>`).join('')}</div>` : ''}
+    <div class="row"> <label>Bedrag (€) <input id="fe-amount" type="number" min="0" step="0.01" placeholder="0,00"></label> <label>Datum <input id="fe-date" type="date" value="${new Date().toISOString().slice(0, 10)}"></label> </div>
+    <div class="row"> <label>Categorie <select id="fe-cat">${cats.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label> <label>Monteur (optioneel) <select id="fe-monteur"><option value="">— geen —</option>${(d.monteurs || []).map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label> </div>
+    ${income ? `<label>Bron <select id="fe-source"><option value="">— kies —</option><option>DRS</option><option>Schuifpui</option><option>Overig</option></select></label>` : ''}
+    <label>Notitie (optioneel) <input id="fe-note" placeholder="bv. Youssef 50% van omzet week 28"></label>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="fe-cancel">Annuleren</button><button class="btn btn-primary" id="fe-save">Boeken</button></div></div>`);
+  $$('.fq').forEach((b) => b.onclick = () => { const q = quick[Number(b.dataset.i)]; if (!q) return; $('#fe-amount').value = q.amount; $('#fe-cat').value = q.category; $('#fe-note').value = q.note || ''; });
+  $('#fe-cancel').onclick = closeModal;
+  $('#fe-save').onclick = async () => {
+    const payload = { kind, amount: Number($('#fe-amount').value), date: $('#fe-date').value, category: $('#fe-cat').value, monteurId: $('#fe-monteur').value || null, note: $('#fe-note').value };
+    if (income) payload.source = $('#fe-source')?.value || '';
+    if (!(payload.amount > 0)) { toast('Vul een bedrag in', true); return; }
+    try { await api('/api/finance', 'POST', payload); toast(income ? 'Inkomst geboekt' : 'Uitgave geboekt'); closeModal(); loadFinance(); }
+    catch (err) { toast(err.message, true); }
+  };
+}
+
 // ---------- Abonnementen & verbruik ----------
 async function loadSubs() {
   const d = await api('/api/subscriptions');
@@ -2691,6 +2770,9 @@ function bindButtons() {
   $('#invFilter')?.addEventListener('change', renderInvoices);
   $('#newInvoiceBtn')?.addEventListener('click', () => openNewInvoiceFlow('factuur'));
   $('#newQuoteBtn')?.addEventListener('click', () => openNewInvoiceFlow('offerte'));
+  $('#finMonth')?.addEventListener('change', loadFinance);
+  $('#finAddIncome')?.addEventListener('click', () => openFinanceEntry('income'));
+  $('#finAddExpense')?.addEventListener('click', () => openFinanceEntry('expense'));
   $('#inboxFilter')?.addEventListener('change', loadInbox);
   $('#selectAll')?.addEventListener('change', (e) => {
     $$('.r-select').forEach((c) => (c.checked = e.target.checked));

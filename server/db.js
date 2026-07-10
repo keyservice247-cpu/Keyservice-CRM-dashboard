@@ -24,6 +24,8 @@ const DEFAULT_DATA = {
   trash: [],
   sessions: [],
   activity: [],
+  invoices: [],
+  finance: { entries: [] },
   settings: { aiAutoApproveThreshold: null },
   _seeded: false,
 };

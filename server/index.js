@@ -28,6 +28,7 @@ import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
 import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice } from './invoices.js';
+import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -1855,6 +1856,35 @@ app.get('/api/invoices', requireAuth, (req, res) => {
   }));
 });
 
+
+// ---------- Financiën / Cijfers (admin) ----------
+app.get('/api/finance', requireRole('admin'), (req, res) => {
+  const month = String(req.query.month || '').slice(0, 7);
+  const monteurs = db().monteurs || [];
+  res.json({
+    report: monthReport(month, monteurs),
+    trend: trend(6, month),
+    monteurs: monteurs.map((m) => ({ id: m.id, name: m.name })),
+    categories: { income: INCOME_CATEGORIES, expense: EXPENSE_CATEGORIES },
+    quickExpenses: QUICK_EXPENSES,
+  });
+});
+app.post('/api/finance', requireRole('admin'), (req, res) => {
+  const out = addEntry(req.body || {}, req.user.name);
+  if (out.error) return res.status(400).json({ error: out.error });
+  logActivity(req.user.name, `${out.entry.kind === 'income' ? 'inkomst' : 'uitgave'} geboekt`, `${out.entry.category} € ${out.entry.amount}`);
+  res.json(out.entry);
+});
+app.patch('/api/finance/:id', requireRole('admin'), (req, res) => {
+  const out = updateEntry(req.params.id, req.body || {});
+  if (out.error) return res.status(out.error === 'Niet gevonden' ? 404 : 400).json({ error: out.error });
+  res.json(out.entry);
+});
+app.delete('/api/finance/:id', requireRole('admin'), (req, res) => {
+  const out = deleteEntry(req.params.id);
+  logActivity(req.user.name, 'financiële regel verwijderd', req.params.id);
+  res.json(out);
+});
 
 // Testmail: stuur één van de automatische mails (met voorbeeldgegevens) naar een gekozen
 // adres, zodat je ziet hoe het bij de klant binnenkomt. Verstuurt NIET naar klanten.
