@@ -83,6 +83,28 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
 - Kosten (indicatie, Sonnet 5): ~$0,12 per scan, nachtscan ~€3,50/mnd. Zie Abonnementen
   (per-model uitsplitsing) + Claude Console → Usage voor het officiële verbruik.
 
+
+## DE NOORDSTER — visie van de eigenaar (interview 12 jul 2026, NOOIT VERGETEN)
+Hier werken we naartoe; elke feature moet hieraan bijdragen:
+1. **CLARITY & OVERZICHT boven alles.** Rustig, netjes, mobiel super gebruiksvriendelijk.
+   Stabiliteit > nieuwe features: geen bugs is belangrijker dan meer functies.
+2. **De assistente wordt de hoofdgebruiker** (CEO checkt 1x/week). Zij moet per opdracht
+   compleet overzicht hebben; snel antwoorden / kant-en-klare teksten / automatische
+   berichten zijn haar kerngereedschap.
+3. **Groei:** meer leads, meer klanten, extra monteur aannemen; eigenaar stopt met zelf
+   repareren en gaat sturen op data.
+4. **Rompslomp vervangen:** wordt alleen gebruikt voor digitale facturen + klantgegevens
+   t.b.v. E-MAILCAMPAGNES → klantdata heilig bewaren (back-ups!) en campagne-functie
+   is een gewenste module.
+5. **Financiële clarity:** eigenaar is 'all over the place' qua cijfers → dashboard met
+   omzet/winst/verlies per maand/monteur/bron (facturen zitten al in het CRM; uitgaven
+   later via invoer of AI-scan van aangeleverde data).
+6. **Autopilot-droom (lange termijn):** AI's die continu scannen en problemen oppikken
+   (bestaat deels: watchdog/statusscan/nachtscan), SEO-content & backlinks (website-
+   project), B2B/VvE-prospectie (VvE's, vastgoed, inbraakpreventie-projecten zoeken),
+   Meta-ads voor monteurs-werving. Eerlijk faseren: eerst CRM-fundament, dan marketing-
+   motor, dan autopilot.
+
 ## Belangrijke beslissingen
 - Onofficiële WhatsApp (whatsapp-web.js) op apart wegwerp-nummer i.p.v. Meta Cloud API, omdat
   de officiële API GEEN groepen kan lezen. Risico = blokkade nummer; daarom wegwerp-nummer.
