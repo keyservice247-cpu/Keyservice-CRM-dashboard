@@ -24,6 +24,170 @@ export const QUICK_EXPENSES = [
 
 const r2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
 const monthOf = (dateStr) => String(dateStr || '').slice(0, 7); // YYYY-MM
+const today = () => new Date().toISOString().slice(0, 10);
+
+// ---------- Finance-instellingen (vaste kosten, gemiddelden, CEO-rapport) ----------
+export const DEFAULT_FINANCE_SETTINGS = {
+  avgJobCost: 300,          // gemiddelde kosten per schuifpui-klus (materiaal/hulp/benzine)
+  recurring: [
+    { id: 'rec_ads', label: 'Google Ads', amount: 2000, period: 'month', category: 'Google Ads', active: true, lastBooked: '' },
+    { id: 'rec_drs', label: 'Marketing fee DRS', amount: 65, period: 'week', category: 'Marketing fee DRS', active: true, lastBooked: '' },
+  ],
+  weeklyReport: { enabled: false, email: '', hour: 8 }, // elke maandag om {hour}:00
+};
+export function getFinanceSettings() {
+  const s = (db().settings.financeSettings) || {};
+  const rec = Array.isArray(s.recurring) ? s.recurring : DEFAULT_FINANCE_SETTINGS.recurring;
+  return {
+    avgJobCost: Number.isFinite(+s.avgJobCost) ? +s.avgJobCost : DEFAULT_FINANCE_SETTINGS.avgJobCost,
+    recurring: rec.map((r) => ({
+      id: r.id || id('rec'), label: String(r.label || '').slice(0, 60),
+      amount: r2(r.amount), period: r.period === 'week' ? 'week' : 'month',
+      category: String(r.category || 'Overig').slice(0, 60), active: r.active !== false, lastBooked: r.lastBooked || '',
+    })),
+    weeklyReport: {
+      enabled: !!(s.weeklyReport && s.weeklyReport.enabled),
+      email: String((s.weeklyReport && s.weeklyReport.email) || '').slice(0, 120),
+      hour: Math.max(0, Math.min(23, Number(s.weeklyReport && s.weeklyReport.hour) || 8)),
+    },
+  };
+}
+export function saveFinanceSettings(b) {
+  const cur = getFinanceSettings();
+  const merged = {
+    avgJobCost: Number.isFinite(+b.avgJobCost) ? Math.max(0, +b.avgJobCost) : cur.avgJobCost,
+    recurring: Array.isArray(b.recurring) ? b.recurring.map((r) => ({
+      id: r.id || id('rec'), label: String(r.label || '').slice(0, 60),
+      amount: Math.max(0, r2(r.amount)), period: r.period === 'week' ? 'week' : 'month',
+      category: String(r.category || 'Overig').slice(0, 60), active: r.active !== false,
+      lastBooked: (cur.recurring.find((x) => x.id === r.id) || {}).lastBooked || '',
+    })).slice(0, 30) : cur.recurring,
+    weeklyReport: {
+      enabled: !!(b.weeklyReport && b.weeklyReport.enabled),
+      email: String((b.weeklyReport && b.weeklyReport.email) || cur.weeklyReport.email).slice(0, 120),
+      hour: Math.max(0, Math.min(23, Number(b.weeklyReport && b.weeklyReport.hour) || cur.weeklyReport.hour)),
+    },
+  };
+  db().settings.financeSettings = merged;
+  saveSoon();
+  return merged;
+}
+
+// Weeknummer-sleutel (ISO-achtig, jaar+week) voor wekelijkse vaste kosten.
+function weekKey(d = new Date()) {
+  const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = dt.getUTCDay() || 7;
+  dt.setUTCDate(dt.getUTCDate() + 4 - day);
+  const yStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+  const wk = Math.ceil((((dt - yStart) / 86400000) + 1) / 7);
+  return `${dt.getUTCFullYear()}-W${String(wk).padStart(2, '0')}`;
+}
+
+// Boek de terugkerende (vaste) kosten die voor de HUIDIGE periode nog niet geboekt zijn.
+// Boekt nooit met terugwerkende kracht: alleen de lopende maand/week. Geeft aantal terug.
+export function bookRecurringDue(actorName = 'systeem') {
+  const s = getFinanceSettings();
+  let booked = 0;
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const nowWeek = weekKey();
+  const persisted = db().settings.financeSettings || (db().settings.financeSettings = { ...s });
+  persisted.recurring = s.recurring.map((r) => {
+    if (!r.active || !(r.amount > 0)) return r;
+    const periodKey = r.period === 'week' ? nowWeek : nowMonth;
+    if (r.lastBooked === periodKey) return r;
+    fin().entries.unshift({
+      id: id('fin'), kind: 'expense', date: today(), amount: r.amount, category: r.category,
+      monteurId: null, source: null, orderId: null,
+      note: `${r.label} (vaste ${r.period === 'week' ? 'week' : 'maand'}kosten)`,
+      auto: true, createdBy: actorName, createdAt: now(),
+    });
+    booked++;
+    return { ...r, lastBooked: periodKey };
+  });
+  if (booked) saveSoon();
+  return booked;
+}
+
+// Zoek €-bedragen in monteursrapporten (monteursgroepen) van een maand -> import-suggesties.
+export function suggestIncomeFromReports(month, monteurs = []) {
+  const m = /^\d{4}-\d{2}$/.test(month) ? month : new Date().toISOString().slice(0, 7);
+  const groupToMonteur = new Map();
+  for (const mo of monteurs) if (mo.waGroup) groupToMonteur.set(String(mo.waGroup).toLowerCase().trim(), mo);
+  const bookedRefs = new Set((fin().entries || []).map((e) => e.sourceRef).filter(Boolean));
+  const out = [];
+  const amountRe = /€\s?(\d{1,3}(?:[.\s]?\d{3})*(?:,\d{2})?|\d+(?:,\d{2})?)/g;
+  for (const msg of db().messages || []) {
+    if (!msg.group || monthOf(msg.receivedAt) !== m) continue;
+    const mo = groupToMonteur.get(String(msg.group).toLowerCase().trim());
+    if (!mo) continue; // alleen echte monteursgroepen
+    const body = String(msg.body || '');
+    let mt; let idx = 0;
+    while ((mt = amountRe.exec(body))) {
+      const raw = mt[1].replace(/[.\s]/g, '').replace(',', '.');
+      const amount = r2(parseFloat(raw));
+      if (!(amount >= 20)) continue; // ruis (bv. €5) overslaan
+      const around = body.slice(Math.max(0, mt.index - 45), mt.index + 40).replace(/\s+/g, ' ').trim();
+      const ref = `${msg.externalId || msg.id}:${idx}:${amount}`;
+      idx++;
+      if (bookedRefs.has(ref)) continue;
+      // Slimme gok op basis van het woord DIRECT NÁ het bedrag (sterkste signaal):
+      // "€90 lips kosten" -> kost; "€556 pin" -> omzet. Neutraal -> standaard omzet.
+      // Alleen tot het volgende bedrag/haakje/regeleinde kijken, zodat "€556 pin" niet de
+      // "(€90 lips kosten)" van het buurbedrag meepakt.
+      const after = body.slice(amountRe.lastIndex).split(/[€(\n]/)[0].slice(0, 22).toLowerCase();
+      const looksCost = /kost|lips|materiaal|inkoop/.test(after);
+      const looksIncome = /pin|contant|betaald|cash|getikt|gepind/.test(after);
+      out.push({
+        ref, amount, date: (msg.receivedAt || '').slice(0, 10) || today(),
+        monteurId: mo.id, monteurName: mo.name, context: around,
+        guess: looksCost ? 'cost' : 'income',
+      });
+    }
+  }
+  out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  return out.slice(0, 100);
+}
+
+// Boek geselecteerde omzet-suggesties (income) met bron 'monteursrapport'.
+export function importIncome(items, actorName = '') {
+  let n = 0;
+  for (const it of (items || [])) {
+    const amount = r2(it.amount);
+    if (!(amount > 0)) continue;
+    fin().entries.unshift({
+      id: id('fin'), kind: 'income', date: /^\d{4}-\d{2}-\d{2}$/.test(it.date) ? it.date : today(),
+      amount, category: 'DRS opdracht', source: 'DRS', monteurId: it.monteurId || null, orderId: null,
+      note: `Uit monteursrapport${it.context ? ': ' + String(it.context).slice(0, 120) : ''}`,
+      sourceRef: it.ref || null, createdBy: actorName, createdAt: now(),
+    });
+    n++;
+  }
+  if (n) saveSoon();
+  return n;
+}
+
+// Data voor het wekelijkse CEO-rapport (deze week + vorige week + openstaand).
+export function weeklyReportData(monteurs = []) {
+  const now2 = Date.now();
+  const startOfWeek = (offset) => { const d = new Date(); const day = (d.getDay() || 7) - 1; d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - day + offset * 7); return d.getTime(); };
+  const thisStart = startOfWeek(0); const lastStart = startOfWeek(-1);
+  const sum = (from, to) => {
+    let inc = 0; let exp = 0;
+    for (const e of fin().entries) { const t = new Date(e.date).getTime(); if (isNaN(t) || t < from || t >= to) continue; if (e.kind === 'income') inc += e.amount; else exp += e.amount; }
+    return { income: r2(inc), expense: r2(exp), profit: r2(inc - exp) };
+  };
+  const thisWeek = sum(thisStart, now2 + 86400000);
+  const lastWeek = sum(lastStart, thisStart);
+  const weekAgo = now2 - 7 * 86400000;
+  const newLeads = (db().reviews || []).filter((r) => r.status === 'pending' || (r.reviewedAt && new Date(r.reviewedAt).getTime() >= weekAgo)).length;
+  const invoices = db().invoices || [];
+  const unpaid = invoices.filter((i) => i.type !== 'offerte' && i.status === 'verzonden');
+  const unpaidTotal = r2(unpaid.reduce((s, i) => s + (i.totalIncl || 0), 0));
+  const overdue = unpaid.filter((i) => i.sentAt && (now2 - new Date(i.sentAt).getTime()) > 7 * 86400000);
+  const staleOrders = (db().orders || []).filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status) && new Date(o.updatedAt).getTime() < now2 - 5 * 86400000).length;
+  const monthNow = monthReport(new Date().toISOString().slice(0, 7), monteurs);
+  return { thisWeek, lastWeek, newLeads, unpaidCount: unpaid.length, unpaidTotal, overdueCount: overdue.length, staleOrders, monthProfit: monthNow.profit, monthIncome: monthNow.income };
+}
 
 function fin() {
   const d = db();

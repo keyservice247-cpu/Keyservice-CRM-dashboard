@@ -91,8 +91,16 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
   Hulpmonteur, Benzine, Overig). Snelknoppen voor vaste bedragen. Koppel aan monteur/bron.
 - Overzicht: omzet/kosten/WINST + marge, per categorie, per bron, per monteur (netto),
   6-maanden verloop (bars). server/finance.js, db().finance.entries.
-- Volgende stappen (nog te doen): auto-omzet uit monteursrapporten (€-bedragen parsen als
-  suggesties), uitgaven-scan/AI-suggesties, wekelijks CEO-rapport per e-mail op deze cijfers.
+- Vaste/terugkerende kosten (Google Ads €2000/mnd, Marketing fee DRS €65/wk) worden
+  automatisch geboekt (bookRecurringDue, periode-sleutel, nooit dubbel/terugwerkend);
+  instelbaar in Cijfers -> Vaste kosten & rapport. Gemiddelde kosten/klus (€300) als context.
+- Omzet-import uit monteursrapporten: €-bedragen uit monteursgroepen als suggesties (slimme
+  gok omzet vs kost o.b.v. woord direct na het bedrag: pin->omzet, lips kosten->kost),
+  dedup via sourceRef, mens vinkt aan en boekt.
+- Wekelijks CEO-rapport per e-mail (maandagochtend, instelbaar uur): deze week/vorige week
+  omzet-kosten-winst, maand tot nu, nieuwe leads, openstaande+verlopen facturen, stille
+  opdrachten. sendWeeklyCeoReport in automations.js; test-knop in de instellingen.
+- Nog te doen: uitgaven-scan/AI-suggesties (bonnetjes/Google-Ads-koppeling).
 
 ## DE NOORDSTER — visie van de eigenaar (interview 12 jul 2026, NOOIT VERGETEN)
 Hier werken we naartoe; elke feature moet hieraan bijdragen:

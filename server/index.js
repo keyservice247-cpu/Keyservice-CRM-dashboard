@@ -26,9 +26,9 @@ import { maybeSendAutoReply } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel } from './automations.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice } from './invoices.js';
-import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES } from './finance.js';
+import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
@@ -1861,13 +1861,35 @@ app.get('/api/invoices', requireAuth, (req, res) => {
 app.get('/api/finance', requireRole('admin'), (req, res) => {
   const month = String(req.query.month || '').slice(0, 7);
   const monteurs = db().monteurs || [];
+  bookRecurringDue(); // vaste kosten van de lopende periode automatisch bijboeken
   res.json({
     report: monthReport(month, monteurs),
     trend: trend(6, month),
     monteurs: monteurs.map((m) => ({ id: m.id, name: m.name })),
     categories: { income: INCOME_CATEGORIES, expense: EXPENSE_CATEGORIES },
     quickExpenses: QUICK_EXPENSES,
+    settings: getFinanceSettings(),
   });
+});
+app.post('/api/finance/settings', requireRole('admin'), (req, res) => {
+  const saved = saveFinanceSettings(req.body || {});
+  bookRecurringDue();
+  res.json(saved);
+});
+app.get('/api/finance/suggest-income', requireRole('admin'), (req, res) => {
+  res.json({ suggestions: suggestIncomeFromReports(String(req.query.month || '').slice(0, 7), db().monteurs || []) });
+});
+app.post('/api/finance/import-income', requireRole('admin'), (req, res) => {
+  const n = importIncome(req.body?.items || [], req.user.name);
+  logActivity(req.user.name, 'omzet geïmporteerd uit monteursrapporten', `${n} boeking(en)`);
+  res.json({ ok: true, booked: n });
+});
+app.post('/api/finance/weekly-report/test', requireRole('admin'), async (req, res) => {
+  const to = (req.body?.to || getFinanceSettings().weeklyReport.email || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Vul een geldig e-mailadres in bij het CEO-rapport.' });
+  if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
+  try { await sendWeeklyCeoReport(to, true); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/finance', requireRole('admin'), (req, res) => {
   const out = addEntry(req.body || {}, req.user.name);

@@ -1973,6 +1973,80 @@ function openFinanceEntry(kind) {
   };
 }
 
+
+// Omzet importeren uit monteursrapporten (WhatsApp): kies de bedragen en boek ze.
+function openImportIncome() {
+  const month = $('#finMonth').value || new Date().toISOString().slice(0, 7);
+  api(`/api/finance/suggest-income?month=${month}`).then(({ suggestions }) => {
+    modal(`
+      <h2>${icon('whatsapp', 16)} Omzet uit monteursrapporten — ${esc(month)}</h2>
+      <p class="muted small">Bedragen gevonden in de monteursgroepen. Vink aan wat als <strong>omzet</strong> geboekt moet worden (bedragen bij "pin/contant/betaald" staan al aangevinkt; kosten zoals "lips kosten" niet). Al geboekte bedragen verschijnen hier niet meer.</p>
+      ${suggestions.length ? `<div style="max-height:340px;overflow:auto;margin:8px 0">${suggestions.map((s, i) => `
+        <label style="display:flex;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:5px;font-weight:400">
+          <input type="checkbox" class="imp-c" data-i="${i}" style="width:auto" ${s.guess === 'income' ? 'checked' : ''}>
+          <span style="flex:1"><strong>${eurF(s.amount)}</strong> <span class="muted small">· ${esc(s.monteurName || '')} · ${esc(s.date)}</span><div class="muted small">…${esc(s.context)}…</div></span>
+        </label>`).join('')}</div>
+        <div class="modal-actions"><span class="muted small" id="imp-count"></span><div class="right"><button class="btn" id="imp-cancel">Annuleren</button><button class="btn btn-primary" id="imp-save">Geselecteerde boeken</button></div></div>`
+        : '<div class="empty" style="margin:16px 0">Geen (nieuwe) bedragen gevonden in de monteursrapporten van deze maand.</div><div class="modal-actions"><span></span><div class="right"><button class="btn" id="imp-cancel">Sluiten</button></div></div>'}`);
+    const upd = () => { const n = $$('.imp-c:checked').length; if ($('#imp-count')) $('#imp-count').textContent = `${n} geselecteerd`; };
+    $$('.imp-c').forEach((c) => c.onchange = upd); upd();
+    $('#imp-cancel').onclick = closeModal;
+    if ($('#imp-save')) $('#imp-save').onclick = async () => {
+      const items = $$('.imp-c:checked').map((c) => suggestions[Number(c.dataset.i)]);
+      if (!items.length) { toast('Vink minstens één bedrag aan', true); return; }
+      try { const r = await api('/api/finance/import-income', 'POST', { items }); toast(`${r.booked} omzet-boeking(en) toegevoegd`); closeModal(); loadFinance(); }
+      catch (err) { toast(err.message, true); }
+    };
+  }).catch((err) => toast(err.message, true));
+}
+
+// Vaste (terugkerende) kosten + gemiddelde kosten per klus + wekelijks CEO-rapport.
+function openFinanceSettings() {
+  const d = state._finance; if (!d) return;
+  const s = d.settings;
+  const recRow = (r) => `
+    <div class="rec-row" data-id="${esc(r.id)}" style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+      <input class="rec-label" value="${esc(r.label)}" placeholder="Naam" style="flex:2">
+      <input class="rec-amount" type="number" min="0" step="0.01" value="${esc(String(r.amount))}" style="width:100px" title="Bedrag">
+      <select class="rec-period" style="width:110px"><option value="month" ${r.period === 'month' ? 'selected' : ''}>per maand</option><option value="week" ${r.period === 'week' ? 'selected' : ''}>per week</option></select>
+      <label style="display:flex;align-items:center;gap:5px;margin:0;font-weight:400"><input type="checkbox" class="rec-active" style="width:auto" ${r.active ? 'checked' : ''}>aan</label>
+      <button type="button" class="btn btn-sm rec-del">${icon('x', 12)}</button>
+    </div>`;
+  modal(`
+    <h2>${icon('tag', 16)} Vaste kosten &amp; CEO-rapport</h2>
+    <label>Gemiddelde kosten per schuifpui-klus (€) <input id="fs-avg" type="number" min="0" step="1" value="${esc(String(s.avgJobCost))}"><span class="muted small">Voor winstschatting en AI-context.</span></label>
+    <h3 style="margin:14px 0 6px">Terugkerende kosten (worden automatisch geboekt)</h3>
+    <p class="muted small" style="margin-bottom:8px">Bijvoorbeeld Google Ads €2000/maand en marketingfee DRS €65/week. Ze worden aan het begin van elke periode automatisch in de cijfers gezet.</p>
+    <div id="rec-rows">${(s.recurring || []).map(recRow).join('')}</div>
+    <button type="button" class="btn btn-sm" id="rec-add">+ Vaste kostenpost</button>
+    <h3 style="margin:16px 0 6px">Wekelijks CEO-rapport per e-mail</h3>
+    <p class="muted small" style="margin-bottom:8px">Elke maandagochtend automatisch: omzet, kosten, winst, nieuwe leads, openstaande facturen en aandachtspunten.</p>
+    <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wr-enabled" style="width:auto" ${s.weeklyReport.enabled ? 'checked' : ''}> Wekelijks rapport aanzetten</label>
+    <div class="row"><label>Naar e-mailadres <input id="wr-email" value="${esc(s.weeklyReport.email)}" placeholder="jij@keyservice247.nl"></label><label>Uur (maandag) <input id="wr-hour" type="number" min="0" max="23" value="${esc(String(s.weeklyReport.hour))}" style="max-width:90px"></label></div>
+    <button type="button" class="btn btn-sm" id="wr-test">Stuur nu een test-rapport</button>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="fs-cancel">Annuleren</button><button class="btn btn-primary" id="fs-save">Opslaan</button></div></div>`);
+  const bindRec = () => $$('#rec-rows .rec-del').forEach((b) => b.onclick = () => b.closest('.rec-row').remove());
+  bindRec();
+  $('#rec-add').onclick = () => { $('#rec-rows').insertAdjacentHTML('beforeend', recRow({ id: 'rec_' + Date.now(), label: '', amount: 0, period: 'month', active: true })); bindRec(); };
+  const collect = () => ({
+    avgJobCost: Number($('#fs-avg').value) || 0,
+    recurring: $$('#rec-rows .rec-row').map((r) => ({ id: r.dataset.id, label: $('.rec-label', r).value, amount: Number($('.rec-amount', r).value) || 0, period: $('.rec-period', r).value, active: $('.rec-active', r).checked, category: $('.rec-label', r).value })).filter((r) => r.label),
+    weeklyReport: { enabled: $('#wr-enabled').checked, email: $('#wr-email').value, hour: Number($('#wr-hour').value) || 8 },
+  });
+  $('#wr-test').onclick = async () => {
+    const to = $('#wr-email').value.trim();
+    if (!to) { toast('Vul eerst een e-mailadres in', true); return; }
+    try { await api('/api/finance/settings', 'POST', collect()); await api('/api/finance/weekly-report/test', 'POST', { to }); toast('Test-rapport verstuurd — check je mail'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#fs-cancel').onclick = closeModal;
+  $('#fs-save').onclick = async () => {
+    try { await api('/api/finance/settings', 'POST', collect()); toast('Opgeslagen'); closeModal(); loadFinance(); }
+    catch (err) { toast(err.message, true); }
+  };
+}
+
+
 // ---------- Abonnementen & verbruik ----------
 async function loadSubs() {
   const d = await api('/api/subscriptions');
@@ -2773,6 +2847,8 @@ function bindButtons() {
   $('#finMonth')?.addEventListener('change', loadFinance);
   $('#finAddIncome')?.addEventListener('click', () => openFinanceEntry('income'));
   $('#finAddExpense')?.addEventListener('click', () => openFinanceEntry('expense'));
+  $('#finImport')?.addEventListener('click', openImportIncome);
+  $('#finSettings')?.addEventListener('click', openFinanceSettings);
   $('#inboxFilter')?.addEventListener('change', loadInbox);
   $('#selectAll')?.addEventListener('change', (e) => {
     $$('.r-select').forEach((c) => (c.checked = e.target.checked));

@@ -9,6 +9,7 @@ import {
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
 import { lastHealth } from './health.js';
+import { getFinanceSettings, weeklyReportData, bookRecurringDue } from './finance.js';
 
 const custOf = (o) => db().customers.find((c) => c.id === o.customerId) || {};
 const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? ''));
@@ -265,6 +266,51 @@ async function runWatchdog() {
   }
 }
 
+// ---------- 6b. Wekelijks CEO-rapport (euro's + kansen) ----------
+const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+export async function sendWeeklyCeoReport(toOverride = '', isTest = false) {
+  const cfg = getFinanceSettings().weeklyReport;
+  const to = (toOverride || cfg.email || '').trim();
+  if (!to || !smtpConfigured()) return false;
+  const d = weeklyReportData(db().monteurs || []);
+  const pijl = d.thisWeek.profit >= d.lastWeek.profit ? '▲' : '▼';
+  const lines = [
+    `${isTest ? '[TEST] ' : ''}Wekelijks overzicht — Key Service 24/7`,
+    '',
+    'DEZE WEEK',
+    `• Omzet: ${eur(d.thisWeek.income)}`,
+    `• Kosten: ${eur(d.thisWeek.expense)}`,
+    `• Winst: ${eur(d.thisWeek.profit)}  (vorige week ${eur(d.lastWeek.profit)} ${pijl})`,
+    '',
+    'DEZE MAAND TOT NU',
+    `• Omzet: ${eur(d.monthIncome)} · Winst: ${eur(d.monthProfit)}`,
+    '',
+    'AANDACHT',
+    `• Nieuwe/te-controleren leads (7 dagen): ${d.newLeads}`,
+    `• Openstaande facturen: ${d.unpaidCount} (${eur(d.unpaidTotal)})${d.overdueCount ? ` — waarvan ${d.overdueCount} VERLOPEN` : ''}`,
+    `• Opdrachten 5+ dagen stil: ${d.staleOrders}`,
+    '',
+    'Open het dashboard voor de details: https://keyservice-crm.onrender.com/',
+  ];
+  const sig = getEmailSignature();
+  await sendMail({ to, subject: `${isTest ? '[TEST] ' : ''}Wekelijks overzicht — winst ${eur(d.thisWeek.profit)}`, text: sig ? `${lines.join('\n')}\n\n${sig}` : lines.join('\n') });
+  if (!isTest) { db().settings._lastWeeklyReport = new Date().toISOString().slice(0, 10); save(); }
+  logActivity('systeem', `wekelijks CEO-rapport ${isTest ? '(test) ' : ''}verstuurd`, to);
+  return true;
+}
+
+async function runWeeklyReport() {
+  const cfg = getFinanceSettings().weeklyReport;
+  if (!cfg.enabled || !cfg.email) return;
+  const nl = new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', weekday: 'short', hour: '2-digit', hour12: false });
+  const isMonday = /^Mon/.test(nl);
+  const hour = Number(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hour12: false }));
+  const today = new Date().toISOString().slice(0, 10);
+  if (!isMonday || hour !== cfg.hour) return;
+  if (db().settings._lastWeeklyReport === today) return;
+  try { await sendWeeklyCeoReport(); } catch (e) { console.error('[ceo-rapport]', e.message); }
+}
+
 // ---------- 7. Nachtelijke statusscan ----------
 let _runStatusScan = null;
 async function runNightlyScan() {
@@ -286,6 +332,8 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runAppointmentReminders(); } catch (e) { console.error('[herinneringen]', e.message); }
     try { await runReviewRequests(); } catch (e) { console.error('[reviews]', e.message); }
     try { await runNightlyScan(); } catch (e) { console.error('[auto-scan]', e.message); }
+    try { bookRecurringDue(); } catch (e) { console.error('[vaste-kosten]', e.message); }
+    try { await runWeeklyReport(); } catch (e) { console.error('[ceo-rapport]', e.message); }
   };
   const fast = async () => {
     try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }
