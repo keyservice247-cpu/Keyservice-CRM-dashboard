@@ -67,7 +67,7 @@ function sanitizeLines(lines, btwPct) {
   return (Array.isArray(lines) ? lines : [])
     .map((l) => ({
       description: String(l.description || '').slice(0, 300),
-      qty: Math.max(0, Math.min(9999, Number(l.qty) || 1)),
+      qty: (() => { const q = Number(l.qty); return Math.max(0, Math.min(9999, Number.isFinite(q) ? q : 1)); })(),
       priceExcl: Math.max(0, Math.min(999999, l.priceExcl !== undefined ? (Number(l.priceExcl) || 0) : lineExcl(l, btwPct))),
     }))
     .filter((l) => l.description || l.priceExcl > 0)

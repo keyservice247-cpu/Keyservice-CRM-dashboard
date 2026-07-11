@@ -337,12 +337,19 @@ export async function ingestMessage({ channel, sender, subject, body, group, ext
   // Youssef komt als (bijna) identieke tekst opnieuw binnen via WhatsApp. Herken
   // dit en hang het aan de bestaande opdracht/review i.p.v. een tweede kaart.
   const normBody = normalizeForDedup(body);
+  // Telefoonnummer uit een bericht halen (genormaliseerd op cijfers). Twee berichten met
+  // dezelfde tekst maar VERSCHILLENDE nummers zijn verschillende klanten -> NIET dedupen
+  // (anders raakt een tweede echte lead met standaard-tekst verloren).
+  const phoneOf = (t) => { const mm = String(t || '').match(/(?:\+?31|0)\s?6[\s-]?\d(?:[\s-]?\d){7}|\b0\d{1,3}[\s-]?\d{6,8}\b/); return mm ? mm[0].replace(/[^\d]/g, '').replace(/^31/, '0') : ''; };
+  const myPhone = phoneOf(body);
   if (normBody.length >= 20) {
     const dayAgo = Date.now() - 24 * 3600 * 1000;
-    const twin = db().messages.find((m) =>
-      m.channel === 'whatsapp' &&
-      new Date(m.receivedAt).getTime() >= dayAgo &&
-      normalizeForDedup(m.body) === normBody);
+    const twin = db().messages.find((m) => {
+      if (m.channel !== 'whatsapp' || new Date(m.receivedAt).getTime() < dayAgo) return false;
+      if (normalizeForDedup(m.body) !== normBody) return false;
+      const tp = phoneOf(m.body);
+      return !myPhone || !tp || tp === myPhone; // alleen dubbel bij gelijk/ontbrekend nummer
+    });
     if (twin) {
       // Hang aan de bijbehorende lopende opdracht als die er is.
       const rev = db().reviews.find((r) => r.messageId === twin.id && r.orderId);

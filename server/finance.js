@@ -48,7 +48,7 @@ export function getFinanceSettings() {
     weeklyReport: {
       enabled: !!(s.weeklyReport && s.weeklyReport.enabled),
       email: String((s.weeklyReport && s.weeklyReport.email) || '').slice(0, 120),
-      hour: Math.max(0, Math.min(23, Number(s.weeklyReport && s.weeklyReport.hour) || 8)),
+      hour: (() => { const h = Number(s.weeklyReport && s.weeklyReport.hour); return Number.isFinite(h) ? Math.max(0, Math.min(23, h)) : 8; })(),
     },
   };
 }
@@ -65,7 +65,7 @@ export function saveFinanceSettings(b) {
     weeklyReport: {
       enabled: !!(b.weeklyReport && b.weeklyReport.enabled),
       email: String((b.weeklyReport && b.weeklyReport.email) || cur.weeklyReport.email).slice(0, 120),
-      hour: Math.max(0, Math.min(23, Number(b.weeklyReport && b.weeklyReport.hour) || cur.weeklyReport.hour)),
+      hour: (() => { const h = Number(b.weeklyReport && b.weeklyReport.hour); return Number.isFinite(h) ? Math.max(0, Math.min(23, h)) : cur.weeklyReport.hour; })(),
     },
   };
   db().settings.financeSettings = merged;
@@ -179,7 +179,7 @@ export function weeklyReportData(monteurs = []) {
   const thisWeek = sum(thisStart, now2 + 86400000);
   const lastWeek = sum(lastStart, thisStart);
   const weekAgo = now2 - 7 * 86400000;
-  const newLeads = (db().reviews || []).filter((r) => r.status === 'pending' || (r.reviewedAt && new Date(r.reviewedAt).getTime() >= weekAgo)).length;
+  const newLeads = (db().reviews || []).filter((r) => r.createdAt && new Date(r.createdAt).getTime() >= weekAgo).length;
   const invoices = db().invoices || [];
   const unpaid = invoices.filter((i) => i.type !== 'offerte' && i.status === 'verzonden');
   const unpaidTotal = r2(unpaid.reduce((s, i) => s + (i.totalIncl || 0), 0));

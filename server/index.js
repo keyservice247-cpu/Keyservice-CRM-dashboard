@@ -507,6 +507,7 @@ app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
 app.patch('/api/orders/:id', requireAuth, (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const b = req.body || {};
 
   // Monteurs mogen alleen status, afspraak en notities aanpassen.
@@ -685,6 +686,7 @@ app.post('/api/orders/:id/seen', requireAuth, (req, res) => {
 app.post('/api/orders/:id/attachments', requireAuth, (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const { filename, mime, dataBase64 } = req.body || {};
   if (!dataBase64) return res.status(400).json({ error: 'Geen bestand ontvangen' });
   let buffer;
@@ -861,7 +863,7 @@ app.post('/api/reviews/bulk-reject', requireRole('admin', 'assistent'), (req, re
 
 // BULK accepteren: keur alle pending reviews goed met AI-zekerheid >= drempel.
 app.post('/api/reviews/bulk-approve', requireRole('admin', 'assistent'), (req, res) => {
-  const minPct = Math.max(0, Math.min(100, Number(req.body?.minConfidence) || 80));
+  const _mc = Number(req.body?.minConfidence); const minPct = Math.max(0, Math.min(100, Number.isFinite(_mc) ? _mc : 80));
   const min = minPct / 100;
   const targets = db().reviews.filter((r) => r.status === 'pending' && !r.suggestion?.aiNotOrder && (r.suggestion?.confidence || 0) >= min);
   let count = 0;
@@ -1130,8 +1132,39 @@ app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
   });
   // Volautomatisch: DRS-opdracht direct goedkeuren + naar monteur (indien ingesteld).
   try { maybeIntakeAutoSend(result); } catch (e) { console.error('intake-autosend:', e.message); }
+  // Bevestigt een monteur de doorgestuurde opdracht ("ok/oké") in zijn groep? Dan stuurt
+  // het wegwerp-nummer ÉÉNMALIG een "oké" naar de bron-/opdrachtgroep (bv. Raf Breda).
+  try { maybeRelayMonteurConfirmation({ group, body: body || text || message || '' }); } catch (e) { console.error('[relay-ack]', e.message); }
   res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
 });
+
+// Korte bevestiging van de monteur -> éénmalig "oké" terug naar de opdrachtgroep.
+const MONTEUR_CONFIRM_RE = /^(ok|oke|oké|okay|oké|prima|is\s?goed|goed|top|komt goed|doen we|ja|jazeker|akkoord|duidelijk|begrepen|👍|✅|�👍)\b/i;
+function maybeRelayMonteurConfirmation({ group, body }) {
+  if (!group) return;
+  const g = String(group).toLowerCase().trim();
+  const monteur = db().monteurs.find((m) => m.waGroup && m.waGroup.toLowerCase().trim() === g);
+  if (!monteur) return; // alleen in een monteursgroep
+  const text = String(body || '').trim();
+  if (!text || text.length > 40 || !MONTEUR_CONFIRM_RE.test(text)) return; // moet korte bevestiging zijn
+  const since = Date.now() - 36 * 3600 * 1000;
+  const order = db().orders
+    .filter((o) => o.sentToMonteur && o.sentToMonteur.monteurId === monteur.id
+      && !o.monteurAckRelayed
+      && o.originGroup && isWhatsappOrderGroup(o.originGroup)
+      && o.sentToMonteur.at && new Date(o.sentToMonteur.at).getTime() >= since)
+    .sort((a, b) => new Date(b.sentToMonteur.at) - new Date(a.sentToMonteur.at))[0];
+  if (!order) return;
+  db().outbox.unshift({
+    id: id('out'), orderId: order.id, group: order.originGroup, monteurName: monteur.name,
+    text: 'Oké 👍, wordt opgepakt.', status: 'queued', createdAt: now(), by: 'monteur-bevestiging',
+  });
+  order.monteurAckRelayed = { at: now(), monteurId: monteur.id, group: order.originGroup };
+  if (order.sentToMonteur) order.sentToMonteur.acked = true;
+  order.updatedAt = now();
+  logActivity('systeem', 'monteur bevestigde — oké naar opdrachtgroep', `${order.title} → ${order.originGroup}`);
+  saveSoon();
+}
 
 // --- Officiële WhatsApp Cloud API (Meta) ---
 // Verificatie van de webhook (Meta doet eerst een GET-aanroep).
@@ -1356,7 +1389,7 @@ app.patch('/api/settings', requireRole('admin'), (req, res) => {
       website: String(v.website || '').slice(0, 120),
       paymentDays: Math.max(1, Math.min(90, Number(v.paymentDays) || 7)),
       quoteValidDays: Math.max(1, Math.min(120, Number(v.quoteValidDays) || 30)),
-      btwPct: Math.max(0, Math.min(21, Number(v.btwPct) || 21)),
+      btwPct: (Number.isFinite(Number(v.btwPct)) ? Math.max(0, Math.min(21, Number(v.btwPct))) : 21),
       warranty: String(v.warranty || '').slice(0, 300),
       legal: String(v.legal || '').slice(0, 1200),
       footer: String(v.footer || '').slice(0, 300),
@@ -2191,6 +2224,15 @@ app.post('/api/assistant/status-scan/start', requireRole('admin', 'assistent'), 
 // Status + laatste resultaat ophalen (voor pollen én tonen bij heropenen).
 app.get('/api/assistant/status-scan/result', requireRole('admin', 'assistent'), (req, res) => {
   res.json({ running: _statusScan.running, startedAt: _statusScan.startedAt, last: db().settings._lastStatusScan || null });
+});
+// Markeer een toegepast/genegeerd voorstel op de laatste scan (blijft zo tot een nieuwe scan).
+app.post('/api/assistant/status-scan/applied', requireRole('admin', 'assistent'), (req, res) => {
+  const last = db().settings._lastStatusScan;
+  if (!last) return res.json({ ok: true });
+  const ids = Array.isArray(req.body?.orderIds) ? req.body.orderIds : (req.body?.orderId ? [req.body.orderId] : []);
+  last.appliedIds = Array.from(new Set([...(last.appliedIds || []), ...ids.map(String)]));
+  save();
+  res.json({ ok: true, appliedIds: last.appliedIds });
 });
 
 // (Compat) directe synchrone scan — nog gebruikt door oudere clients.

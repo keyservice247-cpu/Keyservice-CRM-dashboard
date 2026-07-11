@@ -1409,6 +1409,11 @@ function renderInvoiceEditor(ctx) {
   modal(`
     <h2>${icon('mail', 16)} ${woord} — ${esc(customer.name || ctx.contextTitle || '')}</h2>
     <p class="muted small">${inv.number ? `Nummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(stLabel)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : `Nieuw concept — het ${woord.toLowerCase()}nummer wordt bij opslaan toegekend.`} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.${locked ? ' <strong>Dit document is vergrendeld.</strong>' : ''}</p>
+    ${customer.id ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('user', 13)} Klantgegevens${customer.name ? ' — ' + esc(customer.name) : ''} (klik om te wijzigen)</summary>
+      <div class="row" style="margin-top:8px"><label>Naam <input id="cust-name" value="${esc(customer.name || '')}"></label><label>Telefoon <input id="cust-phone" value="${esc(customer.phone || '')}"></label></div>
+      <div class="row"><label>E-mail <input id="cust-email" value="${esc(customer.email || '')}"></label><label>Adres (straat, postcode, plaats) <input id="cust-address" value="${esc(customer.address || '')}"></label></div>
+      <button type="button" class="btn btn-sm" id="cust-save">Klantgegevens opslaan</button><span class="muted small" style="margin-left:8px">Wijzigingen gelden voor deze klant overal in het CRM.</span>
+    </details>` : ''}
     ${priceList.length && !locked ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('tag', 13)} Prijzenlijst — klik om te openen en snel toe te voegen</summary><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${priceList.map((p, pi) => `<button type="button" class="chip pl-add" data-pi="${pi}" title="€ ${Number(p.priceExcl).toFixed(2)} excl. btw" style="cursor:pointer">${esc(p.description.slice(0, 44))} · ${eur(p.priceExcl)}</button>`).join('')}</div></details>` : ''}
     <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
     ${locked ? '' : `<button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
@@ -1451,6 +1456,17 @@ function renderInvoiceEditor(ctx) {
   if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (ctx.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
   const saveConcept = async () => ctx.save({ lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value });
   const done = (msg) => { toast(msg); closeModal(); if (ctx.after) ctx.after(); };
+  if ($('#cust-save')) $('#cust-save').onclick = async () => {
+    const cp = { name: $('#cust-name').value, phone: $('#cust-phone').value, email: $('#cust-email').value, address: $('#cust-address').value };
+    if (!cp.name.trim()) { toast('Naam mag niet leeg zijn', true); return; }
+    try {
+      const updated = await api(`/api/customers/${customer.id}`, 'PATCH', cp);
+      Object.assign(customer, { name: updated.name, phone: updated.phone, email: updated.email, address: updated.address });
+      const sum = $('#modal details summary'); if (sum) sum.innerHTML = `${icon('user', 13)} Klantgegevens — ${esc(customer.name)} (klik om te wijzigen)`;
+      const h = $('#modal h2'); if (h) h.innerHTML = `${icon('mail', 16)} ${woord} — ${esc(customer.name)}`;
+      toast('Klantgegevens opgeslagen');
+    } catch (err) { toast(err.message, true); }
+  };
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-save')) $('#inv-save').onclick = async () => { try { await saveConcept(); done('Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
   if ($('#inv-send')) $('#inv-send').onclick = async () => {
@@ -1612,14 +1628,22 @@ function renderStatusScan(out) {
   }
   let html = when + src;
   if (out.error) html += `<div class="error small">Laatste scan mislukt: ${esc(out.error)}</div>`;
-  if (sugg.length) {
-    html += `<div class="ss-bulkbar"><span class="muted small">${sugg.length} statusvoorstel(len) gevonden</span><button class="btn btn-sm btn-success" id="ss-apply-all">Alles toepassen</button></div>` + sugg.map((s, i) => `
-      <div class="ss-item" data-i="${i}">
+  // Reeds toegepaste voorstellen (deze scan) blijven zichtbaar als "toegepast" tot je opnieuw scant.
+  const appliedSet = new Set((out.appliedIds || []).map(String));
+  const openSugg = sugg.filter((s) => !appliedSet.has(String(s.orderId)));
+  const doneSugg = sugg.filter((s) => appliedSet.has(String(s.orderId)));
+  if (openSugg.length) {
+    html += `<div class="ss-bulkbar"><span class="muted small">${openSugg.length} statusvoorstel(len) open</span><button class="btn btn-sm btn-success" id="ss-apply-all">Alles toepassen</button></div>` + openSugg.map((s) => `
+      <div class="ss-item" data-oid="${esc(s.orderId)}">
         <div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong></div>
         <div class="muted small">${esc(s.reason)}</div>
         ${s.evidence ? `<div class="muted small" style="font-style:italic">"${esc(s.evidence.slice(0, 160))}"</div>` : ''}
         <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}">Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
       </div>`).join('');
+  }
+  if (doneSugg.length) {
+    html += `<details style="margin:10px 0"><summary class="muted small" style="cursor:pointer">✓ ${doneSugg.length} al toegepast in deze scan (klik om te tonen)</summary>${doneSugg.map((s) => `
+      <div class="ss-item" style="opacity:.6"><div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong> <span class="chip" style="color:var(--ok)">toegepast ✓</span></div></div>`).join('')}</details>`;
   }
   if (todo.length) {
     html += `<div class="ss-drs-head"><strong>${icon('whatsapp', 14)} Nog terugkoppelen in de Raf Breda-groep (${todo.length})</strong><div class="muted small">Deze opdrachten hebben een bekende uitkomst, maar lijken nog niet teruggekoppeld in de DRS-groep. Kopieer de tekst en plak die in WhatsApp.</div></div>` + todo.map((t) => `
@@ -1635,19 +1659,21 @@ function renderStatusScan(out) {
   if (out.rawSample) html += `<details style="margin-top:8px"><summary class="muted small" style="cursor:pointer">Technische details (ruwe AI-antwoord, voor debugging)</summary><pre style="white-space:pre-wrap;font-size:11px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:300px;overflow:auto">${esc(out.rawSample)}</pre></details>`;
   box.innerHTML = html;
   $$('.ss-apply').forEach((b) => b.onclick = async () => {
-    try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); toast('Status bijgewerkt'); b.closest('.ss-item').remove(); loadBoard(); }
-    catch (err) { toast(err.message, true); }
+    try {
+      await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to });
+      await api('/api/assistant/status-scan/applied', 'POST', { orderId: b.dataset.id }).catch(() => {});
+      toast('Status bijgewerkt'); pollStatusScan(); loadBoard();
+    } catch (err) { toast(err.message, true); }
   });
   if ($('#ss-apply-all')) $('#ss-apply-all').onclick = async () => {
     const items = $$('.ss-apply');
     if (!items.length) return;
     if (!confirm(`${items.length} statuswijziging(en) in één keer toepassen?`)) return;
-    let ok = 0;
-    for (const b of items) { try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); ok++; } catch { /* skip */ } }
+    let ok = 0; const done = [];
+    for (const b of items) { try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); ok++; done.push(b.dataset.id); } catch { /* skip */ } }
+    await api('/api/assistant/status-scan/applied', 'POST', { orderIds: done }).catch(() => {});
     toast(`${ok} opdracht(en) bijgewerkt`);
-    items.forEach((b) => b.closest('.ss-item')?.remove());
-    $('.ss-bulkbar')?.remove();
-    loadBoard();
+    pollStatusScan(); loadBoard();
   };
   $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
   $$('.ss-copy').forEach((b) => b.onclick = async () => {
