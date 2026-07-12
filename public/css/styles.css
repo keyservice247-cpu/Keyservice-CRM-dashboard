@@ -757,6 +757,21 @@ table tbody tr:hover { background: var(--panel-2); }
   .card { padding: 15px 14px; border-radius: 14px; }
   .card-title { font-size: 15px; }
   .btn { min-height: 44px; }
+
+  /* Slanke bovenbalk: logo links, knoppen rechts op ÉÉN rij. De navigatie zit
+     onderin (onderbalk), dus bovenaan hoeft alleen merk + account/nachtmodus. */
+  .sidebar { flex-wrap: nowrap; align-items: center; gap: 6px; padding: 6px 12px; }
+  .brand { flex: 0 0 auto; padding: 2px 0; font-size: 14px; }
+  .brand-mark { width: 22px; height: 22px; }
+  .sidebar-foot { margin-left: auto; flex: 0 0 auto; gap: 4px; }
+  .sidebar-foot .who { display: none; }              /* avatar/naam weg — Account-knop volstaat */
+  .foot-actions { gap: 4px; }
+  .foot-actions .btn { flex: 0 0 auto; font-size: 12.5px; padding: 7px 9px; min-height: 0; }
+
+  /* Titels links en compacter op mobiel (i.p.v. veel witruimte). */
+  .view-head { margin-bottom: 14px; gap: 6px; }
+  .view-head h2 { text-align: left; }
+  .content { padding-top: 12px; }
 }
 @keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .modal { animation: none; } }
