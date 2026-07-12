@@ -701,3 +701,62 @@ table tbody tr:hover { background: var(--panel-2); }
 
 /* — Bulk-balken en badges — */
 .bulk-bar { border-radius: 12px; box-shadow: var(--shadow-md); }
+
+/* ============================================================
+   DESIGN 2.1 — mobiele bottom-sheet + rustiger bord (override-laag)
+   Staat bewust NA DESIGN 2.0 en na de bestaande mobiele blokken, zodat
+   deze regels winnen. Alleen uiterlijk/gedrag op mobiel; geen serverlogica.
+   Kern: op mobiel wordt een venster een échte bottom-sheet die zelf scrolt
+   (i.p.v. de hele .modal-root). Daardoor kunnen titel en actieknoppen wél
+   netjes 'plakken' — het oude probleem (zwevende knoppen) kwam doordat de
+   .modal-root scrollde i.p.v. het paneel zelf.
+   ============================================================ */
+@media (max-width: 820px) {
+  /* De achtergrond weer dimmen; het paneel komt van onderen op. */
+  .modal-root { padding: 0; align-items: flex-end; justify-content: center; background: transparent; overflow: hidden; touch-action: none; }
+  .modal-backdrop { display: block; }
+
+  /* Het paneel = de bottom-sheet, en tevens de scroll-container. */
+  .modal {
+    width: 100%; max-width: 100%;
+    max-height: 92vh; min-height: 0;
+    border-radius: 20px 20px 0 0; border: none;
+    padding: 0 16px calc(12px + env(safe-area-inset-bottom));
+    overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+    display: flex; flex-direction: column;
+    box-shadow: 0 -10px 40px rgba(15,18,24,.22);
+    animation: sheetUp .24s cubic-bezier(.22,.61,.36,1);
+  }
+  /* Greepje bovenaan (scrollt mee, klein). */
+  .modal::before { content: ""; display: block; flex: 0 0 auto; width: 42px; height: 4px; border-radius: 999px; background: var(--line); margin: 9px auto 2px; }
+
+  /* Titel plakt bovenaan de sheet. */
+  .modal h2 {
+    position: sticky; top: 0; z-index: 4;
+    margin: 0 -16px 12px; padding: 8px 16px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--line-soft);
+  }
+
+  /* Actieknoppen: in de normale flow onderaan de sheet (niet sticky — bij veel
+     knoppen, zoals op een opdrachtkaart, zou een vaste balk het halve scherm vullen).
+     De primaire knop (Opslaan/Versturen) staat bovenaan het blok en beslaat de volle
+     breedte; secundaire knoppen staan er 2-op-een-rij onder, zodat het compact blijft. */
+  .modal-actions {
+    position: static; margin: 16px -16px 0; padding: 14px 16px calc(6px + env(safe-area-inset-bottom));
+    background: var(--panel); border-top: 1px solid var(--line);
+    flex-direction: column; gap: 8px;
+  }
+  .modal-actions .right { margin-left: 0; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .modal-actions .btn { width: 100%; text-align: center; min-height: 46px; padding: 12px; margin: 0; }
+  /* Primaire actie volle breedte en visueel eerst. */
+  .modal-actions .right .btn-primary { grid-column: 1 / -1; order: -1; }
+  /* Verwijderen (staat als eerste in de HTML) naar onderen — nooit boven Opslaan. */
+  .modal-actions > #f-delete, .modal-actions > .btn-danger { order: 9; width: 100%; }
+
+  /* Rustiger, iets grotere kaartjes op het bord. */
+  .card { padding: 15px 14px; border-radius: 14px; }
+  .card-title { font-size: 15px; }
+  .btn { min-height: 44px; }
+}
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .modal { animation: none; } }
