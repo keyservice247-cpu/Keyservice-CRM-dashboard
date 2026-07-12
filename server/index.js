@@ -1717,8 +1717,17 @@ app.post('/api/invoices', requireAuth, (req, res) => {
   if (!customerId && b.newCustomer) {
     const nc = b.newCustomer || {};
     if (!String(nc.name || '').trim()) return res.status(400).json({ error: 'Vul minimaal de naam van de nieuwe klant in.' });
-    const { customer } = upsertCustomer({ name: nc.name, phone: nc.phone, email: nc.email, address: nc.address, source: 'handmatig' });
-    customerId = customer.id;
+    // BELANGRIJK: "nieuwe klant" maakt echt een NIEUWE klant met de ingevoerde naam.
+    // NIET via upsertCustomer (die matcht op bestaand e-mailadres/telefoon en zou dan
+    // een bestaande klant hergebruiken — bv. "abdel rafour" i.p.v. de getypte naam).
+    const c = {
+      id: id('cust'), name: String(nc.name).trim(), phone: nc.phone || '', email: nc.email || '',
+      address: nc.address || '', type: 'klant', source: 'handmatig',
+      notes: '', createdAt: now(),
+    };
+    db().customers.push(c);
+    logActivity(req.user.name, 'klant toegevoegd (via factuur)', c.name);
+    customerId = c.id;
   }
   const customer = db().customers.find((c) => c.id === customerId);
   if (!customer) return res.status(400).json({ error: 'Kies een klant of vul een nieuwe klant in.' });

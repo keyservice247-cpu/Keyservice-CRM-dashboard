@@ -7,6 +7,7 @@
 import PDFDocument from 'pdfkit';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { db, id, now, save, saveSoon } from './db.js';
 import { UPLOAD_DIR } from './storage.js';
@@ -83,6 +84,16 @@ export function saveInvoiceFields(inv, body) {
   inv.lines = sanitizeLines(body.lines, btwPct);
   inv.btwPct = btwPct;
   inv.note = String(body.note || '').slice(0, 500);
+  // Handtekening rechtstreeks op de factuur/offerte (data-URL PNG), los van een werkbon.
+  // Zo kan er ook op een LOSSE factuur (zonder kaart/werkbon) getekend worden.
+  if ('signature' in body) {
+    const sig = body.signature;
+    if (typeof sig === 'string' && sig.length <= 500000 && sig.startsWith('data:image/png') && signatureBuffer(sig)) {
+      inv.signature = sig; // alleen een écht decodeerbare PNG (binnen de limiet) bewaren
+    } else {
+      inv.signature = ''; // leeg/ongeldig = wissen (nooit een kapotte handtekening opslaan)
+    }
+  }
   Object.assign(inv, computeTotals(inv.lines, btwPct));
   inv.updatedAt = now();
   saveSoon();
@@ -135,6 +146,44 @@ export function copyInvoice(src, { actorName = '', createdById = '', copyType } 
 
 const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
 const nlDate = (d) => new Date(d).toLocaleDateString('nl-NL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+// Controleer of een PNG-buffer écht te decoderen is. pdfkit (via png-js) decodeert
+// de IDAT-stroom ASYNCHROON; bij een kapotte PNG gooit zlib dan een niet-vangbare
+// fout die het hele proces zou laten hangen/crashen. Daarom valideren we hier eerst
+// synchroon: PNG-signatuur checken en de IDAT-chunks synchroon inflaten. Faalt dat,
+// dan slaan we de handtekening gewoon over (nooit een hangende PDF-endpoint).
+export function pngDecodable(buf) {
+  try {
+    if (!Buffer.isBuffer(buf) || buf.length < 8) return false;
+    const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (let i = 0; i < 8; i++) if (buf[i] !== sig[i]) return false;
+    const idat = [];
+    let off = 8;
+    while (off + 8 <= buf.length) {
+      const len = buf.readUInt32BE(off);
+      const type = buf.toString('ascii', off + 4, off + 8);
+      const dataStart = off + 8;
+      const dataEnd = dataStart + len;
+      if (dataEnd + 4 > buf.length) return false; // afgekapt bestand
+      if (type === 'IDAT') idat.push(buf.subarray(dataStart, dataEnd));
+      if (type === 'IEND') break;
+      off = dataEnd + 4; // + CRC
+    }
+    if (!idat.length) return false;
+    zlib.inflateSync(Buffer.concat(idat)); // gooit bij kapotte stroom -> gevangen
+    return true;
+  } catch { return false; }
+}
+
+// Data-URL PNG -> geldige buffer, of null als het niet (veilig) te gebruiken is.
+export function signatureBuffer(dataUrl) {
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png')) return null;
+  const b64 = dataUrl.split(',')[1] || '';
+  if (!b64) return null;
+  let buf;
+  try { buf = Buffer.from(b64, 'base64'); } catch { return null; }
+  return pngDecodable(buf) ? buf : null;
+}
 
 // ---------- PDF (huisstijl: zie voorbeeldfactuur van het oude pakket) ----------
 export function buildInvoicePdf(inv, order, customer) {
@@ -252,15 +301,25 @@ export function buildInvoicePdf(inv, order, customer) {
       y += 30;
     }
 
-    // Handtekening van de werkbon (indien gezet): bewijs van akkoord door de klant.
+    // Handtekening: bewijs van akkoord door de klant. Eerst de werkbon-handtekening
+    // (indien gezet); anders een handtekening die direct op de factuur/offerte is
+    // gezet (inv.signature — data-URL, werkt ook op LOSSE facturen zonder werkbon).
     try {
       const sigId = order?.werkbon?.signatureAttachmentId;
       const att = sigId ? (order.attachments || []).find((a) => a.id === sigId) : null;
       const sigPath = att ? path.join(UPLOAD_DIR, att.file) : null;
+      let sigImage = null; let sigLabel = null;
       if (sigPath && fs.existsSync(sigPath)) {
+        sigImage = sigPath;
+        sigLabel = `Voor akkoord getekend door klant (werkbon${order.werkbon.at ? ' d.d. ' + nlDate(order.werkbon.at) : ''}):`;
+      } else if (inv.signature) {
+        const sigBuf = signatureBuffer(inv.signature);
+        if (sigBuf) { sigImage = sigBuf; sigLabel = 'Voor akkoord getekend door klant:'; }
+      }
+      if (sigImage) {
         if (y > 640) { doc.addPage(); y = 60; }
-        doc.fontSize(9).fillColor(muted).text(`Voor akkoord getekend door klant (werkbon${order.werkbon.at ? ' d.d. ' + nlDate(order.werkbon.at) : ''}):`, 50, y);
-        doc.image(sigPath, 50, y + 14, { fit: [180, 60] });
+        doc.fontSize(9).fillColor(muted).text(sigLabel, 50, y);
+        doc.image(sigImage, 50, y + 14, { fit: [180, 60] });
         doc.rect(50, y + 14, 190, 64).strokeColor('#e5e7eb').lineWidth(0.5).stroke();
         y += 88;
       }

@@ -1420,6 +1420,12 @@ function renderInvoiceEditor(ctx) {
     ${ctx.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}`}
     <div class="row" style="margin-top:10px"> <label>Btw-tarief <select id="inv-btw" ${locked ? 'disabled' : ''}><option value="21" ${Number(inv.btwPct) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(inv.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(inv.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label>
       <label>Opmerking op de ${esc(woord.toLowerCase())} <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel" ${locked ? 'disabled' : ''}></label> </div>
+    ${locked ? (inv.signature ? `<div style="margin:10px 0"><div class="muted small">Handtekening voor akkoord:</div><img src="${esc(inv.signature)}" alt="handtekening" style="max-width:200px;border:1px solid var(--line-soft, #e5e7eb);border-radius:6px;background:#fff"></div>` : '') : `
+    <details class="pl-collapse" style="margin:12px 0"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('edit', 13)} Handtekening voor akkoord${inv.signature ? ' — gezet ✓' : ' (optioneel)'}</summary>
+      <p class="muted small" style="margin:6px 0">Laat de klant hier tekenen; de handtekening komt op de PDF als bewijs van akkoord. Werkt ook zonder werkbon.</p>
+      <canvas id="inv-sig" width="360" height="120" style="border:1px solid var(--line-soft, #cbd5e1);border-radius:8px;background:#fff;touch-action:none;max-width:100%;cursor:crosshair"></canvas>
+      <div style="margin-top:6px"><button type="button" class="btn btn-sm" id="inv-sig-clear">Wissen</button><span class="muted small" id="inv-sig-status" style="margin-left:8px">${inv.signature ? 'Er staat al een handtekening — teken opnieuw om te vervangen, of Wissen om te verwijderen.' : ''}</span></div>
+    </details>`}
     <div id="inv-totals" class="muted small" style="margin:8px 0;font-size:14px"></div>
     <div class="modal-actions">
       <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -1454,7 +1460,33 @@ function renderInvoiceEditor(ctx) {
   if ($('#il-add')) $('#il-add').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: '', qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
   $$('.pl-add').forEach((b) => b.onclick = () => { const p = priceList[Number(b.dataset.pi)]; if (!p) return; $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: p.description, qty: 1, priceExcl: p.priceExcl }, 99)); bindRows(); renderTotals(); });
   if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (ctx.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
-  const saveConcept = async () => ctx.save({ lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value });
+  // Handtekening-canvas: teken direct op de factuur/offerte (los van een werkbon).
+  let sigDrawn = false;   // klant heeft nu getekend
+  let sigCleared = false; // klant heeft "Wissen" gebruikt (bestaande weghalen)
+  const sigCanvas = $('#inv-sig');
+  if (sigCanvas) {
+    const cctx = sigCanvas.getContext('2d');
+    cctx.lineWidth = 2; cctx.lineCap = 'round'; cctx.strokeStyle = '#111827';
+    let drawing = false, lastX = 0, lastY = 0;
+    const pos = (e) => { const r = sigCanvas.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return { x: (t.clientX - r.left) * (sigCanvas.width / r.width), y: (t.clientY - r.top) * (sigCanvas.height / r.height) }; };
+    const start = (e) => { e.preventDefault(); drawing = true; const p = pos(e); lastX = p.x; lastY = p.y; };
+    const move = (e) => { if (!drawing) return; e.preventDefault(); const p = pos(e); cctx.beginPath(); cctx.moveTo(lastX, lastY); cctx.lineTo(p.x, p.y); cctx.stroke(); lastX = p.x; lastY = p.y; sigDrawn = true; sigCleared = false; const st = $('#inv-sig-status'); if (st) st.textContent = ''; };
+    const end = () => { drawing = false; };
+    sigCanvas.addEventListener('pointerdown', start); sigCanvas.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    if ($('#inv-sig-clear')) $('#inv-sig-clear').onclick = () => { cctx.clearRect(0, 0, sigCanvas.width, sigCanvas.height); sigDrawn = false; sigCleared = true; const st = $('#inv-sig-status'); if (st) st.textContent = inv.signature ? 'Handtekening wordt verwijderd bij opslaan.' : ''; };
+  }
+  const readSignature = () => {
+    if (sigDrawn && sigCanvas) return sigCanvas.toDataURL('image/png');
+    if (sigCleared) return '';
+    return undefined; // niet aangeraakt = bestaande handtekening behouden
+  };
+  const saveConcept = async () => {
+    const body = { lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value };
+    const sig = readSignature();
+    if (sig !== undefined) body.signature = sig;
+    return ctx.save(body);
+  };
   const done = (msg) => { toast(msg); closeModal(); if (ctx.after) ctx.after(); };
   if ($('#cust-save')) $('#cust-save').onclick = async () => {
     const cp = { name: $('#cust-name').value, phone: $('#cust-phone').value, email: $('#cust-email').value, address: $('#cust-address').value };
@@ -2253,7 +2285,12 @@ async function loadSettings() {
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een kaart, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="md-auto" style="width:auto"> Automatisch versturen aanzetten</label>
       <div class="row"> <label>Welke monteur (auto) <select id="md-monteur"></select></label> <label>Wanneer <select id="md-trigger"><option value="approved">zodra ik de opdracht goedkeur</option><option value="appointment">zodra een afspraak is ingepland</option><option value="intake">volautomatisch — meteen bij binnenkomst</option></select></label> </div>
-      <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" id="md-onlydrs" style="width:auto"> Alleen opdrachten uit de DRS / Raf Breda-groep</label>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" id="md-onlydrs" style="width:auto"> Alleen opdrachten uit de opdracht-groepen (hieronder ingesteld)</label>
+      <div style="margin:8px 0 0;padding:10px 12px;background:var(--bg-soft, #f6f8fb);border-radius:8px">
+        <label style="margin:0;font-size:13px;font-weight:600">Opdracht-groepen (WhatsApp) — worden automatisch doorgestuurd</label>
+        <p class="muted small" style="margin:2px 0 6px">Alle groepen hier tellen als opdracht-groep en worden net als "Raf Breda" volautomatisch doorgestuurd naar de monteur. Meerdere? Scheid met komma's. Leeg = alle groepen.</p>
+        <input id="md-ordergroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, opdrachten tilburg omgeving" style="width:100%">
+      </div>
       <p class="muted small" id="md-hint" style="margin:6px 0 0"></p>
       <label style="margin:10px 0 4px">Alleen op deze dagen versturen</label>
       <div id="md-days" style="display:flex;gap:6px;flex-wrap:wrap"></div>
@@ -2469,7 +2506,15 @@ async function loadSettings() {
     if (cfg.autoEnabled && !days.length) return toast('Kies minstens één dag (anders wordt er nooit verstuurd)', true);
     const terugkoppeling = { enabled: $('#tk-enabled').checked, monteurId: $('#tk-monteur').value };
     if (terugkoppeling.enabled && !terugkoppeling.monteurId) return toast('Kies de monteur voor de terugkoppeling', true);
-    try { await api('/api/settings', 'PATCH', { monteurDispatch: cfg, terugkoppeling }); toast('Verstuur-instellingen opgeslagen'); }
+    const whatsappOrderGroups = $('#md-ordergroups') ? $('#md-ordergroups').value : undefined;
+    const payload = { monteurDispatch: cfg, terugkoppeling };
+    if (whatsappOrderGroups !== undefined) payload.whatsappOrderGroups = whatsappOrderGroups;
+    try {
+      await api('/api/settings', 'PATCH', payload);
+      // Houd het losse veld hierboven in sync als het zichtbaar is.
+      if (whatsappOrderGroups !== undefined && $('#waOrderGroups')) $('#waOrderGroups').value = whatsappOrderGroups;
+      toast('Verstuur-instellingen opgeslagen');
+    }
     catch (err) { toast(err.message, true); }
   };
   // Laatste analyse tonen indien aanwezig.
