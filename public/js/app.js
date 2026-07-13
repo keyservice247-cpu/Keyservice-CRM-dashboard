@@ -2309,14 +2309,19 @@ async function loadSettings() {
     </div>
     <div data-sg="werk" class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div data-sg="werk" class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
-  // Sectie-chips: filter de instellingen-kaarten per onderwerp (niets wordt verwijderd).
-  const applySGroup = (g) => {
+  // Sectie-chips werken als TABBLADEN: je ziet één onderwerp tegelijk i.p.v. de hele
+  // lange lijst. "Alles" blijft beschikbaar voor wie toch alles wil scrollen. Niets
+  // wordt verwijderd — alleen getoond/verborgen.
+  const applySGroup = (g, scroll) => {
     $$('#settingsPanel [data-sg]').forEach((el) => { el.style.display = (g === 'alles' || el.dataset.sg === g) ? '' : 'none'; });
     $$('#settingsPanel .sg-chip').forEach((c) => c.classList.toggle('on', c.dataset.g === g));
     state._sgroup = g;
+    if (scroll) { const p = $('#settingsPanel'); if (p) p.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
   };
-  $$('#settingsPanel .sg-chip').forEach((c) => c.onclick = () => applySGroup(c.dataset.g));
-  if (state._sgroup && state._sgroup !== 'alles') applySGroup(state._sgroup);
+  $$('#settingsPanel .sg-chip').forEach((c) => c.onclick = () => applySGroup(c.dataset.g, true));
+  // Standaard NIET "Alles" (dat is een muur), maar het eerste onderwerp — of het
+  // laatst gekozen tabblad van deze sessie.
+  applySGroup(state._sgroup || 'bericht');
 
   $('#saveApptMsg').onclick = async () => {
     const appointmentMsg = {

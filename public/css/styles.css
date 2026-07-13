@@ -702,6 +702,19 @@ table tbody tr:hover { background: var(--panel-2); }
 /* — Bulk-balken en badges — */
 .bulk-bar { border-radius: 12px; box-shadow: var(--shadow-md); }
 
+/* Instellingen-tabbladen: de sectie-chips als nette, rustige tabbladenbalk.
+   Je ziet één onderwerp tegelijk (default), dus geen eindeloze muur meer. */
+.sg-nav { border-bottom: 1px solid var(--line); box-shadow: none; gap: 6px; }
+.sg-chip { border-radius: 999px; padding: 7px 14px; font-weight: 600; font-size: 13px; border: 1px solid var(--line); background: var(--panel); color: var(--ink-soft); transition: background .12s, color .12s, border-color .12s; }
+.sg-chip:hover { border-color: var(--accent); color: var(--accent-ink); }
+.sg-chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.sg-chip.on svg { stroke: #fff; }
+
+/* Inbox / AI-controle: rustiger kaartjes met een duidelijke scheiding tussen het
+   bericht en het bewerk-formulier eronder. */
+.review { border-radius: 14px; }
+.review-actions { border-top: 1px solid var(--line-soft); padding-top: 13px; }
+
 /* Sectiekopjes in formulieren (bv. de opdrachtkaart): rustige scheiding tussen
    Klantgegevens / Planning / Intern, zodat een lang formulier scanbaar wordt. */
 .form-sec { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 20px 0 10px; padding-top: 15px; border-top: 1px solid var(--line-soft); }
@@ -778,6 +791,21 @@ table tbody tr:hover { background: var(--panel-2); }
   .view-head { margin-bottom: 14px; gap: 6px; }
   .view-head h2 { text-align: left; }
   .content { padding-top: 12px; }
+
+  /* Instellingen-tabbladen op mobiel: één horizontaal schuivende rij, net onder de
+     slanke bovenbalk (die zelf ook bovenaan plakt). Zo blijven de tabbladen bereikbaar
+     zonder te botsen met de bovenbalk. */
+  .sg-nav { top: 46px; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -14px 14px; padding: 10px 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .sg-chip { flex: 0 0 auto; white-space: nowrap; }
+
+  /* Inbox-controle-kaartjes op mobiel: velden en knoppen vol-breed en op één kolom,
+     Goedkeuren als eerste/prominente knop. */
+  .review { padding: 14px; }
+  .review-actions { flex-direction: column; align-items: stretch; gap: 10px; }
+  .review-actions > label, .review-actions > .btn { width: 100%; }
+  .review-actions select, .review-actions input, .review-actions textarea { width: 100%; }
+  .review-actions .btn { min-height: 46px; }
+  .review-actions .btn-success { order: -1; }
 }
 @keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .modal { animation: none; } }
