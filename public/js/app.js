@@ -1924,13 +1924,12 @@ function renderInvoices() {
   html += items.map((i) => {
     const quote = i.type === 'offerte';
     const overdue = isOverdue(i);
-    const stColor = overdue ? 'var(--danger)' : ({ concept: 'var(--muted)', verzonden: '#b06a00', betaald: '#167a3d', goedgekeurd: '#167a3d', afgekeurd: 'var(--danger)' }[i.status] || 'inherit');
     const stLabel = overdue ? 'Nog niet betaald — VERLOPEN' : ({ concept: 'Concept', verzonden: quote ? 'Verzonden' : 'Verzonden — open', betaald: 'Betaald ✓', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[i.status] || i.status);
     return `
     <div class="info-card" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
         <div>${quote ? `<span class="chip" style="font-size:11px">OFFERTE</span> ` : ''}<strong>${esc(i.number)}</strong> · ${esc(i.customerName || 'klant')} <span class="muted small">${i.orderTitle ? '— ' + esc(i.orderTitle) : '(losstaand)'}</span></div>
-        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span style="color:${stColor};font-weight:600">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}</div>
+        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span class="inv-st ${overdue ? 'verlopen' : esc(i.status)}">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <strong style="font-size:15px">${eur(i.totalIncl)}</strong>

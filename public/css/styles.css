@@ -710,6 +710,14 @@ table tbody tr:hover { background: var(--panel-2); }
 .sg-chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .sg-chip.on svg { stroke: #fff; }
 
+/* Facturen-overzicht: status als rustige badge (pilletje) i.p.v. losse gekleurde
+   tekst — in één oogopslag zie je concept/verzonden/betaald/verlopen. */
+.inv-st { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 11.5px; vertical-align: middle; }
+.inv-st.concept { background: var(--line-soft); color: var(--ink-soft); }
+.inv-st.verzonden { background: var(--warn-soft); color: var(--warn); }
+.inv-st.betaald, .inv-st.goedgekeurd { background: var(--ok-soft); color: var(--ok); }
+.inv-st.afgekeurd, .inv-st.verlopen { background: var(--danger-soft); color: var(--danger); }
+
 /* Inbox / AI-controle: rustiger kaartjes met een duidelijke scheiding tussen het
    bericht en het bewerk-formulier eronder. */
 .review { border-radius: 14px; }
@@ -797,6 +805,19 @@ table tbody tr:hover { background: var(--panel-2); }
      zonder te botsen met de bovenbalk. */
   .sg-nav { top: 46px; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -14px 14px; padding: 10px 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
   .sg-chip { flex: 0 0 auto; white-space: nowrap; }
+
+  /* GEEN automatisch inzoomen bij tikken op een veld: iPhone/Safari zoomt in
+     zodra de tekst in een invoerveld kleiner dan 16px is. Dus op mobiel alle
+     velden minimaal 16px — dan blijft het beeld gewoon staan. */
+  input, select, textarea { font-size: 16px; }
+
+  /* Facturenlijst op mobiel: klantregel boven, bedrag + knoppen netjes eronder
+     op één rij (i.p.v. kris-kras wrappen). */
+  /* align-items moet hier de inline desktop-stijl (center) overrulen, anders
+     centreert alles zodra de kaart een kolom wordt. */
+  #invoiceList .info-card { flex-direction: column; align-items: stretch !important; gap: 8px; }
+  #invoiceList .info-card > div:last-child { justify-content: flex-start; border-top: 1px solid var(--line-soft); padding-top: 10px; }
+  #invoiceList .info-card > div:last-child strong { margin-right: auto; }
 
   /* Inbox-controle-kaartjes op mobiel: velden en knoppen vol-breed en op één kolom,
      Goedkeuren als eerste/prominente knop. */
