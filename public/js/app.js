@@ -147,6 +147,21 @@ const statusColor = (key) => {
   return s ? s.color : '#94a3b8';
 };
 
+// ---------- Rechten (spiegel van server/auth.js) ----------
+// Rol = basisprofiel; de beheerder kan per gebruiker functies aan/uit zetten.
+const ROLE_PERM_DEFAULTS = {
+  admin:     { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: true,  system: true,  settings: true,  hardDelete: true },
+  assistent: { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: false, system: false, settings: false, hardDelete: false },
+  monteur:   { inbox: false, orders: false, deleteOrders: false, customers: false, invoicesAll: false, finance: false, system: false, settings: false, hardDelete: false },
+};
+function hasPerm(key) {
+  if (!state.me) return false;
+  if (state.me.role === 'admin') return true;
+  const o = state.me.perms && typeof state.me.perms[key] === 'boolean' ? state.me.perms[key] : undefined;
+  if (o !== undefined) return o;
+  return !!(ROLE_PERM_DEFAULTS[state.me.role] || {})[key];
+}
+
 // ---------- Init ----------
 (async function init() {
   const me = await api('/api/me');
@@ -156,11 +171,15 @@ const statusColor = (key) => {
   $('#avatar').textContent = (me.user.name || '?').trim().charAt(0).toUpperCase();
   $('#aiMode').textContent = me.meta.aiMode === 'ai' ? 'AI actief' : 'AI: demo';
 
-  if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => el.remove());
+  // Admin-onderdelen: weg voor wie het recht niet heeft. Een element met
+  // data-need="finance" (enz.) blijft staan als dat recht per gebruiker aanstaat.
+  if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => { const need = el.dataset.need; if (!need || !hasPerm(need)) el.remove(); });
   if (me.user.role === 'monteur') {
     $$('.perm-write').forEach((el) => (el.hidden = true));
-    // Monteur ziet alleen zijn eigen werk: Opdrachten + Agenda + eigen Facturen.
+    // Monteur ziet alleen zijn eigen werk: Opdrachten + Agenda + eigen Facturen
+    // (+ Inbox als de beheerder dat recht heeft aangezet).
     const monteurAllowed = ['board', 'agenda', 'invoices'];
+    if (hasPerm('inbox')) monteurAllowed.push('inbox');
     $$('.nav-item, .bn-item').forEach((el) => { if (!monteurAllowed.includes(el.dataset.view)) el.hidden = true; });
   }
 
@@ -1043,7 +1062,7 @@ async function loadInbox(append = false) {
   // Op de prullenbak-weergave verbergen we approve/afwijs-acties; toon evt. 'legen'.
   const inTrash = filter === 'rejected';
   ['#bulkApproveBtn', '#bulkApprovePct', '#bulkRejectBtn', '#rejectAllOverigeBtn', '#rejectAllPendingBtn'].forEach((sel) => { const e = $(sel); if (e) e.style.display = inTrash ? 'none' : (sel.includes('Overige') ? (filter === 'overige' ? '' : 'none') : sel.includes('Pending') ? (filter === 'pending' ? '' : 'none') : ''); });
-  if ($('#emptyRejectedBtn')) $('#emptyRejectedBtn').style.display = (inTrash && state.me.role === 'admin') ? '' : 'none';
+  if ($('#emptyRejectedBtn')) $('#emptyRejectedBtn').style.display = (inTrash && hasPerm('hardDelete')) ? '' : 'none';
   if ($('#selectAll')) $('#selectAll').checked = false;
   updateBulkCount();
   if (!append && !reviews.length) {
@@ -1085,7 +1104,7 @@ function reviewHTML(r) {
   return `
     <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
-      ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${state.me.role === 'admin' ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
+      ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('hardDelete') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
 }
 
@@ -1779,7 +1798,7 @@ async function loadTrash() {
   renderTrash();
 }
 function renderTrash() {
-  const isAdmin = state.me.role === 'admin';
+  const isAdmin = hasPerm('hardDelete'); // recht 'definitief verwijderen'
   const q = ($('#trashSearch')?.value || '').toLowerCase();
   const items = (state._trash || []).filter((o) => {
     if (!q) return true;
@@ -2674,16 +2693,89 @@ async function disablePush() {
 }
 
 // ---------- Users (admin) ----------
+// Labels + uitleg van alle instelbare rechten (volgorde = weergavevolgorde).
+const PERM_LABELS = [
+  ['inbox', 'Inbox / AI-wachtrij behandelen', 'Aanvragen goedkeuren en afwijzen'],
+  ['orders', 'Opdrachten aanmaken & bewerken', 'Ook samenvoegen en bijlagen beheren'],
+  ['deleteOrders', 'Naar prullenbak + terughalen', 'Opdrachten verwijderen (niet definitief)'],
+  ['customers', 'Klanten & monteurs beheren', 'Gegevens bewerken, samenvoegen, toevoegen'],
+  ['invoicesAll', 'Alle facturen & offertes zien', 'Uit = alleen eigen facturen (monteur-stand)'],
+  ['finance', 'Cijfers bekijken & boeken', 'Omzet, kosten en winst — gevoelige informatie'],
+  ['system', 'AI-controle & Abonnementen', 'Systeembewaking en kosten-overzicht'],
+  ['settings', 'Instellingen wijzigen', 'Automatische berichten, factuurgegevens, AI, enz.'],
+  ['hardDelete', 'Definitief verwijderen', 'Prullenbak legen — onomkeerbaar'],
+];
 async function loadUsers() {
   const users = await api('/api/users');
+  state._users = users;
+  const roleName = { admin: 'Beheerder', assistent: 'Assistent', monteur: 'Monteur' };
+  const permCount = (u) => {
+    if (u.role === 'admin') return 'alles';
+    const eff = PERM_LABELS.filter(([k]) => (u.perms && typeof u.perms[k] === 'boolean') ? u.perms[k] : (ROLE_PERM_DEFAULTS[u.role] || {})[k]).length;
+    return `${eff} van ${PERM_LABELS.length} functies${u.perms && Object.keys(u.perms).length ? ' · aangepast' : ''}`;
+  };
   $('#userList').innerHTML = `
-    <table><thead><tr><th>Naam</th><th>E-mail</th><th>Rol</th><th></th></tr></thead><tbody> ${users.map((u) => `<tr> <td><strong>${esc(u.name)}</strong></td><td>${esc(u.email)}</td> <td><span class="tag ${esc(u.role)}">${esc(u.role)}</span></td> <td>${u.id !== state.me.id ? `<button class="btn btn-sm btn-danger" data-udel="${u.id}">Verwijder</button>` : '<span class="muted small">jij</span>'}</td> </tr>`).join('')}
+    <table><thead><tr><th>Naam</th><th>E-mail</th><th>Rol</th><th>Rechten</th><th></th></tr></thead><tbody> ${users.map((u) => `<tr> <td><strong>${esc(u.name)}</strong>${u.id === state.me.id ? ' <span class="muted small">(jij)</span>' : ''}</td><td>${esc(u.email)}</td> <td><span class="tag ${esc(u.role)}">${esc(roleName[u.role] || u.role)}</span></td> <td class="muted small">${permCount(u)}</td> <td style="white-space:nowrap"><button class="btn btn-sm" data-uedit="${u.id}">Rechten &amp; rol</button> ${u.id !== state.me.id ? `<button class="btn btn-sm btn-danger" data-udel="${u.id}">Verwijder</button>` : ''}</td> </tr>`).join('')}
     </tbody></table>`;
   $$('[data-udel]').forEach((b) => b.onclick = async () => {
     if (!confirm('Gebruiker verwijderen?')) return;
     try { await api(`/api/users/${b.dataset.udel}`, 'DELETE'); toast('Verwijderd'); loadUsers(); }
     catch (err) { toast(err.message, true); }
   });
+  $$('[data-uedit]').forEach((b) => b.onclick = () => openUserPermsModal(state._users.find((u) => u.id === b.dataset.uedit)));
+}
+
+// Rechten & rol per gebruiker: rol = basisprofiel, vinkjes = fijnafstelling.
+function openUserPermsModal(u) {
+  if (!u) return;
+  const monteurOpts = (state.monteurs || []).map((m) => `<option value="${m.id}" ${u.monteurId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  const effective = (role, k) => (u.perms && typeof u.perms[k] === 'boolean') ? u.perms[k] : (ROLE_PERM_DEFAULTS[role] || {})[k];
+  const rows = (role) => PERM_LABELS.map(([k, label, sub]) => `
+    <label class="perm-row" style="display:flex;align-items:flex-start;gap:10px;flex-direction:row;padding:9px 0;border-bottom:1px solid var(--line-soft);margin:0">
+      <input type="checkbox" class="up-perm" data-k="${k}" style="width:auto;margin-top:3px" ${effective(role, k) ? 'checked' : ''} ${role === 'admin' ? 'checked disabled' : ''}>
+      <span><strong style="font-weight:600">${esc(label)}</strong><br><span class="muted small">${esc(sub)}</span></span>
+    </label>`).join('');
+  modal(`
+    <h2>${icon('user', 16)} ${esc(u.name)} — rechten &amp; rol</h2>
+    <p class="muted small">De rol is het basisprofiel; met de vinkjes stel je per gebruiker bij. De gebruiker ziet de wijziging na opnieuw inloggen of verversen.</p>
+    <div class="row">
+      <label>Rol <select id="up-role">
+        <option value="assistent" ${u.role === 'assistent' ? 'selected' : ''}>Assistent</option>
+        <option value="monteur" ${u.role === 'monteur' ? 'selected' : ''}>Monteur</option>
+        <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Beheerder (altijd alles)</option>
+      </select></label>
+      <label id="up-monteur-wrap" ${u.role !== 'monteur' ? 'hidden' : ''}>Gekoppelde monteur <select id="up-monteur"><option value="">— kies monteur —</option>${monteurOpts}</select></label>
+    </div>
+    <div class="form-sec">${icon('shield', 13)} Functies</div>
+    <div id="up-perms">${rows(u.role)}</div>
+    <button type="button" class="btn btn-sm" id="up-reset" style="margin-top:10px">Terug naar standaard van de rol</button>
+    <div class="form-sec">${icon('tag', 13)} Wachtwoord</div>
+    <label>Nieuw wachtwoord (leeg = niet wijzigen) <input id="up-pass" type="text" placeholder="minimaal 6 tekens"></label>
+    <div class="modal-actions"><span></span><div class="right">
+      <button class="btn" id="up-cancel">Annuleren</button>
+      <button class="btn btn-primary" id="up-save">Opslaan</button>
+    </div></div>`);
+  const refreshRows = () => { $('#up-perms').innerHTML = rows($('#up-role').value); };
+  $('#up-role').addEventListener('change', () => {
+    $('#up-monteur-wrap').hidden = $('#up-role').value !== 'monteur';
+    refreshRows(); // nieuwe rol = nieuwe standaard-vinkjes
+  });
+  $('#up-reset').onclick = refreshRows;
+  $('#up-cancel').onclick = closeModal;
+  $('#up-save').onclick = async () => {
+    const role = $('#up-role').value;
+    const payload = { role, monteurId: role === 'monteur' ? $('#up-monteur').value : null };
+    if (role === 'monteur' && !payload.monteurId) return toast('Kies welke monteur dit account is', true);
+    if (role !== 'admin') {
+      const perms = {}; const defs = ROLE_PERM_DEFAULTS[role] || {};
+      $$('#up-perms .up-perm').forEach((c) => { if (c.checked !== !!defs[c.dataset.k]) perms[c.dataset.k] = c.checked; });
+      payload.perms = Object.keys(perms).length ? perms : null; // null = precies de rol-standaard
+    }
+    const pass = $('#up-pass').value.trim();
+    if (pass) { if (pass.length < 6) return toast('Wachtwoord minimaal 6 tekens', true); payload.newPassword = pass; }
+    try { await api(`/api/users/${u.id}`, 'PATCH', payload); closeModal(); toast('Opgeslagen'); loadUsers(); }
+    catch (err) { toast(err.message, true); }
+  };
 }
 function openUserModal() {
   const monteurOpts = (state.monteurs || []).map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
@@ -3096,36 +3188,24 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCommandPalette(); }
 });
-// Eén lijst met alle pagina's per rol — gebruikt door het zoekvenster ("Ga naar")
-// én het menu rechtsboven, zodat ze nooit uit elkaar lopen.
+// Eén lijst met alle pagina's — gebruikt door het zoekvenster ("Ga naar") én het
+// menu rechtsboven, zodat ze nooit uit elkaar lopen. Rechten-gestuurd: een
+// assistente met het recht "Cijfers" krijgt die pagina hier vanzelf bij.
 function navItems() {
-  if (state.me.role === 'monteur') {
-    return [
-      { label: 'Opdrachten', view: 'board', ic: 'list' },
-      { label: 'Agenda', view: 'agenda', ic: 'calendar' },
-      { label: 'Facturen', view: 'invoices', ic: 'file' },
-    ];
-  }
-  const nav = [
-    { label: 'Overzicht', view: 'overview', ic: 'activity' },
-    { label: 'Opdrachten', view: 'board', ic: 'list' },
-    { label: 'Inbox / AI', view: 'inbox', ic: 'mail' },
-    { label: 'Agenda', view: 'agenda', ic: 'calendar' },
-    { label: 'Klanten & leads', view: 'customers', ic: 'users' },
-    { label: 'Monteurs', view: 'monteurs', ic: 'wrench' },
-    { label: 'Facturen', view: 'invoices', ic: 'file' },
-    { label: 'AI Assistent', view: 'assistant', ic: 'sparkles' },
-    { label: 'Prullenbak', view: 'trash', ic: 'trash' },
-  ];
-  if (state.me.role === 'admin') {
-    nav.push(
-      { label: 'AI-controle', view: 'control', ic: 'shield' },
-      { label: 'Cijfers', view: 'finance', ic: 'activity' },
-      { label: 'Abonnementen', view: 'subs', ic: 'refresh' },
-      { label: 'Instellingen', view: 'settings', ic: 'wrench' },
-      { label: 'Gebruikers', view: 'users', ic: 'user' },
-    );
-  }
+  const monteur = state.me.role === 'monteur';
+  const nav = [];
+  if (!monteur) nav.push({ label: 'Overzicht', view: 'overview', ic: 'activity' });
+  nav.push({ label: 'Opdrachten', view: 'board', ic: 'list' });
+  if (hasPerm('inbox')) nav.push({ label: 'Inbox / AI', view: 'inbox', ic: 'mail' });
+  nav.push({ label: 'Agenda', view: 'agenda', ic: 'calendar' });
+  if (hasPerm('customers')) nav.push({ label: 'Klanten & leads', view: 'customers', ic: 'users' }, { label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
+  nav.push({ label: 'Facturen', view: 'invoices', ic: 'file' });
+  if (!monteur) nav.push({ label: 'AI Assistent', view: 'assistant', ic: 'sparkles' });
+  if (hasPerm('deleteOrders')) nav.push({ label: 'Prullenbak', view: 'trash', ic: 'trash' });
+  if (hasPerm('system')) nav.push({ label: 'AI-controle', view: 'control', ic: 'shield' }, { label: 'Abonnementen', view: 'subs', ic: 'refresh' });
+  if (hasPerm('finance')) nav.push({ label: 'Cijfers', view: 'finance', ic: 'activity' });
+  if (hasPerm('settings')) nav.push({ label: 'Instellingen', view: 'settings', ic: 'wrench' });
+  if (state.me.role === 'admin') nav.push({ label: 'Gebruikers', view: 'users', ic: 'user' });
   return nav;
 }
 

@@ -74,6 +74,42 @@ export function requireRole(...roles) {
   };
 }
 
+// ---------- Rechten (per gebruiker aan/uit te zetten) ----------
+// De rol is het BASISPROFIEL; per gebruiker kan de beheerder losse functies
+// aan- of uitzetten (user.perms = { sleutel: true/false }). Geen override
+// ingesteld? Dan geldt de standaard van de rol hieronder. De beheerder heeft
+// altijd alles (kan zichzelf nooit buitensluiten).
+export const PERM_KEYS = [
+  'inbox',        // Inbox/AI-wachtrij behandelen (goedkeuren/afwijzen)
+  'orders',       // Opdrachten aanmaken/bewerken/samenvoegen
+  'deleteOrders', // Opdrachten naar de prullenbak verplaatsen/terugzetten
+  'customers',    // Klanten & monteurs beheren (bewerken/samenvoegen)
+  'invoicesAll',  // Alle facturen & offertes zien (uit = alleen eigen)
+  'finance',      // Cijfers (omzet/kosten/winst) bekijken & boeken
+  'system',       // AI-controle & Abonnementen (systeembewaking) bekijken
+  'settings',     // Instellingen wijzigen
+  'hardDelete',   // Definitief verwijderen (prullenbak/afgewezen legen)
+];
+export const ROLE_PERM_DEFAULTS = {
+  admin:     { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: true,  system: true,  settings: true,  hardDelete: true },
+  assistent: { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: false, system: false, settings: false, hardDelete: false },
+  monteur:   { inbox: false, orders: false, deleteOrders: false, customers: false, invoicesAll: false, finance: false, system: false, settings: false, hardDelete: false },
+};
+export function can(user, key) {
+  if (!user) return false;
+  if (user.role === 'admin') return true; // beheerder altijd alles
+  const override = user.perms && typeof user.perms[key] === 'boolean' ? user.perms[key] : undefined;
+  if (override !== undefined) return override;
+  return !!(ROLE_PERM_DEFAULTS[user.role] || {})[key];
+}
+export function requirePerm(key) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Niet ingelogd' });
+    if (!can(req.user, key)) return res.status(403).json({ error: 'Geen rechten voor deze functie — vraag de beheerder' });
+    next();
+  };
+}
+
 export function publicUser(u) {
   if (!u) return null;
   const { passwordHash, ...rest } = u;

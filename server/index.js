@@ -15,6 +15,7 @@ import {
   attachUser, requireAuth, requireRole, publicUser,
   verifyPassword, createSession, destroySession,
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
+  can, requirePerm, PERM_KEYS,
 } from './auth.js';
 import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
@@ -129,6 +130,37 @@ app.post('/api/users', requireRole('admin'), (req, res) => {
   res.json(publicUser(user));
 });
 
+// Gebruiker bijwerken: naam/rol/monteur-koppeling, wachtwoord-reset en RECHTEN
+// (perms = per-gebruiker aan/uit; null = terug naar de standaard van de rol).
+app.patch('/api/users/:id', requireRole('admin'), (req, res) => {
+  const u = db().users.find((x) => x.id === req.params.id);
+  if (!u) return res.status(404).json({ error: 'Niet gevonden' });
+  const b = req.body || {};
+  if (b.name) u.name = String(b.name).slice(0, 80);
+  if (b.role) {
+    if (!['admin', 'assistent', 'monteur'].includes(b.role)) return res.status(400).json({ error: 'Ongeldige rol' });
+    if (u.id === req.user.id && b.role !== 'admin') return res.status(400).json({ error: 'Je kunt je eigen beheerdersrol niet afnemen' });
+    u.role = b.role;
+    u.monteurId = b.role === 'monteur' ? (b.monteurId || u.monteurId || null) : null;
+  } else if ('monteurId' in b && u.role === 'monteur') {
+    u.monteurId = b.monteurId || null;
+  }
+  if (b.newPassword) {
+    if (String(b.newPassword).length < 6) return res.status(400).json({ error: 'Wachtwoord minimaal 6 tekens' });
+    u.passwordHash = hashPassword(b.newPassword);
+  }
+  if ('perms' in b) {
+    if (b.perms === null) { delete u.perms; } // terug naar rol-standaard
+    else if (typeof b.perms === 'object') {
+      u.perms = {};
+      for (const k of PERM_KEYS) if (typeof b.perms[k] === 'boolean') u.perms[k] = b.perms[k];
+    }
+  }
+  saveSoon();
+  logActivity(req.user.name, 'gebruiker bijgewerkt', `${u.name} (${u.role})`);
+  res.json(publicUser(u));
+});
+
 app.delete('/api/users/:id', requireRole('admin'), (req, res) => {
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'Je kunt jezelf niet verwijderen' });
   const users = db().users;
@@ -182,7 +214,7 @@ app.get('/api/customers', requireAuth, (req, res) => {
   res.json(list);
 });
 
-app.post('/api/customers', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/customers', requirePerm('customers'), (req, res) => {
   const { name, phone, email, address, type, notes } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Naam verplicht' });
   const c = {
@@ -196,7 +228,7 @@ app.post('/api/customers', requireRole('admin', 'assistent'), (req, res) => {
   res.json(c);
 });
 
-app.patch('/api/customers/:id', requireRole('admin', 'assistent'), (req, res) => {
+app.patch('/api/customers/:id', requirePerm('customers'), (req, res) => {
   const c = db().customers.find((x) => x.id === req.params.id);
   if (!c) return res.status(404).json({ error: 'Niet gevonden' });
   for (const k of ['name', 'phone', 'email', 'address', 'type', 'notes']) {
@@ -206,7 +238,7 @@ app.patch('/api/customers/:id', requireRole('admin', 'assistent'), (req, res) =>
   res.json(c);
 });
 
-app.delete('/api/customers/:id', requireRole('admin', 'assistent'), (req, res) => {
+app.delete('/api/customers/:id', requirePerm('customers'), (req, res) => {
   const customers = db().customers;
   const i = customers.findIndex((x) => x.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
@@ -220,7 +252,7 @@ app.delete('/api/customers/:id', requireRole('admin', 'assistent'), (req, res) =
 });
 
 // Mogelijke dubbele klanten vinden (zelfde e-mail of telefoon).
-app.get('/api/customers/duplicates', requireRole('admin', 'assistent'), (req, res) => {
+app.get('/api/customers/duplicates', requirePerm('customers'), (req, res) => {
   const norm = (v) => (v || '').toLowerCase().replace(/[\s().-]/g, '');
   const groups = {};
   for (const c of db().customers) {
@@ -244,7 +276,7 @@ app.get('/api/customers/duplicates', requireRole('admin', 'assistent'), (req, re
 
 // Twee (of meer) klanten samenvoegen tot één. Alle opdrachten gaan naar de
 // 'primaire' klant; de rest wordt verwijderd.
-app.post('/api/customers/merge', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/customers/merge', requirePerm('customers'), (req, res) => {
   const { primaryId, mergeIds } = req.body || {};
   const primary = db().customers.find((c) => c.id === primaryId);
   if (!primary || !Array.isArray(mergeIds) || !mergeIds.length) {
@@ -331,7 +363,7 @@ app.get('/api/monteurs/:id/orders', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/monteurs', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/monteurs', requirePerm('customers'), (req, res) => {
   const { name, phone, email, waGroup } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Naam verplicht' });
   const m = { id: id('mont'), name, phone: phone || '', email: email || '', waGroup: waGroup || '', calendarId: '', createdAt: now() };
@@ -341,7 +373,7 @@ app.post('/api/monteurs', requireRole('admin', 'assistent'), (req, res) => {
   res.json(m);
 });
 
-app.patch('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) => {
+app.patch('/api/monteurs/:id', requirePerm('customers'), (req, res) => {
   const m = db().monteurs.find((x) => x.id === req.params.id);
   if (!m) return res.status(404).json({ error: 'Niet gevonden' });
   for (const k of ['name', 'phone', 'email', 'waGroup', 'calendarId']) if (k in (req.body || {})) m[k] = req.body[k];
@@ -349,7 +381,7 @@ app.patch('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) => 
   res.json(m);
 });
 
-app.delete('/api/monteurs/:id', requireRole('admin', 'assistent'), (req, res) => {
+app.delete('/api/monteurs/:id', requirePerm('customers'), (req, res) => {
   const monteurs = db().monteurs;
   const i = monteurs.findIndex((x) => x.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
@@ -424,7 +456,7 @@ function orderChannelOf(o) {
 // Handmatig inklappen: stopt alle nu zichtbare (actieve) opdrachten van het gekozen
 // kanaal in één gedateerde bundel, zodat het bord weer leeg is. Terug te halen door
 // op de bundel te klikken.
-app.post('/api/archives/collapse', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/archives/collapse', requirePerm('orders'), (req, res) => {
   const channel = (req.body && req.body.channel) || 'all';
   const ts = new Date();
   const key = 'manual_' + ts.getTime();
@@ -444,7 +476,7 @@ app.post('/api/archives/collapse', requireRole('admin', 'assistent'), (req, res)
 });
 
 // Een inklap-bundel ongedaan maken: haal de opdrachten weer terug op het bord.
-app.post('/api/archives/uncollapse', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/archives/uncollapse', requirePerm('orders'), (req, res) => {
   const key = req.body && req.body.key;
   if (!key) return res.status(400).json({ error: 'key vereist' });
   let n = 0;
@@ -457,7 +489,7 @@ app.post('/api/archives/uncollapse', requireRole('admin', 'assistent'), (req, re
 
 // Eén bericht uit de gesprekshistorie van een opdracht verwijderen (opschonen van
 // verkeerd samengevoegde/spam-berichten).
-app.delete('/api/orders/:id/thread/:threadId', requireRole('admin', 'assistent'), (req, res) => {
+app.delete('/api/orders/:id/thread/:threadId', requirePerm('orders'), (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   order.thread = (order.thread || []).filter((t) => t.id !== req.params.threadId);
@@ -466,7 +498,7 @@ app.delete('/api/orders/:id/thread/:threadId', requireRole('admin', 'assistent')
   res.json(withRelations(order));
 });
 
-app.post('/api/orders', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/orders', requirePerm('orders'), (req, res) => {
   const b = req.body || {};
   let customerId = b.customerId;
   if (!customerId && (b.customerName || b.customerPhone || b.customerEmail)) {
@@ -575,7 +607,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
 // Meerdere opdrachten samenvoegen tot één (zelfde klant, dubbele kaarten).
 // De 'primaire' opdracht behoudt alles; de rest gaat erin op (historie + foto's).
-app.post('/api/orders/merge', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
   const { primaryId, mergeIds } = req.body || {};
   const primary = db().orders.find((o) => o.id === primaryId);
   if (!primary || !Array.isArray(mergeIds) || !mergeIds.length) {
@@ -609,7 +641,7 @@ app.post('/api/orders/merge', requireRole('admin', 'assistent'), (req, res) => {
 });
 
 // Verwijderen = naar de prullenbak verplaatsen (terug te halen).
-app.delete('/api/orders/:id', requireRole('admin', 'assistent'), (req, res) => {
+app.delete('/api/orders/:id', requirePerm('deleteOrders'), (req, res) => {
   const orders = db().orders;
   const i = orders.findIndex((o) => o.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
@@ -629,12 +661,12 @@ app.delete('/api/orders/:id', requireRole('admin', 'assistent'), (req, res) => {
 });
 
 // Prullenbak bekijken
-app.get('/api/trash', requireRole('admin', 'assistent'), (req, res) => {
+app.get('/api/trash', requirePerm('deleteOrders'), (req, res) => {
   res.json(db().trash.map(withRelations));
 });
 
 // Opdracht terughalen uit de prullenbak
-app.post('/api/trash/:id/restore', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/trash/:id/restore', requirePerm('deleteOrders'), (req, res) => {
   const i = db().trash.findIndex((o) => o.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   const [order] = db().trash.splice(i, 1);
@@ -647,7 +679,7 @@ app.post('/api/trash/:id/restore', requireRole('admin', 'assistent'), (req, res)
 });
 
 // Definitief verwijderen uit de prullenbak (incl. bestanden)
-app.delete('/api/trash/:id', requireRole('admin'), (req, res) => {
+app.delete('/api/trash/:id', requirePerm('hardDelete'), (req, res) => {
   const i = db().trash.findIndex((o) => o.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   const [order] = db().trash.splice(i, 1);
@@ -658,7 +690,7 @@ app.delete('/api/trash/:id', requireRole('admin'), (req, res) => {
 });
 
 // Prullenbak helemaal legen (alleen admin)
-app.post('/api/trash/empty', requireRole('admin'), (req, res) => {
+app.post('/api/trash/empty', requirePerm('hardDelete'), (req, res) => {
   const count = db().trash.length;
   db().trash.forEach((o) => (o.attachments || []).forEach((a) => deleteFile(a.file)));
   db().trash = [];
@@ -703,7 +735,7 @@ app.post('/api/orders/:id/attachments', requireAuth, (req, res) => {
 });
 
 // Bijlage verwijderen van een opdracht.
-app.delete('/api/orders/:id/attachments/:attId', requireRole('admin', 'assistent'), (req, res) => {
+app.delete('/api/orders/:id/attachments/:attId', requirePerm('orders'), (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   const att = (order.attachments || []).find((a) => a.id === req.params.attId);
@@ -725,7 +757,7 @@ app.get('/api/reviews', requireAuth, (req, res) => {
   res.json({ items, total: all.length, offset, limit });
 });
 
-app.post('/api/reviews/:id/approve', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/reviews/:id/approve', requirePerm('inbox'), (req, res) => {
   const review = db().reviews.find((r) => r.id === req.params.id);
   if (!review) return res.status(404).json({ error: 'Niet gevonden' });
   if (!['pending', 'overige'].includes(review.status)) return res.status(400).json({ error: 'Al verwerkt' });
@@ -832,7 +864,7 @@ function rejectReview(review, user, b = {}) {
   });
 }
 
-app.post('/api/reviews/:id/reject', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/reviews/:id/reject', requirePerm('inbox'), (req, res) => {
   const review = db().reviews.find((r) => r.id === req.params.id);
   if (!review) return res.status(404).json({ error: 'Niet gevonden' });
   if (!['pending', 'overige'].includes(review.status)) return res.status(400).json({ error: 'Al verwerkt' });
@@ -843,7 +875,7 @@ app.post('/api/reviews/:id/reject', requireRole('admin', 'assistent'), (req, res
 });
 
 // BULK afwijzen: meerdere ids tegelijk, of alle 'overige' (geklets), of alle pending.
-app.post('/api/reviews/bulk-reject', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/reviews/bulk-reject', requirePerm('inbox'), (req, res) => {
   const b = req.body || {};
   let targets = [];
   if (Array.isArray(b.ids) && b.ids.length) {
@@ -862,7 +894,7 @@ app.post('/api/reviews/bulk-reject', requireRole('admin', 'assistent'), (req, re
 });
 
 // BULK accepteren: keur alle pending reviews goed met AI-zekerheid >= drempel.
-app.post('/api/reviews/bulk-approve', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/reviews/bulk-approve', requirePerm('inbox'), (req, res) => {
   const _mc = Number(req.body?.minConfidence); const minPct = Math.max(0, Math.min(100, Number.isFinite(_mc) ? _mc : 80));
   const min = minPct / 100;
   const targets = db().reviews.filter((r) => r.status === 'pending' && !r.suggestion?.aiNotOrder && (r.suggestion?.confidence || 0) >= min);
@@ -877,7 +909,7 @@ app.post('/api/reviews/bulk-approve', requireRole('admin', 'assistent'), (req, r
 
 // OPSCHONEN: laat alle pending berichten opnieuw door het ruisfilter lopen.
 // Geklets verschuift naar 'overige', zodat de hoofdinbox alleen echte aanvragen houdt.
-app.post('/api/reviews/recategorize', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/reviews/recategorize', requirePerm('inbox'), (req, res) => {
   const messages = db().messages;
   let moved = 0;
   for (const r of db().reviews) {
@@ -900,7 +932,7 @@ app.post('/api/reviews/recategorize', requireRole('admin', 'assistent'), (req, r
 
 // Feedback-overzicht (waarom werden berichten afgewezen) — voor assistente/eigenaar.
 // Afgewezen inbox-bericht terugzetten naar 'te controleren'.
-app.post('/api/reviews/:id/restore', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/reviews/:id/restore', requirePerm('inbox'), (req, res) => {
   const r = db().reviews.find((x) => x.id === req.params.id);
   if (!r) return res.status(404).json({ error: 'Niet gevonden' });
   if (r.status !== 'rejected') return res.status(400).json({ error: 'Alleen afgewezen berichten terugzetten' });
@@ -910,7 +942,7 @@ app.post('/api/reviews/:id/restore', requireRole('admin', 'assistent'), (req, re
 });
 
 // Afgewezen bericht DEFINITIEF verwijderen (alleen admin).
-app.delete('/api/reviews/:id', requireRole('admin'), (req, res) => {
+app.delete('/api/reviews/:id', requirePerm('hardDelete'), (req, res) => {
   const i = db().reviews.findIndex((x) => x.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   db().reviews.splice(i, 1);
@@ -919,7 +951,7 @@ app.delete('/api/reviews/:id', requireRole('admin'), (req, res) => {
 });
 
 // Hele inbox-prullenbak legen (alleen admin).
-app.post('/api/reviews/empty-rejected', requireRole('admin'), (req, res) => {
+app.post('/api/reviews/empty-rejected', requirePerm('hardDelete'), (req, res) => {
   const before = db().reviews.length;
   db().reviews = db().reviews.filter((r) => r.status !== 'rejected');
   saveSoon();
@@ -931,7 +963,7 @@ app.get('/api/feedback', requireAuth, (req, res) => {
 });
 
 // Eén leervoorbeeld verwijderen (bv. een afwijzing die eigenlijk een opdracht was).
-app.delete('/api/feedback/:id', requireRole('admin', 'assistent'), (req, res) => {
+app.delete('/api/feedback/:id', requirePerm('inbox'), (req, res) => {
   const i = (db().feedback || []).findIndex((f) => f.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   db().feedback.splice(i, 1);
@@ -940,7 +972,7 @@ app.delete('/api/feedback/:id', requireRole('admin', 'assistent'), (req, res) =>
 });
 
 // Alle leervoorbeelden van VANDAAG wissen (handig na een verkeerde bulk-actie).
-app.post('/api/feedback/clear-today', requireRole('admin'), (req, res) => {
+app.post('/api/feedback/clear-today', requirePerm('hardDelete'), (req, res) => {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const before = (db().feedback || []).length;
   db().feedback = (db().feedback || []).filter((f) => new Date(f.at).getTime() < start.getTime());
@@ -949,7 +981,7 @@ app.post('/api/feedback/clear-today', requireRole('admin'), (req, res) => {
 });
 
 // Alle AI-leervoorbeelden wissen (volledig schoon beginnen). Alleen admin.
-app.post('/api/feedback/clear-all', requireRole('admin'), (req, res) => {
+app.post('/api/feedback/clear-all', requirePerm('hardDelete'), (req, res) => {
   const removed = (db().feedback || []).length;
   db().feedback = [];
   saveSoon();
@@ -1264,7 +1296,7 @@ app.post('/api/simulate', requireRole('admin', 'assistent'), async (req, res) =>
 });
 
 // ---------- Instellingen / statistieken / activiteit ----------
-app.get('/api/settings', requireRole('admin'), (req, res) => {
+app.get('/api/settings', requirePerm('settings'), (req, res) => {
   res.json({
     aiAutoApproveThreshold: autoApproveThreshold(),
     aiMode: aiMode(),
@@ -1291,7 +1323,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
   });
 });
 
-app.patch('/api/settings', requireRole('admin'), (req, res) => {
+app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   const b = req.body || {};
   if ('aiAutoApproveThreshold' in b) {
     const v = Number(b.aiAutoApproveThreshold);
@@ -1682,6 +1714,7 @@ app.post('/api/orders/:id/werkbon', requireAuth, (req, res) => {
 // opdrachten of records die hij zelf heeft aangemaakt (losse facturen/offertes).
 function canTouchInvoice(req, inv) {
   if (req.user.role !== 'monteur') return true;
+  if (can(req.user, 'invoicesAll')) return true; // recht "alle facturen zien" aangezet
   if (inv.createdById && inv.createdById === req.user.id) return true;
   const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
   return !!(order && order.monteurId === req.user.monteurId);
@@ -1900,7 +1933,7 @@ app.get('/api/invoices', requireAuth, (req, res) => {
 
 
 // ---------- Financiën / Cijfers (admin) ----------
-app.get('/api/finance', requireRole('admin'), (req, res) => {
+app.get('/api/finance', requirePerm('finance'), (req, res) => {
   const month = String(req.query.month || '').slice(0, 7);
   const monteurs = db().monteurs || [];
   bookRecurringDue(); // vaste kosten van de lopende periode automatisch bijboeken
@@ -1913,38 +1946,38 @@ app.get('/api/finance', requireRole('admin'), (req, res) => {
     settings: getFinanceSettings(),
   });
 });
-app.post('/api/finance/settings', requireRole('admin'), (req, res) => {
+app.post('/api/finance/settings', requirePerm('finance'), (req, res) => {
   const saved = saveFinanceSettings(req.body || {});
   bookRecurringDue();
   res.json(saved);
 });
-app.get('/api/finance/suggest-income', requireRole('admin'), (req, res) => {
+app.get('/api/finance/suggest-income', requirePerm('finance'), (req, res) => {
   res.json({ suggestions: suggestIncomeFromReports(String(req.query.month || '').slice(0, 7), db().monteurs || []) });
 });
-app.post('/api/finance/import-income', requireRole('admin'), (req, res) => {
+app.post('/api/finance/import-income', requirePerm('finance'), (req, res) => {
   const n = importIncome(req.body?.items || [], req.user.name);
   logActivity(req.user.name, 'omzet geïmporteerd uit monteursrapporten', `${n} boeking(en)`);
   res.json({ ok: true, booked: n });
 });
-app.post('/api/finance/weekly-report/test', requireRole('admin'), async (req, res) => {
+app.post('/api/finance/weekly-report/test', requirePerm('finance'), async (req, res) => {
   const to = (req.body?.to || getFinanceSettings().weeklyReport.email || '').trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Vul een geldig e-mailadres in bij het CEO-rapport.' });
   if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
   try { await sendWeeklyCeoReport(to, true); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/finance', requireRole('admin'), (req, res) => {
+app.post('/api/finance', requirePerm('finance'), (req, res) => {
   const out = addEntry(req.body || {}, req.user.name);
   if (out.error) return res.status(400).json({ error: out.error });
   logActivity(req.user.name, `${out.entry.kind === 'income' ? 'inkomst' : 'uitgave'} geboekt`, `${out.entry.category} € ${out.entry.amount}`);
   res.json(out.entry);
 });
-app.patch('/api/finance/:id', requireRole('admin'), (req, res) => {
+app.patch('/api/finance/:id', requirePerm('finance'), (req, res) => {
   const out = updateEntry(req.params.id, req.body || {});
   if (out.error) return res.status(out.error === 'Niet gevonden' ? 404 : 400).json({ error: out.error });
   res.json(out.entry);
 });
-app.delete('/api/finance/:id', requireRole('admin'), (req, res) => {
+app.delete('/api/finance/:id', requirePerm('finance'), (req, res) => {
   const out = deleteEntry(req.params.id);
   logActivity(req.user.name, 'financiële regel verwijderd', req.params.id);
   res.json(out);
@@ -2457,7 +2490,7 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
 });
 
 // Abonnementen-overzicht + (geschat) AI-verbruik via dit dashboard.
-app.get('/api/subscriptions', requireRole('admin'), (req, res) => {
+app.get('/api/subscriptions', requirePerm('system'), (req, res) => {
   res.json({
     usage: usageSummary(),
     services: [
@@ -2486,7 +2519,7 @@ app.get('/api/subscriptions', requireRole('admin'), (req, res) => {
 });
 
 // Systeem-gezondheidscheck (laatste resultaat of nu uitvoeren met ?run=1)
-app.get('/api/health', requireRole('admin'), async (req, res) => {
+app.get('/api/health', requirePerm('system'), async (req, res) => {
   if (req.query.run === '1' || !lastHealth()) {
     try { return res.json(await runHealthCheck()); }
     catch (e) { return res.status(500).json({ error: e.message }); }

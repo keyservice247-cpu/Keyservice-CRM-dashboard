@@ -805,10 +805,17 @@ table tbody tr:hover { background: var(--panel-2); }
   #themeBtn, #accountBtn, #logoutBtn { display: none; }
   .nav-menu-btn { display: inline-flex; font-size: 13.5px; font-weight: 600; }
 
-  /* Titels links en compacter op mobiel (i.p.v. veel witruimte). */
-  .view-head { margin-bottom: 14px; gap: 6px; }
-  .view-head h2 { text-align: left; }
-  .content { padding-top: 12px; }
+  /* Compacte kop op mobiel: kleine titel, GEEN subtitel/statistiekjes-regel, en
+     alle actieknoppen op EEN horizontaal schuivende rij i.p.v. drie rijen die
+     het halve scherm vullen. Zo zie je meteen je kaarten. */
+  .view-head { margin-bottom: 8px; gap: 6px; align-items: stretch; }
+  .view-head h2 { text-align: left; font-size: 16px; margin: 0; }
+  .view-head .muted { display: none; }
+  /* max-width voorkomt dat de brede knoppenrij de hele kop oprekt; hij scrolt in zichzelf */
+  .view-actions { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; max-width: 100%; }
+  .view-actions > * { flex: 0 0 auto; }
+  .view-actions input[type=search] { width: 180px; min-width: 180px; }
+  .content { padding-top: 10px; }
 
   /* Instellingen-tabbladen op mobiel: één horizontaal schuivende rij, net onder de
      slanke bovenbalk (die zelf ook bovenaan plakt). Zo blijven de tabbladen bereikbaar
