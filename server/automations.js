@@ -333,14 +333,16 @@ async function runNightlyScan() {
 // weigert inkomende klantmail — dat willen we vóór zijn, niet achteraf ontdekken.
 async function runMailboxQuotaCheck() {
   const rec = await checkMailboxQuota();
-  if (!rec || !rec.supported || typeof rec.pct !== 'number') return;
-  if (rec.pct < 90) return;
+  if (!rec || !rec.supported) return;
+  const full = (rec.boxes || []).filter((b) => b.supported && b.pct >= 90);
+  if (!full.length) return;
   const today = new Date().toISOString().slice(0, 10);
   if (db()._mailboxQuota && db()._mailboxQuota.alertedOn === today) return; // al gemeld vandaag
   db()._mailboxQuota.alertedOn = today;
   saveSoon();
-  const txt = `⚠️ CRM: de e-mailbox (info@) zit ${rec.pct}% VOL (${rec.usedMB} van ${rec.limitMB} MB). Ruim op of vergroot het quotum — anders mislukken bevestigingen/antwoorden en wordt inkomende klantmail geweigerd!`;
-  logActivity('systeem', 'mailbox bijna vol', `${rec.pct}% (${rec.usedMB}/${rec.limitMB} MB)`);
+  const list = full.map((b) => `${b.user}: ${b.pct}% vol (${b.usedMB}/${b.limitMB} MB)`).join(' · ');
+  const txt = `⚠️ CRM: mailbox bijna VOL — ${list}. Ruim op of vergroot het quotum — anders mislukken bevestigingen/antwoorden en wordt inkomende klantmail geweigerd!`;
+  logActivity('systeem', 'mailbox bijna vol', list);
   queueCrmWhatsappAlert(txt);
   console.log('[mailbox-quotum]', txt);
 }

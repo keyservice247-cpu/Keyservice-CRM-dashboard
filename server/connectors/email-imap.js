@@ -223,48 +223,69 @@ async function processSent(client, simpleParser, since) {
   }
 }
 
-// ---------- Mailbox-quotum (hoe vol zit info@?) ----------
-// Vraagt de mailserver hoe vol de mailbox zit (IMAP QUOTA, ondersteund door
-// TransIP). Een volle mailbox = bevestigingen/antwoorden versturen mislukt én
-// inkomende klantmail wordt geweigerd — dus daar willen we VOORAF voor waarschuwen.
-// Resultaat wordt bewaard in db()._mailboxQuota zodat zijbalk en Systeemcheck het
-// direct kunnen tonen zonder telkens opnieuw verbinding te maken.
-export async function checkMailboxQuota() {
-  const host = process.env.IMAP_HOST;
-  const user = process.env.IMAP_USER;
-  const pass = process.env.IMAP_PASSWORD;
-  if (!host || !user || !pass) return null;
+// ---------- Mailbox-quotum (hoe vol zitten de mailboxen?) ----------
+// Vraagt de mailserver hoe vol elke bewaakte mailbox zit (IMAP QUOTA, ondersteund
+// door TransIP). Een volle mailbox = versturen mislukt én inkomende klantmail wordt
+// geweigerd — dus daar willen we VOORAF voor waarschuwen.
+//
+// Bewaakte mailboxen: de hoofdbox (IMAP_USER) + extra boxen via de Render-variabele
+//   IMAP_EXTRA_ACCOUNTS="crm@keyservice247.nl:WACHTWOORD,contact@keyservice247.nl:WACHTWOORD"
+// (zelfde mailserver/host als de hoofdbox). Resultaat komt in db()._mailboxQuota.
+function quotaWatchAccounts() {
+  const list = [];
+  if (process.env.IMAP_USER && process.env.IMAP_PASSWORD) {
+    list.push({ user: process.env.IMAP_USER, pass: process.env.IMAP_PASSWORD });
+  }
+  for (const pair of String(process.env.IMAP_EXTRA_ACCOUNTS || '').split(',')) {
+    const t = pair.trim();
+    const i = t.indexOf(':');
+    if (i > 0) list.push({ user: t.slice(0, i).trim(), pass: t.slice(i + 1).trim() });
+  }
+  return list;
+}
+
+async function quotaForAccount(host, port, { user, pass }) {
   let client;
   try {
     const { ImapFlow } = await import('imapflow');
-    client = new ImapFlow({
-      host, port: Number(process.env.IMAP_PORT || 993), secure: true,
-      auth: { user, pass }, logger: false,
-    });
+    client = new ImapFlow({ host, port, secure: true, auth: { user, pass }, logger: false });
     await client.connect();
     const q = await client.getQuota('INBOX');
     await client.logout().catch(() => {});
     const used = q && q.storage && (q.storage.usage ?? q.storage.used);
     const limit = q && q.storage && q.storage.limit;
-    if (!limit) { // server geeft geen quotum door
-      const rec = { supported: false, at: now() };
-      db()._mailboxQuota = rec; saveSoon();
-      return rec;
-    }
-    const pct = Math.min(100, Math.round((used / limit) * 100));
-    const rec = {
-      supported: true, pct,
+    if (!limit) return { user, supported: false };
+    return {
+      user, supported: true,
+      pct: Math.min(100, Math.round((used / limit) * 100)),
       usedMB: Math.round(used / 1048576), limitMB: Math.round(limit / 1048576),
-      at: now(),
     };
-    // Waarschuwings-datum bewaren zodat we maar 1x per dag alarm slaan.
-    if (db()._mailboxQuota && db()._mailboxQuota.alertedOn) rec.alertedOn = db()._mailboxQuota.alertedOn;
-    db()._mailboxQuota = rec;
-    saveSoon();
-    return rec;
   } catch (e) {
     try { if (client) await client.logout(); } catch { /* al dicht */ }
-    console.error('[mailbox-quotum] check mislukt:', e.message);
-    return null;
+    console.error(`[mailbox-quotum] check van ${user} mislukt:`, e.message);
+    return { user, supported: false, error: e.message };
   }
+}
+
+export async function checkMailboxQuota() {
+  const host = process.env.IMAP_HOST;
+  if (!host) return null;
+  const accounts = quotaWatchAccounts();
+  if (!accounts.length) return null;
+  const port = Number(process.env.IMAP_PORT || 993);
+  const boxes = [];
+  for (const acc of accounts) boxes.push(await quotaForAccount(host, port, acc));
+  const measured = boxes.filter((b) => b.supported);
+  const worst = measured.length ? measured.reduce((a, b) => (b.pct > a.pct ? b : a)) : null;
+  const rec = {
+    supported: !!worst, boxes, at: now(),
+    pct: worst ? worst.pct : undefined,
+    worstUser: worst ? worst.user : undefined,
+    usedMB: worst ? worst.usedMB : undefined,
+    limitMB: worst ? worst.limitMB : undefined,
+  };
+  if (db()._mailboxQuota && db()._mailboxQuota.alertedOn) rec.alertedOn = db()._mailboxQuota.alertedOn;
+  db()._mailboxQuota = rec;
+  saveSoon();
+  return rec;
 }

@@ -243,7 +243,7 @@ async function startLiveUpdates() {
       // Mailbox bijna vol? Rood lampje in de zijbalk (verdwijnt vanzelf na opruimen).
       const mw = $('#mailboxWarn');
       if (mw) {
-        if (typeof p.mailboxPct === 'number') { mw.textContent = `Mailbox ${p.mailboxPct}% VOL — ruim op!`; mw.hidden = false; }
+        if (typeof p.mailboxPct === 'number') { mw.textContent = `Mailbox ${p.mailboxBox || ''} ${p.mailboxPct}% VOL — ruim op!`; mw.hidden = false; }
         else mw.hidden = true;
       }
       // Alleen de inhoud verversen als er écht iets veranderd is.

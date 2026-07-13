@@ -2107,6 +2107,7 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
     // Mailbox-vulgraad (alleen meegeven als bijna vol — anders blijft het stil).
     mailboxPct: (mq && mq.supported && mq.pct >= 90) ? mq.pct : null,
+    mailboxBox: (mq && mq.supported && mq.pct >= 90 && mq.worstUser) ? String(mq.worstUser).split('@')[0] + '@' : null,
   });
 });
 

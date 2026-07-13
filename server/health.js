@@ -59,10 +59,12 @@ async function checkIMAP() {
   try {
     const { checkMailboxQuota } = await import('./connectors/email-imap.js');
     const q = await checkMailboxQuota();
-    if (q && q.supported && typeof q.pct === 'number') {
-      const vol = `${q.pct}% vol (${q.usedMB} van ${q.limitMB} MB)`;
-      if (q.pct >= 90) return { ok: false, configured: true, detail: `MAILBOX BIJNA VOL: ${vol} — ruim op, anders mislukken mails!` };
-      return { ok: true, configured: true, detail: `Actief (${process.env.IMAP_HOST}) · mailbox ${vol}` };
+    if (q && q.supported) {
+      const parts = (q.boxes || []).filter((b) => b.supported)
+        .map((b) => `${b.user} ${b.pct}% vol (${b.usedMB}/${b.limitMB} MB)`);
+      const full = (q.boxes || []).filter((b) => b.supported && b.pct >= 90);
+      if (full.length) return { ok: false, configured: true, detail: `MAILBOX BIJNA VOL: ${parts.join(' · ')} — ruim op, anders mislukken mails!` };
+      if (parts.length) return { ok: true, configured: true, detail: `Actief (${process.env.IMAP_HOST}) · ${parts.join(' · ')}` };
     }
   } catch { /* quotum niet opvraagbaar — val terug op de simpele melding */ }
   return { ok: true, configured: true, detail: `Actief (${process.env.IMAP_HOST})` };
