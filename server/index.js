@@ -23,7 +23,7 @@ import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
-import { maybeSendAutoReply } from './autoreply.js';
+import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
@@ -763,6 +763,8 @@ app.post('/api/reviews/:id/approve', requirePerm('inbox'), (req, res) => {
   if (!['pending', 'overige'].includes(review.status)) return res.status(400).json({ error: 'Al verwerkt' });
   const order = applyReview(review, { actorName: req.user.name, overrides: req.body || {} });
   maybeAutoSendToMonteur(order, 'approved');
+  // Vangnet: is er bij binnenkomst geen ontvangstbevestiging gestuurd, doe het nu alsnog.
+  maybeSendConfirmationOnApprove(order, review).catch(() => {});
   res.json({ review, order: withRelations(order) });
 });
 
@@ -900,7 +902,10 @@ app.post('/api/reviews/bulk-approve', requirePerm('inbox'), (req, res) => {
   const targets = db().reviews.filter((r) => r.status === 'pending' && !r.suggestion?.aiNotOrder && (r.suggestion?.confidence || 0) >= min);
   let count = 0;
   for (const r of targets) {
-    try { applyReview(r, { actorName: `${req.user.name} (bulk >=${minPct}%)` }); count++; } catch { /* skip */ }
+    try {
+      const order = applyReview(r, { actorName: `${req.user.name} (bulk >=${minPct}%)` }); count++;
+      maybeSendConfirmationOnApprove(order, r).catch(() => {}); // vangnet-bevestiging
+    } catch { /* skip */ }
   }
   logActivity(req.user.name, 'bulk goedgekeurd', `${count} berichten met AI-zekerheid >= ${minPct}%`);
   saveSoon();
