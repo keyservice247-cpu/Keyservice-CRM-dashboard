@@ -10,6 +10,8 @@ import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
 import { lastHealth } from './health.js';
 import { getFinanceSettings, weeklyReportData, bookRecurringDue } from './finance.js';
+import { checkMailboxQuota } from './connectors/email-imap.js';
+import { queueCrmWhatsappAlert } from './pipeline.js';
 
 const custOf = (o) => db().customers.find((c) => c.id === o.customerId) || {};
 const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? ''));
@@ -325,6 +327,24 @@ async function runNightlyScan() {
   await _runStatusScan(30);
 }
 
+// ---------- Mailbox-quotum bewaken ----------
+// Elk uur: hoe vol zit de info@-mailbox? Bij >=90% één keer per dag alarm slaan
+// (WhatsApp-teammelding + logboek). Een volle mailbox blokkeert versturen EN
+// weigert inkomende klantmail — dat willen we vóór zijn, niet achteraf ontdekken.
+async function runMailboxQuotaCheck() {
+  const rec = await checkMailboxQuota();
+  if (!rec || !rec.supported || typeof rec.pct !== 'number') return;
+  if (rec.pct < 90) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (db()._mailboxQuota && db()._mailboxQuota.alertedOn === today) return; // al gemeld vandaag
+  db()._mailboxQuota.alertedOn = today;
+  saveSoon();
+  const txt = `⚠️ CRM: de e-mailbox (info@) zit ${rec.pct}% VOL (${rec.usedMB} van ${rec.limitMB} MB). Ruim op of vergroot het quotum — anders mislukken bevestigingen/antwoorden en wordt inkomende klantmail geweigerd!`;
+  logActivity('systeem', 'mailbox bijna vol', `${rec.pct}% (${rec.usedMB}/${rec.limitMB} MB)`);
+  queueCrmWhatsappAlert(txt);
+  console.log('[mailbox-quotum]', txt);
+}
+
 // ---------- Starter ----------
 export function startAutomations({ runStatusScan } = {}) {
   _runStatusScan = runStatusScan || null;
@@ -334,6 +354,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runNightlyScan(); } catch (e) { console.error('[auto-scan]', e.message); }
     try { bookRecurringDue(); } catch (e) { console.error('[vaste-kosten]', e.message); }
     try { await runWeeklyReport(); } catch (e) { console.error('[ceo-rapport]', e.message); }
+    try { await runMailboxQuotaCheck(); } catch (e) { console.error('[mailbox-quotum]', e.message); }
   };
   const fast = async () => {
     try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }

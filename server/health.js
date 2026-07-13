@@ -51,21 +51,33 @@ function checkDB() {
   }
 }
 
-function checkIMAP() {
+async function checkIMAP() {
   const on = !!(process.env.IMAP_HOST && process.env.IMAP_USER && process.env.IMAP_PASSWORD);
-  return { ok: true, configured: on, detail: on ? `Actief (${process.env.IMAP_HOST})` : 'Niet ingesteld (ontvangen uit)' };
+  if (!on) return { ok: true, configured: false, detail: 'Niet ingesteld (ontvangen uit)' };
+  // Ook de vulgraad van de mailbox meten: een volle mailbox weigert inkomende
+  // klantmail en blokkeert versturen — dat is een ECHTE storing, dus rood.
+  try {
+    const { checkMailboxQuota } = await import('./connectors/email-imap.js');
+    const q = await checkMailboxQuota();
+    if (q && q.supported && typeof q.pct === 'number') {
+      const vol = `${q.pct}% vol (${q.usedMB} van ${q.limitMB} MB)`;
+      if (q.pct >= 90) return { ok: false, configured: true, detail: `MAILBOX BIJNA VOL: ${vol} — ruim op, anders mislukken mails!` };
+      return { ok: true, configured: true, detail: `Actief (${process.env.IMAP_HOST}) · mailbox ${vol}` };
+    }
+  } catch { /* quotum niet opvraagbaar — val terug op de simpele melding */ }
+  return { ok: true, configured: true, detail: `Actief (${process.env.IMAP_HOST})` };
 }
 
 export async function runHealthCheck() {
-  const [ai, smtp] = await Promise.all([checkAI(), checkSMTP()]);
+  const [ai, smtp, imap] = await Promise.all([checkAI(), checkSMTP(), checkIMAP()]);
   const result = {
     at: new Date().toISOString(),
     database: checkDB(),
-    imap: checkIMAP(),
+    imap,
     smtp,
     ai,
   };
-  result.allOk = [result.database, result.smtp, result.ai].every((c) => c.ok);
+  result.allOk = [result.database, result.imap, result.smtp, result.ai].every((c) => c.ok);
   lastResult = result;
   return result;
 }

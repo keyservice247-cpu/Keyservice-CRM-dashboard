@@ -804,6 +804,10 @@ table tbody tr:hover { background: var(--panel-2); }
      Uitloggen zitten ín het menu (anders wordt de balk te vol). */
   #themeBtn, #accountBtn, #logoutBtn { display: none; }
   .nav-menu-btn { display: inline-flex; font-size: 13.5px; font-weight: 600; }
+  /* Mailbox-alarm: op mobiel als vol-brede rode banner onder de bovenbalk
+     (gewone pills zijn daar verborgen, maar dit alarm moet je juist zien). */
+  .sidebar { flex-wrap: wrap; }
+  #mailboxWarn:not([hidden]) { display: block; flex: 1 1 100%; order: 9; text-align: center; margin: 2px 0 4px; padding: 7px 10px; font-size: 13px; }
 
   /* Compacte kop op mobiel: kleine titel, GEEN subtitel/statistiekjes-regel, en
      alle actieknoppen op EEN horizontaal schuivende rij i.p.v. drie rijen die

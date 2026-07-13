@@ -2101,9 +2101,12 @@ app.post('/api/learn-filter', requireRole('admin'), async (req, res) => {
 // Lichte "is er iets veranderd?"-check voor live-updates. Het dashboard pollt
 // dit elke paar seconden en ververst alleen als de versie veranderd is.
 app.get('/api/pulse', requireAuth, (req, res) => {
+  const mq = db()._mailboxQuota;
   res.json({
     v: changeVersion(),
     pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
+    // Mailbox-vulgraad (alleen meegeven als bijna vol — anders blijft het stil).
+    mailboxPct: (mq && mq.supported && mq.pct >= 90) ? mq.pct : null,
   });
 });
 

@@ -240,6 +240,12 @@ async function startLiveUpdates() {
       const badge = $('#inboxBadge');
       if (badge) { badge.textContent = p.pendingReviews; badge.hidden = p.pendingReviews === 0; }
       const bn = $('#bnInboxBadge'); if (bn) { bn.textContent = p.pendingReviews; bn.hidden = p.pendingReviews === 0; }
+      // Mailbox bijna vol? Rood lampje in de zijbalk (verdwijnt vanzelf na opruimen).
+      const mw = $('#mailboxWarn');
+      if (mw) {
+        if (typeof p.mailboxPct === 'number') { mw.textContent = `Mailbox ${p.mailboxPct}% VOL — ruim op!`; mw.hidden = false; }
+        else mw.hidden = true;
+      }
       // Alleen de inhoud verversen als er écht iets veranderd is.
       if (_lastPulse !== null && p.v !== _lastPulse) {
         if (state.view === 'overview') loadOverview();
