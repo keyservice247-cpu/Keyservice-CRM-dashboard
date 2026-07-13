@@ -874,7 +874,7 @@ function openOrderModal(id, pool) {
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Sluiten</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
   // Status-veld laten opvallen: kader kleurt mee met de gekozen status.
@@ -925,6 +925,7 @@ function openOrderModal(id, pool) {
   if (o && canWrite && $('#f-snooze')) $('#f-snooze').onclick = () => openSnoozeModal(o);
   if (o && $('#f-werkbon')) $('#f-werkbon').onclick = () => openWerkbonModal(o);
   if (o && $('#f-invoice')) $('#f-invoice').onclick = () => openInvoiceModal(o);
+  if (o && $('#f-quote')) $('#f-quote').onclick = () => openInvoiceModal(o, 'offerte');
   // Afspraak annuleren: haalt de datum weg (verdwijnt uit de agenda + Google Agenda) en
   // brengt desgewenst de klant op de hoogte. De opdracht zelf blijft bestaan.
   if (o && canWrite && $('#f-cancel-appt')) $('#f-cancel-appt').onclick = async () => {
@@ -1369,12 +1370,14 @@ function openWerkbonModal(o) {
 
 // ---------- Factuur (regels, btw, versturen als PDF) ----------
 // ---------- Factuur/offerte-editor (vanaf kaart óf losstaand) ----------
-function openInvoiceModal(o) {
+// type = 'factuur' of 'offerte' — telt alleen bij het AANMAKEN; bestaat er al een
+// gekoppeld document, dan opent gewoon dat document (type wijzigt nooit stiekem).
+function openInvoiceModal(o, type = 'factuur') {
   api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [] }) => {
     renderInvoiceEditor({
-      inv: invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept', type: 'factuur' },
+      inv: invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept', type },
       customer: o.customer || {}, contextTitle: o.title, werkbon: o.werkbon || null, priceList,
-      save: (body) => api(`/api/orders/${o.id}/invoice`, 'POST', body),
+      save: (body) => api(`/api/orders/${o.id}/invoice`, 'POST', { ...body, type }),
       after: () => loadBoard(),
     });
   }).catch((err) => toast(err.message, true));
@@ -3016,7 +3019,63 @@ function modal(html) {
   document.body.classList.add('modal-open'); // achtergrond vastzetten
   $('.modal-backdrop').onclick = closeModal;
 }
-function closeModal() { $('#modalRoot').hidden = true; $('#modal').innerHTML = ''; document.body.classList.remove('modal-open'); }
+function closeModal() { const m = $('#modal'); m.style.transform = ''; m.style.transition = ''; $('#modalRoot').hidden = true; m.innerHTML = ''; document.body.classList.remove('modal-open'); }
+
+// Bottom-sheet: op mobiel sluit je een venster door het balkje/de titel bovenaan
+// vast te pakken en omlaag te swipen (zoals je van apps gewend bent).
+(() => {
+  const sheet = document.getElementById('modal');
+  const rootEl = document.getElementById('modalRoot');
+  if (!sheet || !rootEl) return;
+  let startY = 0, dragging = false, dy = 0;
+  sheet.addEventListener('touchstart', (e) => {
+    if (window.innerWidth > 820 || rootEl.hidden) return;
+    const t = e.touches[0];
+    const rect = sheet.getBoundingClientRect();
+    if (t.clientY - rect.top > 64) return; // alleen de bovenste strook (balkje/titel)
+    startY = t.clientY; dragging = true; dy = 0;
+    sheet.style.transition = 'none';
+  }, { passive: true });
+  sheet.addEventListener('touchmove', (e) => {
+    if (!dragging) return;
+    dy = Math.max(0, e.touches[0].clientY - startY);
+    sheet.style.transform = dy ? `translateY(${dy}px)` : '';
+    if (dy) e.preventDefault(); // tijdens het slepen niet ook nog scrollen
+  }, { passive: false });
+  const endDrag = () => {
+    if (!dragging) return; dragging = false;
+    sheet.style.transition = 'transform .18s ease';
+    if (dy > 110) {
+      sheet.style.transform = 'translateY(105%)';
+      setTimeout(closeModal, 170); // closeModal ruimt transform/transition op
+    } else {
+      sheet.style.transform = '';
+      setTimeout(() => { sheet.style.transition = ''; }, 200);
+    }
+  };
+  sheet.addEventListener('touchend', endDrag);
+  sheet.addEventListener('touchcancel', endDrag);
+})();
+
+// Menu rechtsboven (mobiel): alle pagina's als nette knoppen in een sheet,
+// plus Nachtmodus/Account/Uitloggen (die staan op mobiel niet in de bovenbalk).
+function openNavMenu() {
+  const items = navItems();
+  modal(`<h2>${icon('list', 16)} Menu</h2>
+    <div class="nav-menu-grid">${items.map((n) => `<button type="button" class="btn nav-menu-item" data-view="${esc(n.view)}">${icon(n.ic || 'list', 15)} ${esc(n.label)}</button>`).join('')}</div>
+    <div class="form-sec">${icon('user', 13)} Account</div>
+    <div class="nav-menu-grid">
+      <button type="button" class="btn nav-menu-item" id="nm-theme">${icon('clock', 15)} Nachtmodus</button>
+      <button type="button" class="btn nav-menu-item" id="nm-account">${icon('user', 15)} Account</button>
+      <button type="button" class="btn nav-menu-item" id="nm-logout">${icon('x', 15)} Uitloggen</button>
+    </div>
+    <div class="modal-actions"><div class="right"><button class="btn" id="nm-close">Sluiten</button></div></div>`);
+  $$('#modal .nav-menu-item[data-view]').forEach((b) => b.onclick = () => { closeModal(); goView(b.dataset.view); });
+  const relay = (sel, target) => { const el = $(sel); if (el) el.onclick = () => { closeModal(); const t = document.getElementById(target); if (t) t.click(); }; };
+  relay('#nm-theme', 'themeBtn'); relay('#nm-account', 'accountBtn'); relay('#nm-logout', 'logoutBtn');
+  $('#nm-close').onclick = closeModal;
+}
+{ const b = document.getElementById('navMenuBtn'); if (b) b.onclick = openNavMenu; }
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if ($('.lightbox')) return; // open foto-viewer handelt zijn eigen Esc af
@@ -3037,21 +3096,44 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCommandPalette(); }
 });
+// Eén lijst met alle pagina's per rol — gebruikt door het zoekvenster ("Ga naar")
+// én het menu rechtsboven, zodat ze nooit uit elkaar lopen.
+function navItems() {
+  if (state.me.role === 'monteur') {
+    return [
+      { label: 'Opdrachten', view: 'board', ic: 'list' },
+      { label: 'Agenda', view: 'agenda', ic: 'calendar' },
+      { label: 'Facturen', view: 'invoices', ic: 'file' },
+    ];
+  }
+  const nav = [
+    { label: 'Overzicht', view: 'overview', ic: 'activity' },
+    { label: 'Opdrachten', view: 'board', ic: 'list' },
+    { label: 'Inbox / AI', view: 'inbox', ic: 'mail' },
+    { label: 'Agenda', view: 'agenda', ic: 'calendar' },
+    { label: 'Klanten & leads', view: 'customers', ic: 'users' },
+    { label: 'Monteurs', view: 'monteurs', ic: 'wrench' },
+    { label: 'Facturen', view: 'invoices', ic: 'file' },
+    { label: 'AI Assistent', view: 'assistant', ic: 'sparkles' },
+    { label: 'Prullenbak', view: 'trash', ic: 'trash' },
+  ];
+  if (state.me.role === 'admin') {
+    nav.push(
+      { label: 'AI-controle', view: 'control', ic: 'shield' },
+      { label: 'Cijfers', view: 'finance', ic: 'activity' },
+      { label: 'Abonnementen', view: 'subs', ic: 'refresh' },
+      { label: 'Instellingen', view: 'settings', ic: 'wrench' },
+      { label: 'Gebruikers', view: 'users', ic: 'user' },
+    );
+  }
+  return nav;
+}
+
 async function openCommandPalette() {
   if ($('#cmdPalette')) return;
   const [orders, customers] = await Promise.all([api('/api/orders').catch(() => []), api('/api/customers').catch(() => [])]);
   state.orders = orders; // zodat een gekozen opdracht netjes opent
-  const nav = state.me.role === 'monteur'
-    ? [{ label: 'Opdrachten', view: 'board' }, { label: 'Agenda', view: 'agenda' }, { label: 'Facturen', view: 'invoices' }]
-    : [
-      { label: 'Overzicht', view: 'overview' }, { label: 'Opdrachten', view: 'board' },
-      { label: 'Inbox / AI', view: 'inbox' }, { label: 'Agenda', view: 'agenda' },
-      { label: 'Klanten & leads', view: 'customers' }, { label: 'Monteurs', view: 'monteurs' },
-      { label: 'Facturen', view: 'invoices' },
-    ];
-  if (state.me.role !== 'monteur') { nav.push({ label: 'AI Assistent', view: 'assistant' }, { label: 'Prullenbak', view: 'trash' }); }
-  if (state.me.role === 'admin') { nav.push({ label: 'AI-controle', view: 'control' }, { label: 'Abonnementen', view: 'subs' }, { label: 'Instellingen', view: 'settings' }, { label: 'Gebruikers', view: 'users' }); }
-  nav.forEach((n) => { n.type = 'view'; });
+  const nav = navItems().map((n) => ({ label: n.label, view: n.view, type: 'view' }));
   const root = document.createElement('div'); root.id = 'cmdPalette'; root.className = 'cmd-root';
   root.innerHTML = `<div class="cmd-box"><input id="cmd-input" class="cmd-input" placeholder="Zoek opdracht of klant, of ga naar…" autocomplete="off" spellcheck="false"><div id="cmd-results" class="cmd-results"></div><div class="cmd-hint">↑ ↓ kiezen · Enter openen · Esc sluiten</div></div>`;
   document.body.appendChild(root);

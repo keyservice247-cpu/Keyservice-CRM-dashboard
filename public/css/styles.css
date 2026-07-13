@@ -710,6 +710,12 @@ table tbody tr:hover { background: var(--panel-2); }
 .sg-chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .sg-chip.on svg { stroke: #fff; }
 
+/* Menu rechtsboven (mobiel): knop verborgen op desktop (daar staat de zijbalk al),
+   en het menu zelf als rustig rooster van paginaknoppen. */
+.nav-menu-btn { display: none; align-items: center; gap: 6px; }
+.nav-menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.nav-menu-item { display: flex; align-items: center; justify-content: flex-start; gap: 9px; min-height: 48px; font-weight: 600; }
+
 /* Facturen-overzicht: status als rustige badge (pilletje) i.p.v. losse gekleurde
    tekst — in één oogopslag zie je concept/verzonden/betaald/verlopen. */
 .inv-st { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 11.5px; vertical-align: middle; }
@@ -794,6 +800,10 @@ table tbody tr:hover { background: var(--panel-2); }
   .sidebar-foot .who { display: none; }              /* avatar/naam weg — Account-knop volstaat */
   .foot-actions { gap: 4px; }
   .foot-actions .btn { flex: 0 0 auto; font-size: 12.5px; padding: 7px 9px; min-height: 0; }
+  /* Op mobiel: alleen logo + Menu in de bovenbalk. Nachtmodus, Account en
+     Uitloggen zitten ín het menu (anders wordt de balk te vol). */
+  #themeBtn, #accountBtn, #logoutBtn { display: none; }
+  .nav-menu-btn { display: inline-flex; font-size: 13.5px; font-weight: 600; }
 
   /* Titels links en compacter op mobiel (i.p.v. veel witruimte). */
   .view-head { margin-bottom: 14px; gap: 6px; }
