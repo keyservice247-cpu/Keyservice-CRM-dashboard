@@ -44,7 +44,7 @@ import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
-  getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp, getBackupMail,
+  getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
 } from './settings.js';
 
@@ -1319,6 +1319,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     backupMail: getBackupMail(),
     terugkoppeling: getTerugkoppeling(),
     appointmentMsg: getAppointmentMsg(),
+    onderwegMsg: getOnderweg(),
     reviewRequest: getReviewRequest(),
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     crmAlerts: getCrmAlerts(),
@@ -1410,6 +1411,14 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       reminderHours: Math.max(1, Math.min(72, Number(a.reminderHours) || 24)),
       reminderEmailSubject: String(a.reminderEmailSubject || '').slice(0, 200),
       reminderBody: String(a.reminderBody || '').slice(0, 1000),
+    };
+  }
+  if ('onderwegMsg' in b) {
+    const o = b.onderwegMsg || {};
+    db().settings.onderwegMsg = {
+      emailSubject: String(o.emailSubject || '').slice(0, 200),
+      emailBody: String(o.emailBody || '').slice(0, 2000),
+      whatsappBody: String(o.whatsappBody || '').slice(0, 1000),
     };
   }
   if ('invoiceSettings' in b) {
@@ -1696,6 +1705,49 @@ function canTouchOrder(req, order) {
   if (req.user.role !== 'monteur') return true;
   return !!(order.monteurId && order.monteurId === req.user.monteurId);
 }
+
+// "Monteur onderweg": één knop op de kaart -> klant krijgt een mail én een appje
+// dat de monteur er nu aankomt. Mag ook door de monteur zelf (eigen opdrachten).
+app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
+  const customer = db().customers.find((c) => c.id === order.customerId) || {};
+  const monteur = db().monteurs.find((m) => m.id === order.monteurId);
+  const cfg = getOnderweg();
+  // {monteur} leest als hele frase: "onze monteur Youssef" of, zonder toewijzing,
+  // gewoon "onze monteur" — zo klopt de zin altijd.
+  const vars = { naam: customer.name || '', monteur: monteur?.name ? `onze monteur ${monteur.name}` : 'onze monteur' };
+  const fill = (t) => String(t || '').replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
+  const sent = [];
+  order.thread = order.thread || [];
+  // 1) E-mail (indien adres + SMTP)
+  const email = (customer.email || '').trim();
+  if (email && /@/.test(email) && smtpConfigured()) {
+    const sig = getEmailSignature();
+    const body = fill(cfg.emailBody);
+    try {
+      await sendMail({ to: email, subject: fill(cfg.emailSubject), text: sig ? `${body}\n\n${sig}` : body });
+      order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (onderweg-bericht)', subject: fill(cfg.emailSubject), body, at: now() });
+      sent.push('e-mail');
+    } catch (e) { console.error('[onderweg] e-mail mislukt:', e.message); }
+  }
+  // 2) WhatsApp-DM via de bridge (indien telefoonnummer)
+  const phone = String(customer.phone || '').replace(/[^\d+]/g, '');
+  if (phone) {
+    const body = fill(cfg.whatsappBody);
+    db().outbox = db().outbox || [];
+    db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone, group: '__klant_dm__', text: body, orderId: order.id, status: 'queued', createdAt: now(), by: `onderweg (${req.user.name})` });
+    order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (onderweg-bericht)', body, at: now() });
+    sent.push('WhatsApp');
+  }
+  if (!sent.length) return res.status(400).json({ error: 'Klant heeft geen e-mailadres of telefoonnummer op de kaart (of versturen staat uit).' });
+  order.onderwegAt = now();
+  order.updatedAt = now();
+  logActivity(req.user.name, 'onderweg-bericht verstuurd', `${order.title} — via ${sent.join(' + ')}`);
+  saveSoon();
+  res.json({ ok: true, sent, summary: `Klant geïnformeerd via ${sent.join(' + ')}` });
+});
 
 // Werkbon opslaan op de kaart (uitgevoerd werk, materialen, handtekening als bijlage-id).
 app.post('/api/orders/:id/werkbon', requireAuth, (req, res) => {

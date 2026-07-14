@@ -111,6 +111,7 @@ export function ensureSettings() {
   if (s.backupMail === undefined) s.backupMail = structuredClone(DEFAULT_BACKUP_MAIL);
   if (s.terugkoppeling === undefined) s.terugkoppeling = structuredClone(DEFAULT_TERUGKOPPELING);
   if (s.appointmentMsg === undefined) s.appointmentMsg = structuredClone(DEFAULT_APPOINTMENT_MSG);
+  if (s.onderwegMsg === undefined) s.onderwegMsg = structuredClone(DEFAULT_ONDERWEG_MSG);
   if (s.reviewRequest === undefined) s.reviewRequest = structuredClone(DEFAULT_REVIEW_REQUEST);
   if (s.autoScan === undefined) s.autoScan = { enabled: false, hour: 5 };
   save();
@@ -170,6 +171,22 @@ export function getCrmAlerts() {
 }
 
 // Afspraakbevestiging naar de klant (+ herinnering X uur vooraf).
+// "Monteur onderweg"-bericht: met één knop op de kaart krijgt de klant een mail
+// én een appje dat de monteur er nu aankomt. Teksten aanpasbaar in Instellingen.
+export const DEFAULT_ONDERWEG_MSG = {
+  emailSubject: 'Onze monteur is onderweg — Keyservice',
+  emailBody: `Beste {naam},
+
+Goed nieuws: {monteur} is nu naar u onderweg.
+
+Zorgt u dat er iemand aanwezig is? Tot zo!`,
+  whatsappBody: `Hallo {naam}, {monteur} is nu naar u onderweg. Tot zo! — Keyservice`,
+};
+export function getOnderweg() {
+  const c = db().settings.onderwegMsg || {};
+  return { ...DEFAULT_ONDERWEG_MSG, ...c };
+}
+
 export const DEFAULT_APPOINTMENT_MSG = {
   emailEnabled: false,
   whatsappEnabled: false,

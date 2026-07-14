@@ -899,7 +899,7 @@ function openOrderModal(id, pool) {
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o ? `<button class="btn" id="f-onweg" title="Stuur de klant een mail + appje dat de monteur nu onderweg is">${icon('pin', 14)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Sluiten</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
   // Status-veld laten opvallen: kader kleurt mee met de gekozen status.
@@ -951,6 +951,11 @@ function openOrderModal(id, pool) {
   if (o && $('#f-werkbon')) $('#f-werkbon').onclick = () => openWerkbonModal(o);
   if (o && $('#f-invoice')) $('#f-invoice').onclick = () => openInvoiceModal(o);
   if (o && $('#f-quote')) $('#f-quote').onclick = () => openInvoiceModal(o, 'offerte');
+  if (o && $('#f-onweg')) $('#f-onweg').onclick = async () => {
+    if (!confirm(`Klant laten weten dat de monteur nu onderweg is?${o.onderwegAt ? ' (Er is al eerder een onderweg-bericht gestuurd.)' : ''}`)) return;
+    try { const r = await api(`/api/orders/${o.id}/onderweg`, 'POST', {}); toast(r.summary || 'Onderweg-bericht verstuurd'); closeModal(); loadBoard(); }
+    catch (err) { toast(err.message, true); }
+  };
   // Afspraak annuleren: haalt de datum weg (verdwijnt uit de agenda + Google Agenda) en
   // brengt desgewenst de klant op de hoogte. De opdracht zelf blijft bestaan.
   if (o && canWrite && $('#f-cancel-appt')) $('#f-cancel-appt').onclick = async () => {
@@ -2296,6 +2301,13 @@ async function loadSettings() {
       <label>Herinnering (tekst) <textarea id="ab-rembody" rows="3">${esc(s.appointmentMsg?.reminderBody || '')}</textarea></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveApptMsg">Opslaan</button></div>
     </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('pin', 15)} "Monteur onderweg"-bericht (knop op de kaart)</h3>
+      <p class="muted small">Met de knop <strong>Onderweg</strong> op een kaart krijgt de klant direct een mail én een appje dat de monteur eraan komt. Gebruik <code>{naam}</code> en <code>{monteur}</code> in de tekst.</p>
+      <label>E-mail onderwerp <input id="ow-subject" value="${esc(s.onderwegMsg?.emailSubject || '')}"></label>
+      <label>E-mail bericht <textarea id="ow-body" rows="5">${esc(s.onderwegMsg?.emailBody || '')}</textarea></label>
+      <label>WhatsApp-bericht <textarea id="ow-wabody" rows="3">${esc(s.onderwegMsg?.whatsappBody || '')}</textarea></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveOnderweg">Opslaan</button></div>
+    </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>⭐ Review-verzoek na afronding (automatisch)</h3>
       <p class="muted small">Zodra een opdracht op <strong>Afgerond</strong> staat, krijgt de klant na het ingestelde aantal uren automatisch een vriendelijk mailtje met jullie review-link (bv. Google). Goede reviews = meer klanten. Gebruik <code>{naam}</code> en <code>{link}</code> in de tekst.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="rr-enabled" style="width:auto" ${s.reviewRequest?.enabled ? 'checked' : ''}> Review-verzoek aanzetten</label>
@@ -2359,6 +2371,11 @@ async function loadSettings() {
       reminderEmailSubject: 'Herinnering: uw afspraak — Keyservice', reminderBody: $('#ab-rembody').value,
     };
     try { await api('/api/settings', 'PATCH', { appointmentMsg }); toast('Afspraakberichten opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveOnderweg').onclick = async () => {
+    const onderwegMsg = { emailSubject: $('#ow-subject').value, emailBody: $('#ow-body').value, whatsappBody: $('#ow-wabody').value };
+    try { await api('/api/settings', 'PATCH', { onderwegMsg }); toast('Onderweg-bericht opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveReview').onclick = async () => {
