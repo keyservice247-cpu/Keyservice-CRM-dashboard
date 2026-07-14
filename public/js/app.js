@@ -2202,6 +2202,15 @@ async function loadSettings() {
         <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
       </div>
     </div>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-verbinding testen</h3>
+      <p class="muted small">Stuur een testbericht naar een nummer en zie hieronder of de bridge het écht verstuurt. Blijft een bericht op <strong>wachtrij</strong> staan of wordt het <strong>mislukt</strong>? Dan moet de bridge op de VPS worden bijgewerkt/herstart.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <label style="margin:0;flex:1;min-width:180px">Telefoonnummer <input id="wt-phone" placeholder="bv. 0612345678"></label>
+        <button class="btn btn-primary" id="wt-send" style="align-self:flex-end">Stuur testbericht</button>
+        <button class="btn" id="wt-refresh" style="align-self:flex-end" title="Status verversen">${icon('refresh', 14)}</button>
+      </div>
+      <div id="wt-status" style="margin-top:12px"></div>
+    </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('bell', 15)} Meldingen op je telefoon</h3>
       <p class="muted small">Krijg een pushmelding op dit toestel zodra er een nieuwe aanvraag of een reactie van een klant binnenkomt — ook als de CRM dicht is. Zet het per toestel aan (telefoon én pc kan allebei).</p>
       <div id="pushPanel" class="muted small" style="margin-top:10px">Laden…</div>
@@ -2372,6 +2381,23 @@ async function loadSettings() {
     };
     try { await api('/api/settings', 'PATCH', { appointmentMsg }); toast('Afspraakberichten opgeslagen'); }
     catch (err) { toast(err.message, true); }
+  };
+  const wtRender = (items) => {
+    const stChip = { queued: '<span class="inv-st verzonden">wachtrij</span>', sent: '<span class="inv-st betaald">verstuurd ✓</span>', failed: '<span class="inv-st verlopen">MISLUKT</span>' };
+    $('#wt-status').innerHTML = items.length ? `<table><thead><tr><th>Tijd</th><th>Naar</th><th>Status</th><th>Door</th></tr></thead><tbody>${items.map((i) => `<tr><td class="muted small">${esc(fmtDate(i.createdAt))}</td><td>${esc(i.to)}</td><td>${stChip[i.status] || esc(i.status)}</td><td class="muted small">${esc(i.by)}</td></tr>`).join('')}</tbody></table>` : '<span class="muted small">Nog geen berichten in de wachtrij.</span>';
+  };
+  const wtLoad = async () => { try { wtRender(await api('/api/whatsapp/outbox-status')); } catch { /* stil */ } };
+  wtLoad();
+  $('#wt-refresh').onclick = wtLoad;
+  $('#wt-send').onclick = async () => {
+    const phone = $('#wt-phone').value.trim();
+    if (!phone) return toast('Vul eerst een telefoonnummer in', true);
+    try {
+      await api('/api/whatsapp/test', 'POST', { phone });
+      toast('Testbericht in de wachtrij — de bridge verstuurt binnen ~10 sec');
+      await wtLoad();
+      setTimeout(wtLoad, 12000); // na de bridge-poll nog eens verversen
+    } catch (err) { toast(err.message, true); }
   };
   $('#saveOnderweg').onclick = async () => {
     const onderwegMsg = { emailSubject: $('#ow-subject').value, emailBody: $('#ow-body').value, whatsappBody: $('#ow-wabody').value };

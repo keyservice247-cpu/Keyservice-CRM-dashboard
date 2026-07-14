@@ -1687,6 +1687,31 @@ app.get('/api/outbox', checkIngestToken, (req, res) => {
   res.json(db().outbox.filter((o) => o.status === 'queued'));
 });
 
+// WhatsApp-verbinding testen vanuit Instellingen: zet een testbericht in de
+// wachtrij naar een opgegeven nummer. Zo zie je binnen ~10 sec of de bridge
+// op de VPS klant-DM's echt verstuurt (status wordt sent/failed).
+app.post('/api/whatsapp/test', requirePerm('settings'), (req, res) => {
+  const phone = String(req.body?.phone || '').replace(/[^\d+]/g, '');
+  if (phone.replace(/\D/g, '').length < 10) return res.status(400).json({ error: 'Vul een geldig telefoonnummer in (bv. 0612345678)' });
+  const text = String(req.body?.text || '').trim() || `Testbericht van het Keyservice CRM — de WhatsApp-koppeling werkt! (${new Date().toLocaleTimeString('nl-NL')})`;
+  db().outbox = db().outbox || [];
+  const item = { id: id('out'), kind: 'whatsapp_customer', phone, group: '__klant_dm__', text, status: 'queued', createdAt: now(), by: `testbericht (${req.user.name})` };
+  db().outbox.unshift(item);
+  logActivity(req.user.name, 'WhatsApp-testbericht in wachtrij', phone);
+  saveSoon();
+  res.json({ ok: true, id: item.id });
+});
+
+// Wachtrij-status voor het test-/diagnosekaartje: de laatste items met status.
+app.get('/api/whatsapp/outbox-status', requirePerm('settings'), (req, res) => {
+  const items = (db().outbox || []).slice(0, 12).map((o) => ({
+    id: o.id, status: o.status, by: o.by || '', createdAt: o.createdAt, doneAt: o.doneAt || null,
+    to: o.phone ? o.phone : (o.group === '__klant_dm__' ? 'klant-DM' : o.group || '?'),
+    text: String(o.text || '').slice(0, 80),
+  }));
+  res.json(items);
+});
+
 // De bridge meldt hier terug dat een item verzonden is (of mislukt).
 app.post('/api/outbox/:id/done', checkIngestToken, (req, res) => {
   const item = db().outbox.find((o) => o.id === req.params.id);
