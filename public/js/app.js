@@ -1423,6 +1423,41 @@ function openStandaloneInvoice(invId) {
   }).catch((err) => toast(err.message, true));
 }
 
+// PDF delen (mobiel: native deel-menu -> WhatsApp / Bestanden / Mail) of anders
+// downloaden (desktop). label wordt de bestandsnaam. Werkt voor facturen én offertes.
+async function shareInvoicePdf(invId, label, btn) {
+  const safe = String(label || 'document').replace(/[^\w\-. ]+/g, '').trim() || 'document';
+  const prev = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Bezig…'; }
+  try {
+    const resp = await fetch(`/api/invoices/${invId}/pdf`, { credentials: 'same-origin' });
+    if (!resp.ok) throw new Error('PDF ophalen mislukt');
+    const blob = await resp.blob();
+    const file = new File([blob], `${safe}.pdf`, { type: 'application/pdf' });
+    // 1) Mobiel met deel-ondersteuning: open het native deel-menu (WhatsApp, Bestanden…).
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: safe, text: `${safe} — Keyservice` });
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return; // gebruiker sloot het deel-menu zelf
+        // anders doorvallen naar downloaden
+      }
+    }
+    // 2) Anders: gewoon downloaden als bestand.
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl; a.download = `${safe}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+    toast('PDF gedownload');
+  } catch (err) {
+    toast(err.message || 'Delen mislukt', true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
 function renderInvoiceEditor(ctx) {
   const { inv, customer, priceList } = ctx;
   const isQuote = inv.type === 'offerte';
@@ -1470,7 +1505,8 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && inv.status !== 'betaald' ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}
       </div>
       <div class="right">
-        ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('paperclip', 14)} PDF</a>` : ''}
+        ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('eye', 14)} PDF openen</a>` : ''}
+        ${inv.id ? `<button class="btn" id="inv-share">${icon('paperclip', 14)} Delen / opslaan</button>` : ''}
         <button class="btn" id="inv-cancel">Sluiten</button>
         ${locked ? '' : `<button class="btn" id="inv-save">Concept opslaan</button>
         <button class="btn btn-primary" id="inv-send">${inv.status === 'verzonden' ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>`}
@@ -1534,6 +1570,7 @@ function renderInvoiceEditor(ctx) {
     } catch (err) { toast(err.message, true); }
   };
   $('#inv-cancel').onclick = closeModal;
+  if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
   if ($('#inv-save')) $('#inv-save').onclick = async () => { try { await saveConcept(); done('Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
   if ($('#inv-send')) $('#inv-send').onclick = async () => {
     if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de kaart of bij Klanten).', true); return; }
@@ -1968,6 +2005,7 @@ function renderInvoices() {
         <strong style="font-size:15px">${eur(i.totalIncl)}</strong>
         <button class="btn btn-sm btn-primary inv-edit" data-id="${esc(i.id)}">Openen</button>
         <a class="btn btn-sm" target="_blank" rel="noopener" href="/api/invoices/${esc(i.id)}/pdf">PDF</a>
+        <button class="btn btn-sm inv-share" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + '-' + i.number + (i.customerName ? ' ' + i.customerName : ''))}">${icon('paperclip', 13)} Deel</button>
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Kaart</button>` : ''}
         ${!quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
@@ -1976,6 +2014,7 @@ function renderInvoices() {
   }).join('');
   wrap.innerHTML = html;
   $$('.inv-edit').forEach((b) => b.onclick = () => openStandaloneInvoice(b.dataset.id));
+  $$('.inv-share').forEach((b) => b.onclick = (e) => shareInvoicePdf(b.dataset.id, b.dataset.label, e.currentTarget));
   $$('.inv-open').forEach((b) => b.onclick = async () => { const orders = await api('/api/orders?includeArchived=1'); state.orders = orders; openOrderModal(b.dataset.oid); });
   const quickStatus = (sel, status, msg) => $$(sel).forEach((b) => b.onclick = async () => {
     try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status }); toast(msg); loadInvoices(); }

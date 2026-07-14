@@ -1910,8 +1910,11 @@ app.get('/api/invoices/:id/pdf', requireAuth, async (req, res) => {
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   try {
     const pdf = await buildInvoicePdf(inv, order, customer);
+    // ?download=1 => opslaan als bestand (i.p.v. inline tonen in de browser).
+    const disp = req.query.download ? 'attachment' : 'inline';
+    const fname = `${inv.type === 'offerte' ? 'offerte' : 'factuur'}-${inv.number}.pdf`;
     res.set('Content-Type', 'application/pdf');
-    res.set('Content-Disposition', `inline; filename="${inv.type === 'offerte' ? 'offerte' : 'factuur'}-${inv.number}.pdf"`);
+    res.set('Content-Disposition', `${disp}; filename="${fname}"`);
     res.send(pdf);
   } catch (e) { res.status(500).json({ error: 'PDF maken mislukt: ' + e.message }); }
 });
