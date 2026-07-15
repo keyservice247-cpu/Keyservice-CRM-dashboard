@@ -130,6 +130,17 @@ function sourceMeta(label) {
   return { icon: '', cls: '' };
 }
 
+// Label voor het "afkomstig uit groep"-chipje. De vertrouwde "Raf Breda"-groep
+// houdt het korte label "DRS"; andere opdracht-groepen (bv. "opdrachten tilburg
+// omgeving") tonen hun ÉCHTE groepsnaam i.p.v. verkeerd "DRS".
+function orderGroupLabel(o) {
+  const g = String(o.originGroup || '').trim();
+  if (!g) return 'Opdrachtgroep';
+  const gl = g.toLowerCase();
+  if (gl.includes('raf breda') || gl.includes('drs')) return 'DRS';
+  return g.length > 24 ? g.slice(0, 22) + '…' : g;
+}
+
 // Bepaalt via welk kanaal een opdracht binnenkwam (voor de hoofdmenu's E-mail / WhatsApp).
 function orderChannel(o) {
   const l = (o.source || '').toLowerCase();
@@ -722,7 +733,7 @@ function cardHTML(o) {
   const stCol = statusColor(o.status);
   const meta = [`<span class="chip status-pill" style="color:${esc(stCol)};background:${esc(stCol)}1f;border-color:${esc(stCol)}66">${esc(statusLabel(o.status))}</span>`];
   meta.push(`<span class="chip ${sm.cls}">${sourceIcon(o.source)} ${esc(o.source || 'Handmatig')}</span>`);
-  if (o.isDrs) meta.push('<span class="chip chip-drs" title="Afkomstig uit de DRS-groep (Raf Breda)">DRS</span>');
+  if (o.isDrs) { const gl = orderGroupLabel(o); meta.push(`<span class="chip chip-drs" title="Afkomstig uit WhatsApp-groep: ${esc(o.originGroup || 'opdrachtgroep')}">${esc(gl)}</span>`); }
   if (o.monteur) meta.push(`<span class="chip mont">${icon('wrench', 13)} ${esc(o.monteur.name)}</span>`);
   if (o.sentToMonteur) meta.push(`<span class="chip src-whatsapp" title="Verstuurd naar ${esc(o.sentToMonteur.monteurName)}">${icon('whatsapp', 13)} naar ${esc(o.sentToMonteur.monteurName)}</span>`);
   if (o.urgent) meta.push(`<span class="chip urgent">${icon('bolt', 13)} spoed</span>`);
@@ -1424,7 +1435,7 @@ function openStandaloneInvoice(invId) {
 }
 
 // PDF delen (mobiel: native deel-menu -> WhatsApp / Bestanden / Mail) of anders
-// downloaden (desktop). label wordt de bestandsnaam. Werkt voor facturen én offertes.
+// downloaden (desktop). Werkt voor facturen én offertes.
 async function shareInvoicePdf(invId, label, btn) {
   const safe = String(label || 'document').replace(/[^\w\-. ]+/g, '').trim() || 'document';
   const prev = btn ? btn.textContent : '';
@@ -1434,28 +1445,32 @@ async function shareInvoicePdf(invId, label, btn) {
     if (!resp.ok) throw new Error('PDF ophalen mislukt');
     const blob = await resp.blob();
     const file = new File([blob], `${safe}.pdf`, { type: 'application/pdf' });
-    // 1) Mobiel met deel-ondersteuning: open het native deel-menu (WhatsApp, Bestanden…).
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: safe, text: `${safe} — Keyservice` });
-        return;
-      } catch (e) {
-        if (e && e.name === 'AbortError') return; // gebruiker sloot het deel-menu zelf
-        // anders doorvallen naar downloaden
-      }
+      try { await navigator.share({ files: [file], title: safe, text: `${safe} — Keyservice` }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; /* anders: downloaden */ }
     }
-    // 2) Anders: gewoon downloaden als bestand.
     const objUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objUrl; a.download = `${safe}.pdf`;
+    const a = document.createElement('a'); a.href = objUrl; a.download = `${safe}.pdf`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
     toast('PDF gedownload');
-  } catch (err) {
-    toast(err.message || 'Delen mislukt', true);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = prev; }
-  }
+  } catch (err) { toast(err.message || 'Delen mislukt', true); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = prev; } }
+}
+
+// Factuur/offerte (opnieuw) versturen naar de klant. Vraagt naar het e-mailadres
+// (voorgevuld met het huidige/laatst gebruikte) zodat een verkeerd adres direct te
+// corrigeren is. Mag zo vaak als nodig; een betaalde factuur blijft betaald.
+async function resendInvoice(invId, label, prefillEmail, after) {
+  const to = prompt(`${label} versturen naar welk e-mailadres?`, prefillEmail || '');
+  if (to === null) return; // geannuleerd
+  const addr = to.trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) { toast('Geen geldig e-mailadres', true); return; }
+  try {
+    const r = await api(`/api/invoices/${invId}/send`, 'POST', { to: addr });
+    toast(`Verstuurd naar ${r.invoice?.sentTo || addr}`);
+    if (after) after();
+  } catch (err) { toast(err.message, true); }
 }
 
 function renderInvoiceEditor(ctx) {
@@ -1507,6 +1522,7 @@ function renderInvoiceEditor(ctx) {
       <div class="right">
         ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('eye', 14)} PDF openen</a>` : ''}
         ${inv.id ? `<button class="btn" id="inv-share">${icon('paperclip', 14)} Delen / opslaan</button>` : ''}
+        ${inv.id && locked ? `<button class="btn" id="inv-resend">${icon('mail', 14)} Verstuur opnieuw</button>` : ''}
         <button class="btn" id="inv-cancel">Sluiten</button>
         ${locked ? '' : `<button class="btn" id="inv-save">Concept opslaan</button>
         <button class="btn btn-primary" id="inv-send">${inv.status === 'verzonden' ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>`}
@@ -1571,6 +1587,7 @@ function renderInvoiceEditor(ctx) {
   };
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
+  if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); });
   if ($('#inv-save')) $('#inv-save').onclick = async () => { try { await saveConcept(); done('Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
   if ($('#inv-send')) $('#inv-send').onclick = async () => {
     if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de kaart of bij Klanten).', true); return; }
@@ -1818,7 +1835,7 @@ function renderAgenda() {
         <div class="agenda-item" data-open="${a.id}">
           <div class="agenda-time">${esc(fmtTime(a.at))}${a.endAt ? '<span class="agenda-endtime">' + esc(fmtTime(a.endAt)) + '</span>' : ''}</div>
           <div class="agenda-body">
-            <div class="agenda-title"><span class="dot" style="background:${esc(statusColor(a.status))}"></span>${esc(a.title)} ${a.isDrs ? '<span class="chip src-whatsapp">DRS</span>' : ''}</div>
+            <div class="agenda-title"><span class="dot" style="background:${esc(statusColor(a.status))}"></span>${esc(a.title)} ${a.isDrs ? `<span class="chip src-whatsapp" title="${esc(a.originGroup || '')}">${esc(orderGroupLabel(a))}</span>` : ''}</div>
             <div class="muted small">${esc(a.customer || '')}${a.phone ? ' · ' + esc(a.phone) : ''}${a.address ? ' · ' + esc(a.address) : ''}</div>
             <div class="muted small">${esc(a.statusLabel)}${a.monteur ? ' · monteur ' + esc(a.monteur) : ' · geen monteur'}</div>
             <div style="display:flex;gap:14px;flex-wrap:wrap">
@@ -2006,6 +2023,7 @@ function renderInvoices() {
         <button class="btn btn-sm btn-primary inv-edit" data-id="${esc(i.id)}">Openen</button>
         <a class="btn btn-sm" target="_blank" rel="noopener" href="/api/invoices/${esc(i.id)}/pdf">PDF</a>
         <button class="btn btn-sm inv-share" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + '-' + i.number + (i.customerName ? ' ' + i.customerName : ''))}">${icon('paperclip', 13)} Deel</button>
+        ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Kaart</button>` : ''}
         ${!quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
@@ -2015,6 +2033,7 @@ function renderInvoices() {
   wrap.innerHTML = html;
   $$('.inv-edit').forEach((b) => b.onclick = () => openStandaloneInvoice(b.dataset.id));
   $$('.inv-share').forEach((b) => b.onclick = (e) => shareInvoicePdf(b.dataset.id, b.dataset.label, e.currentTarget));
+  $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices()));
   $$('.inv-open').forEach((b) => b.onclick = async () => { const orders = await api('/api/orders?includeArchived=1'); state.orders = orders; openOrderModal(b.dataset.oid); });
   const quickStatus = (sel, status, msg) => $$(sel).forEach((b) => b.onclick = async () => {
     try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status }); toast(msg); loadInvoices(); }

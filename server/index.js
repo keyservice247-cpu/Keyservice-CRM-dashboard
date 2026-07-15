@@ -1910,7 +1910,7 @@ app.get('/api/invoices/:id/pdf', requireAuth, async (req, res) => {
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   try {
     const pdf = await buildInvoicePdf(inv, order, customer);
-    // ?download=1 => opslaan als bestand (i.p.v. inline tonen in de browser).
+    // ?download=1 => opslaan als bestand (attachment) i.p.v. inline tonen.
     const disp = req.query.download ? 'attachment' : 'inline';
     const fname = `${inv.type === 'offerte' ? 'offerte' : 'factuur'}-${inv.number}.pdf`;
     res.set('Content-Type', 'application/pdf');
@@ -1928,6 +1928,12 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   const to = (req.body?.to || customer.email || '').trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Geen geldig e-mailadres van de klant. Vul het e-mailveld in.' });
+  // Corrigeerde de gebruiker een verkeerd e-mailadres bij het opnieuw versturen?
+  // Sla het dan meteen op bij de klant, zodat het overal klopt (niet alleen deze mail).
+  if (req.body?.to && customer.id && to.toLowerCase() !== String(customer.email || '').toLowerCase()) {
+    customer.email = to;
+    logActivity(req.user.name, 'klant-e-mail gecorrigeerd (bij versturen)', `${customer.name || ''} → ${to}`);
+  }
   if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
   if (!inv.lines || !inv.lines.length) return res.status(400).json({ error: 'Er staan nog geen regels op.' });
   const cfg = getInvoiceSettings();
@@ -1944,9 +1950,13 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
       text: sig ? `${body}\n\n${sig}` : body,
       attachments: [{ filename: `${isQuote ? 'offerte' : 'factuur'}-${inv.number}.pdf`, content: pdf }],
     });
-    inv.status = 'verzonden';
+    // Opnieuw versturen mag altijd (bv. verkeerd adres, klant wil kopie), maar
+    // verlaag de status NOOIT: een betaalde factuur of goedgekeurde offerte blijft
+    // dat. Alleen een concept promoveert naar 'verzonden'.
+    if (inv.status === 'concept') inv.status = 'verzonden';
     inv.sentAt = now();
     inv.sentTo = to;
+    inv.sendCount = (inv.sendCount || 0) + 1;
     if (order) {
       order.thread = order.thread || [];
       order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (${inv.type})`, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number}`, body, at: now() });
@@ -2012,7 +2022,7 @@ app.get('/api/invoices', requireAuth, (req, res) => {
   res.json(list.map((i) => {
     const c = maps.customers.get(i.customerId) || {};
     const o = i.orderId ? (db().orders.find((x) => x.id === i.orderId) || {}) : {};
-    return { ...i, customerName: c.name || '', orderTitle: o.title || '' };
+    return { ...i, customerName: c.name || '', customerEmail: c.email || '', orderTitle: o.title || '' };
   }));
 });
 
