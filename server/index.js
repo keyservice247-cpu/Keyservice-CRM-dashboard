@@ -257,6 +257,12 @@ app.get('/api/customers', requireAuth, (req, res) => {
       } : null,
     };
   });
+  // AVG: een monteur mag NIET de complete klantendatabase kunnen ophalen. Hij ziet
+  // alleen klanten van zijn eigen opdrachten (genoeg om z'n eigen factuur te maken).
+  if (req.user.role === 'monteur') {
+    const mineIds = new Set(db().orders.filter((o) => o.monteurId && o.monteurId === req.user.monteurId).map((o) => o.customerId));
+    return res.json(list.filter((c) => mineIds.has(c.id)));
+  }
   res.json(list);
 });
 
@@ -2077,6 +2083,14 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
   const s = String(req.body?.status || '');
   const allowed = inv.type === 'offerte' ? ['concept', 'verzonden', 'goedgekeurd', 'afgekeurd'] : ['concept', 'verzonden', 'betaald'];
   if (!allowed.includes(s)) return res.status(400).json({ error: 'Ongeldige status' });
+  // Een betaalde factuur / goedgekeurde offerte mag NIET terug naar concept/verzonden
+  // (dat omzeilde de bewerk-/verwijder-vergrendeling). Alleen de beheerder mag dit,
+  // voor het geval een betaling per ongeluk is aangevinkt.
+  const wasLocked = inv.status === 'betaald' || inv.status === 'goedgekeurd';
+  const wouldUnlock = wasLocked && s !== inv.status;
+  if (wouldUnlock && req.user.role !== 'admin') {
+    return res.status(403).json({ error: `Een ${inv.status === 'betaald' ? 'betaalde factuur' : 'goedgekeurde offerte'} kan alleen de beheerder terugzetten.` });
+  }
   inv.status = s;
   if (s === 'betaald') inv.paidAt = now();
   if (s === 'goedgekeurd') inv.acceptedAt = now();

@@ -266,6 +266,23 @@ async function runWatchdog() {
       }
     }
   }
+  // Outbox-bewaking: WhatsApp-berichten die MISLUKKEN of lang blijven hangen (dan
+  // krijgt een klant/monteur z'n bericht niet). Alleen RECENTE problemen (<24u) tellen,
+  // zodat het alarm vanzelf stopt zodra de bridge weer verstuurt. Max 1 melding/dag.
+  try {
+    const nowMs = Date.now();
+    const recent = (o) => o.createdAt && (nowMs - new Date(o.createdAt).getTime()) < 24 * 3600000;
+    const ob = db().outbox || [];
+    const failed = ob.filter((o) => o.status === 'failed' && recent(o)).length;
+    const stuck = ob.filter((o) => o.status === 'queued' && recent(o) && (nowMs - new Date(o.createdAt).getTime()) > 30 * 60000).length;
+    const today = new Date().toISOString().slice(0, 10);
+    if ((failed >= 1 || stuck >= 1) && s._alerts.outboxDay !== today) {
+      s._alerts.outboxDay = today; save();
+      await alertAdmins('WhatsApp-berichten komen niet aan', `${failed} bericht(en) MISLUKT en ${stuck} langer dan 30 min in de wachtrij. Klanten/monteurs krijgen die mogelijk niet. Check Instellingen → WhatsApp-verbinding testen en de bridge op de VPS.`);
+    } else if (failed === 0 && stuck === 0 && s._alerts.outboxDay) {
+      delete s._alerts.outboxDay; save();
+    }
+  } catch { /* watchdog mag nooit crashen */ }
 }
 
 // ---------- 6b. Wekelijks CEO-rapport (euro's + kansen) ----------

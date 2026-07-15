@@ -131,25 +131,40 @@ async function processInbox(client, simpleParser, since) {
       // Al verwerkt? Dan overslaan (geen dubbel werk, geen dubbele kaarten).
       if (db().messages.find((m) => m.externalId && m.externalId === mid)) continue;
 
-      const msg = await client.fetchOne(uid, { source: true }, { uid: true });
-      if (!msg || !msg.source) continue;
-      const parsed = await simpleParser(msg.source);
-      const attachments = [];
-      for (const att of parsed.attachments || []) {
-        if (!att.content || !att.content.length) continue; // inline-logo's e.d. overslaan
-        const saved = saveBuffer(att.content, { mime: att.contentType, filename: att.filename });
-        if (saved) attachments.push(saved);
+      // BELANGRIJK: één kapotte/rare e-mail mag NIET de hele ronde afbreken — anders
+      // worden alle NIEUWERE mails (hogere UID) nooit meer verwerkt. Dus per bericht
+      // afvangen en doorgaan; de rotte mail wordt gemarkeerd zodat we 'm niet blijven
+      // herproberen (en er komt een regel in het logboek).
+      try {
+        const msg = await client.fetchOne(uid, { source: true }, { uid: true });
+        if (!msg || !msg.source) continue;
+        const parsed = await simpleParser(msg.source);
+        const attachments = [];
+        for (const att of parsed.attachments || []) {
+          if (!att.content || !att.content.length) continue; // inline-logo's e.d. overslaan
+          const saved = saveBuffer(att.content, { mime: att.contentType, filename: att.filename });
+          if (saved) attachments.push(saved);
+        }
+        const result = await ingestMessage({
+          channel: 'email',
+          sender: parsed.from?.text || '',
+          subject: parsed.subject || '',
+          body: (parsed.text || parsed.html || '').toString().slice(0, 8000),
+          externalId: mid,
+          attachments,
+        });
+        // Automatische ontvangstbevestiging naar de klant (indien aangezet).
+        await maybeSendAutoReply(result).catch(() => {});
+      } catch (e) {
+        console.error(`  IMAP: e-mail (uid ${uid}) overgeslagen door fout:`, e.message);
+        // Markeer als 'gezien' zodat deze rotte mail de volgende rondes niet blijft
+        // blokkeren/herproberen. Geen kaart, maar wel geregistreerd.
+        try {
+          db().messages.push({ id: id('msg'), externalId: mid, channel: 'email', skipped: true, error: String(e.message).slice(0, 200), at: now() });
+          logActivity('systeem', 'e-mail overgeslagen (verwerkingsfout)', String(e.message).slice(0, 120));
+          saveSoon();
+        } catch { /* registratie best-effort */ }
       }
-      const result = await ingestMessage({
-        channel: 'email',
-        sender: parsed.from?.text || '',
-        subject: parsed.subject || '',
-        body: (parsed.text || parsed.html || '').toString().slice(0, 8000),
-        externalId: mid,
-        attachments,
-      });
-      // Automatische ontvangstbevestiging naar de klant (indien aangezet).
-      await maybeSendAutoReply(result).catch(() => {});
     }
   } finally {
     lock.release();
