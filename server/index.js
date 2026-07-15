@@ -1092,10 +1092,27 @@ function formCors(req, res) {
   res.set('Access-Control-Max-Age', '86400');
 }
 app.options('/api/ingest/form', (req, res) => { formCors(req, res); res.sendStatus(204); });
-// Toegestane afkomst-domeinen voor formulier-leads (zonder token). Standaard de
-// eigen sites; aanpasbaar/uit te breiden via FORM_ALLOWED_ORIGINS (komma-gescheiden).
-const FORM_ORIGINS = (process.env.FORM_ALLOWED_ORIGINS || 'keyservice247.nl,schuifpuiservice.com')
-  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+// Toegestane afkomst-domeinen voor formulier-leads (zonder token). Deze basislijst
+// staat ALTIJD aan (elke eigen site + elke stad-website); extra domeinen kunnen er
+// zonder code-wijziging bij via de Render-variabele FORM_ALLOWED_ORIGINS
+// (komma-gescheiden). Nieuwe stad? Voeg 'm hier toe of zet 'm in FORM_ALLOWED_ORIGINS.
+// De www.-variant hoeft niet apart: de check matcht het kale domein als deel van de
+// origin. Voor .pages.dev-adressen (Cloudflare-preview) staat de volledige host erin.
+const ALLOWED_ORIGINS = [
+  'keyservice247.nl',
+  'schuifpuiservice.com',
+  // Stad-websites:
+  'schuifpuireparatie-amsterdam.nl',
+  'schuifpuireparatie-amsterdam.pages.dev',
+  'schuifpuireparatie-rotterdam.nl',
+  'schuifpuireparatie-rotterdam.pages.dev',
+  'schuifpuireparatie-utrecht.nl',
+  'schuifpuireparatie-utrecht.pages.dev',
+];
+const FORM_ORIGINS = [...new Set([
+  ...ALLOWED_ORIGINS,
+  ...String(process.env.FORM_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+].map((s) => s.toLowerCase()))];
 function fromAllowedSite(req) {
   const src = `${req.get('origin') || ''} ${req.get('referer') || ''}`.toLowerCase();
   return FORM_ORIGINS.some((d) => src.includes(d));
