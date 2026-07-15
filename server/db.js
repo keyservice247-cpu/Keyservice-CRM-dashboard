@@ -41,15 +41,54 @@ function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+function parseDbFile(file) {
+  const raw = fs.readFileSync(file, 'utf8');
+  return { ...structuredClone(DEFAULT_DATA), ...JSON.parse(raw) };
+}
+// Heeft een geladen dataset échte inhoud? (om lege/kapotte data te herkennen)
+function hasRealData(d) {
+  return !!(d && ((d.customers && d.customers.length) || (d.orders && d.orders.length) || (d.invoices && d.invoices.length)));
+}
+// Probeer te herstellen uit de nieuwste bruikbare back-up (nieuwste eerst).
+function loadFromBackups() {
+  for (const b of listBackups()) {
+    try {
+      const parsed = parseDbFile(path.join(BACKUP_DIR, b.name));
+      if (hasRealData(parsed)) return { parsed, from: b.name };
+    } catch { /* volgende back-up proberen */ }
+  }
+  return null;
+}
+
 export function load() {
   ensureDir();
   if (fs.existsSync(DB_FILE)) {
     try {
-      const raw = fs.readFileSync(DB_FILE, 'utf8');
-      data = { ...structuredClone(DEFAULT_DATA), ...JSON.parse(raw) };
+      data = parseDbFile(DB_FILE);
+      return data;
     } catch (err) {
-      console.error('Kon db.json niet lezen, start met lege database:', err.message);
+      // KRITIEK: db.json is onleesbaar. NOOIT stil leeg starten en het origineel
+      // overschrijven — dan is alle klantdata weg. Eerst het kapotte bestand veilig
+      // wegzetten, dan herstellen uit de nieuwste bruikbare back-up.
+      console.error('[DB-CORRUPT] db.json is onleesbaar:', err.message);
+      try {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        fs.copyFileSync(DB_FILE, `${DB_FILE}.corrupt-${stamp}`);
+        console.error(`[DB-CORRUPT] kapotte versie bewaard als db.json.corrupt-${stamp}`);
+      } catch (e) { console.error('[DB-CORRUPT] kon kapotte db niet apart bewaren:', e.message); }
+      const rec = loadFromBackups();
+      if (rec) {
+        data = rec.parsed;
+        console.error(`[DB-HERSTEL] hersteld uit back-up ${rec.from} — ${(data.customers || []).length} klanten, ${(data.orders || []).length} opdrachten`);
+        try { save(); } catch { /* opslaan van het herstel is best-effort */ }
+        return data;
+      }
+      // Geen bruikbare back-up: leeg starten maar MARKEREN, zodat we geen goede
+      // back-ups overschrijven met lege data (back-ups worden overgeslagen zolang leeg).
+      console.error('[DB-HERSTEL] GEEN bruikbare back-up — start leeg; back-ups tijdelijk uit tot er weer echte data is.');
       data = structuredClone(DEFAULT_DATA);
+      data._recoveryEmpty = true;
+      return data;
     }
   } else {
     data = structuredClone(DEFAULT_DATA);
@@ -63,14 +102,28 @@ export function db() {
   return data;
 }
 
-// Atomisch wegschrijven (schrijf naar tmp, hernoem) zodat het bestand nooit half kapot raakt.
+// Atomisch én duurzaam wegschrijven: schrijf naar tmp, fsync (dwing naar schijf),
+// hernoem (atomair), en fsync de map. Zo raakt db.json nooit half kapot en gaat een
+// net-opgeslagen wijziging niet verloren bij een harde crash. Een schrijffout
+// (bv. schijf vol) laat het BESTAANDE db.json intact en wordt luid gelogd.
 export function save() {
-  if (!data) return;
+  if (!data) return true;
   changeCounter++;
   ensureDir();
-  const tmp = DB_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, DB_FILE);
+  const tmp = `${DB_FILE}.tmp`;
+  try {
+    const json = JSON.stringify(data, null, 2);
+    const fd = fs.openSync(tmp, 'w');
+    try { fs.writeSync(fd, json); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, DB_FILE);
+    // Map-fsync zodat de hernoeming ook duurzaam is (best-effort; niet op elk FS nodig).
+    try { const dfd = fs.openSync(DATA_DIR, 'r'); try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); } } catch { /* optioneel */ }
+    return true;
+  } catch (e) {
+    console.error('[DB-SCHRIJFFOUT] opslaan mislukt (data staat nog in het geheugen):', e.message);
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* opruimen best-effort */ }
+    return false;
+  }
 }
 
 // Debounced opslaan voor veel kleine wijzigingen achter elkaar.
@@ -96,6 +149,9 @@ const KEEP_BACKUPS = Number(process.env.BACKUP_KEEP || 60);
 export function backupNow(reason = 'auto') {
   try {
     if (!data) return null;
+    // Nooit een verdacht LEGE dataset back-uppen: anders verdringt een lege back-up
+    // (na een mislukte/lege start) langzaam alle goede back-ups uit de rotatie.
+    if (!hasRealData(data)) { console.error('[BACK-UP] overgeslagen — dataset lijkt leeg (0 klanten/opdrachten/facturen)'); return null; }
     if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const file = path.join(BACKUP_DIR, `db-${stamp}.json`);
@@ -127,6 +183,22 @@ export function listBackups() {
 }
 
 export function dbFilePath() { return DB_FILE; }
+
+// Een back-up terugzetten (admin-only route). Zet eerst de huidige stand veilig weg
+// (pre-restore-back-up), laadt dan de gekozen back-up in het geheugen en schrijft die weg.
+export function restoreBackup(name) {
+  if (typeof name !== 'string' || !/^db-[\w.\-]+\.json$/.test(name)) return { error: 'Ongeldige back-upnaam' };
+  const file = path.join(BACKUP_DIR, name);
+  if (!fs.existsSync(file)) return { error: 'Back-up niet gevonden' };
+  let parsed;
+  try { parsed = parseDbFile(file); } catch (e) { return { error: 'Back-up onleesbaar: ' + e.message }; }
+  try { backupNow('pre-restore'); } catch { /* best-effort */ }
+  data = parsed;
+  delete data._recoveryEmpty;
+  const ok = save();
+  return ok ? { ok: true, customers: (data.customers || []).length, orders: (data.orders || []).length, invoices: (data.invoices || []).length }
+    : { error: 'Terugzetten gelukt in geheugen, maar wegschrijven mislukte (schijf vol?)' };
+}
 
 // Start automatische back-ups: één bij opstarten (na 10s) en daarna elke X uur.
 export function startBackups() {

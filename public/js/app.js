@@ -2585,8 +2585,16 @@ async function loadSettings() {
       const r = await api('/api/backups');
       const list = r.backups || [];
       $('#backupList').innerHTML = list.length
-        ? `Laatste back-ups (${list.length}):<br>` + list.slice(0, 6).map((b) => `· ${esc(fmtDate(b.at))} — ${(b.size / 1024).toFixed(0)} kB`).join('<br>')
+        ? `<div style="margin-bottom:6px">Laatste back-ups (${list.length}) — je kunt er eentje terugzetten:</div>` + list.slice(0, 8).map((b) => `<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><span style="flex:1">${esc(fmtDate(b.at))} — ${(b.size / 1024).toFixed(0)} kB</span><button class="btn btn-sm bk-restore" data-name="${esc(b.name)}">Terugzetten</button></div>`).join('')
         : 'Nog geen back-ups (de eerste wordt automatisch gemaakt).';
+      $$('#backupList .bk-restore').forEach((btn) => btn.onclick = async () => {
+        if (!confirm('LET OP: dit vervangt ALLE huidige gegevens door deze back-up.\n\nDe huidige stand wordt eerst automatisch veilig weggezet, maar wijzigingen ná deze back-up gaan verloren.\n\nDoorgaan?')) return;
+        try {
+          const res = await api('/api/backup/restore', 'POST', { name: btn.dataset.name });
+          toast(`Teruggezet: ${res.customers} klanten, ${res.orders} opdrachten`);
+          setTimeout(() => location.reload(), 1200);
+        } catch (err) { toast(err.message, true); }
+      });
     } catch { $('#backupList').textContent = ''; }
   };
   loadBackups();

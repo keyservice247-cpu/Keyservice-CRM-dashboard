@@ -10,7 +10,21 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Onafgehandelde fout (genegeerd, app blijft draaien):', err?.message || err);
 });
-import { db, id, now, save, saveSoon, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath } from './db.js';
+import { db, id, now, save, saveSoon, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup } from './db.js';
+
+// Nette afsluiting: bij een deploy/herstart stuurt Render (of Ctrl+C lokaal) een
+// signaal. Flush dan de laatste, nog niet weggeschreven wijzigingen naar schijf
+// (saveSoon debounct 200ms — zonder dit gaat die laatste seconde stil verloren).
+let _shuttingDown = false;
+function gracefulShutdown(sig) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`[afsluiten] ${sig} ontvangen — laatste opslag flushen…`);
+  try { save(); } catch (e) { console.error('[afsluiten] opslaan mislukt:', e.message); }
+  process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 import {
   attachUser, requireAuth, requireRole, publicUser,
   verifyPassword, createSession, destroySession,
@@ -443,6 +457,14 @@ app.get('/api/backup/download', requireRole('admin'), (req, res) => {
   save();
   const stamp = new Date().toISOString().slice(0, 10);
   res.download(dbFilePath(), `keyservice-backup-${stamp}.json`);
+});
+// Een back-up terugzetten (alleen beheerder). Zet eerst de huidige stand veilig weg.
+app.post('/api/backup/restore', requireRole('admin'), (req, res) => {
+  const name = String(req.body?.name || '');
+  const r = restoreBackup(name);
+  if (r.error) return res.status(400).json({ error: r.error });
+  logActivity(req.user.name, 'back-up teruggezet', `${name} — ${r.customers} klanten, ${r.orders} opdrachten`);
+  res.json(r);
 });
 
 // Bepaalt via welk kanaal een opdracht binnenkwam (voor handmatig inklappen per bron).
