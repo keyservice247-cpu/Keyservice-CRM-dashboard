@@ -71,18 +71,50 @@ ensureSeed();
 ensureSettings();
 
 const app = express();
+app.set('trust proxy', 1); // achter de Render-proxy: herkent HTTPS via x-forwarded-proto
+// Basale beveiligingsheaders op elk antwoord: geen MIME-sniffing, geen clickjacking.
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'SAMEORIGIN');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
 app.use(attachUser);
+const isHttps = (req) => req.secure || req.get('x-forwarded-proto') === 'https';
+
+// Eenvoudige rem tegen wachtwoord-raden: te veel MISLUKTE inlogpogingen vanaf
+// hetzelfde IP -> tijdelijk blokkeren. Een geslaagde login wist de teller, dus
+// normaal gebruik wordt nooit gehinderd (pas na 8 foute pogingen in 15 min).
+const _loginAttempts = new Map();
+function loginBlockedFor(ip) {
+  const rec = _loginAttempts.get(ip);
+  if (rec && rec.blockedUntil > Date.now()) return Math.ceil((rec.blockedUntil - Date.now()) / 1000);
+  return 0;
+}
+function noteLoginFail(ip) {
+  const nowMs = Date.now();
+  let rec = _loginAttempts.get(ip);
+  if (!rec || nowMs - rec.first > 15 * 60000) rec = { count: 0, first: nowMs, blockedUntil: 0 };
+  rec.count++;
+  if (rec.count >= 8) rec.blockedUntil = nowMs + 10 * 60000; // 10 min blok
+  _loginAttempts.set(ip, rec);
+}
 
 // ---------- Auth-routes ----------
 app.post('/api/login', (req, res) => {
+  const ip = req.ip || 'onbekend';
+  const wait = loginBlockedFor(ip);
+  if (wait) return res.status(429).json({ error: `Te veel inlogpogingen. Probeer het over ${Math.ceil(wait / 60)} min opnieuw.` });
   const { email, password } = req.body || {};
   const user = db().users.find((u) => u.email === (email || '').toLowerCase());
   if (!user || !verifyPassword(password || '', user.passwordHash)) {
+    noteLoginFail(ip);
     return res.status(401).json({ error: 'Onjuist e-mailadres of wachtwoord' });
   }
+  _loginAttempts.delete(ip); // geslaagd -> teller wissen
   const token = createSession(user.id);
-  setSessionCookie(res, token);
+  setSessionCookie(res, token, isHttps(req));
   logActivity(user.name, 'ingelogd');
   res.json({ user: publicUser(user) });
 });
@@ -2672,6 +2704,14 @@ app.get('/api/activity', requireAuth, (req, res) => {
 // ---------- Bijlagen (alleen voor ingelogde gebruikers) ----------
 app.get('/uploads/:file', requireAuth, (req, res) => {
   if (!/^att_[a-zA-Z0-9_.]+$/.test(req.params.file)) return res.status(400).end();
+  // Veilig serveren: een klant kan via e-mail/WhatsApp een bijlage sturen. Alleen
+  // afbeeldingen/PDF's tonen we inline (voor de fotoviewer); al het andere (bv. .html
+  // of .svg met verborgen script) wordt geforceerd gedownload i.p.v. uitgevoerd in
+  // onze eigen origin. nosniff voorkomt dat de browser het type zelf herinterpreteert.
+  const ext = (req.params.file.split('.').pop() || '').toLowerCase();
+  const inlineOk = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'].includes(ext);
+  res.set('X-Content-Type-Options', 'nosniff');
+  if (!inlineOk) res.set('Content-Disposition', `attachment; filename="${req.params.file}"`);
   res.sendFile(path.join(UPLOAD_DIR, req.params.file));
 });
 

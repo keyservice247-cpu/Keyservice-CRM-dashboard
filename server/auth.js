@@ -116,8 +116,10 @@ export function publicUser(u) {
   return rest;
 }
 
-export function setSessionCookie(res, token) {
-  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}`);
+export function setSessionCookie(res, token, secure = false) {
+  // Secure alléén over HTTPS (productie/Render), anders zou de cookie lokaal (http)
+  // niet werken en kon je niet meer inloggen tijdens ontwikkelen.
+  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}${secure ? '; Secure' : ''}`);
 }
 
 export function clearSessionCookie(res) {
