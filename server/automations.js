@@ -283,6 +283,20 @@ async function runWatchdog() {
       delete s._alerts.outboxDay; save();
     }
   } catch { /* watchdog mag nooit crashen */ }
+  // Off-site back-up-mail: als hij AAN staat maar al >36 uur niet is gelukt, alarm.
+  try {
+    if (s.backupMail && s.backupMail.enabled && smtpConfigured()) {
+      const last = s._backupMailDay ? new Date(s._backupMailDay + 'T12:00:00Z').getTime() : 0;
+      const stale = Date.now() - last > 36 * 3600000;
+      const today = new Date().toISOString().slice(0, 10);
+      if (stale && s._alerts.backupMailDay !== today) {
+        s._alerts.backupMailDay = today; save();
+        await alertAdmins('Off-site back-up mislukt', `De dagelijkse back-up-mail is al meer dan een dag niet verstuurd${s._backupMailError ? ` (${s._backupMailError.message})` : ''}. Controleer e-mail versturen (SMTP) — je klantdata heeft dan geen verse kopie buiten de server.`);
+      } else if (!stale && s._alerts.backupMailDay) {
+        delete s._alerts.backupMailDay; save();
+      }
+    }
+  } catch { /* watchdog mag nooit crashen */ }
 }
 
 // ---------- 6b. Wekelijks CEO-rapport (euro's + kansen) ----------

@@ -109,6 +109,16 @@ export function ensureSettings() {
   if (s.autoReply === undefined) s.autoReply = structuredClone(DEFAULT_AUTOREPLY);
   if (s.followUp === undefined) s.followUp = structuredClone(DEFAULT_FOLLOWUP);
   if (s.backupMail === undefined) s.backupMail = structuredClone(DEFAULT_BACKUP_MAIL);
+  // Eenmalige migratie: zet de dagelijkse off-site back-up-mail AAN als hij nog nooit
+  // is aangeraakt (stond standaard uit). Klantdata is heilig en verdient een kopie
+  // BUITEN de server. Gaat naar het beheerder-adres tenzij anders ingesteld. De
+  // gebruiker kan hem gewoon weer uitzetten; dan blijft dat zo (flag voorkomt herhaling).
+  if (!s._backupMailAutoEnabled) {
+    s._backupMailAutoEnabled = true;
+    if (s.backupMail && s.backupMail.enabled === false && !s.backupMail.email) {
+      s.backupMail.enabled = true;
+    }
+  }
   if (s.terugkoppeling === undefined) s.terugkoppeling = structuredClone(DEFAULT_TERUGKOPPELING);
   if (s.appointmentMsg === undefined) s.appointmentMsg = structuredClone(DEFAULT_APPOINTMENT_MSG);
   if (s.onderwegMsg === undefined) s.onderwegMsg = structuredClone(DEFAULT_ONDERWEG_MSG);

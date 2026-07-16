@@ -5,11 +5,20 @@ import { db, dbFilePath, save, now, logActivity } from './db.js';
 import { getBackupMail } from './settings.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 
-// Verstuur nu een back-up naar het opgegeven adres (of het ingestelde adres).
-export async function sendBackupMail(toOverride) {
+// Waar gaat de back-up naartoe? Het ingestelde adres, en anders automatisch het
+// e-mailadres van de (eerste) beheerder — zodat aanzetten genoeg is, zonder eerst
+// een adres te hoeven typen.
+export function backupTarget() {
   const cfg = getBackupMail();
-  const to = (toOverride || cfg.email || '').trim();
-  if (!to) throw new Error('Geen e-mailadres voor de back-up ingesteld');
+  if (cfg.email) return cfg.email;
+  const admin = (db().users || []).find((u) => u.role === 'admin' && u.email);
+  return admin ? admin.email : '';
+}
+
+// Verstuur nu een back-up naar het opgegeven adres (of anders automatisch de beheerder).
+export async function sendBackupMail(toOverride) {
+  const to = (toOverride || backupTarget() || '').trim();
+  if (!to) throw new Error('Geen e-mailadres voor de back-up ingesteld (en geen beheerder met e-mail)');
   if (!smtpConfigured()) throw new Error('SMTP niet geconfigureerd — versturen kan niet');
   save(); // zorg dat het bestand actueel is
   const file = dbFilePath();
@@ -39,22 +48,30 @@ Bewaar deze e-mail; de bijlage is een volledige kopie van alle gegevens en kan g
 
 // Eén keer per dag op het ingestelde uur automatisch versturen.
 export function startBackupMail() {
-  let lastSentDay = null;
   const tick = async () => {
     try {
       const cfg = getBackupMail();
-      if (!cfg.enabled || !cfg.email) return;
+      // 'email' hoeft niet meer ingevuld: bij aan-staan valt hij terug op de beheerder.
+      if (!cfg.enabled || !backupTarget()) return;
       const d = new Date();
       const day = d.toISOString().slice(0, 10);
-      if (d.getHours() === cfg.hour && lastSentDay !== day) {
-        lastSentDay = day;
-        await sendBackupMail();
-        console.log('[backup-mail] dagelijkse back-up verstuurd naar', cfg.email);
+      const s = db().settings;
+      // Op of ná het ingestelde uur, en nog niet gelukt vandaag. De "gelukt vandaag"-
+      // markering staat in de DB (restart-veilig) en wordt pas NÁ succes gezet — dus
+      // een tijdelijke SMTP-storing zorgt niet dat de hele dag wordt overgeslagen: de
+      // volgende tick (elk kwartier) probeert het gewoon opnieuw.
+      if (d.getHours() >= cfg.hour && s._backupMailDay !== day) {
+        const r = await sendBackupMail();
+        s._backupMailDay = day;
+        delete s._backupMailError;
+        save();
+        console.log('[backup-mail] dagelijkse back-up verstuurd naar', r.to);
       }
     } catch (e) {
-      console.error('[backup-mail] versturen mislukt:', e.message);
+      console.error('[backup-mail] versturen mislukt (wordt volgende kwartier opnieuw geprobeerd):', e.message);
+      try { db().settings._backupMailError = { at: now(), message: String(e.message).slice(0, 200) }; save(); } catch { /* best-effort */ }
     }
   };
-  setInterval(tick, 15 * 60 * 1000); // elk kwartier kijken of het tijd is
+  setInterval(tick, 15 * 60 * 1000); // elk kwartier kijken of het tijd is (en herproberen)
   setTimeout(tick, 30 * 1000);       // ook kort na opstarten
 }
