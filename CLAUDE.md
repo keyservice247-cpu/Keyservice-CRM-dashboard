@@ -69,6 +69,25 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 
+## WhatsApp-groepstoring (LID) — opgelost ronde 26 (17 jul), NIET verzwakken
+- WhatsApp's LID-migratie brak het LEZEN van groeps-chats in whatsapp-web.js 1.34.7
+  (getChats/getChat gooien een minified fout zoals "r"); 1-op-1 werkt, en VERSTUREN
+  naar een groep op id werkt óók (het verzendpad gebruikt getAsModel:false en omzeilt
+  de kapotte code — geverifieerd in de bibliotheek-broncode). 1.34.7 = nieuwste; geen
+  upstream fix; webVersionCache-pinning helpt niet. window.Store bestaat NIET meer in
+  1.34.x — in-page modules heten nu window.require('WAWebCollections') etc.
+- **CRM-kant (werkt zonder VPS):** groeps-koppelingen id→naam in Instellingen →
+  Koppelingen (seed: Raf breda-id 120363177872957422); heling van "groep <id>" op
+  berichten/kaarten bij boot + bij koppeling-opslaan; inhaalslag-dispatch (<48u) bij
+  boot; groeps-outbox-items worden bij falen HERKANST (36u) i.p.v. definitief mislukt;
+  dispatch-items dragen groupId + monteur-06 als noodpad → oude bridge bezorgt 1-op-1.
+- **Bridge v2:** LID-reparatie (hardenGroupChatModel patcht WWebJS.getChatModel),
+  directe naamlezing via WAWebCollections, groep-verzenden op id vóór naam, 1-op-1
+  noodpad, stuurt groupId mee (CRM leert koppelingen automatisch), version in
+  heartbeat. VPS-update = alleen git pull + pm2 restart wa (GEEN npm install).
+- Dit samenspel (koppelingen + herkansing + noodpad + inhaalslag) is het vangnet
+  waardoor een opdracht nooit meer stil verloren gaat — niet weghalen of verzwakken.
+
 ## AI-statusscan — NIET verzwakken (werkt, 6 juli bevestigd)
 - De statusscan leest de **dagrapporten** van de monteur (WhatsApp-monteursgroep, bv.
   "Youssef Keyservice247"). Formaat: kopje (Afgerond/Offerte/Afspraken/Geannuleerd) +
