@@ -4,7 +4,7 @@
 import { db, id, now, save, saveSoon, logActivity } from './db.js';
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
-  getStatusLabels, isWhatsappOrderGroup, getBackupMail,
+  getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
 } from './settings.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
@@ -60,6 +60,7 @@ export function maybeSendTerugkoppeling(order) {
     ].filter(Boolean);
     db().outbox.unshift({
       id: id('out'), orderId: order.id, group: monteur.waGroup, monteurName: monteur.name,
+      groupId: groupIdForName(monteur.waGroup) || undefined, // bridge kan dan direct op id versturen
       text: lines.join('\n'), status: 'queued', createdAt: now(), by: 'terugkoppeling',
     });
     order.terugkoppeling = { status: order.status, at: now() };

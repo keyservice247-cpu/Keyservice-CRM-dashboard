@@ -124,6 +124,19 @@ export function ensureSettings() {
   if (s.onderwegMsg === undefined) s.onderwegMsg = structuredClone(DEFAULT_ONDERWEG_MSG);
   if (s.reviewRequest === undefined) s.reviewRequest = structuredClone(DEFAULT_REVIEW_REQUEST);
   if (s.autoScan === undefined) s.autoScan = { enabled: false, hour: 5 };
+  // Nood-koppeling (16 jul 2026): door de WhatsApp-storing (LID-migratie) kan de bridge
+  // geen groepsnamen meer ophalen, waardoor de DRS-opdrachtgroep binnenkwam als
+  // "groep 120363177872957422" — niet herkend, verkeerde bron, geen auto-dispatch.
+  // Dit id is via de logboeken bevestigd als de Raf Breda-groep. We leveren de
+  // koppeling eenmalig mee zodat alles direct weer werkt; aanpasbaar/verwijderbaar in
+  // Instellingen → Koppelingen (de vlag voorkomt dat hij dan terugkomt).
+  if (!s._seedRafBredaAlias) {
+    s._seedRafBredaAlias = true;
+    const list = Array.isArray(s.groupAliases) ? s.groupAliases : (s.groupAliases = []);
+    if (!list.some((a) => String(a.id || '').replace(/\D/g, '') === '120363177872957422')) {
+      list.push({ id: '120363177872957422', name: 'Raf breda en vliegende keer Rhenen straal 30 KM' });
+    }
+  }
   save();
 }
 
@@ -369,11 +382,80 @@ export function resolveGroupAlias(group) {
 }
 
 // Hoort een WhatsApp-groep bij de "opdracht-groepen"? (substring-match, genormaliseerd)
+// Eerst id → naam vertalen: zo telt ook een kaart/bericht dat nog "groep <id>" heet
+// (binnengekomen vóórdat de koppeling bestond) gewoon als opdracht-groep.
 export function isWhatsappOrderGroup(groupName) {
   const allow = getWhatsappOrderGroups();
   if (!allow.length) return true; // geen filter ingesteld = alle groepen
-  const n = normGroupName(groupName);
+  const n = normGroupName(resolveGroupAlias(groupName));
   return allow.some((a) => n.includes(a));
+}
+
+// Omgekeerde koppeling: groepsNAAM → groeps-id. Hiermee kan de bridge rechtstreeks
+// op id versturen ("<id>@g.us"), ook als hij door de WhatsApp-storing geen namen kan
+// opzoeken. Geeft '' als de naam (nog) niet gekoppeld is.
+export function groupIdForName(name) {
+  const n = normGroupName(name);
+  if (!n || n === '__klant_dm__') return '';
+  for (const a of getGroupAliases()) {
+    const an = normGroupName(a.name);
+    if (an && (an === n || an.includes(n) || n.includes(an))) {
+      return String(a.id || '').replace(/\D/g, '');
+    }
+  }
+  return '';
+}
+
+// Automatisch leren: levert de bridge een bericht MET echte groepsnaam én groeps-id
+// (nieuwere bridge stuurt beide mee), dan slaan we die koppeling meteen op. Valt de
+// naam later weg door een WhatsApp-storing, dan kent het CRM de groep al en blijft
+// herkenning + versturen gewoon werken — zonder handmatige stap.
+export function learnGroupAlias(groupId, name) {
+  try {
+    const idDigits = String(groupId || '').replace(/\D/g, '');
+    const clean = String(name || '').trim().slice(0, 100);
+    if (idDigits.length < 10 || !clean || /^groep\s+\d+$/i.test(clean)) return;
+    const s = db().settings;
+    const list = Array.isArray(s.groupAliases) ? s.groupAliases : (s.groupAliases = []);
+    const cur = list.find((a) => String(a.id || '').replace(/\D/g, '') === idDigits);
+    if (cur) {
+      if (cur.name !== clean) { cur.name = clean; save(); }
+      return;
+    }
+    if (list.length >= 50) return;
+    list.push({ id: idDigits, name: clean });
+    save();
+    console.log(`[groep-koppeling] automatisch geleerd: ${idDigits} → "${clean}"`);
+  } catch (e) { console.error('[groep-koppeling] leren mislukt:', e.message); }
+}
+
+// Heling: berichten en kaarten die tijdens de storing als "groep <id>" zijn opgeslagen
+// krijgen alsnog de echte naam zodra er een koppeling is. Daarmee klopt de bron-chip
+// (DRS) met terugwerkende kracht en herkent ook de statusscan de groepen weer.
+// Idempotent: draait bij het opstarten en na elke wijziging van de koppelingen.
+export function healGroupIdNames() {
+  let n = 0;
+  try {
+    for (const m of db().messages || []) {
+      if (!m.group) continue;
+      const fixed = resolveGroupAlias(m.group);
+      if (fixed !== m.group) {
+        m.group = fixed;
+        if (m.subject && /^WhatsApp-groep:\s*groep\s+\d+$/i.test(m.subject)) m.subject = `WhatsApp-groep: ${fixed}`;
+        n++;
+      }
+    }
+    for (const o of db().orders || []) {
+      if (!o.originGroup) continue;
+      const fixed = resolveGroupAlias(o.originGroup);
+      if (fixed !== o.originGroup) { o.originGroup = fixed; n++; }
+    }
+    if (n) {
+      save();
+      console.log(`[groep-koppeling] ${n} bericht(en)/kaart(en) geheeld: "groep <id>" → echte naam`);
+    }
+  } catch (e) { console.error('[groep-koppeling] helen mislukt:', e.message); }
+  return n;
 }
 
 // Standaard bedrijfsprofiel (kennisbank) — de gebruiker past dit aan in Instellingen.

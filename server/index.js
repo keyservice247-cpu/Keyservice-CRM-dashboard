@@ -60,6 +60,7 @@ import {
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
+  groupIdForName, healGroupIdNames,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1071,6 +1072,9 @@ app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
   const b = req.body || {};
   if (b.state) db().settings.whatsappState = String(b.state).slice(0, 60);
   if (b.lastIncomingAt) db().settings.whatsappLastIncomingAt = String(b.lastIncomingAt).slice(0, 40);
+  // Bridge-versie: zo zien we in het dashboard of de VPS al de nieuwe bridge draait
+  // (v2 = kan groepen per id versturen + leert groeps-koppelingen automatisch).
+  if (b.version) db().settings.whatsappBridgeVersion = Number(b.version) || 0;
   saveSoon();
   res.json({ ok: true });
 });
@@ -1268,7 +1272,7 @@ app.post('/api/ingest/form', async (req, res) => {
 });
 
 app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
-  const { from, sender, name, body, text, message, externalId } = req.body || {};
+  const { from, sender, name, body, text, message, externalId, groupId } = req.body || {};
   // Groep-ID -> echte naam vertalen (bij WhatsApp-storing levert de bridge "groep <id>").
   // Doe het hier al, zodat ook het onderwerp/de kaart-titel de echte naam toont.
   const group = resolveGroupAlias(req.body?.group);
@@ -1278,6 +1282,7 @@ app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
     subject: group ? `WhatsApp-groep: ${group}` : '',
     body: body || text || message || '',
     group,
+    groupId, // nieuwere bridge stuurt het groeps-id mee -> CRM leert de koppeling zelf
     externalId,
   });
   // Volautomatisch: DRS-opdracht direct goedkeuren + naar monteur (indien ingesteld).
@@ -1292,8 +1297,10 @@ app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
 const MONTEUR_CONFIRM_RE = /^(ok|oke|oké|okay|oké|prima|is\s?goed|goed|top|komt goed|doen we|ja|jazeker|akkoord|duidelijk|begrepen|👍|✅|�👍)\b/i;
 function maybeRelayMonteurConfirmation({ group, body }) {
   if (!group) return;
-  const g = String(group).toLowerCase().trim();
-  const monteur = db().monteurs.find((m) => m.waGroup && m.waGroup.toLowerCase().trim() === g);
+  // Vergevingsgezind vergelijken: hoofdletters en dubbele spaties maken niet uit.
+  const norm = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const g = norm(group);
+  const monteur = db().monteurs.find((m) => m.waGroup && norm(m.waGroup) === g);
   if (!monteur) return; // alleen in een monteursgroep
   const text = String(body || '').trim();
   if (!text || text.length > 40 || !MONTEUR_CONFIRM_RE.test(text)) return; // moet korte bevestiging zijn
@@ -1307,6 +1314,7 @@ function maybeRelayMonteurConfirmation({ group, body }) {
   if (!order) return;
   db().outbox.unshift({
     id: id('out'), orderId: order.id, group: order.originGroup, monteurName: monteur.name,
+    groupId: groupIdForName(order.originGroup) || undefined, // direct op id kunnen versturen
     text: 'Oké 👍, wordt opgepakt.', status: 'queued', createdAt: now(), by: 'monteur-bevestiging',
   });
   order.monteurAckRelayed = { at: now(), monteurId: monteur.id, group: order.originGroup };
@@ -1478,6 +1486,10 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       .map((a) => ({ id: String(a.id || '').replace(/\D/g, '').slice(0, 40), name: String(a.name || '').slice(0, 100).trim() }))
       .filter((a) => a.id.length >= 10 && a.name)
       .slice(0, 50);
+    // Direct helen + inhalen: bestaande "groep <id>"-berichten/kaarten krijgen meteen
+    // de echte naam, en gemiste opdrachten gaan alsnog automatisch naar de monteur.
+    healGroupIdNames();
+    maybeCatchUpDispatch();
   }
   if ('emailSignature' in b) {
     db().settings.emailSignature = String(b.emailSignature || '').slice(0, 1000);
@@ -1777,6 +1789,13 @@ function queueToMonteur(order, monteur, byName) {
     id: id('out'),
     orderId: order.id,
     group: monteur.waGroup,
+    // Groeps-id (indien gekoppeld): de bridge verstuurt dan DIRECT op id, ook als hij
+    // door een WhatsApp-storing geen groepsnamen kan opzoeken.
+    groupId: groupIdForName(monteur.waGroup) || undefined,
+    // Noodpad: het 06-nummer van de monteur. Kan de bridge de groep (tijdelijk) niet
+    // bereiken, dan gaat de opdracht 1-op-1 naar de monteur zelf — een opdracht mag
+    // NOOIT ongemerkt blijven hangen.
+    phone: String(monteur.phone || '').trim() || undefined,
     monteurName: monteur.name,
     text: buildMonteurMessage(order),
     status: 'queued',           // queued | sent | failed
@@ -1788,6 +1807,63 @@ function queueToMonteur(order, monteur, byName) {
   order.updatedAt = now();
   if (db().outbox.length > 1000) db().outbox.length = 1000;
   return { item };
+}
+
+// Eenmalig bij het opstarten: recente MISLUKTE groeps-berichten (monteur-dispatch,
+// terugkoppeling, CRM-meldingen) terug in de wachtrij zetten. Tijdens de WhatsApp-
+// storing zijn die ten onrechte als definitief mislukt gemarkeerd; zodra de bridge
+// weer kan versturen gaan ze nu alsnog vanzelf de deur uit.
+function requeueRecentFailedGroupItems() {
+  try {
+    const cutoff = Date.now() - 36 * 3600000;
+    let n = 0;
+    for (const it of db().outbox || []) {
+      if (it.status !== 'failed') continue;
+      if (!it.group || it.group === '__klant_dm__') continue;
+      if (!it.createdAt || new Date(it.createdAt).getTime() < cutoff) continue;
+      it.status = 'queued';
+      delete it.doneAt;
+      it.attempts = it.attempts || 0;
+      n++;
+    }
+    if (n) {
+      console.log(`[outbox] ${n} mislukte groeps-bericht(en) terug in de wachtrij (worden opnieuw geprobeerd)`);
+      saveSoon();
+    }
+  } catch (e) { console.error('[outbox-herstel]', e.message); }
+}
+
+// Inhaalslag bij het opstarten: kaarten die tijdens de WhatsApp-storing uit een
+// opdracht-groep binnenkwamen maar NIET automatisch naar de monteur zijn gegaan
+// (de groep werd toen niet herkend), alsnog automatisch versturen. Streng begrensd:
+// alleen als de automatische dispatch aanstaat (trigger goedgekeurd/volautomatisch),
+// vandaag is toegestaan, en alleen niet-afgeronde kaarten van de afgelopen 48 uur
+// zonder eerdere verzending. Zo raakt een opdracht nooit stil kwijt door een storing.
+function maybeCatchUpDispatch() {
+  try {
+    const cfg = db().settings.monteurDispatch || {};
+    if (!cfg.autoEnabled) return;
+    if (!['approved', 'intake'].includes(cfg.trigger)) return;
+    if (!autoSendAllowedToday()) { console.log('[inhaalslag] vandaag niet ingeschakeld (dag staat uit)'); return; }
+    const cutoff = Date.now() - 48 * 3600000;
+    let n = 0;
+    for (const o of db().orders || []) {
+      if (o.sentToMonteur || o.archivedWeek) continue;
+      if (['afgerond', 'geannuleerd'].includes(o.status)) continue;
+      if (!o.createdAt || new Date(o.createdAt).getTime() < cutoff) continue;
+      if (!o.originGroup || !isWhatsappOrderGroup(o.originGroup)) continue;
+      const routed = routeMonteurForOrder(o);
+      const monteur = routed || db().monteurs.find((m) => m.id === (cfg.autoMonteurId || o.monteurId));
+      if (!monteur || !monteur.waGroup) continue;
+      if (!o.monteurId) o.monteurId = monteur.id;
+      const r = queueToMonteur(o, monteur, 'inhaalslag na storing');
+      if (!r.error) {
+        n++;
+        logActivity('systeem', 'inhaalslag: alsnog naar monteur', `${o.title} -> ${monteur.name}`);
+      }
+    }
+    if (n) { console.log(`[inhaalslag] ${n} gemiste opdracht(en) alsnog naar de monteur in de wachtrij`); saveSoon(); }
+  } catch (e) { console.error('[inhaalslag]', e.message); }
 }
 
 // Handmatig: stuur een opdracht naar (de groep van) een monteur.
@@ -1808,7 +1884,18 @@ app.post('/api/orders/:id/send-monteur', requireRole('admin', 'assistent'), (req
 
 // De WhatsApp-bridge haalt hier de wachtrij op (queued items).
 app.get('/api/outbox', checkIngestToken, (req, res) => {
-  res.json(db().outbox.filter((o) => o.status === 'queued'));
+  const items = db().outbox.filter((o) => o.status === 'queued');
+  // Groeps-id er bij het ophalen live bij zoeken: een koppeling kan ná het aanmaken
+  // van het item zijn gezet/geleerd. Zo kan de bridge altijd rechtstreeks op id
+  // versturen, ook voor oudere items in de wachtrij.
+  for (const it of items) {
+    if (it.groupId || !it.group || it.group === '__klant_dm__') continue;
+    const viaAlias = groupIdForName(it.group);
+    const rawDigits = String(it.group).replace(/\D/g, '');
+    const gid = viaAlias || (rawDigits.length >= 15 ? rawDigits : '');
+    if (gid) it.groupId = gid;
+  }
+  res.json(items);
 });
 
 // WhatsApp-verbinding testen vanuit Instellingen: zet een testbericht in de
@@ -1830,7 +1917,10 @@ app.post('/api/whatsapp/test', requirePerm('settings'), (req, res) => {
 app.get('/api/whatsapp/outbox-status', requirePerm('settings'), (req, res) => {
   const items = (db().outbox || []).slice(0, 12).map((o) => ({
     id: o.id, status: o.status, by: o.by || '', createdAt: o.createdAt, doneAt: o.doneAt || null,
-    to: o.phone ? o.phone : (o.group === '__klant_dm__' ? 'klant-DM' : o.group || '?'),
+    // Groeps-items tonen de groep (ook als er een nood-telefoonnummer op zit).
+    to: (o.group && o.group !== '__klant_dm__') ? o.group : (o.phone || 'klant-DM'),
+    attempts: o.attempts || 0,
+    lastResult: o.lastResult || '',
     text: String(o.text || '').slice(0, 80),
   }));
   res.json(items);
@@ -1840,11 +1930,32 @@ app.get('/api/whatsapp/outbox-status', requirePerm('settings'), (req, res) => {
 app.post('/api/outbox/:id/done', checkIngestToken, (req, res) => {
   const item = db().outbox.find((o) => o.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Niet gevonden' });
-  item.status = req.body?.ok === false ? 'failed' : 'sent';
-  item.doneAt = now();
+  const ok = req.body?.ok !== false;
+  if (req.body?.detail) item.lastResult = String(req.body.detail).slice(0, 160);
+  if (ok) {
+    item.status = 'sent';
+    item.doneAt = now();
+  } else {
+    // NIET meteen definitief opgeven: een groeps-bericht kan tijdelijk niet verstuurd
+    // worden (WhatsApp-storing, bridge-herstart). Dan blijft het in de wachtrij en
+    // wordt het vanzelf alsnog bezorgd zodra de bridge weer kan versturen. Pas na
+    // 36 uur geven we echt op. Klant-DM's falen wél direct (verkeerd nummer blijft
+    // verkeerd — eindeloos herproberen zou de klant nooit bereiken).
+    item.attempts = (item.attempts || 0) + 1;
+    const isGroupItem = item.group && item.group !== '__klant_dm__';
+    const tooOld = !item.createdAt || (Date.now() - new Date(item.createdAt).getTime()) > 36 * 3600000;
+    if (isGroupItem && !tooOld) {
+      item.status = 'queued';
+    } else {
+      item.status = 'failed';
+      item.doneAt = now();
+    }
+  }
   const order = db().orders.find((o) => o.id === item.orderId);
   if (order && order.sentToMonteur) order.sentToMonteur.status = item.status;
-  saveSoon();
+  // Bij het her-wachtrijen niet elke 8s naar schijf schrijven (de oude bridge probeert
+  // het snel opnieuw): 1x per 20 pogingen is genoeg — de teller is geen kritieke data.
+  if (item.status !== 'queued' || (item.attempts % 20) === 1) saveSoon();
   res.json({ ok: true });
 });
 
@@ -2786,6 +2897,12 @@ app.listen(PORT, () => {
   console.log(`\n  Keyservice CRM draait op  http://localhost:${PORT}`);
   console.log(`  AI-modus: ${aiMode() === 'ai' ? 'AI (Claude)' : 'DEMO (regels)'}`);
   console.log(`  E-mail versturen (SMTP): ${smtpConfigured() ? 'actief' : 'niet geconfigureerd'}`);
+  // Storing-herstel in vaste volgorde: eerst "groep <id>" → echte naam helen (bron-chip
+  // klopt weer, ook op bestaande kaarten), dan mislukte groeps-berichten opnieuw in de
+  // wachtrij, dan gemiste opdrachten alsnog automatisch naar de monteur.
+  healGroupIdNames();
+  requeueRecentFailedGroupItems();
+  maybeCatchUpDispatch();
   startEmailPoller();
   startWeeklyArchiver();
   startHealthMonitor();

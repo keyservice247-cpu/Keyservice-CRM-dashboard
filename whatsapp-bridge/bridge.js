@@ -91,16 +91,85 @@ client.on('qr', async (qr) => {
   console.log(link + '\n');
 });
 
+// Versie van deze bridge (gaat mee met de heartbeat, zichtbaar in het CRM):
+// v2 = verstuurt naar groepen rechtstreeks op id (werkt óók tijdens de WhatsApp-
+// storing), leest groepsnamen via een reparatie-route, valt terug op 1-op-1 naar de
+// monteur als een groep echt niet lukt, en stuurt het groeps-id mee naar het CRM
+// zodat dat de koppeling id→naam automatisch leert.
+const BRIDGE_VERSION = 2;
+
 client.on('authenticated', () => console.log('Gekoppeld — sessie opgeslagen, geen QR meer nodig bij herstart.'));
-client.on('ready', () => {
-  console.log(`\nBridge actief. Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
+client.on('ready', async () => {
+  console.log(`\nBridge actief (v${BRIDGE_VERSION}). Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
   startHeartbeat();
   startOutbox();
+  // Reparatie voor de WhatsApp-storing (LID-migratie, zomer 2026): vang de lees-fout
+  // op groeps-chats af zodat getChats()/getChat() weer bruikbaar zijn. Moet na elke
+  // (her)verbinding opnieuw, want WhatsApp-web wordt dan opnieuw geladen.
+  try { await hardenGroupChatModel(); console.log('[reparatie] groeps-leesfout (LID) afgevangen — groepsnamen weer beschikbaar'); }
+  catch (e) { console.error('[reparatie] afvangen niet gelukt (gaan door met noodpaden):', e.message); }
   // Vul de groepsnaam-cache meteen én ververs elke 5 min, zodat een binnenkomend
   // groepsbericht altijd van de echte naam voorzien kan worden (ook als getChat faalt).
   refreshGroups(true).catch((e) => console.error('[groepen] eerste ophalen mislukt:', e.message));
   setInterval(() => refreshGroups(true).catch(() => {}), 5 * 60 * 1000);
 });
+
+// ---- Reparaties voor de WhatsApp-storing van zomer 2026 (LID-migratie) ----
+// WhatsApp gaf groepsleden nieuwe interne id's ("lid"). De bibliotheek struikelt
+// daarover bij het LEZEN van groeps-chats (getChats/getChat gooien een korte
+// minified fout zoals "r"), terwijl VERSTUREN naar een groep gewoon werkt omdat dat
+// pad de kapotte conversie overslaat. Twee reparaties, allebei zonder externe code:
+
+// 1) Lees-fout afvangen: crasht het nette groepsmodel (de lid-conversie), bouw dan
+// zelf een eenvoudig model mét groepsnaam. Alleen-lezen, veilig, herstelbaar.
+async function hardenGroupChatModel() {
+  await client.pupPage.evaluate(() => {
+    const W = window.WWebJS;
+    if (!W || W.__lidHardened) return;
+    const orig = W.getChatModel;
+    W.getChatModel = async function (chat, opts) {
+      try { return await orig(chat, opts); }
+      catch (err) {
+        if (!chat) return null;
+        const model = chat.serialize();
+        model.isGroup = !!chat.groupMetadata;
+        model.isMuted = !!(chat.mute && chat.mute.expiration !== 0);
+        model.formattedTitle = chat.formattedTitle;
+        if (chat.groupMetadata) {
+          try { model.groupMetadata = chat.groupMetadata.serialize(); }
+          catch (e2) { model.groupMetadata = { subject: chat.formattedTitle || '' }; }
+          model.isReadOnly = !!chat.groupMetadata.announce;
+        }
+        model.lastMessage = null;
+        delete model.msgs; delete model.msgUnsyncedButtonReplyMsgs; delete model.unsyncedButtonReplies;
+        return model;
+      }
+    };
+    W.__lidHardened = true;
+  });
+}
+
+// 2) Groepsnaam DIRECT uit het geheugen van WhatsApp-web lezen, zonder het kapotte
+// pad aan te raken. Let op: window.Store bestaat niet meer in bibliotheek 1.34.x;
+// de modules heten nu WAWebCollections/WAWebWidFactory (window.require).
+async function readGroupNameDirect(chatId) {
+  try {
+    const name = await client.pupPage.evaluate((cid) => {
+      const pick = (chat) => chat
+        ? ((chat.groupMetadata && chat.groupMetadata.subject) || chat.formattedTitle || chat.name || null)
+        : null;
+      try {
+        const WidFactory = window.require('WAWebWidFactory');
+        const { Chat } = window.require('WAWebCollections');
+        return pick(Chat.get(WidFactory.createWid(cid)));
+      } catch (e) {
+        try { if (window.Store && window.Store.Chat) return pick(window.Store.Chat.get(cid)); } catch (e2) { /* leeg */ }
+        return null;
+      }
+    }, chatId);
+    return name || '';
+  } catch { return ''; }
+}
 // ZELFHERSTEL: bij een verbroken verbinding echt afsluiten, zodat pm2 het proces
 // opnieuw start en de sessie zich herstelt. (Voorheen werd hier alleen gelogd en
 // bleef de bridge als zombie draaien: heartbeat groen, maar niets kwam meer binnen.)
@@ -135,7 +204,7 @@ function startHeartbeat() {
       await fetch(`${DASHBOARD_URL}/api/whatsapp/heartbeat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
-        body: JSON.stringify({ at: new Date().toISOString(), state, lastIncomingAt }),
+        body: JSON.stringify({ at: new Date().toISOString(), state, lastIncomingAt, version: BRIDGE_VERSION }),
       });
     } catch (e) { /* netwerkfout: volgende keer opnieuw */ }
   };
@@ -152,25 +221,39 @@ let groupCache = null;
 // we een binnenkomend groepsbericht toch van de ECHTE groepsnaam voorzien (bv.
 // "Raf breda…"), zodat het CRM de opdracht-groep herkent en de monteur-dispatch werkt.
 const groupNameById = new Map();
+let lastRefreshFailAt = 0;
 async function refreshGroups(forceRefresh = false) {
   if (groupCache && !forceRefresh) return groupCache;
-  const chats = await client.getChats();
-  groupCache = chats.filter((c) => c.isGroup);
-  for (const g of groupCache) { const idk = g.id?._serialized; if (idk) groupNameById.set(idk, g.name); }
-  console.log(`[groepen] ${groupCache.length} bekend: ${groupCache.map((g) => g.name).join(' | ')}`);
-  return groupCache;
+  // Net nog mislukt (storing)? Dan 30s niet opnieuw hameren.
+  if (Date.now() - lastRefreshFailAt < 30 * 1000) return groupCache || [];
+  try {
+    const chats = await client.getChats();
+    groupCache = chats.filter((c) => c.isGroup);
+    for (const g of groupCache) { const idk = g.id?._serialized; if (idk && g.name) groupNameById.set(idk, g.name); }
+    console.log(`[groepen] ${groupCache.length} bekend: ${groupCache.map((g) => g.name).join(' | ')}`);
+  } catch (e) {
+    // getChats kan stuk zijn door de WhatsApp-storing — NOOIT crashen; we werken
+    // gewoon door met de naam-cache + directe naam-lezing + versturen op id.
+    lastRefreshFailAt = Date.now();
+    console.error('[groepen] ophalen mislukt (storing?):', e.message);
+  }
+  return groupCache || [];
 }
 async function resolveGroupId(groupName, forceRefresh = false) {
-  if (!groupCache || forceRefresh) {
-    await refreshGroups(true);
-  }
+  const list = await refreshGroups(forceRefresh || !groupCache);
   const wanted = (groupName || '').toLowerCase().trim();
   if (wanted.length < 2) return null; // lege/onzin-naam mag NOOIT de eerste groep pakken
   // Een nep-naam voor klant-DM's hoort hier niet thuis.
   if (wanted.includes('klant_dm') || wanted.includes('__')) return null;
-  const hit = groupCache.find((g) => (g.name || '').toLowerCase().trim() === wanted)
-    || groupCache.find((g) => (g.name || '').toLowerCase().includes(wanted));
-  return hit ? hit.id._serialized : null;
+  const hit = (list || []).find((g) => (g.name || '').toLowerCase().trim() === wanted)
+    || (list || []).find((g) => (g.name || '').toLowerCase().includes(wanted));
+  if (hit) return hit.id._serialized;
+  // Ook de naam-cache proberen (gevuld uit binnengekomen berichten/directe lezing).
+  for (const [gid, nm] of groupNameById) {
+    const n = (nm || '').toLowerCase().trim();
+    if (n === wanted || n.includes(wanted)) return gid;
+  }
+  return null;
 }
 // Zet een (Nederlands) telefoonnummer om naar een WhatsApp chat-id (internationaal).
 function toChatId(phone) {
@@ -196,22 +279,50 @@ function startOutbox() {
       if (items.length) console.log(`[outbox] ${items.length} opdracht(en) in de wachtrij`);
       for (const it of items) {
         let ok = false;
+        let detail = '';
+        // Klant-DM's gaan altijd 1-op-1. Groeps-items (monteur-dispatch, terugkoppeling,
+        // CRM-meldingen) proberen éérst de groep; het telefoonnummer daarop is een NOODPAD.
+        const isKlantDm = it.kind === 'whatsapp_customer' || it.group === '__klant_dm__' || (!it.group && it.phone);
         try {
-          if (it.phone) {
-            // 1-op-1 naar een klant (bv. offerte follow-up). Nummer naar internationaal formaat.
+          if (isKlantDm) {
             const chatId = toChatId(it.phone);
-            if (chatId) { await client.sendMessage(chatId, it.text); ok = true; console.log(`[outbox] -> follow-up verstuurd naar klant ${it.phone}`); }
-            else console.error(`[outbox] ongeldig telefoonnummer: "${it.phone}"`);
+            if (chatId) { await client.sendMessage(chatId, it.text); ok = true; detail = '1-op-1'; console.log(`[outbox] -> verstuurd naar klant ${it.phone}`); }
+            else { detail = `ongeldig telefoonnummer: "${it.phone}"`; console.error(`[outbox] ${detail}`); }
           } else {
-            let gid = await resolveGroupId(it.group);
+            // GROEP versturen: 1) rechtstreeks op groeps-id — dat pad werkt óók tijdens
+            // de WhatsApp-storing; 2) anders op naam via cache/getChats; 3) nood: 1-op-1
+            // naar het meegegeven nummer (bv. de monteur zelf) — een opdracht mag NOOIT
+            // ongemerkt blijven hangen.
+            let gid = null;
+            const idDigits = String(it.groupId || '').replace(/\D/g, '');
+            if (idDigits.length >= 10) gid = `${idDigits}@g.us`;
+            if (!gid) {
+              const raw = String(it.group || '');
+              const rawDigits = raw.replace(/\D/g, '');
+              if (/^groep\s+\d+$/i.test(raw) || (rawDigits.length >= 15 && !/[a-z]/i.test(raw.replace(/groep/i, '')))) gid = `${rawDigits}@g.us`;
+            }
+            if (!gid) gid = await resolveGroupId(it.group);
             if (!gid) gid = await resolveGroupId(it.group, true); // cache verversen en opnieuw
-            if (gid) { await client.sendMessage(gid, it.text); ok = true; console.log(`[outbox] -> verstuurd naar monteur-groep "${it.group}"`); }
-            else { console.error(`[outbox] Groep NIET gevonden: "${it.group}" — controleer de exacte groepsnaam bij Monteurs`); }
+            if (gid) {
+              try { await client.sendMessage(gid, it.text); ok = true; detail = 'groep'; console.log(`[outbox] -> verstuurd naar groep "${it.group}" (${gid})`); }
+              catch (eSend) { detail = 'groep-verzending mislukt: ' + eSend.message; console.error(`[outbox] ${detail}`); }
+            } else {
+              detail = `groep niet gevonden: "${it.group}"`;
+              console.error(`[outbox] ${detail} — koppel de groep in het CRM (Instellingen → Koppelingen), dan verstuurt de bridge op id`);
+            }
+            if (!ok && it.phone) {
+              const chatId = toChatId(it.phone);
+              if (chatId) {
+                await client.sendMessage(chatId, it.text);
+                ok = true; detail = '1-op-1 noodpad (groep niet bereikbaar)';
+                console.log(`[outbox] -> NOODPAD: 1-op-1 verstuurd naar ${it.phone} omdat de groep niet lukte`);
+              }
+            }
           }
-        } catch (e) { console.error('[outbox] versturen mislukt:', e.message); }
+        } catch (e) { detail = detail || ('versturen mislukt: ' + e.message); console.error('[outbox] versturen mislukt:', e.message); }
         await fetch(`${DASHBOARD_URL}/api/outbox/${it.id}/done`, {
           method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
-          body: JSON.stringify({ ok }),
+          body: JSON.stringify({ ok, detail }),
         }).catch((e) => console.error('[outbox] terugmelden mislukt:', e.message));
       }
     } catch (e) {
@@ -248,8 +359,10 @@ async function postForward(payload) {
   if (!resp.ok) throw new Error(`status ${resp.status}`);
 }
 
-async function forward({ channel, sender, group, body, externalId }) {
-  const payload = { name: sender, group, body, externalId };
+async function forward({ channel, sender, group, groupId, body, externalId }) {
+  // groupId gaat mee zodat het CRM de koppeling id→naam automatisch leert (en bij een
+  // storing zelf kan vertalen). Bij 1-op-1 berichten is er geen groep(-id).
+  const payload = { name: sender, group, groupId, body, externalId };
   const label = `${sender}${group ? ' in ' + group : ''}`;
   try {
     await postForward(payload);
@@ -301,17 +414,18 @@ client.on('message', async (msg) => {
       || String(msg.author || msg.from || 'Onbekend').replace(/@.*$/, '');
 
     if (isGroup) {
-      // Groepsnaam bepalen: 1) uit getChat (als die werkt), 2) uit de naam-cache die
-      // via het WEL werkende getChats() is gevuld, 3) desnoods het groeps-id ophalen
-      // en de cache verversen, 4) als laatste redmiddel het kale id. Zo komt een
-      // opdracht uit "Raf breda…" met de ECHTE naam binnen -> CRM herkent 'm en de
-      // monteur-dispatch werkt weer, ondanks de kapotte per-bericht getChat.
-      let groupName = chat?.name || groupNameById.get(remote);
-      if (!groupName) { try { await refreshGroups(true); } catch { /* getChats faalde ook */ } groupName = groupNameById.get(remote); }
+      // Groepsnaam bepalen: 1) uit getChat (werkt met de LID-reparatie meestal weer),
+      // 2) uit de naam-cache, 3) DIRECT uit het geheugen van WhatsApp-web (reparatie-
+      // route die de storing omzeilt), 4) via getChats() verversen, 5) als laatste
+      // redmiddel het kale id — het CRM vertaalt dat dan via de groeps-koppeling.
+      let groupName = (chat && (chat.name || chat.formattedTitle)) || groupNameById.get(remote) || '';
+      if (!groupName) groupName = await readGroupNameDirect(remote);
+      if (!groupName) { await refreshGroups(true); groupName = groupNameById.get(remote) || ''; }
+      const knownName = groupName;
+      if (groupName) groupNameById.set(remote, groupName); // onthouden voor de volgende keer
       if (!groupName) groupName = `groep ${String(remote).replace(/@.*$/, '')}`;
-      const knownName = chat?.name || (groupNameById.has(remote) ? groupName : '');
       if (knownName && !groupAllowed(knownName)) return; // filter alleen als de naam echt bekend is
-      await forward({ channel: 'groep', sender, group: groupName, body: msg.body || `[${msg.type}]`, externalId: msg.id?._serialized });
+      await forward({ channel: 'groep', sender, group: groupName, groupId: String(remote).replace(/@.*$/, ''), body: msg.body || `[${msg.type}]`, externalId: msg.id?._serialized });
     } else {
       if (!FORWARD_DIRECT) return;
       // nummer mee in de body zodat het dashboard het herkent

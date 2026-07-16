@@ -2,7 +2,7 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
-import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias } from './settings.js';
+import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName } from './settings.js';
 import { sendPush } from './push.js';
 
 // ---------- WhatsApp-melding naar het team (groep "CRM meldingen" of 1-op-1) ----------
@@ -21,7 +21,13 @@ export function queueCrmWhatsappAlert(text) {
     _waAlertLast = nowMs;
     const item = { id: id('out'), text, status: 'queued', createdAt: now(), by: 'crm-melding' };
     if (cfg.phone) { item.kind = 'whatsapp_customer'; item.phone = cfg.phone; item.group = '__klant_dm__'; }
-    else item.group = cfg.group;
+    else {
+      item.group = cfg.group;
+      // Groeps-id meegeven (indien gekoppeld): dan kan de bridge direct op id versturen,
+      // ook als hij door de WhatsApp-storing geen groepsnamen kan opzoeken.
+      const gid = groupIdForName(cfg.group);
+      if (gid) item.groupId = gid;
+    }
     db().outbox.unshift(item);
     saveSoon();
   } catch (e) { console.error('[crm-melding]', e.message); }
@@ -326,11 +332,31 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
 
 // Verwerk een binnenkomend bericht: ontdubbelen -> opslaan -> AI categoriseren
 // -> review aanmaken -> eventueel automatisch goedkeuren bij hoge zekerheid.
-export async function ingestMessage({ channel, sender, subject, body, group, externalId, attachments = [], forceRelevant = false }) {
+export async function ingestMessage({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false }) {
+  // Stuurt de bridge naam ÉN groeps-id mee? Dan die koppeling meteen leren (self-healing:
+  // valt de naam later weg door een WhatsApp-storing, dan kent het CRM de groep al).
+  if (groupId && group) learnGroupAlias(groupId, group);
   // Groep-ID -> echte naam vertalen (als de bridge "groep <id>" levert door de
   // WhatsApp-storing). Vanaf hier gebruikt alles de vriendelijke naam: opdracht-groep-
   // herkenning, kaart-titel, statusscan en weergave.
+  if (!group && groupId) group = `groep ${String(groupId).replace(/\D/g, '')}`;
   group = resolveGroupAlias(group);
+  // Blijft het een kaal groeps-id (geen koppeling bekend)? Waarschuw het team dan
+  // duidelijk (1x per groep per 12 uur): één tik in Instellingen → Koppelingen en
+  // alles uit die groep wordt weer herkend. Zo blijft zo'n storing nooit meer stil.
+  if (channel === 'whatsapp' && /^groep\s+\d{10,}$/i.test(String(group || ''))) {
+    try {
+      const s = db().settings;
+      s._unknownGroupAlerts = s._unknownGroupAlerts || {};
+      const key = String(group).replace(/\D/g, '');
+      const lastT = s._unknownGroupAlerts[key] ? new Date(s._unknownGroupAlerts[key]).getTime() : 0;
+      if (Date.now() - lastT > 12 * 3600000) {
+        s._unknownGroupAlerts[key] = now();
+        logActivity('systeem', 'onbekende WhatsApp-groep (koppelen!)', String(group));
+        notifyPush('Onbekende WhatsApp-groep', `Berichten uit "${group}" komen zonder naam binnen. Koppel de groep in Instellingen → Koppelingen aan z'n echte naam — dan worden opdrachten er weer automatisch uit herkend en doorgestuurd.`);
+      }
+    } catch { /* melding mag verwerking nooit blokkeren */ }
+  }
   // Ontdubbelen: zelfde bericht (zelfde externe id) nooit twee keer verwerken.
   if (externalId) {
     const existing = db().messages.find((m) => m.externalId && m.externalId === externalId);
