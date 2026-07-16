@@ -1066,6 +1066,11 @@ function checkIngestToken(req, res, next) {
 // de bridge nog draait.
 app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
   db().settings.whatsappLastSeen = now();
+  // Extra diagnose van de bridge (nieuwere versies sturen dit mee): de echte
+  // WhatsApp-verbindingsstatus en wanneer er voor het laatst een bericht BINNENKWAM.
+  const b = req.body || {};
+  if (b.state) db().settings.whatsappState = String(b.state).slice(0, 60);
+  if (b.lastIncomingAt) db().settings.whatsappLastIncomingAt = String(b.lastIncomingAt).slice(0, 40);
   saveSoon();
   res.json({ ok: true });
 });
@@ -1123,7 +1128,13 @@ app.get('/api/whatsapp/status', requireAuth, (req, res) => {
   const last = db().settings.whatsappLastSeen || null;
   const ageSec = last ? (Date.now() - new Date(last).getTime()) / 1000 : null;
   const online = ageSec != null && ageSec < 180; // 3 minuten marge
-  res.json({ configured: !!last, online, lastSeen: last, ageSeconds: ageSec });
+  const lastIn = db().settings.whatsappLastIncomingAt || null;
+  res.json({
+    configured: !!last, online, lastSeen: last, ageSeconds: ageSec,
+    state: db().settings.whatsappState || null,
+    lastIncomingAt: lastIn,
+    lastIncomingAgeMin: lastIn ? Math.round((Date.now() - new Date(lastIn).getTime()) / 60000) : null,
+  });
 });
 
 app.post('/api/ingest/email', checkIngestToken, async (req, res) => {

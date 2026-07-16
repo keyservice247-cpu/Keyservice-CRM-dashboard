@@ -93,18 +93,41 @@ client.on('ready', () => {
   startHeartbeat();
   startOutbox();
 });
-client.on('disconnected', (r) => console.log('Verbinding verbroken:', r, '— pm2 herstart automatisch.'));
+// ZELFHERSTEL: bij een verbroken verbinding echt afsluiten, zodat pm2 het proces
+// opnieuw start en de sessie zich herstelt. (Voorheen werd hier alleen gelogd en
+// bleef de bridge als zombie draaien: heartbeat groen, maar niets kwam meer binnen.)
+client.on('disconnected', (r) => {
+  console.error('Verbinding verbroken:', r, '— bridge sluit af zodat pm2 opnieuw start.');
+  setTimeout(() => process.exit(1), 2000);
+});
 
-// Stuurt elke 60s een "ik leef nog"-seintje naar het dashboard. Als deze
-// uitblijft, weet het dashboard dat de WhatsApp-bridge stil ligt.
+// Stuurt elke 60s een "ik leef nog"-seintje naar het dashboard — maar ALLEEN als de
+// WhatsApp-verbinding ook écht werkt (state CONNECTED). Een half-dode sessie stuurt
+// dus geen heartbeat meer, waardoor de zijbalk rood wordt en het uitval-alarm afgaat
+// i.p.v. dat alles groen lijkt terwijl er niets meer binnenkomt.
 let heartbeatTimer = null;
+let notConnectedCount = 0;
+let lastIncomingAt = null; // laatst ONTVANGEN WhatsApp-bericht (voor diagnose in het CRM)
 function startHeartbeat() {
   const ping = async () => {
+    let state = 'ONBEKEND';
+    try { state = await client.getState() || 'GEEN'; } catch (e) { state = 'FOUT: ' + e.message; }
+    if (state !== 'CONNECTED') {
+      notConnectedCount++;
+      console.error(`[heartbeat] WhatsApp-status is '${state}' (${notConnectedCount}x op rij) — geen heartbeat gestuurd.`);
+      // ZELFHERSTEL: 3 minuten lang niet verbonden -> herstart via pm2.
+      if (notConnectedCount >= 3) {
+        console.error('[heartbeat] verbinding blijft weg — bridge sluit af zodat pm2 opnieuw start.');
+        process.exit(1);
+      }
+      return;
+    }
+    notConnectedCount = 0;
     try {
       await fetch(`${DASHBOARD_URL}/api/whatsapp/heartbeat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
-        body: JSON.stringify({ at: new Date().toISOString() }),
+        body: JSON.stringify({ at: new Date().toISOString(), state, lastIncomingAt }),
       });
     } catch (e) { /* netwerkfout: volgende keer opnieuw */ }
   };
@@ -243,6 +266,7 @@ setInterval(processRetryQueue, 20 * 1000); // elke 20s de wachtrij opnieuw probe
 if (retryQueue.length) console.log(`[wachtrij] ${retryQueue.length} bericht(en) uit vorige sessie worden opnieuw geprobeerd`);
 
 client.on('message', async (msg) => {
+  lastIncomingAt = new Date().toISOString(); // bewijs dat ONTVANGEN werkt (gaat mee met de heartbeat)
   try {
     const chat = await msg.getChat();
     const contact = await msg.getContact();

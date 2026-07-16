@@ -281,6 +281,9 @@ async function refreshWaStatus() {
     el.hidden = false;
     if (s.online) {
       el.textContent = 'WhatsApp: actief';
+      // Diagnose in de tooltip: wanneer kwam het laatste bericht BINNEN? Zo zie je
+      // meteen of ontvangen ook echt werkt (en niet alleen het proces draait).
+      el.title = s.lastIncomingAgeMin != null ? `Laatste bericht ontvangen: ${s.lastIncomingAgeMin} min geleden` : '';
       el.classList.remove('wa-down'); el.classList.add('wa-up');
     } else {
       const mins = s.ageSeconds ? Math.round(s.ageSeconds / 60) : '?';
