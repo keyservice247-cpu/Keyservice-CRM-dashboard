@@ -268,17 +268,29 @@ if (retryQueue.length) console.log(`[wachtrij] ${retryQueue.length} bericht(en) 
 client.on('message', async (msg) => {
   lastIncomingAt = new Date().toISOString(); // bewijs dat ONTVANGEN werkt (gaat mee met de heartbeat)
   try {
-    const chat = await msg.getChat();
-    const contact = await msg.getContact();
-    const sender = contact?.pushname || contact?.number || 'Onbekend';
+    // NOOIT-KWIJT-PRINCIPE: getChat()/getContact() kunnen crashen als WhatsApp z'n
+    // binnenkant wijzigt en de bibliotheek verouderd is (zoals de "Verwerkingsfout: r"
+    // die groepsberichten liet verdwijnen). Daarom zijn ze hier optioneel: falen ze,
+    // dan sturen we het bericht ALSNOG door met de gegevens die we wél hebben, in
+    // plaats van het stil weg te gooien.
+    let chat = null, contact = null;
+    try { chat = await msg.getChat(); } catch (e) { console.error('[ontvangen] getChat faalde (bibliotheek verouderd?):', e.message); }
+    try { contact = await msg.getContact(); } catch (e) { console.error('[ontvangen] getContact faalde:', e.message); }
+    const remote = msg?.id?.remote || msg.from || '';
+    const isGroup = chat ? !!chat.isGroup : String(remote).endsWith('@g.us');
+    const sender = contact?.pushname || contact?.number || msg?._data?.notifyName
+      || String(msg.author || msg.from || 'Onbekend').replace(/@.*$/, '');
 
-    if (chat.isGroup) {
-      if (!groupAllowed(chat.name)) return;
-      await forward({ channel: 'groep', sender, group: chat.name, body: msg.body || `[${msg.type}]`, externalId: msg.id?._serialized });
+    if (isGroup) {
+      // Groepsnaam onbekend (getChat kapot)? Gebruik dan het groeps-id als naam —
+      // het bericht belandt dan in de te-controleren inbox i.p.v. nergens.
+      const groupName = chat?.name || `groep ${String(remote).replace(/@.*$/, '')}`;
+      if (chat && !groupAllowed(chat.name)) return; // filter alleen toepassen als de naam echt bekend is
+      await forward({ channel: 'groep', sender, group: groupName, body: msg.body || `[${msg.type}]`, externalId: msg.id?._serialized });
     } else {
       if (!FORWARD_DIRECT) return;
       // nummer mee in de body zodat het dashboard het herkent
-      const phone = (contact?.number || '').replace(/[^\d+]/g, '');
+      const phone = (contact?.number || String(msg.from || '').replace(/@.*$/, '')).replace(/[^\d+]/g, '');
       const body = `${msg.body || `[${msg.type}]`}${phone ? `\nTelefoon: +${phone}` : ''}`;
       await forward({ channel: '1-op-1', sender, body, externalId: msg.id?._serialized });
     }
