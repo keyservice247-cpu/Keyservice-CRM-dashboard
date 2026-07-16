@@ -6,3 +6,8 @@ data/*.bak
 *.log
 .DS_Store
 data/backups/
+
+# WhatsApp-bridge runtime
+whatsapp-bridge/pending-forwards.json
+whatsapp-bridge/.wwebjs_auth/
+whatsapp-bridge/.wwebjs_cache/

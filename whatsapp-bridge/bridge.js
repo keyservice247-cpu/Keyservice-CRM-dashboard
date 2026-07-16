@@ -187,19 +187,60 @@ function groupAllowed(name) {
   return GROUP_FILTER.some((f) => n.includes(f));
 }
 
+// Persistente herkansings-wachtrij: een binnengekomen bericht dat (tijdelijk) niet
+// doorgestuurd kan worden — bv. omdat de CRM net een update uitrolt — gaat NIET
+// verloren. Het wordt bewaard (ook over een bridge-herstart heen) en opnieuw
+// geprobeerd tot het lukt. De CRM ontdubbelt op externalId, dus een dubbele poging
+// maakt nooit een dubbele kaart.
+const QUEUE_FILE = path.join(__dirname, 'pending-forwards.json');
+let retryQueue = [];
+try { if (fs.existsSync(QUEUE_FILE)) retryQueue = JSON.parse(fs.readFileSync(QUEUE_FILE, 'utf8')) || []; } catch { retryQueue = []; }
+function saveQueue() { try { fs.writeFileSync(QUEUE_FILE, JSON.stringify(retryQueue)); } catch (e) { console.error('[wachtrij] opslaan mislukt:', e.message); } }
+
+async function postForward(payload) {
+  const resp = await fetch(`${DASHBOARD_URL}/api/ingest/whatsapp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error(`status ${resp.status}`);
+}
+
 async function forward({ channel, sender, group, body, externalId }) {
+  const payload = { name: sender, group, body, externalId };
+  const label = `${sender}${group ? ' in ' + group : ''}`;
   try {
-    const resp = await fetch(`${DASHBOARD_URL}/api/ingest/whatsapp`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
-      body: JSON.stringify({ name: sender, group, body, externalId }),
-    });
-    if (!resp.ok) console.error('Doorsturen mislukt:', resp.status, await resp.text());
-    else console.log(`→ doorgestuurd (${channel}) van ${sender}${group ? ' in ' + group : ''}`);
+    await postForward(payload);
+    console.log(`→ doorgestuurd (${channel}) van ${label}`);
   } catch (e) {
-    console.error('Fout bij doorsturen:', e.message);
+    console.error(`Doorsturen mislukt (${e.message}) — in wachtrij voor herkansing: ${label}`);
+    retryQueue.push({ payload, label, at: Date.now(), attempts: 0 });
+    saveQueue();
   }
 }
+
+async function processRetryQueue() {
+  if (!retryQueue.length) return;
+  const keep = [];
+  for (const q of retryQueue) {
+    if (Date.now() - q.at > 24 * 3600000 || q.attempts > 300) {
+      console.error(`[wachtrij] OPGEGEVEN na ${q.attempts} pogingen (>24u): ${q.label}`);
+      continue; // te oud/te vaak — nooit stil, wél gelogd
+    }
+    try {
+      await postForward(q.payload);
+      console.log(`[wachtrij] alsnog doorgestuurd: ${q.label}`);
+    } catch {
+      q.attempts++;
+      keep.push(q);
+    }
+  }
+  const changed = keep.length !== retryQueue.length;
+  retryQueue = keep;
+  if (changed) saveQueue();
+}
+setInterval(processRetryQueue, 20 * 1000); // elke 20s de wachtrij opnieuw proberen
+if (retryQueue.length) console.log(`[wachtrij] ${retryQueue.length} bericht(en) uit vorige sessie worden opnieuw geprobeerd`);
 
 client.on('message', async (msg) => {
   try {
