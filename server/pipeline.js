@@ -2,7 +2,7 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
-import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts } from './settings.js';
+import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias } from './settings.js';
 import { sendPush } from './push.js';
 
 // ---------- WhatsApp-melding naar het team (groep "CRM meldingen" of 1-op-1) ----------
@@ -327,6 +327,10 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
 // Verwerk een binnenkomend bericht: ontdubbelen -> opslaan -> AI categoriseren
 // -> review aanmaken -> eventueel automatisch goedkeuren bij hoge zekerheid.
 export async function ingestMessage({ channel, sender, subject, body, group, externalId, attachments = [], forceRelevant = false }) {
+  // Groep-ID -> echte naam vertalen (als de bridge "groep <id>" levert door de
+  // WhatsApp-storing). Vanaf hier gebruikt alles de vriendelijke naam: opdracht-groep-
+  // herkenning, kaart-titel, statusscan en weergave.
+  group = resolveGroupAlias(group);
   // Ontdubbelen: zelfde bericht (zelfde externe id) nooit twee keer verwerken.
   if (externalId) {
     const existing = db().messages.find((m) => m.externalId && m.externalId === externalId);

@@ -348,6 +348,26 @@ export function getWhatsappOrderGroups() {
   return String(db().settings.whatsappOrderGroups || '')
     .split(',').map(normGroupName).filter(Boolean);
 }
+// Koppeling groeps-ID -> vriendelijke naam. Nodig sinds WhatsApp z'n binnenkant
+// wijzigde: de bridge kan de groepsNAAM dan niet meer ophalen en levert "groep <id>".
+// Met deze koppeling toont het CRM tóch de echte naam en herkent het de opdracht-groep.
+export function getGroupAliases() {
+  const list = db().settings.groupAliases;
+  return Array.isArray(list) ? list : [];
+}
+// Vertaal een binnenkomende groep-aanduiding ("groep <id>", "<id>@g.us" of het kale
+// id) naar de ingestelde naam. Een gewone groepsnaam (geen lange cijfer-id) blijft
+// ongewijzigd, zodat het gewoon werkt zodra de bibliotheek weer namen levert.
+export function resolveGroupAlias(group) {
+  const digits = String(group || '').replace(/\D/g, '');
+  if (digits.length < 10) return group; // geen groeps-id herkenbaar -> laat staan
+  for (const a of getGroupAliases()) {
+    const aid = String(a.id || '').replace(/\D/g, '');
+    if (aid.length >= 10 && (digits.includes(aid) || aid.includes(digits)) && a.name) return a.name;
+  }
+  return group;
+}
+
 // Hoort een WhatsApp-groep bij de "opdracht-groepen"? (substring-match, genormaliseerd)
 export function isWhatsappOrderGroup(groupName) {
   const allow = getWhatsappOrderGroups();

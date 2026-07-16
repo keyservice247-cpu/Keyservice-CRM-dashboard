@@ -2272,6 +2272,13 @@ async function loadSettings() {
       </div>
       <div id="wt-status" style="margin-top:12px"></div>
     </div>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('users', 15)} WhatsApp-groepen koppelen (bij WhatsApp-storing)</h3>
+      <p class="muted small">WhatsApp verandert soms z'n binnenkant, waardoor de bridge de <strong>groepsnaam</strong> niet meer kan ophalen en een opdracht binnenkomt als "groep 1203…". Koppel hieronder het nummer aan de echte naam — dan herkent het CRM de opdracht-groep weer en werkt automatisch doorsturen. Zet de naam die je hier geeft ook in het opdracht-groepen-veld (bv. "Raf breda").</p>
+      <div id="ga-seen" class="small" style="margin:8px 0"></div>
+      <div id="ga-rows"></div>
+      <button type="button" class="btn btn-sm" id="ga-add" style="margin-top:6px">+ Koppeling toevoegen</button>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="ga-save">Koppelingen opslaan</button></div>
+    </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('bell', 15)} Meldingen op je telefoon</h3>
       <p class="muted small">Krijg een pushmelding op dit toestel zodra er een nieuwe aanvraag of een reactie van een klant binnenkomt — ook als de CRM dicht is. Zet het per toestel aan (telefoon én pc kan allebei).</p>
       <div id="pushPanel" class="muted small" style="margin-top:10px">Laden…</div>
@@ -2448,6 +2455,34 @@ async function loadSettings() {
     const stChip = { queued: '<span class="inv-st verzonden">wachtrij</span>', sent: '<span class="inv-st betaald">verstuurd ✓</span>', failed: '<span class="inv-st verlopen">MISLUKT</span>' };
     $('#wt-status').innerHTML = items.length ? `<table><thead><tr><th>Tijd</th><th>Naar</th><th>Status</th><th>Door</th></tr></thead><tbody>${items.map((i) => `<tr><td class="muted small">${esc(fmtDate(i.createdAt))}</td><td>${esc(i.to)}</td><td>${stChip[i.status] || esc(i.status)}</td><td class="muted small">${esc(i.by)}</td></tr>`).join('')}</tbody></table>` : '<span class="muted small">Nog geen berichten in de wachtrij.</span>';
   };
+
+  // --- Groep-koppelingen (id -> naam) ---
+  const gaRow = (a = {}) => `<div class="ga-row" style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+    <input class="ga-id" placeholder="groep-nummer (bv. 120363177872957422)" value="${esc(a.id || '')}" style="flex:1">
+    <span class="muted">→</span>
+    <input class="ga-name" placeholder="naam (bv. Raf breda)" value="${esc(a.name || '')}" style="flex:1">
+    <button type="button" class="btn btn-sm ga-del" title="Weg">${icon('x', 13)}</button></div>`;
+  const gaBindDel = () => $$('#ga-rows .ga-del').forEach((b) => b.onclick = () => b.closest('.ga-row').remove());
+  const gaRender = (aliases) => { $('#ga-rows').innerHTML = (aliases && aliases.length ? aliases : [{}]).map(gaRow).join(''); gaBindDel(); };
+  gaRender(s.groupAliases || []);
+  $('#ga-add').onclick = () => { $('#ga-rows').insertAdjacentHTML('beforeend', gaRow()); gaBindDel(); };
+  $('#ga-save').onclick = async () => {
+    const groupAliases = $$('#ga-rows .ga-row').map((r) => ({ id: $('.ga-id', r).value.trim(), name: $('.ga-name', r).value.trim() })).filter((a) => a.id && a.name);
+    try { await api('/api/settings', 'PATCH', { groupAliases }); toast('Groep-koppelingen opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  // Toon recent geziene groepen (vooral "groep <id>" zonder naam) zodat je makkelijk kunt koppelen.
+  api('/api/whatsapp/seen-groups').then((groups) => {
+    const el = $('#ga-seen'); if (!el) return;
+    const unnamed = (groups || []).filter((g) => g.isIdOnly && !g.aliasName);
+    if (!groups || !groups.length) { el.innerHTML = '<span class="muted">Nog geen WhatsApp-groepen gezien.</span>'; return; }
+    el.innerHTML = '<div class="muted" style="margin-bottom:4px">Recent geziene groepen:</div>' + groups.slice(0, 8).map((g) => {
+      const digits = g.digits;
+      const label = g.aliasName ? `<span style="color:var(--ok)">✓ ${esc(g.aliasName)}</span>` : (g.isIdOnly ? `<span style="color:var(--danger)">nog niet gekoppeld</span>` : '');
+      return `<div style="display:flex;align-items:center;gap:8px;padding:2px 0"><code style="font-size:11px">${esc(g.group.length > 30 ? g.group.slice(0, 28) + '…' : g.group)}</code> ${label} ${g.isIdOnly && !g.aliasName ? `<button type="button" class="btn btn-sm ga-quick" data-id="${esc(digits)}">koppel</button>` : ''}</div>`;
+    }).join('');
+    $$('#ga-seen .ga-quick').forEach((b) => b.onclick = () => { $('#ga-rows').insertAdjacentHTML('beforeend', gaRow({ id: b.dataset.id })); gaBindDel(); const rows = $$('#ga-rows .ga-row'); rows[rows.length - 1]?.querySelector('.ga-name')?.focus(); });
+  }).catch(() => {});
   const wtLoad = async () => { try { wtRender(await api('/api/whatsapp/outbox-status')); } catch { /* stil */ } };
   wtLoad();
   $('#wt-refresh').onclick = wtLoad;

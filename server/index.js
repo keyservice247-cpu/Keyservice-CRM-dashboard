@@ -58,7 +58,7 @@ import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
-  getEmailSignature, isWhatsappOrderGroup, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
+  getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
 } from './settings.js';
 
@@ -1124,6 +1124,28 @@ app.get('/api/overview', requireAuth, (req, res) => {
 });
 
 // Status van de WhatsApp-bridge: draait hij nog? (geen seintje in 3 min = stil)
+// Recent geziene WhatsApp-groepen (uit de binnengekomen berichten), zodat de gebruiker
+// een groep-ID makkelijk aan een naam kan koppelen als de bridge de naam niet levert.
+app.get('/api/whatsapp/seen-groups', requireAuth, (req, res) => {
+  const since = Date.now() - 14 * 86400000;
+  const seen = new Map(); // key(id of naam) -> { group, lastAt }
+  for (const m of db().messages || []) {
+    if (!m.group || m.channel !== 'whatsapp') continue;
+    const t = m.receivedAt ? new Date(m.receivedAt).getTime() : 0;
+    if (t < since) continue;
+    const cur = seen.get(m.group);
+    if (!cur || t > cur.lastAt) seen.set(m.group, { group: m.group, lastAt: t });
+  }
+  const aliases = db().settings.groupAliases || [];
+  const list = [...seen.values()].map((x) => {
+    const digits = String(x.group).replace(/\D/g, '');
+    const isIdOnly = digits.length >= 10 && !/[a-z]/i.test(x.group.replace(/groep/i, '')); // "groep <id>" zonder echte naam
+    const alias = aliases.find((a) => String(a.id || '').replace(/\D/g, '') && digits.includes(String(a.id).replace(/\D/g, '')));
+    return { group: x.group, digits, isIdOnly, aliasName: alias?.name || '', lastAt: new Date(x.lastAt).toISOString() };
+  }).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  res.json(list);
+});
+
 app.get('/api/whatsapp/status', requireAuth, (req, res) => {
   const last = db().settings.whatsappLastSeen || null;
   const ageSec = last ? (Date.now() - new Date(last).getTime()) / 1000 : null;
@@ -1246,7 +1268,10 @@ app.post('/api/ingest/form', async (req, res) => {
 });
 
 app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
-  const { from, sender, name, body, text, message, group, externalId } = req.body || {};
+  const { from, sender, name, body, text, message, externalId } = req.body || {};
+  // Groep-ID -> echte naam vertalen (bij WhatsApp-storing levert de bridge "groep <id>").
+  // Doe het hier al, zodat ook het onderwerp/de kaart-titel de echte naam toont.
+  const group = resolveGroupAlias(req.body?.group);
   const result = await ingestMessage({
     channel: 'whatsapp',
     sender: name || from || sender,
@@ -1398,6 +1423,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     templates: getTemplates(),
     companyProfile: getCompanyProfile(),
     whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
+    groupAliases: db().settings.groupAliases || [],
     emailSignature: getEmailSignature(),
     sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
     imapAddress: process.env.IMAP_USER || '',
@@ -1443,6 +1469,15 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   }
   if ('whatsappOrderGroups' in b) {
     db().settings.whatsappOrderGroups = String(b.whatsappOrderGroups || '').slice(0, 500);
+  }
+  if ('groupAliases' in b) {
+    // Koppelingen groeps-ID -> naam (voor als de bridge door een WhatsApp-storing geen
+    // groepsnaam kan ophalen). Alleen nette id/naam-paren bewaren.
+    const arr = Array.isArray(b.groupAliases) ? b.groupAliases : [];
+    db().settings.groupAliases = arr
+      .map((a) => ({ id: String(a.id || '').replace(/\D/g, '').slice(0, 40), name: String(a.name || '').slice(0, 100).trim() }))
+      .filter((a) => a.id.length >= 10 && a.name)
+      .slice(0, 50);
   }
   if ('emailSignature' in b) {
     db().settings.emailSignature = String(b.emailSignature || '').slice(0, 1000);
@@ -1588,6 +1623,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     templates: getTemplates(),
     companyProfile: getCompanyProfile(),
     whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
+    groupAliases: db().settings.groupAliases || [],
     emailSignature: getEmailSignature(),
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
