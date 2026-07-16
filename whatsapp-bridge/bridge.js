@@ -47,7 +47,11 @@ if (!DASHBOARD_URL || !INGEST_TOKEN) {
 
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
-  puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+  // --disable-dev-shm-usage: op een kleine VPS is /dev/shm te klein -> anders random
+  // Chromium-crashes. --disable-gpu: headless, geen GPU nodig.
+  puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] },
+  takeoverOnConflict: true, // pak de sessie terug i.p.v. crashen bij een conflict
+  takeoverTimeoutMs: 10000,
 });
 
 // Koppelen via 8-cijferige code i.p.v. QR-scan.
@@ -92,6 +96,10 @@ client.on('ready', () => {
   console.log(`\nBridge actief. Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
   startHeartbeat();
   startOutbox();
+  // Vul de groepsnaam-cache meteen én ververs elke 5 min, zodat een binnenkomend
+  // groepsbericht altijd van de echte naam voorzien kan worden (ook als getChat faalt).
+  refreshGroups(true).catch((e) => console.error('[groepen] eerste ophalen mislukt:', e.message));
+  setInterval(() => refreshGroups(true).catch(() => {}), 5 * 60 * 1000);
 });
 // ZELFHERSTEL: bij een verbroken verbinding echt afsluiten, zodat pm2 het proces
 // opnieuw start en de sessie zich herstelt. (Voorheen werd hier alleen gelogd en
@@ -139,11 +147,22 @@ function startHeartbeat() {
 // Haalt de uitgaande wachtrij op en stuurt opdrachten naar de monteur-groep.
 let outboxTimer = null;
 let groupCache = null;
+// Naam-cache: groeps-id -> groepsnaam. Gevuld via client.getChats() — die WERKT nog,
+// óók nu msg.getChat() per bericht faalt op de nieuwste WhatsApp-Web-build. Zo kunnen
+// we een binnenkomend groepsbericht toch van de ECHTE groepsnaam voorzien (bv.
+// "Raf breda…"), zodat het CRM de opdracht-groep herkent en de monteur-dispatch werkt.
+const groupNameById = new Map();
+async function refreshGroups(forceRefresh = false) {
+  if (groupCache && !forceRefresh) return groupCache;
+  const chats = await client.getChats();
+  groupCache = chats.filter((c) => c.isGroup);
+  for (const g of groupCache) { const idk = g.id?._serialized; if (idk) groupNameById.set(idk, g.name); }
+  console.log(`[groepen] ${groupCache.length} bekend: ${groupCache.map((g) => g.name).join(' | ')}`);
+  return groupCache;
+}
 async function resolveGroupId(groupName, forceRefresh = false) {
   if (!groupCache || forceRefresh) {
-    const chats = await client.getChats();
-    groupCache = chats.filter((c) => c.isGroup);
-    console.log(`[outbox] ${groupCache.length} groepen bekend: ${groupCache.map((g) => g.name).join(' | ')}`);
+    await refreshGroups(true);
   }
   const wanted = (groupName || '').toLowerCase().trim();
   if (wanted.length < 2) return null; // lege/onzin-naam mag NOOIT de eerste groep pakken
@@ -282,10 +301,16 @@ client.on('message', async (msg) => {
       || String(msg.author || msg.from || 'Onbekend').replace(/@.*$/, '');
 
     if (isGroup) {
-      // Groepsnaam onbekend (getChat kapot)? Gebruik dan het groeps-id als naam —
-      // het bericht belandt dan in de te-controleren inbox i.p.v. nergens.
-      const groupName = chat?.name || `groep ${String(remote).replace(/@.*$/, '')}`;
-      if (chat && !groupAllowed(chat.name)) return; // filter alleen toepassen als de naam echt bekend is
+      // Groepsnaam bepalen: 1) uit getChat (als die werkt), 2) uit de naam-cache die
+      // via het WEL werkende getChats() is gevuld, 3) desnoods het groeps-id ophalen
+      // en de cache verversen, 4) als laatste redmiddel het kale id. Zo komt een
+      // opdracht uit "Raf breda…" met de ECHTE naam binnen -> CRM herkent 'm en de
+      // monteur-dispatch werkt weer, ondanks de kapotte per-bericht getChat.
+      let groupName = chat?.name || groupNameById.get(remote);
+      if (!groupName) { try { await refreshGroups(true); } catch { /* getChats faalde ook */ } groupName = groupNameById.get(remote); }
+      if (!groupName) groupName = `groep ${String(remote).replace(/@.*$/, '')}`;
+      const knownName = chat?.name || (groupNameById.has(remote) ? groupName : '');
+      if (knownName && !groupAllowed(knownName)) return; // filter alleen als de naam echt bekend is
       await forward({ channel: 'groep', sender, group: groupName, body: msg.body || `[${msg.type}]`, externalId: msg.id?._serialized });
     } else {
       if (!FORWARD_DIRECT) return;
