@@ -340,15 +340,19 @@ export function getEmailSignature() {
 
 // Lijst met groepsnamen (stukjes) waaruit we WhatsApp-opdrachten oppakken.
 // Leeg = alle groepen toegestaan.
+// Normalisatie: hoofdletters/kleine letters én dubbele/rare spaties maken niet uit —
+// een dubbele spatie in het instellingenveld (of in de groepsnaam) mag NOOIT de
+// reden zijn dat een opdracht stilletjes in Overige belandt.
+const normGroupName = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
 export function getWhatsappOrderGroups() {
   return String(db().settings.whatsappOrderGroups || '')
-    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    .split(',').map(normGroupName).filter(Boolean);
 }
-// Hoort een WhatsApp-groep bij de "opdracht-groepen"? (substring-match, hoofdletter-ongevoelig)
+// Hoort een WhatsApp-groep bij de "opdracht-groepen"? (substring-match, genormaliseerd)
 export function isWhatsappOrderGroup(groupName) {
   const allow = getWhatsappOrderGroups();
   if (!allow.length) return true; // geen filter ingesteld = alle groepen
-  const n = (groupName || '').toLowerCase();
+  const n = normGroupName(groupName);
   return allow.some((a) => n.includes(a));
 }
 

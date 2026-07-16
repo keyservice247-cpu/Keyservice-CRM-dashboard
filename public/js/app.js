@@ -2397,6 +2397,7 @@ async function loadSettings() {
         <label style="margin:0;font-size:13px;font-weight:600">Opdracht-groepen (WhatsApp) — worden automatisch doorgestuurd</label>
         <p class="muted small" style="margin:2px 0 6px">Alle groepen hier tellen als opdracht-groep en worden net als "Raf Breda" volautomatisch doorgestuurd naar de monteur. Meerdere? Scheid met komma's. Leeg = alle groepen.</p>
         <input id="md-ordergroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, opdrachten tilburg omgeving" style="width:100%">
+        <div id="md-groupcheck" class="small" style="margin-top:8px"></div>
       </div>
       <p class="muted small" id="md-hint" style="margin:6px 0 0"></p>
       <label style="margin:10px 0 4px">Alleen op deze dagen versturen</label>
@@ -2619,6 +2620,30 @@ async function loadSettings() {
   $('#md-trigger').addEventListener('change', setHint);
   // monteurs vullen
   const mons = await api('/api/monteurs').catch(() => []);
+  // Live groep-controle: laat per BEKENDE WhatsApp-groep zien of hij met de huidige
+  // veldinhoud wordt herkend als opdracht-groep. Eén typefout (bv. "30km" i.p.v.
+  // "30 KM") betekent anders dat opdrachten stilletjes in Overige belanden — dat
+  // maakt dit blokje direct zichtbaar, al tijdens het typen.
+  const normG = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const gcMatches = (conf, name) => {
+    const allow = String(conf || '').split(',').map(normG).filter(Boolean);
+    if (!allow.length) return true; // leeg veld = alle groepen
+    return allow.some((a) => normG(name).includes(a));
+  };
+  const monteurGroups = new Set(mons.map((m) => normG(m.waGroup)).filter(Boolean));
+  let _knownGroups = [];
+  const renderGroupCheck = () => {
+    const el = $('#md-groupcheck'); if (!el) return;
+    if (!_knownGroups.length) { el.innerHTML = ''; return; }
+    const conf = $('#md-ordergroups') ? $('#md-ordergroups').value : '';
+    el.innerHTML = '<div class="muted" style="margin-bottom:4px">Controle — zo herkent het systeem je groepen op dit moment:</div>' + _knownGroups.map((g) => {
+      if (monteurGroups.has(normG(g))) return `<div style="padding:2px 0"><span class="muted">•</span> ${esc(g)} <span class="muted">— monteursgroep (hoort geen vinkje te hebben)</span></div>`;
+      const ok = gcMatches(conf, g);
+      return `<div style="padding:2px 0">${ok ? '<span style="color:var(--ok);font-weight:700">✓</span>' : '<span style="color:var(--danger);font-weight:700">✗</span>'} ${esc(g)} <span class="muted">${ok ? '— wordt opdracht + doorgestuurd' : '— wordt NIET herkend: gaat naar Overige (geen kaart, geen monteur!)'}</span></div>`;
+    }).join('');
+  };
+  api('/api/assistant/groups').then((g) => { _knownGroups = g || []; renderGroupCheck(); }).catch(() => {});
+  if ($('#md-ordergroups')) $('#md-ordergroups').addEventListener('input', renderGroupCheck);
   $('#md-monteur').innerHTML = '<option value="">— kies monteur —</option>' + mons.map((m) => `<option value="${m.id}" ${md.autoMonteurId === m.id ? 'selected' : ''}>${esc(m.name)}${m.waGroup ? '' : ' (geen groep!)'}</option>`).join('');
   // Terugkoppeling: controle-monteur (bv. Abdel) wiens groep de terugkoppeling ontvangt.
   $('#tk-monteur').innerHTML = '<option value="">— kies monteur —</option>' + mons.map((m) => `<option value="${m.id}" ${s.terugkoppeling?.monteurId === m.id ? 'selected' : ''}>${esc(m.name)}${m.waGroup ? '' : ' (geen groep!)'}</option>`).join('');
