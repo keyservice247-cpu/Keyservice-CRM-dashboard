@@ -222,6 +222,7 @@ let groupCache = null;
 // "Raf breda…"), zodat het CRM de opdracht-groep herkent en de monteur-dispatch werkt.
 const groupNameById = new Map();
 let lastRefreshFailAt = 0;
+let lastGroupsSyncAt = 0;
 async function refreshGroups(forceRefresh = false) {
   if (groupCache && !forceRefresh) return groupCache;
   // Net nog mislukt (storing)? Dan 30s niet opnieuw hameren.
@@ -231,6 +232,7 @@ async function refreshGroups(forceRefresh = false) {
     groupCache = chats.filter((c) => c.isGroup);
     for (const g of groupCache) { const idk = g.id?._serialized; if (idk && g.name) groupNameById.set(idk, g.name); }
     console.log(`[groepen] ${groupCache.length} bekend: ${groupCache.map((g) => g.name).join(' | ')}`);
+    syncGroupsToCrm().catch(() => {});
   } catch (e) {
     // getChats kan stuk zijn door de WhatsApp-storing — NOOIT crashen; we werken
     // gewoon door met de naam-cache + directe naam-lezing + versturen op id.
@@ -238,6 +240,26 @@ async function refreshGroups(forceRefresh = false) {
     console.error('[groepen] ophalen mislukt (storing?):', e.message);
   }
   return groupCache || [];
+}
+
+// Stuur de complete groepenlijst (id + naam) naar het CRM, dat daarvan ALLE
+// koppelingen automatisch leert — ook van groepen die zelf nooit iets sturen.
+// Zo koppelt het systeem zichzelf en hoeft niemand op "groep <cijfers>" te letten.
+async function syncGroupsToCrm() {
+  if (Date.now() - lastGroupsSyncAt < 60 * 1000) return; // max 1x per minuut
+  const groups = [...groupNameById.entries()]
+    .map(([gid, name]) => ({ id: String(gid).replace(/@.*$/, ''), name }))
+    .filter((g) => g.id && g.name);
+  if (!groups.length) return;
+  lastGroupsSyncAt = Date.now();
+  try {
+    await fetch(`${DASHBOARD_URL}/api/whatsapp/groups`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
+      body: JSON.stringify({ groups }),
+    });
+    console.log(`[groepen] ${groups.length} koppeling(en) doorgegeven aan het CRM`);
+  } catch (e) { /* volgende ronde opnieuw */ }
 }
 async function resolveGroupId(groupName, forceRefresh = false) {
   const list = await refreshGroups(forceRefresh || !groupCache);

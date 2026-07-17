@@ -60,7 +60,7 @@ import {
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
-  groupIdForName, healGroupIdNames,
+  groupIdForName, healGroupIdNames, learnGroupAlias,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1077,6 +1077,24 @@ app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
   if (b.version) db().settings.whatsappBridgeVersion = Number(b.version) || 0;
   saveSoon();
   res.json({ ok: true });
+});
+
+// De bridge (v2) stuurt periodiek zijn complete groepenlijst (id + naam). Het CRM
+// leert daarvan ALLE koppelingen automatisch — ook van groepen die zelf nooit een
+// bericht sturen (zoals "CRM meldingen"). Zo hoeft niemand ooit nog handmatig een
+// "groep <lange cijfers>" te koppelen: het systeem koppelt zichzelf.
+app.post('/api/whatsapp/groups', checkIngestToken, (req, res) => {
+  const groups = Array.isArray(req.body?.groups) ? req.body.groups.slice(0, 100) : [];
+  let learned = 0;
+  const before = JSON.stringify(db().settings.groupAliases || []);
+  for (const g of groups) learnGroupAlias(g && g.id, g && g.name);
+  if (JSON.stringify(db().settings.groupAliases || []) !== before) {
+    learned = 1;
+    // Meteen ook oude "groep <id>"-berichten/kaarten helen en gemiste opdrachten inhalen.
+    healGroupIdNames();
+    maybeCatchUpDispatch();
+  }
+  res.json({ ok: true, count: groups.length, changed: !!learned });
 });
 
 // Begin (maandag 00:00) en einde (volgende maandag 00:00) van de kalenderweek rond ref.
