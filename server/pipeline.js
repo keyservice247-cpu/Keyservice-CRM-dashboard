@@ -454,10 +454,17 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const hasCustomerData = !!(suggestion.customerPhone && (suggestion.customerAddress || hasPostcode))
     || /(volgende klant|nieuwe klant|naam\s*:\s*\S)/i.test(`${subject || ''} ${body || ''}`);
   // Status-/afrond-RAPPORTAGE van een medewerker (GEEN nieuwe opdracht), bv.
-  // "Afgerond: Rosmalen 5247 HS", weekfactuur/omzet. Alleen als er GEEN klantgegevens
-  // in staan (anders is het gewoon een opdracht).
-  const REPORT_RE = /(\bafgerond\b|\bafgehandeld\b|\bgereed\b|klus\s*(af|klaar|geklaard)|weekfactuur|\bomzet\b|rapportage|dagrapport)/i;
-  const looksReport = !hasCustomerData && REPORT_RE.test(`${subject || ''} ${body || ''}`);
+  // "Afgerond: Rosmalen 5247 HS", "Dagrapportage geannuleerde opdrachten", weekfactuur.
+  // LET OP: een rapportage bevat vaak óók klant-achtige gegevens (postcodes/nummers van
+  // de klussen waarover gerapporteerd wordt). Daarom telt het TOCH als rapport wanneer:
+  // - er meerdere postcodes in staan (lijstje klussen ≠ één klant), of
+  // - de "klant" een generieke naam is (bv. "Key Service" zelf).
+  // Zo wordt een dagrapportage nooit meer een opdracht-kaart die automatisch naar de
+  // monteur gaat, terwijl een échte aanvraag (één klant, één adres) er gewoon doorkomt.
+  const REPORT_RE = /(\bafgerond\b|\bafgehandeld\b|\bgereed\b|klus\s*(af|klaar|geklaard)|weekfactuur|\bomzet\b|rapportage|dagrapport|geannuleerde opdracht(en)?)/i;
+  const postcodeCount = (String(body || '').match(/\b\d{4}\s?[a-z]{2}\b/gi) || []).length;
+  const looksReport = REPORT_RE.test(`${subject || ''} ${body || ''}`)
+    && (!hasCustomerData || postcodeCount >= 2 || isGenericName(suggestion.customerName));
 
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
