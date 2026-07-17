@@ -1902,7 +1902,11 @@ app.post('/api/orders/:id/send-monteur', requireRole('admin', 'assistent'), (req
 
 // De WhatsApp-bridge haalt hier de wachtrij op (queued items).
 app.get('/api/outbox', checkIngestToken, (req, res) => {
-  const items = db().outbox.filter((o) => o.status === 'queued');
+  // Herkansings-rem: een eerder mislukt item mag pas na z'n wachttijd (nextTryAt)
+  // opnieuw worden aangeboden. Anders hamert de bridge elke 8s op hetzelfde kapotte
+  // bericht en loopt de log vol. Nieuwe items gaan wel meteen mee.
+  const nu = now();
+  const items = db().outbox.filter((o) => o.status === 'queued' && (!o.nextTryAt || o.nextTryAt <= nu));
   // Groeps-id er bij het ophalen live bij zoeken: een koppeling kan ná het aanmaken
   // van het item zijn gezet/geleerd. Zo kan de bridge altijd rechtstreeks op id
   // versturen, ook voor oudere items in de wachtrij.
@@ -1964,6 +1968,8 @@ app.post('/api/outbox/:id/done', checkIngestToken, (req, res) => {
     const tooOld = !item.createdAt || (Date.now() - new Date(item.createdAt).getTime()) > 36 * 3600000;
     if (isGroupItem && !tooOld) {
       item.status = 'queued';
+      // Rem: volgende poging pas over 60s (i.p.v. elke bridge-ronde van 8s).
+      item.nextTryAt = new Date(Date.now() + 60 * 1000).toISOString();
     } else {
       item.status = 'failed';
       item.doneAt = now();
