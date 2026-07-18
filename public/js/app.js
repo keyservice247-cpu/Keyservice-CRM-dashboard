@@ -2331,6 +2331,11 @@ async function loadSettings() {
       <textarea id="emailFilters" rows="3" placeholder="bv. bol.com, mijn leverancier bv">${esc(s.emailFilters || '')}</textarea>
       <p class="muted small" style="margin-top:6px">Standaard al actief: ${esc(s.emailFiltersDefault || '')}</p>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveEmailFilters">Filter opslaan</button></div> </div>
+    <div data-sg="systeem" class="info-card" style="margin-bottom:18px"> <h3>Oude bijlages automatisch opruimen</h3>
+      <p class="muted small">Foto's en bestanden van <strong>afgeronde of geannuleerde</strong> klussen worden na de ingestelde periode van de schijf verwijderd, zodat die nooit volloopt. Klantgegevens, kaarten, facturen en <strong>werkbon-handtekeningen blijven altijd bewaard</strong> — alleen de losse bestanden verdwijnen. Tip: garantie op producten is 3 jaar; kies 1095 dagen als je foto's daarvoor wilt kunnen terugkijken.</p>
+      <div class="row" style="align-items:center"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ac-enabled" style="width:auto" ${s.attachmentCleanup?.enabled !== false ? 'checked' : ''}>Aan</label>
+      <label>Na hoeveel dagen <input id="ac-days" type="number" min="90" max="3650" value="${esc(String(s.attachmentCleanup?.days ?? 365))}" style="max-width:120px"></label></div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveAttCleanup">Opslaan</button></div> </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
     <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Factuurgegevens (op elke factuur-PDF)</h3>
       <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een kaart verstuurt (knop <strong>Factuur</strong>). Het logo staat er automatisch op. Prijzen voer je <strong>excl. btw</strong> in.</p>
@@ -2552,6 +2557,10 @@ async function loadSettings() {
   };
   $('#saveEmailFilters').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { emailFilters: $('#emailFilters').value }); toast('E-mailfilter opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveAttCleanup').onclick = async () => {
+    try { await api('/api/settings', 'PATCH', { attachmentCleanup: { enabled: $('#ac-enabled').checked, days: Number($('#ac-days').value) || 365 } }); toast('Bijlage-opschoning opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveSignature').onclick = async () => {

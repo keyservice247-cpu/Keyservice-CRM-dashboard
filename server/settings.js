@@ -362,6 +362,20 @@ export function getEmailFilters() {
   return [...DEFAULT_EMAIL_FILTERS, ...own];
 }
 
+// Automatisch bijlages opruimen (voorstel Abdel, 18 jul): foto's/bestanden van
+// AFGERONDE of GEANNULEERDE kaarten ouder dan X dagen worden van de schijf gehaald,
+// zodat de schijf nooit meer volloopt door oude foto's. Klantgegevens, kaarten,
+// facturen en werkbon-handtekeningen blijven ALTIJD volledig bewaard — alleen de
+// losse bestandsbijlages van oude, afgehandelde klussen verdwijnen.
+export const DEFAULT_ATTACHMENT_CLEANUP = { enabled: true, days: 365 };
+export function getAttachmentCleanup() {
+  const a = db().settings.attachmentCleanup || {};
+  return {
+    enabled: a.enabled !== false,
+    days: Math.max(90, Math.min(3650, Number(a.days) || DEFAULT_ATTACHMENT_CLEANUP.days)),
+  };
+}
+
 // Nette standaard-handtekening onder elke mail die vanuit het dashboard wordt verstuurd.
 export const DEFAULT_EMAIL_SIGNATURE = `Met vriendelijke groet,
 Team Key Service 24/7

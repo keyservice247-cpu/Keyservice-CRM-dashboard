@@ -5,7 +5,9 @@ import { db, id, now, save, saveSoon, logActivity, diskFreeMB, backupNow, saveFa
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
+  getAttachmentCleanup,
 } from './settings.js';
+import { deleteFile } from './storage.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
 import { lastHealth } from './health.js';
@@ -417,6 +419,62 @@ async function runMailboxQuotaCheck() {
   console.log('[mailbox-quotum]', txt);
 }
 
+// ---------- Bijlage-opschoning (1x per dag) ----------
+// Verwijdert bestandsbijlages van AFGERONDE/GEANNULEERDE kaarten (en berichten in de
+// prullenbak-leeftijd) ouder dan de ingestelde periode. Uitdrukkelijk NOOIT:
+// werkbon-handtekeningen (garantie/juridisch), facturen, of iets van een nog
+// lopende kaart. Klant- en kaartgegevens zelf blijven altijd volledig staan —
+// alleen de losse bestanden op de schijf verdwijnen.
+export function runAttachmentCleanup() {
+  const cfg = getAttachmentCleanup();
+  if (!cfg.enabled) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (db().settings._attCleanupDay === today) return;
+  db().settings._attCleanupDay = today;
+  const cutoff = Date.now() - cfg.days * 86400000;
+  // Bestanden die NOOIT weg mogen: werkbon-handtekeningen.
+  const keep = new Set();
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    const sigId = o.werkbon && o.werkbon.signatureAttachmentId;
+    if (sigId) keep.add(sigId);
+  }
+  let removed = 0;
+  const stripList = (list) => {
+    if (!Array.isArray(list) || !list.length) return list;
+    const rest = [];
+    for (const att of list) {
+      if (!att || !att.file || keep.has(att.id)) { rest.push(att); continue; }
+      try { deleteFile(att.file); removed++; } catch { rest.push(att); continue; }
+    }
+    return rest;
+  };
+  // Leeftijd op basis van het afrondmoment (of anders de aanmaakdatum) — bewust
+  // NIET updatedAt: die schuift op door systeemacties (archivering, badges) en zou
+  // het opruimen eindeloos uitstellen.
+  const oldDone = (o) => {
+    if (!['afgerond', 'geannuleerd'].includes(o.status)) return false;
+    const ref = o.completedAt || o.createdAt;
+    return ref && new Date(ref).getTime() < cutoff;
+  };
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    if (!oldDone(o)) continue;
+    if (o.attachments && o.attachments.length) o.attachments = stripList(o.attachments);
+    for (const t of o.thread || []) {
+      if (t.attachments && t.attachments.length) t.attachments = stripList(t.attachments);
+    }
+  }
+  // Losse berichten (inbox-historie) ouder dan de periode: bestanden weg, tekst blijft.
+  for (const m of db().messages || []) {
+    if (!m.receivedAt || new Date(m.receivedAt).getTime() >= cutoff) continue;
+    if (m.attachments && m.attachments.length) m.attachments = stripList(m.attachments);
+  }
+  if (removed) {
+    logActivity('systeem', 'oude bijlages opgeruimd', `${removed} bestand(en) van afgehandelde klussen ouder dan ${cfg.days} dagen`);
+    console.log(`[bijlage-opschoning] ${removed} bestand(en) verwijderd (ouder dan ${cfg.days} dagen, alleen afgeronde/geannuleerde klussen)`);
+  }
+  saveSoon();
+}
+
 // ---------- Starter ----------
 export function startAutomations({ runStatusScan } = {}) {
   _runStatusScan = runStatusScan || null;
@@ -427,6 +485,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { bookRecurringDue(); } catch (e) { console.error('[vaste-kosten]', e.message); }
     try { await runWeeklyReport(); } catch (e) { console.error('[ceo-rapport]', e.message); }
     try { await runMailboxQuotaCheck(); } catch (e) { console.error('[mailbox-quotum]', e.message); }
+    try { runAttachmentCleanup(); } catch (e) { console.error('[bijlage-opschoning]', e.message); }
   };
   const fast = async () => {
     try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }

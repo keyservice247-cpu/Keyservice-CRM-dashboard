@@ -61,7 +61,7 @@ import {
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
-  groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS,
+  groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1536,6 +1536,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     groupAliases: db().settings.groupAliases || [],
     emailFilters: db().settings.emailFilters || '',
     emailFiltersDefault: DEFAULT_EMAIL_FILTERS.join(', '),
+    attachmentCleanup: getAttachmentCleanup(),
     emailSignature: getEmailSignature(),
     sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
     imapAddress: process.env.IMAP_USER || '',
@@ -1586,6 +1587,13 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     // WET (Regel 4): eigen filterpatronen (afzender/onderwerp) bovenop de vaste
     // basislijst — leveranciers-/webshopmail stil naar Overige, zonder code-wijziging.
     db().settings.emailFilters = String(b.emailFilters || '').slice(0, 3000);
+  }
+  if ('attachmentCleanup' in b) {
+    const a = b.attachmentCleanup || {};
+    db().settings.attachmentCleanup = {
+      enabled: a.enabled !== false,
+      days: Math.max(90, Math.min(3650, Number(a.days) || 365)),
+    };
   }
   if ('groupAliases' in b) {
     // Koppelingen groeps-ID -> naam (voor als de bridge door een WhatsApp-storing geen
@@ -1747,6 +1755,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     groupAliases: db().settings.groupAliases || [],
     emailFilters: db().settings.emailFilters || '',
     emailFiltersDefault: DEFAULT_EMAIL_FILTERS.join(', '),
+    attachmentCleanup: getAttachmentCleanup(),
     emailSignature: getEmailSignature(),
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
