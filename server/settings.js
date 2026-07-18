@@ -341,6 +341,27 @@ export function getAutoReply() {
   };
 }
 
+// LEAD-INSTROOM WET (Regel 4): patronen (afzender/onderwerp) waarmee bestellingen,
+// orderbevestigingen, facturen, verzend-/bezorgberichten en no-reply-post van
+// leveranciers/webshops STIL naar Overige gaan — nooit een pending lead, nooit een
+// melding. Deze basislijst staat vast in de code; eigen patronen kunnen erbij via
+// Instellingen (settings.emailFilters, komma- of regel-gescheiden, hoofdletter-
+// ongevoelige deeltekst-match op afzender + onderwerp). Website-formulieren winnen
+// altijd van dit filter (een echte lead kan hier nooit door sneuvelen).
+export const DEFAULT_EMAIL_FILTERS = [
+  'no-reply@', 'noreply@', 'geen-antwoord@', 'do-not-reply@', 'donotreply@',
+  'orderbevestiging', 'bestelbevestiging', 'bevestiging van je bestelling',
+  'je bestelling', 'uw bestelling', 'ordernummer', 'order #', 'je order', 'uw order',
+  'factuur', 'invoice', 'betaalherinnering', 'betalingsherinnering', 'betaling ontvangen',
+  'is verzonden', 'is onderweg', 'wordt bezorgd', 'bezorging', 'track & trace',
+  'track&trace', 'verzendbevestiging', 'aanmaning', 'incasso',
+];
+export function getEmailFilters() {
+  const own = String(db().settings.emailFilters || '')
+    .split(/[\n,]/).map((s) => s.trim().toLowerCase()).filter((s) => s.length >= 3);
+  return [...DEFAULT_EMAIL_FILTERS, ...own];
+}
+
 // Nette standaard-handtekening onder elke mail die vanuit het dashboard wordt verstuurd.
 export const DEFAULT_EMAIL_SIGNATURE = `Met vriendelijke groet,
 Team Key Service 24/7

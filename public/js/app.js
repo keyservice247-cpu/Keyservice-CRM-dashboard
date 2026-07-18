@@ -745,6 +745,11 @@ function cardHTML(o) {
   else if (o.snoozeAt) meta.push(`<span class="chip" title="Opvolg-herinnering ingesteld">${icon('clock', 13)} ${fmtDate(o.snoozeAt)}</span>`);
   if (o.attachments && o.attachments.length) meta.push(`<span class="chip">${icon('paperclip', 13)} ${o.attachments.length}</span>`);
   if (o.autoReplied) meta.push(`<span class="chip chip-ack" title="Automatische ontvangstbevestiging verstuurd">${icon('mail', 12)} bevestigd</span>`);
+  // Suggesties (lead-instroom wetten): het systeem voegt nooit zelf samen of wijzigt
+  // nooit zelf klantgegevens — deze chips vragen om een menselijke beslissing.
+  if (o.mergeSuggestion) meta.push(`<span class="chip chip-sug" title="Mogelijk zelfde opdracht als een open kaart van deze klant — open de kaart om samen te voegen of te negeren">${icon('merge', 13)} dubbel?</span>`);
+  if (o.dataSuggestions && o.dataSuggestions.length) meta.push(`<span class="chip chip-sug" title="Deze aanvraag wijkt af van het klantrecord — open de kaart om bij te werken of te negeren">${icon('user', 13)} gegevens-check</span>`);
+  if (o.customerIncomplete) meta.push(`<span class="chip urgent" title="Geen echte klantnaam in het bericht gevonden — vul de klantgegevens aan">${icon('user', 13)} klant onbekend</span>`);
   // Status-stip: beantwoord (groen) > geopend (blauw) > nieuw/ongelezen (geel).
   const st = o.lastReplyAt ? { c: 'replied', t: 'Beantwoord' }
     : o.openedAt ? { c: 'opened', t: 'Geopend' }
@@ -887,6 +892,9 @@ function openOrderModal(id, pool) {
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
     ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}</div>` : ''}
+    ${o && o.customerIncomplete ? `<div class="sug-banner sug-warn">${icon('user', 13)} <strong>Klant onbekend — aanvullen.</strong> Er is geen echte klantnaam in het bericht gevonden (de afzender is nooit automatisch de klant). Vul hieronder de klantgegevens aan.</div>` : ''}
+    ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open kaart <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. <span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span></div>` : ''}
+    ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de kaart gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from || '—')}"</span> → <strong>"${esc(sg.to)}"</strong> <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span></div>`).join('')}</div>` : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label>
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
@@ -916,6 +924,28 @@ function openOrderModal(id, pool) {
       <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o ? `<button class="btn" id="f-onweg" title="Stuur de klant een mail + appje dat de monteur nu onderweg is">${icon('pin', 14)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Sluiten</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
+  // Suggestie-knoppen (lead-instroom wetten): de mens beslist, het systeem nooit.
+  if (o && o.mergeSuggestion) {
+    $('#sug-merge-do').onclick = async () => {
+      if (!confirm(`Deze kaart samenvoegen met "${o.mergeSuggestion.title}"? De berichten en bijlages gaan mee naar die kaart.`)) return;
+      try { await api('/api/orders/merge', 'POST', { primaryId: o.mergeSuggestion.orderId, mergeIds: [o.id] }); toast('Kaarten samengevoegd'); closeModal(); loadBoard(); }
+      catch (err) { toast(err.message, true); }
+    };
+    $('#sug-merge-no').onclick = async () => {
+      try { await api(`/api/orders/${o.id}/merge-suggestion`, 'POST', {}); toast('Suggestie weggehaald'); closeModal(); loadBoard(); }
+      catch (err) { toast(err.message, true); }
+    };
+  }
+  if (o && o.dataSuggestions && o.dataSuggestions.length) {
+    $$('.sug-apply', $('#modal')).forEach((btn) => btn.onclick = async () => {
+      try { await api(`/api/orders/${o.id}/data-suggestion`, 'POST', { field: btn.dataset.field, action: 'apply' }); toast('Klantrecord bijgewerkt'); closeModal(); loadBoard(); }
+      catch (err) { toast(err.message, true); }
+    });
+    $$('.sug-skip', $('#modal')).forEach((btn) => btn.onclick = async () => {
+      try { await api(`/api/orders/${o.id}/data-suggestion`, 'POST', { field: btn.dataset.field, action: 'skip' }); toast('Suggestie genegeerd'); closeModal(); loadBoard(); }
+      catch (err) { toast(err.message, true); }
+    });
+  }
   // Status-veld laten opvallen: kader kleurt mee met de gekozen status.
   {
     const stEl = $('#f-status');
@@ -1127,8 +1157,8 @@ function reviewHTML(r) {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}
-          <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
+    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}
+          <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
       ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('hardDelete') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
 }
@@ -2296,6 +2326,11 @@ async function loadSettings() {
       <p class="muted small" style="margin-top:8px">Houd deze link privé (geeft toegang tot je afspraken). Losse afspraak nú toevoegen kan ook met de knop <strong>"Google Agenda"</strong> op een opdracht/agenda-item.</p>
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
+    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>E-mailfilter: bestellingen &amp; leveranciers</h3>
+      <p class="muted small">Mails waarvan de <strong>afzender of het onderwerp</strong> een van deze woorden bevat (bv. orderbevestigingen, facturen van webshops, verzendberichten, no-reply-post) gaan <strong>stil naar Overige</strong> — nooit een lead, nooit een melding. Website-aanvragen worden hier nooit door tegengehouden. Eigen woorden toevoegen: één per regel of met komma's.</p>
+      <textarea id="emailFilters" rows="3" placeholder="bv. bol.com, mijn leverancier bv">${esc(s.emailFilters || '')}</textarea>
+      <p class="muted small" style="margin-top:6px">Standaard al actief: ${esc(s.emailFiltersDefault || '')}</p>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveEmailFilters">Filter opslaan</button></div> </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
     <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Factuurgegevens (op elke factuur-PDF)</h3>
       <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een kaart verstuurt (knop <strong>Factuur</strong>). Het logo staat er automatisch op. Prijzen voer je <strong>excl. btw</strong> in.</p>
@@ -2513,6 +2548,10 @@ async function loadSettings() {
   };
   $('#saveWaGroups').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { whatsappOrderGroups: $('#waOrderGroups').value }); toast('WhatsApp opdracht-groepen opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveEmailFilters').onclick = async () => {
+    try { await api('/api/settings', 'PATCH', { emailFilters: $('#emailFilters').value }); toast('E-mailfilter opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveSignature').onclick = async () => {

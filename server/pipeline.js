@@ -2,7 +2,7 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
-import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName } from './settings.js';
+import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters } from './settings.js';
 import { sendPush } from './push.js';
 
 // ---------- WhatsApp-melding naar het team (groep "CRM meldingen" of 1-op-1) ----------
@@ -73,29 +73,35 @@ export function autoApproveThreshold() {
   return Number.isFinite(env) ? env : 0;
 }
 
-// Namen die GEEN echte klant zijn (het bedrijf zelf / forwarder / leeg). Hierop mag
-// nooit een klant worden samengevoegd, anders belanden allemaal losse klanten op één
-// kaart (bv. alles onder "Key Service").
-const GENERIC_NAMES = /^(key\s?service|keyservice|key service 24\/?7|het systeem van key service|systeem|info|onbekend|onbekende klant|klant|drs)$/i;
-function isGenericName(name) { return !name || GENERIC_NAMES.test(String(name).trim()); }
+// Namen die GEEN echte klant zijn (het bedrijf zelf / forwarder / leeg). Zo'n naam
+// mag nooit koppelgrond zijn én nooit als klantnaam worden opgeslagen — de afzender
+// (bv. een DRS-doorstuurder of "Key Service Admin") is nooit de klant.
+const GENERIC_NAMES = /^(key\s?service( admin)?|keyservice|key service 24\/?7|het systeem van key service|systeem|info|onbekend|onbekende klant|klant|drs|no-?reply|formsubmit|website)$/i;
+export function isGenericName(name) { return !name || GENERIC_NAMES.test(String(name).trim()); }
+
+// LEAD-INSTROOM WET (Regel 2): koppelen aan een bestaande klant mag ALLEEN op harde
+// identificatoren — ① e-mail exact of ② telefoonnummer genormaliseerd exact. Naam is
+// NOOIT een koppelgrond (hooguit extra bevestiging): drie verschillende klanten die
+// door dezelfde DRS-afzender werden doorgestuurd, zijn ooit op afzendernaam tot één
+// klant samengevoegd — dat mag nooit meer gebeuren.
+// Telefoon-normalisatie voor matching: alleen cijfers, en internationaal NL naar
+// nationaal (0031… / 31… → 0…), zodat "+31 6 11 11 11 11" en "0611111111" als
+// HETZELFDE nummer tellen — het bekendste gat waardoor een klant-reactie niet aan
+// z'n kaart hing.
+const matchPhone = (v) => String(v || '').replace(/[^\d]/g, '').replace(/^0031/, '0').replace(/^31(?=\d{9})/, '0');
 
 export function findCustomer({ name, phone, email }) {
   const customers = db().customers;
-  const norm = (v) => (v || '').toLowerCase().replace(/[\s().-]/g, '');
   if (email) {
     const m = customers.find((c) => c.email && c.email.toLowerCase() === email.toLowerCase());
     if (m) return m;
   }
   if (phone) {
-    const p = norm(phone);
+    const p = matchPhone(phone);
     if (p.length >= 6) {
-      const m = customers.find((c) => c.phone && norm(c.phone) === p);
+      const m = customers.find((c) => c.phone && matchPhone(c.phone) === p);
       if (m) return m;
     }
-  }
-  if (name && !isGenericName(name)) {
-    const m = customers.find((c) => c.name && c.name.toLowerCase() === name.toLowerCase());
-    if (m) return m;
   }
   return null;
 }
@@ -105,15 +111,14 @@ export function findCustomer({ name, phone, email }) {
 // zwak (en generieke namen als "Key Service" zorgen voor verkeerde samenvoegingen).
 export function findCustomerStrong({ phone, email }) {
   const customers = db().customers;
-  const norm = (v) => (v || '').toLowerCase().replace(/[\s().-]/g, '');
   if (email) {
     const m = customers.find((c) => c.email && c.email.toLowerCase() === email.toLowerCase());
     if (m) return m;
   }
   if (phone) {
-    const p = norm(phone);
+    const p = matchPhone(phone);
     if (p.length >= 6) {
-      const m = customers.find((c) => c.phone && norm(c.phone) === p);
+      const m = customers.find((c) => c.phone && matchPhone(c.phone) === p);
       if (m) return m;
     }
   }
@@ -131,27 +136,40 @@ export function addressDiffers(a, b) {
   return !!(x && y && !x.includes(y) && !y.includes(x));
 }
 
+// LEAD-INSTROOM WET (Regel 3): bestaande klantgegevens worden NOOIT automatisch
+// overschreven. Afwijkingen (ander adres/telefoon/e-mail/naam) komen terug als
+// SUGGESTIES — de mens beslist op de kaart of het klantrecord wordt bijgewerkt.
+// Alleen LEGE velden aanvullen mag (dat overschrijft niets). De kaart zelf gebruikt
+// altijd de gegevens uit de aanvraag (order.intake), dus de opdracht klopt sowieso.
 export function upsertCustomer({ name, phone, email, address, source }, opts = {}) {
   let c = findCustomer({ name, phone, email });
   if (c) {
-    const changes = [];
+    const suggestions = [];
     if (!c.phone && phone) c.phone = phone;
     if (!c.email && email) c.email = email;
     if (!c.address && address) c.address = address;
-    // BELANGRIJK (goedkeur-moment): geeft de klant in een NIEUWE aanvraag een ander
-    // adres/telefoonnummer op, dan is de nieuwste opgave leidend — anders rijdt de
-    // monteur naar een oud adres. De wijziging wordt gemeld op de kaart (audit).
-    if (opts.updateChanged) {
-      if (address && addressDiffers(c.address, address)) { changes.push({ field: 'adres', from: c.address, to: address }); c.address = address; }
-      if (phone && phoneDiffers(c.phone, phone)) { changes.push({ field: 'telefoon', from: c.phone, to: phone }); c.phone = phone; }
-      if (email && c.email && email.toLowerCase() !== c.email.toLowerCase() && /@/.test(email)) { changes.push({ field: 'e-mail', from: c.email, to: email }); c.email = email; }
+    if (address && addressDiffers(c.address, address)) suggestions.push({ field: 'adres', from: c.address, to: address });
+    if (phone && phoneDiffers(c.phone, phone)) suggestions.push({ field: 'telefoon', from: c.phone, to: phone });
+    if (email && c.email && email.toLowerCase() !== c.email.toLowerCase() && /@/.test(email)) suggestions.push({ field: 'e-mail', from: c.email, to: email });
+    // Naam alleen als extra bevestiging: een afwijkende ECHTE naam wordt een suggestie.
+    if (name && !isGenericName(name) && c.name && !isGenericName(c.name)
+      && name.trim().toLowerCase() !== c.name.trim().toLowerCase()) {
+      suggestions.push({ field: 'naam', from: c.name, to: name });
     }
+    // Eerder als "Onbekende klant" opgeslagen en nu is er wél een echte naam? Aanvullen mag.
+    if (name && !isGenericName(name) && (!c.name || isGenericName(c.name))) c.name = name;
     if (c.type === 'lead') c.type = 'klant';
-    return { customer: c, created: false, changes };
+    // Nog steeds geen echte naam? Dan blijft de kaart "Klant onbekend — aanvullen"
+    // vragen (ook als het record al bij binnenkomst was aangemaakt).
+    return { customer: c, created: false, changes: [], suggestions, unknownName: !c.name || isGenericName(c.name) };
   }
+  // WET (Regel 2): een generieke naam ("Key Service", "DRS", afzender-restjes) mag
+  // NOOIT als klantnaam worden opgeslagen — dan heet het record "Onbekende klant" en
+  // krijgt de kaart het label "Klant onbekend — aanvullen".
+  const unknownName = !name || isGenericName(name);
   c = {
     id: id('cust'),
-    name: name || 'Onbekende klant',
+    name: unknownName ? 'Onbekende klant' : name,
     phone: phone || '',
     email: email || '',
     address: address || '',
@@ -161,7 +179,7 @@ export function upsertCustomer({ name, phone, email, address, source }, opts = {
     createdAt: now(),
   };
   db().customers.push(c);
-  return { customer: c, created: true, changes: [] };
+  return { customer: c, created: true, changes: [], suggestions: [], unknownName };
 }
 
 // Bouw snelle opzoek-maps (id -> klant/monteur). Geef die mee aan withRelations
@@ -188,63 +206,33 @@ export function withRelations(order, maps) {
 export function applyReview(review, { actorName, overrides = {}, auto = false }) {
   const s = review.suggestion;
   const status = normalizeStatus(overrides.status || s.status);
-  // updateChanged: bij goedkeuren is de NIEUWSTE opgave van de klant leidend (ander
-  // adres/telefoon in deze aanvraag wordt overgenomen, met melding op de kaart).
-  const { customer, changes: custChanges = [] } = upsertCustomer({
-    name: overrides.customerName ?? s.customerName,
-    phone: overrides.customerPhone ?? s.customerPhone,
-    email: overrides.customerEmail ?? s.customerEmail,
-    address: overrides.customerAddress ?? s.customerAddress,
+  // INTAKE-GEGEVENS: de gegevens zoals ze in DÉZE aanvraag staan. De kaart gebruikt
+  // altijd deze gegevens (dus de opdracht/monteur klopt altijd), het klantrecord
+  // wordt NOOIT stil herschreven (Regel 3) — afwijkingen worden suggesties.
+  const intake = {
+    name: (overrides.customerName ?? s.customerName ?? '') || '',
+    phone: (overrides.customerPhone ?? s.customerPhone ?? '') || '',
+    email: (overrides.customerEmail ?? s.customerEmail ?? '') || '',
+    address: (overrides.customerAddress ?? s.customerAddress ?? '') || '',
+  };
+  const { customer, suggestions: custSuggestions = [], unknownName } = upsertCustomer({
+    ...intake,
     source: review.channel,
-  }, { updateChanged: true });
-  const changeNote = custChanges.length
-    ? `⚠ Klantgegevens bijgewerkt op basis van deze aanvraag: ${custChanges.map((ch) => `${ch.field}: "${ch.from}" → "${ch.to}"`).join('; ')}. Even checken of dit klopt vóór het inplannen.`
-    : '';
+  });
 
   const defaultSource = review.channel === 'whatsapp' ? 'Keyservice WhatsApp'
     : review.channel === 'email' ? 'Keyservice e-mail'
     : 'Handmatig';
 
-  // STRENGE DEDUP bij goedkeuren: bestaat er al een actieve (niet-afgeronde/
-  // geannuleerde/ingeklapte) kaart van deze klant? Dan dit bericht daaraan
-  // toevoegen i.p.v. een tweede kaart maken. Tenzij de gebruiker dat expliciet
-  // overslaat (overrides.forceNew).
-  const origMsg0 = db().messages.find((m) => m.id === review.messageId);
-  if (!overrides.forceNew) {
-    const existingOrder = db().orders.find((o) =>
-      o.customerId === customer.id &&
-      !o.archivedWeek &&
-      !['afgerond', 'geannuleerd'].includes(o.status));
-    if (existingOrder) {
-      existingOrder.thread = existingOrder.thread || [];
-      if (origMsg0) {
-        existingOrder.thread.push({
-          id: id('thr'), channel: origMsg0.channel, sender: origMsg0.sender,
-          subject: origMsg0.subject, body: origMsg0.body, at: origMsg0.receivedAt,
-          attachments: origMsg0.attachments || [],
-        });
-        if (origMsg0.attachments && origMsg0.attachments.length) {
-          existingOrder.attachments = (existingOrder.attachments || []).concat(origMsg0.attachments);
-        }
-      }
-      if (changeNote) {
-        existingOrder.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: changeNote, at: now() });
-        logActivity('systeem', 'klantgegevens bijgewerkt (bestaande kaart)', customer.name || '');
-      }
-      existingOrder.customerReplied = true;
-      existingOrder.unreadReplies = (existingOrder.unreadReplies || 0) + 1;
-      existingOrder.lastCustomerReplyAt = now();
-      existingOrder.updatedAt = now();
-      review.status = auto ? 'auto_approved' : 'approved';
-      review.finalStatus = existingOrder.status;
-      review.orderId = existingOrder.id;
-      review.reviewedBy = actorName;
-      review.reviewedAt = now();
-      saveSoon();
-      logActivity(actorName, 'bericht aan bestaande opdracht', `${customer.name}: ${existingOrder.title}`);
-      return existingOrder;
-    }
-  }
+  // LEAD-INSTROOM WET (Regel 1): elke goedgekeurde aanvraag wordt een NIEUWE kaart,
+  // óók als deze klant al een open kaart heeft. Automatisch samenvoegen bestaat niet
+  // meer — de nieuwe kaart krijgt een SUGGESTIE ("Mogelijk zelfde opdracht als kaart
+  // X — samenvoegen?") en de mens beslist. Zelfde input geeft zo altijd zelfde
+  // uitkomst; er verdwijnt nooit meer stil een aanvraag in een oude kaart.
+  const openOrder = db().orders.find((o) =>
+    o.customerId === customer.id &&
+    !o.archivedWeek &&
+    !['afgerond', 'geannuleerd'].includes(o.status));
 
   const order = {
     id: id('ord'),
@@ -261,6 +249,14 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     urgent: !!s.urgent,
     notes: '',
     messageId: review.messageId,
+    // Gegevens van DEZE aanvraag (kaart-waarheid; klantrecord kan afwijken).
+    intake,
+    // "Klant onbekend — aanvullen": er is geen echte klantnaam uit de tekst gehaald.
+    customerIncomplete: !!unknownName || undefined,
+    // Suggestie: mogelijk zelfde opdracht als een al open kaart (mens beslist).
+    mergeSuggestion: openOrder ? { orderId: openOrder.id, title: openOrder.title, at: now() } : undefined,
+    // Suggesties: aanvraag wijkt af van het klantrecord (mens beslist over bijwerken).
+    dataSuggestions: custSuggestions.length ? custSuggestions : undefined,
     thread: [],
     attachments: [],
     createdAt: now(),
@@ -289,11 +285,17 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
       order.autoReplied = { at: origMsg.autoReplied.at };
     }
   }
-  // Zichtbare melding op de kaart als klantgegevens zijn bijgewerkt (ander adres/tel).
-  if (changeNote) {
-    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: changeNote, at: now() });
-    order.notes = changeNote;
-    logActivity('systeem', 'klantgegevens bijgewerkt bij goedkeuren', `${customer.name}: ${custChanges.map((c) => c.field).join(', ')}`);
+  // Zichtbare SUGGESTIES op de kaart (niets is automatisch toegepast — de mens beslist).
+  if (custSuggestions.length) {
+    const note = `⚠ Deze aanvraag wijkt af van het klantrecord: ${custSuggestions.map((ch) => `${ch.field}: "${ch.from || '—'}" → "${ch.to}"`).join('; ')}. Niets automatisch gewijzigd — bijwerken kan met één klik op de kaart. De kaart zelf gebruikt de gegevens uit deze aanvraag.`;
+    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: note, at: now() });
+    logActivity('systeem', 'afwijkende klantgegevens (suggestie)', `${customer.name}: ${custSuggestions.map((c) => c.field).join(', ')}`);
+  }
+  if (unknownName) {
+    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: 'Klant onbekend — er is geen echte klantnaam in dit bericht gevonden. Vul de klantgegevens aan op de kaart (de afzender is nooit automatisch de klant).', at: now() });
+  }
+  if (order.mergeSuggestion) {
+    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (dubbel-check)', body: `Mogelijk zelfde opdracht als de open kaart "${order.mergeSuggestion.title}" van deze klant. Niets automatisch samengevoegd — samenvoegen kan met één klik, of negeer deze melding.`, at: now() });
   }
   db().orders.push(order);
 
@@ -332,7 +334,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
 
 // Verwerk een binnenkomend bericht: ontdubbelen -> opslaan -> AI categoriseren
 // -> review aanmaken -> eventueel automatisch goedkeuren bij hoge zekerheid.
-export async function ingestMessage({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false }) {
+export async function ingestMessage({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '' }) {
   // Stuurt de bridge naam ÉN groeps-id mee? Dan die koppeling meteen leren (self-healing:
   // valt de naam later weg door een WhatsApp-storing, dan kent het CRM de groep al).
   if (groupId && group) learnGroupAlias(groupId, group);
@@ -372,6 +374,40 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // (anders raakt een tweede echte lead met standaard-tekst verloren).
   const phoneOf = (t) => { const mm = String(t || '').match(/(?:\+?31|0)\s?6[\s-]?\d(?:[\s-]?\d){7}|\b0\d{1,3}[\s-]?\d{6,8}\b/); return mm ? mm[0].replace(/[^\d]/g, '').replace(/^31/, '0') : ''; };
   const myPhone = phoneOf(body);
+
+  // WEBSITE-DEDUP (15 min): dezelfde aanvraag komt vaak dubbel binnen — één keer
+  // rechtstreeks van de site (POST /api/ingest/form) en één keer als (FormSubmit-)
+  // e-mail op de mailbox. Herken dat op telefoon/e-mail binnen een kwartier en hang
+  // de tweede binnenkomst (incl. eventuele bijlages!) aan de eerste lead, in plaats
+  // van een tweede lead te maken.
+  const WEBSITE_LEAD_RE = /(nieuwe aanvraag via de website|submitted your form on|offerte-?aanvraag (schuifpui|via)|nieuwe (offerte|contact)aanvraag via|aanvraag via de website)/i;
+  const looksWebsiteLead = forceRelevant || WEBSITE_LEAD_RE.test(`${subject || ''}\n${body || ''}`);
+  if (looksWebsiteLead) {
+    const win = Date.now() - 15 * 60000;
+    const mailOf = (t) => ((String(t || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])
+      .map((e) => e.toLowerCase()).find((e) => !/keyservice247\.nl|keyservice-crm|formsubmit/.test(e)) || '');
+    const myMail = mailOf(body);
+    const twin = db().messages.find((m) => {
+      if (!m.receivedAt || new Date(m.receivedAt).getTime() < win) return false;
+      if (!WEBSITE_LEAD_RE.test(`${m.subject || ''}\n${m.body || ''}`)) return false;
+      const tp = phoneOf(m.body);
+      const tm = mailOf(m.body);
+      return (myPhone && tp && tp === myPhone) || (myMail && tm && tm === myMail);
+    });
+    if (twin) {
+      if (attachments && attachments.length) {
+        twin.attachments = (twin.attachments || []).concat(attachments);
+        const rev0 = db().reviews.find((r) => r.messageId === twin.id);
+        if (rev0 && rev0.orderId) {
+          const ord = db().orders.find((o) => o.id === rev0.orderId);
+          if (ord) { ord.attachments = (ord.attachments || []).concat(attachments); ord.updatedAt = now(); }
+        }
+      }
+      saveSoon();
+      logActivity('systeem', 'dubbele websitelead samengevoegd (site+mail)', `${sender || ''} ${myPhone || myMail}`.trim());
+      return { message: twin, review: db().reviews.find((r) => r.messageId === twin.id) || null, duplicate: true };
+    }
+  }
   if (normBody.length >= 20) {
     const dayAgo = Date.now() - 24 * 3600 * 1000;
     const twin = db().messages.find((m) => {
@@ -406,6 +442,9 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     subject: subject || '',
     body: body || '',
     group: group || '',
+    // Bron-markering: via welke mailbox/route kwam dit binnen (bv.
+    // "contact@keyservice247.nl" of "website-direct"). Leeg = hoofdroute.
+    mailbox: mailbox || '',
     externalId: externalId || '',
     attachments: attachments || [],
     receivedAt: now(),
@@ -447,6 +486,15 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // Markeer overduidelijke marketing/niet-opdracht (mag nooit aan een kaart plakken).
   const MARKETING_RE = /(bing|microsoft advertising|places for business|google ads|adwords|nieuwsbrief|newsletter|unsubscribe|afmelden|advertenti|\bseo\b|nieuwe manieren om je bedrijf)/i;
   const looksMarketing = suggestion.aiNotOrder === true || MARKETING_RE.test(`${subject || ''} ${body || ''}`);
+  // LEAD-INSTROOM WET (Regel 4): leveranciers-/webshop-post (orderbevestiging,
+  // bestelling, factuur, verzend-/bezorgbericht, betaalherinnering, no-reply) wordt
+  // STIL naar Overige geleid — nooit een pending lead, nooit een melding. Patronen
+  // (code-basislijst + eigen patronen uit Instellingen) matchen alléén op afzender +
+  // onderwerp, nooit op de body — een klant die over "de bestelling" schrijft wordt
+  // dus niet geraakt. Website-formulieren winnen altijd (isFormLead verderop).
+  const supplierHay = `${sender || ''} ${subject || ''}`.toLowerCase();
+  const looksSupplier = channel === 'email' && !forceRelevant
+    && getEmailFilters().some((p) => supplierHay.includes(p));
   // Heeft dit bericht duidelijke KLANTGEGEVENS? Dan is het een echte opdracht — ook al
   // staat er toevallig een woord als "afgerond/opgelost" in (klantwens). Zo voorkomen we
   // dat een echte aanvraag per ongeluk als "rapport" wordt weggefilterd.
@@ -487,10 +535,14 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // AI twijfelde. Alleen harde reclame/nieuwsbrief (unsubscribe/adverteren) blijft
   // uitgesloten. Veilig, want Te controleren wordt handmatig gekeurd — nooit auto-opdracht.
   const HARD_MARKETING_RE = /(nieuwsbrief|newsletter|unsubscribe|afmelden|advertenti|\bseo\b|bing|microsoft advertising|google ads|adwords|factuur|incasso|aanmaning)/i;
-  const emailIntake = channel === 'email' && hasIntakeData && !looksReport
+  const emailIntake = channel === 'email' && hasIntakeData && !looksReport && !looksSupplier
     && !HARD_MARKETING_RE.test(`${subject || ''} ${body || ''}`);
   if (emailIntake) suggestion.aiNotOrder = false;
-  suggestion.relevant = emailIntake ? true
+  // Volgorde is bewust: leveranciersfilter wint van intake-herkenning (een order-
+  // bevestiging van een webshop bevat ook een adres + telefoonnummer!), maar het
+  // website-formulier (isFormLead, verderop) wint van alles.
+  suggestion.relevant = looksSupplier ? false
+    : emailIntake ? true
     : (aiSaysNotOrder || looksMarketing || looksReport) ? false
     : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
   // Website-formulieren (offerte/contact), ook als ze via FormSubmit worden doorgestuurd
@@ -511,9 +563,11 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     suggestion.relevant = true;
     suggestion.aiNotOrder = false;
   }
-  if ((looksMarketing || looksReport) && !isFormLead && !emailIntake) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
+  if ((looksMarketing || looksReport || looksSupplier) && !isFormLead && !emailIntake) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
   suggestion.relevanceReason = isFormLead
     ? 'Website-formulier (offerte/contactaanvraag) — als opdracht voorgesteld.'
+    : looksSupplier
+    ? 'Leveranciers-/webshop-mail (bestelling/factuur/verzending/no-reply) — stil naar Overige.'
     : emailIntake
     ? 'E-mail met duidelijke klantgegevens (telefoon + adres) — als aanvraag voorgesteld.'
     : looksReport
@@ -524,10 +578,17 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     : otherGroupButOrder ? `Klantgegevens (telefoon + adres) herkend in groep "${group}" — als opdracht voorgesteld.`
     : aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
 
-  // Bestaande klant herkennen op TELEFOON/E-MAIL (sterke match). Zo hangt een
-  // vervolgbericht aan de lopende opdracht, ZONDER dat losse klanten verkeerd op één
-  // kaart belanden (naam alleen is te zwak — denk aan "Key Service" als afzender).
-  const existingCustomer = (looksMarketing && !isFormLead) ? null : findCustomerStrong({
+  // LEAD-INSTROOM WET (Regel 1): AANVRAAG-verkeer (opdracht-groepen, website-
+  // formulieren, e-mail mét intake-gegevens, vangnet-treffers) wordt NOOIT meer
+  // automatisch aan een lopende kaart gehangen — dat wordt bij goedkeuren een NIEUWE
+  // kaart met een samenvoeg-suggestie (zie applyReview). Alleen REACTIE-verkeer
+  // (een 1-op-1 appje of e-mail zonder intake-kenmerken, van een klant met een open
+  // kaart) blijft als bericht in de gesprekshistorie komen — anders zou elk
+  // "ok, tot morgen!" een losse kaart worden en sterft de chat-weergave + het
+  // "Nieuw bericht"-belletje.
+  const isOrderGroupMsg = channel === 'whatsapp' && !!group && isWhatsappOrderGroup(group);
+  const isNewAanvraag = isFormLead || emailIntake || isOrderGroupMsg || otherGroupButOrder;
+  const existingCustomer = (isNewAanvraag || ((looksMarketing || looksSupplier) && !isFormLead)) ? null : findCustomerStrong({
     phone: suggestion.customerPhone,
     email: suggestion.customerEmail,
   });
@@ -571,10 +632,10 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     }
   }
 
-  // Klantgegevens altijd bewaren in het klantenbestand (ook vóór goedkeuring), zodat
-  // namen/e-mails/telefoons nooit verloren gaan. Alleen bij een echte aanvraag met een
-  // betrouwbaar contact (e-mail of telefoon), om ruis te voorkomen.
-  if (suggestion.relevant && (suggestion.customerEmail || suggestion.customerPhone)) {
+  // Klantgegevens alvast bewaren — maar ALLEEN voor echt aanvraag-verkeer met een
+  // betrouwbaar contact. WET (Regel 5): een los 1-op-1 appje maakt NOOIT automatisch
+  // een klant aan; dat gebeurt pas als een mens de aanvraag goedkeurt.
+  if (isNewAanvraag && suggestion.relevant && (suggestion.customerEmail || suggestion.customerPhone)) {
     upsertCustomer({
       name: suggestion.customerName,
       phone: suggestion.customerPhone,
@@ -601,9 +662,11 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   db().reviews.push(review);
 
   const threshold = autoApproveThreshold();
-  // Automatisch goedkeuren alleen voor ECHTE opdrachten (nooit bij 'geen opdracht'
-  // of berichten uit een niet-opdracht-groep).
-  if (suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  // WET (Regel 5): alleen aanvragen uit de OPDRACHT-groepen mogen automatisch een
+  // kaart worden (via de drempel hier, of volautomatisch via de intake-flow).
+  // Losse 1-op-1 appjes, e-mails en website-formulieren gaan ALTIJD eerst langs een
+  // mens in Te controleren — de AI vult nooit zelf ontbrekende gegevens in.
+  if (isOrderGroupMsg && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 

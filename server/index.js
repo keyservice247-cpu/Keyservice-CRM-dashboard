@@ -47,6 +47,7 @@ import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORI
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
+import Busboy from 'busboy';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
 import {
   googleConfigured, isConnected as googleConnected, connectionInfo as googleInfo,
@@ -60,7 +61,7 @@ import {
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
-  groupIdForName, healGroupIdNames, learnGroupAlias,
+  groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1232,19 +1233,97 @@ function fromAllowedSite(req) {
   const src = `${req.get('origin') || ''} ${req.get('referer') || ''}`.toLowerCase();
   return FORM_ORIGINS.some((d) => src.includes(d));
 }
+// Bijlages op het website-formulier: naast JSON accepteert het endpoint ook
+// multipart/form-data (zelfde veldnamen + één of meer bestandsvelden "bijlage").
+// Limieten: max 10 MB totaal per aanvraag; alleen afbeeldingen (jpg/png/webp/heic/
+// heif) en pdf. Een te groot of verkeerd bestand laat de LEAD gewoon doorgaan —
+// alleen die bijlage wordt geweigerd (zichtbaar in het antwoord): een lead mag
+// nooit sneuvelen op z'n bijlage.
+const FORM_FILE_MAX_TOTAL = 10 * 1024 * 1024;
+const FORM_FILE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf']);
+function parseMultipartForm(req) {
+  return new Promise((resolve) => {
+    const fields = {};
+    const attachments = [];
+    const rejected = [];
+    let total = 0;
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve({ fields, attachments, rejected }); } };
+    let bb;
+    try {
+      bb = Busboy({ headers: req.headers, limits: { files: 10, fields: 40, fileSize: FORM_FILE_MAX_TOTAL } });
+    } catch (e) {
+      rejected.push({ file: '', reason: 'upload onleesbaar: ' + e.message });
+      return resolve({ fields, attachments, rejected });
+    }
+    bb.on('field', (fname, val) => { fields[fname] = String(val || '').slice(0, 4000); });
+    bb.on('file', (fname, stream, info) => {
+      const filename = (info && info.filename) || 'bijlage';
+      const mime = String((info && info.mimeType) || '').toLowerCase();
+      const chunks = [];
+      let bad = false;
+      if (!FORM_FILE_TYPES.has(mime)) {
+        bad = true;
+        rejected.push({ file: filename, reason: `bestandstype niet toegestaan (${mime || 'onbekend'}) — alleen jpg/png/webp/heic/heif/pdf` });
+      }
+      stream.on('data', (c) => {
+        total += c.length;
+        if (bad) return;
+        if (total > FORM_FILE_MAX_TOTAL) {
+          bad = true;
+          chunks.length = 0;
+          rejected.push({ file: filename, reason: 'te groot — max 10 MB totaal per aanvraag' });
+          return;
+        }
+        chunks.push(c);
+      });
+      stream.on('limit', () => {
+        if (!bad) { bad = true; chunks.length = 0; rejected.push({ file: filename, reason: 'te groot — max 10 MB totaal per aanvraag' }); }
+      });
+      stream.on('end', () => {
+        if (bad || !chunks.length) return;
+        try {
+          const saved = saveBuffer(Buffer.concat(chunks), { mime, filename });
+          if (saved) attachments.push(saved);
+          else rejected.push({ file: filename, reason: 'opslaan mislukt' });
+        } catch (e) { rejected.push({ file: filename, reason: 'opslaan mislukt: ' + e.message }); }
+      });
+      stream.on('error', () => { bad = true; });
+    });
+    bb.on('error', (e) => { rejected.push({ file: '', reason: 'upload-fout: ' + e.message }); finish(); });
+    bb.on('close', finish);
+    bb.on('finish', finish);
+    req.pipe(bb);
+  });
+}
+
 app.post('/api/ingest/form', async (req, res) => {
   formCors(req, res);
+  // Multipart (met bijlages) of gewone JSON — beide met dezelfde veldnamen. De
+  // bestaande JSON-flow van de websites blijft exact zoals hij was.
+  const isMultipart = /multipart\/form-data/i.test(req.get('content-type') || '');
+  let formAttachments = [];
+  let rejectedFiles = [];
+  let mb = req.body || {};
+  if (isMultipart) {
+    const parsed = await parseMultipartForm(req);
+    mb = parsed.fields;
+    formAttachments = parsed.attachments;
+    rejectedFiles = parsed.rejected;
+  }
+  const dropSavedFiles = () => { for (const a of formAttachments) { try { deleteFile(a.file); } catch { /* al weg */ } } };
   // Toegang: óf een geldig token, óf de aanvraag komt aantoonbaar van de eigen site.
   // Leads gaan sowieso altijd eerst door handmatige controle, dus de impact van
   // misbruik is beperkt tot hooguit spam in de te-controleren inbox.
   const expected = process.env.FORM_TOKEN || process.env.INGEST_TOKEN;
-  const got = req.get('x-form-token') || req.get('x-ingest-token') || (req.body && req.body.token) || req.query.token;
+  const got = req.get('x-form-token') || req.get('x-ingest-token') || mb.token || req.query.token;
   const tokenOk = expected && got === expected;
   if (!tokenOk && !fromAllowedSite(req)) {
     console.log('[form] geweigerd — geen geldig token en niet van toegestane site:', req.get('origin') || req.get('referer') || 'onbekend');
+    dropSavedFiles();
     return res.status(401).json({ error: 'Niet toegestaan' });
   }
-  const b = req.body || {};
+  const b = mb;
   const str = (v) => (v || '').toString().trim();
   const name = str(b.name);
   const phone = str(b.phone);
@@ -1259,7 +1338,7 @@ app.post('/api/ingest/form', async (req, res) => {
   const subject = str(b.subject);
   const message = str(b.message || b.comment);
   const formType = str(b.formType || b.form) || 'website';
-  if (!name && !phone && !email && !message) return res.status(400).json({ error: 'Lege aanvraag' });
+  if (!name && !phone && !email && !message) { dropSavedFiles(); return res.status(400).json({ error: 'Lege aanvraag' }); }
   // Van welke site komt de lead? (voor meerdere gekoppelde websites). Neem het meegestuurde
   // 'site'-veld, anders de host uit origin/referer, anders 'website'.
   const hostFrom = (v) => { const m = String(v || '').match(/^(?:https?:\/\/)?([^/?#]+)/i); return m ? m[1].replace(/^www\./, '') : ''; };
@@ -1281,12 +1360,17 @@ app.post('/api/ingest/form', async (req, res) => {
     subject: subject || `${/offerte/i.test(formType) ? 'Offerteaanvraag' : 'Contactaanvraag'} via ${site}`,
     body: lines.join('\n'),
     externalId: b.externalId || '',
+    attachments: formAttachments,
+    mailbox: 'website-direct', // bron-markering: rechtstreeks van de site
     forceRelevant: true, // website-aanvraag = altijd een echte lead
   });
-  console.log(`[form] lead ontvangen van ${site}: ${name || '?'} <${email || '-'}> (${formType})`);
+  console.log(`[form] lead ontvangen van ${site}: ${name || '?'} <${email || '-'}> (${formType}${formAttachments.length ? `, ${formAttachments.length} bijlage(s)` : ''})`);
   // Ook website-leads krijgen automatisch de ontvangstbevestiging (indien aan).
   await maybeSendAutoReply(result).catch(() => {});
-  res.json({ ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate });
+  res.json({
+    ok: true, reviewId: result.review?.id, status: result.review?.status, duplicate: !!result.duplicate,
+    bijlagen: { opgeslagen: formAttachments.length, geweigerd: rejectedFiles },
+  });
 });
 
 app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
@@ -1450,6 +1534,8 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     companyProfile: getCompanyProfile(),
     whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
     groupAliases: db().settings.groupAliases || [],
+    emailFilters: db().settings.emailFilters || '',
+    emailFiltersDefault: DEFAULT_EMAIL_FILTERS.join(', '),
     emailSignature: getEmailSignature(),
     sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
     imapAddress: process.env.IMAP_USER || '',
@@ -1495,6 +1581,11 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   }
   if ('whatsappOrderGroups' in b) {
     db().settings.whatsappOrderGroups = String(b.whatsappOrderGroups || '').slice(0, 500);
+  }
+  if ('emailFilters' in b) {
+    // WET (Regel 4): eigen filterpatronen (afzender/onderwerp) bovenop de vaste
+    // basislijst — leveranciers-/webshopmail stil naar Overige, zonder code-wijziging.
+    db().settings.emailFilters = String(b.emailFilters || '').slice(0, 3000);
   }
   if ('groupAliases' in b) {
     // Koppelingen groeps-ID -> naam (voor als de bridge door een WhatsApp-storing geen
@@ -1654,6 +1745,8 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     companyProfile: getCompanyProfile(),
     whatsappOrderGroups: db().settings.whatsappOrderGroups || '',
     groupAliases: db().settings.groupAliases || [],
+    emailFilters: db().settings.emailFilters || '',
+    emailFiltersDefault: DEFAULT_EMAIL_FILTERS.join(', '),
     emailSignature: getEmailSignature(),
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
@@ -1775,13 +1868,20 @@ app.post('/api/orders/:id/suggest-reply', requireRole('admin', 'assistent'), asy
 
 // ---------- Opdracht naar monteur sturen (via WhatsApp-bridge) ----------
 // Bouwt een nette samenvatting van de opdracht voor de monteur-groep.
+// WET (Regel 3): de gegevens uit DE AANVRAAG (order.intake) gaan voor — het
+// klantrecord kan bewust afwijken (wordt nooit stil overschreven), maar de monteur
+// moet naar het adres/nummer uit déze aanvraag.
 function buildMonteurMessage(order) {
-  const c = db().customers.find((x) => x.id === order.customerId);
+  const c = db().customers.find((x) => x.id === order.customerId) || {};
+  const it = order.intake || {};
+  const name = (it.name && !/^onbekende klant$/i.test(it.name) ? it.name : '') || c.name || '';
+  const phone = it.phone || c.phone || '';
+  const address = it.address || c.address || '';
   const lines = [`*Nieuwe opdracht: ${order.title}*`];
   if (order.originGroup && isWhatsappOrderGroup(order.originGroup)) lines.push('Bron: DRS (Raf Breda)');
-  if (c?.name) lines.push(`Klant: ${c.name}`);
-  if (c?.phone) lines.push(`Tel: ${c.phone}`);
-  if (c?.address) lines.push(`Adres: ${c.address}`);
+  if (name) lines.push(`Klant: ${name}`);
+  if (phone) lines.push(`Tel: ${phone}`);
+  if (address) lines.push(`Adres: ${address}`);
   if (order.description) lines.push(`Omschrijving: ${order.description}`);
   if (order.appointmentAt) lines.push(`Afspraak: ${order.appointmentAt.replace('T', ' ')}`);
   if (order.price) lines.push(`Prijs: ${order.price}`);
@@ -1826,6 +1926,51 @@ function queueToMonteur(order, monteur, byName) {
   if (db().outbox.length > 1000) db().outbox.length = 1000;
   return { item };
 }
+
+// ---------- Suggesties op de kaart (Regel 1 + 3): de mens beslist ----------
+// Gegevens-suggestie toepassen ("bijwerken") of negeren. Toepassen schrijft het
+// klantrecord alsnog bij — bewust, zichtbaar en gelogd; negeren haalt alleen de
+// suggestie weg. Er verandert nooit iets zonder deze menselijke klik.
+app.post('/api/orders/:id/data-suggestion', requireRole('admin', 'assistent'), (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  const { field, action } = req.body || {};
+  const list = order.dataSuggestions || [];
+  const idx = list.findIndex((s) => s.field === field);
+  if (idx < 0) return res.status(404).json({ error: 'Suggestie niet gevonden' });
+  const sug = list[idx];
+  if (action === 'apply') {
+    const customer = db().customers.find((c) => c.id === order.customerId);
+    const map = { adres: 'address', telefoon: 'phone', 'e-mail': 'email', naam: 'name' };
+    if (customer && map[sug.field]) {
+      customer[map[sug.field]] = sug.to;
+      order.thread = order.thread || [];
+      order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: `Klantrecord bijgewerkt door ${req.user.name}: ${sug.field} "${sug.from || '—'}" → "${sug.to}".`, at: now() });
+      logActivity(req.user.name, 'klantrecord bijgewerkt via suggestie', `${customer.name}: ${sug.field} → ${sug.to}`);
+    }
+  } else {
+    logActivity(req.user.name, 'gegevens-suggestie genegeerd', `${order.title}: ${sug.field}`);
+  }
+  list.splice(idx, 1);
+  if (list.length) order.dataSuggestions = list; else delete order.dataSuggestions;
+  order.updatedAt = now();
+  saveSoon();
+  res.json(withRelations(order));
+});
+
+// Samenvoeg-suggestie negeren (samenvoegen zelf gaat via de bestaande
+// POST /api/orders/merge, aangestuurd door de knop op de kaart).
+app.post('/api/orders/:id/merge-suggestion', requireRole('admin', 'assistent'), (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (order.mergeSuggestion) {
+    logActivity(req.user.name, 'samenvoeg-suggestie genegeerd', order.title);
+    delete order.mergeSuggestion;
+    order.updatedAt = now();
+    saveSoon();
+  }
+  res.json(withRelations(order));
+});
 
 // Eenmalig bij het opstarten: recente MISLUKTE groeps-berichten (monteur-dispatch,
 // terugkoppeling, CRM-meldingen) terug in de wachtrij zetten. Tijdens de WhatsApp-

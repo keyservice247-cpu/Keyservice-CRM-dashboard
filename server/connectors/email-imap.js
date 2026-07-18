@@ -34,6 +34,25 @@ export function startEmailPoller() {
   setInterval(run, intervalSec * 1000);
 }
 
+// Extra postbussen die ALLEEN MEELEZEN (zelfde IMAP-host als het hoofdaccount),
+// bijv. contact@keyservice247.nl. Formaat van de env-var IMAP_INGEST_ACCOUNTS:
+//   "user:pass,user2:pass2"  (komma-gescheiden accounts).
+// We splitsen per account op de EERSTE dubbele punt, want een wachtwoord mag zelf
+// ':' bevatten. Witruimte trimmen en lege stukjes negeren.
+function extraIngestAccounts() {
+  const list = [];
+  for (const entry of String(process.env.IMAP_INGEST_ACCOUNTS || '').split(',')) {
+    const t = entry.trim();
+    if (!t) continue;
+    const i = t.indexOf(':');
+    if (i <= 0) continue;
+    const user = t.slice(0, i).trim();
+    const pass = t.slice(i + 1).trim();
+    if (user && pass) list.push({ user, pass });
+  }
+  return list;
+}
+
 async function poll({ host, port, user, pass }) {
   if (polling) return; // voorkom overlappende rondes
   polling = true;
@@ -49,28 +68,46 @@ async function poll({ host, port, user, pass }) {
     return;
   }
 
-  const client = new ImapFlow({
-    host, port, secure: true,
-    auth: { user, pass },
-    logger: false,
-  });
-  // BELANGRIJK: ImapFlow is een EventEmitter. Zonder 'error'-listener gooit Node
-  // een verbindingsfout (bv. 'NoConnection') als uncaughtException -> de hele app
-  // crasht. Deze listener vangt dat netjes op.
-  client.on('error', (e) => console.error('  IMAP client-fout:', e?.message || e));
-
   const lookbackDays = Math.max(1, Number(process.env.IMAP_LOOKBACK_DAYS || 5));
   const since = new Date(Date.now() - lookbackDays * 24 * 3600 * 1000);
 
   try {
-    await client.connect();
-    // 1) INKOMENDE mail verwerken (INBOX).
-    await processInbox(client, simpleParser, since);
-    // 2) UITGAANDE mail (Verzonden-map) ophalen, zodat antwoorden die buiten het
-    //    dashboard om zijn verstuurd toch in de gesprekshistorie komen.
-    await processSent(client, simpleParser, since).catch((e) => console.error('  IMAP (Verzonden):', e.message));
+    // 1) HOOFDACCOUNT: exact zoals voorheen — inkomende mail (INBOX) én de
+    //    Verzonden-map. De Verzonden-map lezen we BEWUST alleen voor het hoofd-
+    //    account (daar verstuurt het dashboard vandaan).
+    const mainClient = new ImapFlow({ host, port, secure: true, auth: { user, pass }, logger: false });
+    // BELANGRIJK: ImapFlow is een EventEmitter. Zonder 'error'-listener gooit Node
+    // een verbindingsfout (bv. 'NoConnection') als uncaughtException -> de hele app
+    // crasht. Deze listener vangt dat netjes op.
+    mainClient.on('error', (e) => console.error('  IMAP client-fout:', e?.message || e));
+    try {
+      await mainClient.connect();
+      await processInbox(mainClient, simpleParser, since); // hoofdaccount -> mailbox '' (ongewijzigd)
+      await processSent(mainClient, simpleParser, since).catch((e) => console.error('  IMAP (Verzonden):', e.message));
+    } catch (e) {
+      // Valt het hoofdaccount uit, dan behouden we exact de oude logregel; de extra
+      // postbussen hieronder krijgen dankzij deze catch tóch nog hun beurt.
+      console.error('  IMAP-fout:', e.message);
+    } finally {
+      try { await mainClient.logout(); } catch { /* negeren */ }
+    }
+
+    // 2) EXTRA POSTBUSSEN: alleen INKOMENDE mail meelezen. Elk account krijgt een
+    //    eigen client mét try/catch-isolatie: een kapot extra account mag het hoofd-
+    //    account en de andere extra accounts nooit blokkeren (fout loggen, doorgaan).
+    for (const acc of extraIngestAccounts()) {
+      const client = new ImapFlow({ host, port, secure: true, auth: { user: acc.user, pass: acc.pass }, logger: false });
+      client.on('error', (e) => console.error(`  IMAP client-fout (${acc.user}):`, e?.message || e));
+      try {
+        await client.connect();
+        await processInbox(client, simpleParser, since, acc.user); // bron-markering op het bericht
+      } catch (e) {
+        console.error(`  IMAP: extra postbus ${acc.user} overgeslagen door fout:`, e.message);
+      } finally {
+        try { await client.logout(); } catch { /* negeren */ }
+      }
+    }
   } finally {
-    try { await client.logout(); } catch { /* negeren */ }
     polling = false;
   }
 }
@@ -118,8 +155,56 @@ export async function appendSentMail({ from, to, subject, text }) {
   }
 }
 
+// Herkent en normaliseert een FormSubmit-mail (het formulier van de website wordt
+// via FormSubmit naar de mailbox gestuurd). FormSubmit levert de velden als een
+// tabel die mailparser platslaat tot label/waarde-tekst; we halen de vaste velden
+// er tolerant uit (label mag door ':' óf gewoon witruimte/nieuwe regel gevolgd
+// worden, hoofdletter-ongevoelig; ontbrekende velden laten we leeg).
+//
+// De genormaliseerde body begint bewust met "Nieuwe aanvraag via de website ..." —
+// daarop draaien de website-herkenning en de site+mail-ontdubbeling in de pipeline.
+function parseFormSubmit(text, subject) {
+  const t = String(text || '');
+  // Alle bekende labels (mét spellingvarianten), zodat we per veld tot het VOLGENDE
+  // label kunnen doorlezen — nodig voor meerregelige velden (Probleem/Toelichting).
+  const labelSrc = ['naam', 'tele(?:foon)?(?:nummer)?', 'e-?mail', 'woonplaats', 'type\\s*schuifpui', 'probleem', 'toelichting'];
+  // De grens waar een veldwaarde stopt: het volgende bekende label OF de vaste
+  // FormSubmit-voettekst (anders bloedt die boilerplate in het laatste veld door).
+  const nextLabel = '(?:\\n|^)[ \\t>*|]*(?:' + labelSrc.concat(['you are receiving this', 'submitted your form on']).join('|') + ')\\b\\s*:?';
+  const grab = (labelPat) => {
+    const re = new RegExp('(?:\\n|^)[ \\t>*|]*(?:' + labelPat + ')\\b[ \\t]*:?[ \\t]*([\\s\\S]*?)(?=' + nextLabel + '|$)', 'i');
+    const m = t.match(re);
+    return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+  };
+
+  const naam = grab('naam');
+  const telefoon = grab('tele(?:foon)?(?:nummer)?');
+  const email = grab('e-?mail');
+  const woonplaats = grab('woonplaats');
+  const type = grab('type\\s*schuifpui');
+  const probleem = grab('probleem');
+  const toelichting = grab('toelichting');
+
+  // Sitenaam uit het onderwerp als die tussen haakjes staat, bv.
+  //   "Offerte-aanvraag schuifpui (schuifpuiservice.com)" -> "schuifpuiservice.com".
+  const siteM = String(subject || '').match(/\(([^)]+)\)/);
+  const site = siteM ? siteM[1].trim() : '';
+
+  const lines = [`Nieuwe aanvraag via de website${site ? ' ' + site : ''} (FormSubmit-mail).`];
+  if (naam) lines.push(`Naam: ${naam}`);
+  if (telefoon) lines.push(`Telefoon: ${telefoon}`);
+  if (email) lines.push(`E-mail: ${email}`);
+  if (woonplaats) lines.push(`Adres: ${woonplaats}`);
+  if (type) lines.push(`Onderwerp: ${type}`);
+  const tail = [probleem, toelichting].filter(Boolean);
+  if (tail.length) lines.push('', ...tail);
+  return lines.join('\n');
+}
+
 // Verwerk inkomende mail: op datum (laatste X dagen), ontdubbeld op messageId.
-async function processInbox(client, simpleParser, since) {
+// mailbox = bron-markering die aan ingestMessage wordt meegegeven; leeg voor het
+// hoofdaccount (bestaand gedrag/weergave), de user-naam voor extra postbussen.
+async function processInbox(client, simpleParser, since, mailbox = '') {
   const lock = await client.getMailboxLock('INBOX');
   try {
     const uids = await client.search({ since }, { uid: true });
@@ -145,13 +230,27 @@ async function processInbox(client, simpleParser, since) {
           const saved = saveBuffer(att.content, { mime: att.contentType, filename: att.filename });
           if (saved) attachments.push(saved);
         }
+        // FormSubmit-mail herkennen aan de afzender, het onderwerp óf de bekende
+        // FormSubmit-zin in de tekst. Zo ja: de ruwe mailtekst vervangen door een
+        // genormaliseerde body (nette velden), zodat naam/tel/e-mail/adres
+        // betrouwbaar worden opgeslagen en de website-herkenning aanslaat.
+        const rawText = (parsed.text || '').toString();
+        const fromText = (parsed.from?.text || '').toLowerCase();
+        const isFormSubmit = fromText.includes('formsubmit')
+          || /offerte-?aanvraag/i.test(parsed.subject || '')
+          || /submitted your form on/i.test(rawText);
+        const body = isFormSubmit
+          ? parseFormSubmit(rawText, parsed.subject || '')
+          : (parsed.text || parsed.html || '').toString().slice(0, 8000);
+
         const result = await ingestMessage({
           channel: 'email',
           sender: parsed.from?.text || '',
           subject: parsed.subject || '',
-          body: (parsed.text || parsed.html || '').toString().slice(0, 8000),
+          body,
           externalId: mid,
           attachments,
+          mailbox,
         });
         // Automatische ontvangstbevestiging naar de klant (indien aangezet).
         await maybeSendAutoReply(result).catch(() => {});

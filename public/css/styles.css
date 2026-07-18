@@ -362,6 +362,14 @@ tr:last-child td { border-bottom: none; }
 .day-toggle { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink-soft); font-size: 13px; font-weight: 500; cursor: pointer; }
 .day-toggle.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .sent-monteur { background: var(--ok-soft); color: var(--ok); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 12px; margin: -6px 0 14px; display: inline-block; }
+/* Suggestie-banners (lead-instroom wetten): het systeem beslist nooit zelf —
+   deze balken vragen om een menselijke keuze (samenvoegen / bijwerken / negeren). */
+.sug-banner { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; border-radius: var(--radius-sm); padding: 8px 12px; font-size: 12.5px; margin: 0 0 12px; line-height: 1.5; }
+.sug-banner.sug-warn { background: #fef2f2; border-color: #fca5a5; color: #991b1b; }
+.sug-banner .sug-row { margin-top: 6px; }
+.sug-banner .sug-actions { white-space: nowrap; }
+.sug-banner .btn { margin-left: 6px; padding: 2px 10px; font-size: 12px; vertical-align: middle; }
+.chip-sug { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; }
 .not-order-warn { background: var(--warn-soft); color: var(--warn); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 12px; font-weight: 500; margin: 6px 0; }
 .bulk-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; max-width: 920px; margin-bottom: 12px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); }
 .bulk-count { font-weight: 600; color: var(--ink); white-space: nowrap; }

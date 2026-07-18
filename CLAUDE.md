@@ -69,6 +69,44 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 
+## LEAD-INSTROOM WETTEN (bindend, 18 jul 2026 — niet afzwakken zonder akkoord Abdel)
+Kernprincipe: DETERMINISME BOVEN AI-VRIJHEID. De AI classificeert en extraheert;
+hij wijzigt, samenvoegt of overschrijft NOOIT zelf klanten of kaarten. Zelfde input
+geeft altijd zelfde uitkomst. Alle instroomkanalen (WhatsApp-bridge, Cloud API,
+IMAP-mailboxen, websiteformulier) lopen door ingestMessage/applyReview in
+server/pipeline.js — er bestaat geen pad eromheen.
+1. Elke AANVRAAG wordt een NIEUWE kaart, ook bij een bestaande klant. Nooit
+   automatisch samenvoegen: open kaart zelfde klant → mergeSuggestion-badge (mens
+   klikt Samenvoegen/Negeren, via bestaand POST /api/orders/merge). Automatische
+   uitzonderingen: exacte-inhoud-dedup van doorgestuurde WhatsApp (24u, alleen
+   IDENTIEKE tekst) + REACTIE-verkeer (1-op-1 appje / e-mailreply zonder
+   intake-kenmerken van een klant mét open kaart) blijft in de kaart-thread —
+   anders sterven chat-weergave en "Nieuw bericht"-badge.
+2. Klant-matching ALLEEN op harde identificatoren: e-mail exact óf telefoon
+   genormaliseerd (matchPhone: +31/0031 ↔ 0). Naam is NOOIT koppelgrond.
+   Generieke namen (GENERIC_NAMES: "Key Service", "DRS", …) worden nooit een
+   klantnaam: record heet "Onbekende klant" + kaartvlag customerIncomplete
+   ("Klant onbekend — aanvullen"). De afzender is nooit de klant.
+3. Klantrecord NOOIT stil overschrijven. Afwijkend adres/telefoon/e-mail/naam →
+   dataSuggestions op de kaart (knoppen Bijwerken/Negeren, endpoint
+   /api/orders/:id/data-suggestion). Elke kaart draagt order.intake (gegevens van
+   DÍE aanvraag); monteur-dispatch gebruikt intake vóór het klantrecord.
+4. Leveranciers-/webshopmail (DEFAULT_EMAIL_FILTERS in settings.js + eigen
+   patronen in settings.emailFilters; match alléén op afzender+onderwerp) → STIL
+   naar Overige, geen lead, geen melding; wint van intake-herkenning; het
+   websiteformulier wint van alles. Auto-kaart (drempel/intake) mag ALLEEN uit
+   opdracht-groepen; 1-op-1, losse mail en formulier gaan altijd eerst langs een
+   mens in Te controleren.
+5. Website-leads: /api/ingest/form accepteert JSON én multipart/form-data
+   (bestandsvelden "bijlage", max 10MB totaal, jpg/png/webp/heic/heif/pdf; een
+   bijlage-fout laat de lead nooit sneuvelen). Extra mailboxen meelezen via env
+   IMAP_INGEST_ACCOUNTS="user:wachtwoord,user2:ww2" (zelfde IMAP-host);
+   FormSubmit-mails worden geparsed naar een genormaliseerde aanvraag; dezelfde
+   aanvraag via site én mail wordt binnen 15 min ontdubbeld op tel/e-mail
+   (bijlages hangen aan de bestaande lead). Bron per lead: message.mailbox.
+LET OP: md-bestanden zijn dev-documentatie; de runtime-regels staan in code +
+settings. Wijzig je het één, houd BEIDE synchroon.
+
 ## WhatsApp-groepstoring (LID) — opgelost ronde 26 (17 jul), NIET verzwakken
 - WhatsApp's LID-migratie brak het LEZEN van groeps-chats in whatsapp-web.js 1.34.7
   (getChats/getChat gooien een minified fout zoals "r"); 1-op-1 werkt, en VERSTUREN
