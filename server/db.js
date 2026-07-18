@@ -106,6 +106,16 @@ export function db() {
 // hernoem (atomair), en fsync de map. Zo raakt db.json nooit half kapot en gaat een
 // net-opgeslagen wijziging niet verloren bij een harde crash. Een schrijffout
 // (bv. schijf vol) laat het BESTAANDE db.json intact en wordt luid gelogd.
+// Bewaking: wanneer het wegschrijven voor het laatst mislukte (bv. schijf vol).
+// De watchdog slaat hierop direct alarm — een stille schrijffout betekent dat
+// wijzigingen alleen in het geheugen leven en bij een herstart verloren gaan
+// (zo verdwenen op 18 jul ingeplande afspraken; dat mag nooit meer stil gebeuren).
+let lastSaveFailureAt = 0;
+let lastSaveFailureMsg = '';
+export function saveFailure() {
+  return lastSaveFailureAt ? { at: lastSaveFailureAt, message: lastSaveFailureMsg } : null;
+}
+
 export function save() {
   if (!data) return true;
   changeCounter++;
@@ -118,8 +128,12 @@ export function save() {
     fs.renameSync(tmp, DB_FILE);
     // Map-fsync zodat de hernoeming ook duurzaam is (best-effort; niet op elk FS nodig).
     try { const dfd = fs.openSync(DATA_DIR, 'r'); try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); } } catch { /* optioneel */ }
+    lastSaveFailureAt = 0;
+    lastSaveFailureMsg = '';
     return true;
   } catch (e) {
+    lastSaveFailureAt = Date.now();
+    lastSaveFailureMsg = e.message;
     console.error('[DB-SCHRIJFFOUT] opslaan mislukt (data staat nog in het geheugen):', e.message);
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* opruimen best-effort */ }
     return false;

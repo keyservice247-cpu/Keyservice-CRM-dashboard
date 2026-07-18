@@ -1,7 +1,7 @@
 // Automatiseringen rond de opdracht-lus: terugkoppeling via de controle-groep,
 // afspraakbevestiging + herinnering naar de klant, review-verzoek na afronding,
 // snooze-herinneringen, uitval-alarm (bridge/e-mail/AI) en de nachtelijke statusscan.
-import { db, id, now, save, saveSoon, logActivity, diskFreeMB, backupNow } from './db.js';
+import { db, id, now, save, saveSoon, logActivity, diskFreeMB, backupNow, saveFailure } from './db.js';
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
@@ -282,6 +282,25 @@ async function runWatchdog() {
       await alertAdmins('WhatsApp-berichten komen niet aan', `${failed} bericht(en) MISLUKT en ${stuck} langer dan 30 min in de wachtrij. Klanten/monteurs krijgen die mogelijk niet. Check Instellingen → WhatsApp-verbinding testen en de bridge op de VPS.`);
     } else if (failed === 0 && stuck === 0 && s._alerts.outboxDay) {
       delete s._alerts.outboxDay; save();
+    }
+  } catch { /* watchdog mag nooit crashen */ }
+  // NOODALARM: het wegschrijven van de database mislukt (bv. schijf vol). Dit is het
+  // ergste stille probleem dat er bestaat — wijzigingen (nieuwe leads, afspraken)
+  // leven dan alleen in het geheugen en verdampen bij de eerstvolgende herstart.
+  // Daarom: elk kwartier opnieuw alarmeren zolang het aanhoudt, en meteen een
+  // opruimronde draaien om ruimte te maken. (De alarm-vlag staat bewust in het
+  // geheugen: opslaan werkt op dat moment immers niet.)
+  try {
+    const sf = saveFailure();
+    if (sf) {
+      try { backupNow('nood-opruimronde (opslaan faalt)'); } catch { /* best-effort */ }
+      if (!global._saveFailAlarmAt || Date.now() - global._saveFailAlarmAt > 15 * 60000) {
+        global._saveFailAlarmAt = Date.now();
+        await alertAdmins('NOOD: database kan NIET opslaan', `Het wegschrijven van de database mislukt (${sf.message}). Nieuwe leads en afspraken leven nu ALLEEN in het geheugen en gaan bij een herstart verloren. Waarschijnlijk is de schijf vol: oude back-ups zijn automatisch opgeruimd — helpt dat niet, vergroot dan direct de schijf in het Render-dashboard (Disks). Voer géén updates/deploys uit tot dit alarm stopt.`);
+      }
+    } else if (global._saveFailAlarmAt) {
+      global._saveFailAlarmAt = 0;
+      await alertAdmins('Database-opslag hersteld', 'Het wegschrijven van de database werkt weer. Alle wijzigingen worden weer veilig bewaard.');
     }
   } catch { /* watchdog mag nooit crashen */ }
   // Schijfruimte-bewaking: een volle schijf breekt bijlages, back-ups en (erger)

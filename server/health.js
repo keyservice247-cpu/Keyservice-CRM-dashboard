@@ -44,7 +44,12 @@ function checkDB() {
   try {
     const before = db()._healthPing || 0;
     db()._healthPing = before + 1;
-    save();
+    // LET OP: save() gooit geen fout maar geeft false terug bij een schrijffout
+    // (bv. schijf vol). Dat resultaat MOET gecheckt worden — anders bleef de
+    // systeemcheck groen terwijl wijzigingen alleen in het geheugen leefden en bij
+    // een herstart verloren gingen (zo verdwenen op 18 jul ingeplande afspraken).
+    const ok = save();
+    if (!ok) return { ok: false, detail: 'Database schrijven MISLUKT — mogelijk schijf vol. Wijzigingen leven nu alleen in het geheugen en gaan bij een herstart verloren!' };
     return { ok: true, detail: 'Database schrijven werkt' };
   } catch (e) {
     return { ok: false, detail: 'Database-fout: ' + e.message };
