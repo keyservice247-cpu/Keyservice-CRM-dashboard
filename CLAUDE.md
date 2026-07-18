@@ -79,9 +79,11 @@ server/pipeline.js — er bestaat geen pad eromheen.
    automatisch samenvoegen: open kaart zelfde klant → mergeSuggestion-badge (mens
    klikt Samenvoegen/Negeren, via bestaand POST /api/orders/merge). Automatische
    uitzonderingen: exacte-inhoud-dedup van doorgestuurde WhatsApp (24u, alleen
-   IDENTIEKE tekst) + REACTIE-verkeer (1-op-1 appje / e-mailreply zonder
-   intake-kenmerken van een klant mét open kaart) blijft in de kaart-thread —
-   anders sterven chat-weergave en "Nieuw bericht"-badge.
+   IDENTIEKE tekst) + REACTIE-verkeer blijft in de kaart-thread: een 1-op-1 appje
+   van een klant mét open kaart, én elke e-mail met Re:/Antw:-onderwerp of
+   In-Reply-To-header (isEmailReply — wint van intake-herkenning én van de
+   website-dedup; matching op het échte afzenderadres). Fwd: telt bewust NIET als
+   reactie. Anders sterven chat-weergave en "Nieuw bericht"-badge.
 2. Klant-matching ALLEEN op harde identificatoren: e-mail exact óf telefoon
    genormaliseerd (matchPhone: +31/0031 ↔ 0). Naam is NOOIT koppelgrond.
    Generieke namen (GENERIC_NAMES: "Key Service", "DRS", …) worden nooit een

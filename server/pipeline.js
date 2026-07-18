@@ -334,7 +334,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
 
 // Verwerk een binnenkomend bericht: ontdubbelen -> opslaan -> AI categoriseren
 // -> review aanmaken -> eventueel automatisch goedkeuren bij hoge zekerheid.
-export async function ingestMessage({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '' }) {
+export async function ingestMessage({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '', inReplyTo = '' }) {
   // Stuurt de bridge naam ÉN groeps-id mee? Dan die koppeling meteen leren (self-healing:
   // valt de naam later weg door een WhatsApp-storing, dan kent het CRM de groep al).
   if (groupId && group) learnGroupAlias(groupId, group);
@@ -380,8 +380,16 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // e-mail op de mailbox. Herken dat op telefoon/e-mail binnen een kwartier en hang
   // de tweede binnenkomst (incl. eventuele bijlages!) aan de eerste lead, in plaats
   // van een tweede lead te maken.
+  // REACTIE-HERKENNING e-mail (deterministisch, hier al nodig): een antwoord in een
+  // bestaande wisseling — Re:/Antw:-onderwerp of In-Reply-To-header — is nooit een
+  // nieuwe aanvraag én mag ook niet door de website-dedup worden opgeslokt (het
+  // geciteerde origineel onder de reply lijkt anders sprekend op de eerste aanvraag).
+  const REPLY_SUBJECT_RE = /^\s*(re|aw|antw)\s*:/i;
+  const isEmailReply = channel === 'email' && !forceRelevant
+    && (REPLY_SUBJECT_RE.test(subject || '') || !!inReplyTo);
+
   const WEBSITE_LEAD_RE = /(nieuwe aanvraag via de website|submitted your form on|offerte-?aanvraag (schuifpui|via)|nieuwe (offerte|contact)aanvraag via|aanvraag via de website)/i;
-  const looksWebsiteLead = forceRelevant || WEBSITE_LEAD_RE.test(`${subject || ''}\n${body || ''}`);
+  const looksWebsiteLead = !isEmailReply && (forceRelevant || WEBSITE_LEAD_RE.test(`${subject || ''}\n${body || ''}`));
   if (looksWebsiteLead) {
     const win = Date.now() - 15 * 60000;
     const mailOf = (t) => ((String(t || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])
@@ -535,7 +543,11 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // AI twijfelde. Alleen harde reclame/nieuwsbrief (unsubscribe/adverteren) blijft
   // uitgesloten. Veilig, want Te controleren wordt handmatig gekeurd — nooit auto-opdracht.
   const HARD_MARKETING_RE = /(nieuwsbrief|newsletter|unsubscribe|afmelden|advertenti|\bseo\b|bing|microsoft advertising|google ads|adwords|factuur|incasso|aanmaning)/i;
-  const emailIntake = channel === 'email' && hasIntakeData && !looksReport && !looksSupplier
+  // Een e-mailREACTIE (isEmailReply, hierboven bepaald) is GEEN nieuwe aanvraag —
+  // ook al staan er geciteerde klantgegevens in. Het hoort in de gesprekshistorie
+  // van de lopende kaart; nooit een losse kaart of inbox-item met samenvoeg-gedoe.
+  // (Fwd:/doorgestuurd telt bewust NIET als reactie: dat is vaak wél een nieuwe klant.)
+  const emailIntake = channel === 'email' && !isEmailReply && hasIntakeData && !looksReport && !looksSupplier
     && !HARD_MARKETING_RE.test(`${subject || ''} ${body || ''}`);
   if (emailIntake) suggestion.aiNotOrder = false;
   // Volgorde is bewust: leveranciersfilter wint van intake-herkenning (een order-
@@ -587,11 +599,16 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // "ok, tot morgen!" een losse kaart worden en sterft de chat-weergave + het
   // "Nieuw bericht"-belletje.
   const isOrderGroupMsg = channel === 'whatsapp' && !!group && isWhatsappOrderGroup(group);
-  const isNewAanvraag = isFormLead || emailIntake || isOrderGroupMsg || otherGroupButOrder;
-  const existingCustomer = (isNewAanvraag || ((looksMarketing || looksSupplier) && !isFormLead)) ? null : findCustomerStrong({
-    phone: suggestion.customerPhone,
-    email: suggestion.customerEmail,
-  });
+  const isNewAanvraag = !isEmailReply && (isFormLead || emailIntake || isOrderGroupMsg || otherGroupButOrder);
+  // Bij een e-mailREACTIE is het ECHTE afzenderadres leidend voor de koppeling aan
+  // de kaart — de AI-extractie kan bij replies per ongeluk gegevens uit de
+  // geciteerde tekst pakken.
+  const fromEmail = channel === 'email'
+    ? ((String(sender || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [''])[0])
+    : '';
+  const existingCustomer = (isNewAanvraag || ((looksMarketing || looksSupplier) && !isFormLead)) ? null
+    : ((isEmailReply && fromEmail ? findCustomerStrong({ email: fromEmail }) : null)
+      || findCustomerStrong({ phone: suggestion.customerPhone, email: suggestion.customerEmail }));
   if (existingCustomer) {
     // zoek een nog lopende (niet-afgeronde/geannuleerde/ingeklapte) opdracht
     const openOrder = db().orders.find((o) =>

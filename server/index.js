@@ -1183,12 +1183,13 @@ app.get('/api/whatsapp/status', requireAuth, (req, res) => {
 });
 
 app.post('/api/ingest/email', checkIngestToken, async (req, res) => {
-  const { from, sender, subject, body, text, html, externalId } = req.body || {};
+  const { from, sender, subject, body, text, html, externalId, inReplyTo } = req.body || {};
   const result = await ingestMessage({
     channel: 'email',
     sender: from || sender,
     subject,
     body: body || text || html || '',
+    inReplyTo, // thread-header: antwoord in bestaande wisseling -> gesprekshistorie
     externalId,
   });
   await maybeSendAutoReply(result).catch(() => {});

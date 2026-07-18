@@ -251,6 +251,9 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
           externalId: mid,
           attachments,
           mailbox,
+          // Thread-header: is dit een ANTWOORD in een bestaande mailwisseling? Dan
+          // hoort het in de gesprekshistorie van de kaart, nooit als nieuwe aanvraag.
+          inReplyTo: parsed.inReplyTo || '',
         });
         // Automatische ontvangstbevestiging naar de klant (indien aangezet).
         await maybeSendAutoReply(result).catch(() => {});
