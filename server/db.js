@@ -144,7 +144,11 @@ export function id(prefix = 'id') {
 // Een back-up is gewoon een kopie van db.json met een tijdstempel, in DATA_DIR/backups.
 // Op Render staat DATA_DIR op de blijvende schijf, dus back-ups overleven herstarts/deploys.
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
-const KEEP_BACKUPS = Number(process.env.BACKUP_KEEP || 60);
+// 10 kopieën (2,5 dag bij 6-uurs-interval) is ruim voldoende naast de dagelijkse
+// off-site back-upmail. 60 kopieën van een database mét handtekening-afbeeldingen
+// heeft ooit de hele Render-schijf volgezet — waardoor ook bijlages en (erger) het
+// wegschrijven van de database zelf konden mislukken.
+const KEEP_BACKUPS = Math.max(3, Number(process.env.BACKUP_KEEP || 10));
 
 export function backupNow(reason = 'auto') {
   try {
@@ -153,20 +157,31 @@ export function backupNow(reason = 'auto') {
     // (na een mislukte/lege start) langzaam alle goede back-ups uit de rotatie.
     if (!hasRealData(data)) { console.error('[BACK-UP] overgeslagen — dataset lijkt leeg (0 klanten/opdrachten/facturen)'); return null; }
     if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const file = path.join(BACKUP_DIR, `db-${stamp}.json`);
-    fs.writeFileSync(file, JSON.stringify(data));
-    // Oude back-ups opruimen (alleen de laatste KEEP_BACKUPS bewaren).
+    // EERST oude back-ups opruimen, DAN pas schrijven. Andersom werkt niet op een
+    // volle schijf: het schrijven faalt en het opruimen wordt nooit meer bereikt —
+    // de schijf blijft dan voorgoed vol.
     const files = fs.readdirSync(BACKUP_DIR).filter((f) => f.startsWith('db-') && f.endsWith('.json')).sort();
-    while (files.length > KEEP_BACKUPS) {
+    while (files.length >= KEEP_BACKUPS) {
       const old = files.shift();
       try { fs.unlinkSync(path.join(BACKUP_DIR, old)); } catch { /* negeren */ }
     }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(BACKUP_DIR, `db-${stamp}.json`);
+    fs.writeFileSync(file, JSON.stringify(data));
     return { file, reason };
   } catch (e) {
     console.error('Back-up maken mislukt:', e.message);
     return null;
   }
+}
+
+// Vrije schijfruimte (MB) op de datamap — voor de schijf-bewaking. Geeft null als
+// het besturingssysteem/Node het niet ondersteunt (dan slaan we de check gewoon over).
+export function diskFreeMB() {
+  try {
+    const st = fs.statfsSync(DATA_DIR);
+    return Math.round((st.bavail * st.bsize) / 1048576);
+  } catch { return null; }
 }
 
 export function listBackups() {

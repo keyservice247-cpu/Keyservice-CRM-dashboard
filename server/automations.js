@@ -1,7 +1,7 @@
 // Automatiseringen rond de opdracht-lus: terugkoppeling via de controle-groep,
 // afspraakbevestiging + herinnering naar de klant, review-verzoek na afronding,
 // snooze-herinneringen, uitval-alarm (bridge/e-mail/AI) en de nachtelijke statusscan.
-import { db, id, now, save, saveSoon, logActivity } from './db.js';
+import { db, id, now, save, saveSoon, logActivity, diskFreeMB, backupNow } from './db.js';
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
@@ -282,6 +282,25 @@ async function runWatchdog() {
       await alertAdmins('WhatsApp-berichten komen niet aan', `${failed} bericht(en) MISLUKT en ${stuck} langer dan 30 min in de wachtrij. Klanten/monteurs krijgen die mogelijk niet. Check Instellingen → WhatsApp-verbinding testen en de bridge op de VPS.`);
     } else if (failed === 0 && stuck === 0 && s._alerts.outboxDay) {
       delete s._alerts.outboxDay; save();
+    }
+  } catch { /* watchdog mag nooit crashen */ }
+  // Schijfruimte-bewaking: een volle schijf breekt bijlages, back-ups en (erger)
+  // het wegschrijven van de database zelf. Onder de 150 MB vrij: alarm (1x/dag) +
+  // meteen een back-upronde draaien, want die ruimt eerst oude kopieën op en maakt
+  // zo direct ruimte vrij. Boven de grens: alarm vanzelf opheffen.
+  try {
+    const freeMB = diskFreeMB();
+    if (freeMB != null) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (freeMB < 150) {
+        try { backupNow('schijf-bijna-vol (opruimronde)'); } catch { /* best-effort */ }
+        if (s._alerts.diskDay !== today) {
+          s._alerts.diskDay = today; save();
+          await alertAdmins('Schijf bijna VOL op de server', `Nog maar ${freeMB} MB vrij op de datamap. Bijlages en database-opslag kunnen mislukken. Oude back-ups zijn automatisch opgeruimd; blijft dit alarm komen, vergroot dan de schijf in het Render-dashboard (Disks).`);
+        }
+      } else if (s._alerts.diskDay) {
+        delete s._alerts.diskDay; save();
+      }
     }
   } catch { /* watchdog mag nooit crashen */ }
   // Off-site back-up-mail: als hij AAN staat maar al >36 uur niet is gelukt, alarm.
