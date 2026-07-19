@@ -163,11 +163,18 @@ export async function appendSentMail({ from, to, subject, text }) {
 //
 // De genormaliseerde body begint bewust met "Nieuwe aanvraag via de website ..." —
 // daarop draaien de website-herkenning en de site+mail-ontdubbeling in de pipeline.
-function parseFormSubmit(text, subject) {
+export function parseFormSubmit(text, subject) {
   const t = String(text || '');
-  // Alle bekende labels (mét spellingvarianten), zodat we per veld tot het VOLGENDE
-  // label kunnen doorlezen — nodig voor meerregelige velden (Probleem/Toelichting).
-  const labelSrc = ['naam', 'tele(?:foon)?(?:nummer)?', 'e-?mail', 'woonplaats', 'type\\s*schuifpui', 'probleem', 'toelichting'];
+  // Alle bekende labels (mét spellingvarianten én de ENGELSE veldnamen die het
+  // website-formulier aan FormSubmit meegeeft — in de praktijk kwam de mail met
+  // "name/phone/email/…" binnen en viel het Nederlandse parsen droog), zodat we per
+  // veld tot het VOLGENDE label kunnen doorlezen (meerregelige velden).
+  const labelSrc = [
+    'naam', 'name', 'tele(?:foon)?(?:nummer)?', 'phone', 'tel',
+    'e-?mail(?:adres)?', 'woonplaats', 'plaats', 'city', 'stad', 'adres', 'address',
+    'postcode', 'zip', 'type\\s*schuifpui', 'onderwerp', 'subject', 'type',
+    'probleem', 'problem', 'bericht', 'message', 'comment', 'toelichting',
+  ];
   // De grens waar een veldwaarde stopt: het volgende bekende label OF de vaste
   // FormSubmit-voettekst (anders bloedt die boilerplate in het laatste veld door).
   const nextLabel = '(?:\\n|^)[ \\t>*|]*(?:' + labelSrc.concat(['you are receiving this', 'submitted your form on']).join('|') + ')\\b\\s*:?';
@@ -177,12 +184,12 @@ function parseFormSubmit(text, subject) {
     return m ? m[1].replace(/\s+/g, ' ').trim() : '';
   };
 
-  const naam = grab('naam');
-  const telefoon = grab('tele(?:foon)?(?:nummer)?');
-  const email = grab('e-?mail');
-  const woonplaats = grab('woonplaats');
-  const type = grab('type\\s*schuifpui');
-  const probleem = grab('probleem');
+  const naam = grab('naam|name');
+  const telefoon = grab('tele(?:foon)?(?:nummer)?|phone|tel');
+  const email = grab('e-?mail(?:adres)?');
+  const woonplaats = grab('woonplaats|plaats|city|stad|adres|address');
+  const type = grab('type\\s*schuifpui|onderwerp|subject');
+  const probleem = grab('probleem|problem|bericht|message|comment');
   const toelichting = grab('toelichting');
 
   // Sitenaam uit het onderwerp als die tussen haakjes staat, bv.
@@ -198,6 +205,13 @@ function parseFormSubmit(text, subject) {
   if (type) lines.push(`Onderwerp: ${type}`);
   const tail = [probleem, toelichting].filter(Boolean);
   if (tail.length) lines.push('', ...tail);
+  // VANGNET: de ruwe mailtekst gaat er ALTIJD onder mee. Zelfs als FormSubmit z'n
+  // labels ooit weer wijzigt en het parsen niets vindt, staan telefoon/e-mail dan
+  // tóch in de body — dus de site+mail-ontdubbeling blijft werken en een mens ziet
+  // altijd de complete aanvraag. (Zonder dit vangnet werd één website-test op 19 jul
+  // twee losse kaarten: de mail had Engelse labels en parste leeg.)
+  const rawTail = t.trim().slice(0, 4000);
+  if (rawTail) lines.push('', '— Originele FormSubmit-mail —', rawTail);
   return lines.join('\n');
 }
 

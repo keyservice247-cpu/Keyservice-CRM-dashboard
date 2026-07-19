@@ -478,7 +478,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // Verkeerde contactgegevens opschonen: nooit het eigen bedrijf, een reclame-/
   // magazine- of no-reply-adres als KLANT bewaren. Anders worden losse mensen verkeerd
   // samengevoegd en plakt reclame naar info@... aan kaarten.
-  const JUNK_EMAIL_RE = /(keyservice247\.nl|keyservice-crm|@microsoft\.com|@bing|noreply|no-?reply|norep|do-?not-?reply|redactie@|nieuwsbrief|newsletter|mailchimp|sendgrid|mailing|bouwmagazine|facebookmail|linkedin|google\.com)/i;
+  const JUNK_EMAIL_RE = /(keyservice247\.nl|keyservice-crm|@microsoft\.com|@bing|noreply|no-?reply|norep|do-?not-?reply|redactie@|nieuwsbrief|newsletter|mailchimp|sendgrid|mailing|bouwmagazine|facebookmail|linkedin|google\.com|formsubmit)/i;
   const COMPANY_PHONES = ['0850602359', '0031850602359']; // eigen bedrijfsnummer(s)
   const normPhone = (v) => String(v || '').replace(/[^\d]/g, '');
   if (suggestion.customerEmail && JUNK_EMAIL_RE.test(suggestion.customerEmail)) suggestion.customerEmail = '';
