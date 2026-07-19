@@ -42,7 +42,7 @@ import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
 import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport } from './automations.js';
-import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice } from './invoices.js';
+import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
@@ -1688,6 +1688,11 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       website: String(v.website || '').slice(0, 120),
       paymentDays: Math.max(1, Math.min(90, Number(v.paymentDays) || 7)),
       quoteValidDays: Math.max(1, Math.min(120, Number(v.quoteValidDays) || 30)),
+      // Automatische betaalherinnering (na vervaldatum), instelbaar in Instellingen.
+      autoRemind: !!v.autoRemind,
+      remindAfterDays: Math.max(1, Math.min(60, Number(v.remindAfterDays) || 3)),
+      remindRepeatDays: Math.max(2, Math.min(60, Number(v.remindRepeatDays) || 7)),
+      remindMax: Math.max(1, Math.min(5, Number(v.remindMax) || 2)),
       btwPct: (Number.isFinite(Number(v.btwPct)) ? Math.max(0, Math.min(21, Number(v.btwPct))) : 21),
       warranty: String(v.warranty || '').slice(0, 300),
       legal: String(v.legal || '').slice(0, 1200),
@@ -2231,9 +2236,12 @@ app.post('/api/orders/:id/invoice', requireAuth, (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
+  const wasSent = !!(order.invoiceId && (db().invoices || []).find((i) => i.id === order.invoiceId && i.status === 'verzonden'));
   const out = upsertInvoice(order, req.body || {}, req.user.name);
   if (out.error) return res.status(400).json({ error: out.error });
-  logActivity(req.user.name, 'factuur opgeslagen (concept)', `${out.invoice.number} — ${order.title}`);
+  // Verzonden document gewijzigd (na de waarschuwing in het scherm): zichtbaar vastleggen.
+  if (wasSent) logActivity(req.user.name, `verzonden ${out.invoice.type} gewijzigd`, out.invoice.number);
+  else logActivity(req.user.name, 'factuur opgeslagen (concept)', `${out.invoice.number} — ${order.title}`);
   res.json(out.invoice);
 });
 
@@ -2280,8 +2288,11 @@ app.patch('/api/invoices/:id', requireAuth, (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  const wasSent = inv.status === 'verzonden';
   const out = saveInvoiceFields(inv, req.body || {});
   if (out.error) return res.status(400).json({ error: out.error });
+  // Verzonden document gewijzigd (na de waarschuwing in het scherm): zichtbaar vastleggen.
+  if (wasSent) logActivity(req.user.name, `verzonden ${inv.type} gewijzigd`, inv.number);
   res.json(out.invoice);
 });
 
@@ -2382,32 +2393,15 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
 
-// Vriendelijke betaalherinnering (alleen verzonden facturen), met PDF opnieuw als bijlage.
+// Vriendelijke betaalherinnering (alleen verzonden facturen), met PDF opnieuw als
+// bijlage. De kern is gedeeld met de automatische herinnering (sendInvoiceReminder).
 app.post('/api/invoices/:id/remind', requireAuth, async (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
-  if (inv.type === 'offerte') return res.status(400).json({ error: 'Herinnering is voor facturen. Verstuur de offerte desnoods opnieuw.' });
-  if (inv.status !== 'verzonden') return res.status(400).json({ error: 'Alleen voor verzonden (nog niet betaalde) facturen.' });
-  const customer = db().customers.find((c) => c.id === inv.customerId) || {};
-  const to = (req.body?.to || inv.sentTo || customer.email || '').trim();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Geen geldig e-mailadres bekend.' });
-  if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
-  const cfg = getInvoiceSettings();
-  const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
   try {
-    const pdf = await buildInvoicePdf(inv, order, customer);
-    const sig = getEmailSignature();
-    const body = `Beste ${customer.name || 'klant'},\n\nVolgens onze administratie staat factuur ${inv.number} (€ ${inv.totalIncl.toFixed(2).replace('.', ',')}) nog open. Mogelijk is het aan uw aandacht ontsnapt — dat kan gebeuren.\n\nWilt u het bedrag overmaken${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer? De factuur zit nogmaals in de bijlage.\n\nHeeft u al betaald of heeft u een vraag? Reageer gerust op deze e-mail.`;
-    await sendMail({
-      to, subject: `Betaalherinnering: factuur ${inv.number} — ${cfg.companyName}`,
-      text: sig ? `${body}\n\n${sig}` : body,
-      attachments: [{ filename: `factuur-${inv.number}.pdf`, content: pdf }],
-    });
-    inv.remindedAt = now();
-    inv.remindCount = (inv.remindCount || 0) + 1;
-    saveSoon();
-    logActivity(req.user.name, 'betaalherinnering verstuurd', `${inv.number} → ${to}`);
+    const r = await sendInvoiceReminder(inv, { to: req.body?.to || '', by: req.user.name });
+    if (r.error) return res.status(400).json({ error: r.error });
     res.json({ ok: true, invoice: inv });
   } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
@@ -2441,10 +2435,15 @@ app.get('/api/invoices', requireAuth, (req, res) => {
   const maps = buildMaps();
   let list = db().invoices || [];
   if (req.user.role === 'monteur') list = list.filter((i) => canTouchInvoice(req, i));
+  const payDays = getInvoiceSettings().paymentDays || 7;
   res.json(list.map((i) => {
     const c = maps.customers.get(i.customerId) || {};
     const o = i.orderId ? (db().orders.find((x) => x.id === i.orderId) || {}) : {};
-    return { ...i, customerName: c.name || '', customerEmail: c.email || '', orderTitle: o.title || '' };
+    // Vervaldatum meegeven zodat het overzicht "verlopen" op de ÉCHTE betaaltermijn
+    // baseert (instelbaar) i.p.v. een vaste 7 dagen in de frontend.
+    const dueAt = i.type !== 'offerte' && i.sentAt
+      ? new Date(new Date(i.sentAt).getTime() + payDays * 86400000).toISOString() : null;
+    return { ...i, customerName: c.name || '', customerEmail: c.email || '', orderTitle: o.title || '', dueAt };
   }));
 });
 

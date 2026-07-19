@@ -57,6 +57,16 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
   concept/verzonden/betaald, Facturen-overzicht (monteur alleen eigen). Bedrijfsgegevens
   staan als standaard in de code (Rhenen/KvK/BTW/IBAN) en zijn aanpasbaar in Instellingen →
   Facturen-pil, incl. PRIJSLIJST (vaste producten/werkzaamheden, 1-klik in de factuur).
+  KORTING per factuur/offerte (percentage óf vast bedrag EXCL btw; van subtotaal af,
+  btw over het verlaagde bedrag; aparte subtotaal+kortingsregel op de PDF; kopie neemt
+  korting mee). Verzonden document wijzigen = eerst expliciete waarschuwing in het
+  scherm + logboek-registratie (editedAfterSendAt); betaald/goedgekeurd blijft hard
+  vergrendeld. AUTOMATISCHE betaalherinnering (standaard UIT; aan te zetten in
+  Instellingen → Facturen): X dagen na vervaldatum, herhaald, met maximum; deelt de
+  mail+PDF met de handmatige knop (sendInvoiceReminder in invoices.js); vangrails:
+  nooit >120 dagen oud, max 10/ronde. Facturen-overzicht "verlopen" volgt de échte
+  betaaltermijn (dueAt van de server). Instellingen-pagina: kaarten gegroepeerd per
+  pil met kopjes, standaard "Alles".
 - **Offertes + losse facturen:** naast kaart-facturen ook LOSSTAANDE facturen/offertes
   (Facturen-pagina → + Factuur / + Offerte → klant kiezen of nieuw). Offerte: nummer
   OFF-2026-…, eigen PDF (geldigheidsdatum, Voor akkoord-blok), status concept/verzonden/

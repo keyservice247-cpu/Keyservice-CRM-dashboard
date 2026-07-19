@@ -1537,6 +1537,8 @@ function renderInvoiceEditor(ctx) {
     ${ctx.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}`}
     <div class="row" style="margin-top:10px"> <label>Btw-tarief <select id="inv-btw" ${locked ? 'disabled' : ''}><option value="21" ${Number(inv.btwPct) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(inv.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(inv.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label>
       <label>Opmerking op de ${esc(woord.toLowerCase())} <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel" ${locked ? 'disabled' : ''}></label> </div>
+    <div class="row"> <label>Korting <select id="inv-disc-type" ${locked ? 'disabled' : ''}><option value="" ${!inv.discount ? 'selected' : ''}>Geen korting</option><option value="pct" ${inv.discount?.type === 'pct' ? 'selected' : ''}>Percentage (%)</option><option value="bedrag" ${inv.discount?.type === 'bedrag' ? 'selected' : ''}>Vast bedrag (excl. btw)</option></select></label>
+      <label>Kortingswaarde <input id="inv-disc-val" type="number" min="0" step="0.01" value="${esc(String(inv.discount?.value ?? ''))}" placeholder="bv. 10" ${locked ? 'disabled' : ''}></label> </div>
     ${locked ? (inv.signature ? `<div style="margin:10px 0"><div class="muted small">Handtekening voor akkoord:</div><img src="${esc(inv.signature)}" alt="handtekening" style="max-width:200px;border:1px solid var(--line-soft, #e5e7eb);border-radius:6px;background:#fff"></div>` : '') : `
     <details class="pl-collapse" style="margin:12px 0"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('edit', 13)} Handtekening voor akkoord${inv.signature ? ' — gezet ✓' : ' (optioneel)'}</summary>
       <p class="muted small" style="margin:6px 0">Laat de klant hier tekenen; de handtekening komt op de PDF als bewijs van akkoord. Werkt ook zonder werkbon.</p>
@@ -1564,12 +1566,24 @@ function renderInvoiceEditor(ctx) {
   const readLines = () => $$('#inv-lines .inv-line').map((row) => ({
     description: $('.il-desc', row).value, qty: Number($('.il-qty', row).value) || 0, priceExcl: Number($('.il-price', row).value) || 0,
   })).filter((l) => l.description || l.priceExcl > 0);
+  const readDiscount = () => {
+    const type = $('#inv-disc-type')?.value || '';
+    const value = Number($('#inv-disc-val')?.value) || 0;
+    return type && value > 0 ? { type, value } : null;
+  };
   const renderTotals = () => {
     const btw = Number($('#inv-btw').value);
-    const excl = readLines().reduce((s, l) => s + l.qty * l.priceExcl, 0);
+    const sub = readLines().reduce((s, l) => s + l.qty * l.priceExcl, 0);
+    // Zelfde rekenwijze als de server: korting van het subtotaal EXCL btw af,
+    // daarna de btw over het verlaagde bedrag.
+    const d = readDiscount();
+    const korting = d ? (d.type === 'pct' ? sub * Math.min(100, d.value) / 100 : Math.min(d.value, sub)) : 0;
+    const excl = sub - korting;
     const btwBedrag = excl * (btw / 100);
-    $('#inv-totals').innerHTML = `Totaal excl. btw: <strong>${eur(excl)}</strong> · btw ${btw}%: <strong>${eur(btwBedrag)}</strong> · <span style="font-size:16px">Totaal incl. btw: <strong>${eur(excl + btwBedrag)}</strong></span>`;
+    $('#inv-totals').innerHTML = `${korting > 0 ? `Subtotaal: <strong>${eur(sub)}</strong> · korting${d.type === 'pct' ? ` (${d.value}%)` : ''}: <strong>- ${eur(korting)}</strong> · ` : ''}Totaal excl. btw: <strong>${eur(excl)}</strong> · btw ${btw}%: <strong>${eur(btwBedrag)}</strong> · <span style="font-size:16px">Totaal incl. btw: <strong>${eur(excl + btwBedrag)}</strong></span>`;
   };
+  if ($('#inv-disc-type')) $('#inv-disc-type').onchange = renderTotals;
+  if ($('#inv-disc-val')) $('#inv-disc-val').oninput = renderTotals;
   const bindRows = () => {
     $$('#inv-lines input').forEach((i) => i.oninput = renderTotals);
     $$('#inv-lines .il-del').forEach((b) => b.onclick = () => { b.closest('.inv-line').remove(); renderTotals(); });
@@ -1601,11 +1615,16 @@ function renderInvoiceEditor(ctx) {
     return undefined; // niet aangeraakt = bestaande handtekening behouden
   };
   const saveConcept = async () => {
-    const body = { lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value };
+    const body = { lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value, discount: readDiscount() || {} };
     const sig = readSignature();
     if (sig !== undefined) body.signature = sig;
     return ctx.save(body);
   };
+  // WAARSCHUWING (op verzoek Abdel): een al VERZONDEN factuur/offerte wijzig je niet
+  // zomaar — de klant heeft al een andere versie ontvangen. Wijzigen mag, maar pas
+  // na deze bewuste bevestiging (en het wordt in het logboek vastgelegd).
+  const confirmEditIfSent = () => inv.status !== 'verzonden'
+    || confirm(`LET OP: deze ${woord.toLowerCase()} is al verstuurd naar de klant. Wijzigen kan tot verwarring leiden — netter is een kopie (of bij een fout een creditregel). Toch wijzigen?`);
   const done = (msg) => { toast(msg); closeModal(); if (ctx.after) ctx.after(); };
   if ($('#cust-save')) $('#cust-save').onclick = async () => {
     const cp = { name: $('#cust-name').value, phone: $('#cust-phone').value, email: $('#cust-email').value, address: $('#cust-address').value };
@@ -1621,10 +1640,12 @@ function renderInvoiceEditor(ctx) {
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
   if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); });
-  if ($('#inv-save')) $('#inv-save').onclick = async () => { try { await saveConcept(); done('Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
+  if ($('#inv-save')) $('#inv-save').onclick = async () => { if (!confirmEditIfSent()) return; try { await saveConcept(); done(inv.status === 'verzonden' ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : 'Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
   if ($('#inv-send')) $('#inv-send').onclick = async () => {
     if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de kaart of bij Klanten).', true); return; }
-    if (!confirm(`${woord} nu versturen naar ${customer.email}?`)) return;
+    if (!confirm(inv.status === 'verzonden'
+      ? `LET OP: deze ${woord.toLowerCase()} is al eerder verstuurd. Je verstuurt nu een NIEUWE versie (eventuele wijzigingen vervangen wat de klant heeft). Doorgaan naar ${customer.email}?`
+      : `${woord} nu versturen naar ${customer.email}?`)) return;
     try {
       const saved = await saveConcept();
       await api(`/api/invoices/${saved.id}/send`, 'POST', {});
@@ -2028,9 +2049,11 @@ function renderInvoices() {
   const f = $('#invFilter')?.value || 'all';
   const all = state._invoices || [];
   const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
-  // Verlopen = verzonden factuur waarvan de betaaltermijn is verstreken.
-  const days = 7;
-  const isOverdue = (i) => (i.type !== 'offerte') && i.status === 'verzonden' && i.sentAt && (Date.now() - new Date(i.sentAt).getTime()) > days * 86400000;
+  // Verlopen = verzonden factuur voorbij de ÉCHTE vervaldatum (dueAt komt van de
+  // server en volgt de ingestelde betaaltermijn — niet meer een vaste 7 dagen).
+  const isOverdue = (i) => (i.type !== 'offerte') && i.status === 'verzonden'
+    && ((i.dueAt && new Date(i.dueAt).getTime() < Date.now())
+      || (!i.dueAt && i.sentAt && (Date.now() - new Date(i.sentAt).getTime()) > 7 * 86400000));
   let items = all;
   if (f === 'factuur') items = all.filter((i) => i.type !== 'offerte');
   else if (f === 'offerte') items = all.filter((i) => i.type === 'offerte');
@@ -2345,6 +2368,13 @@ async function loadSettings() {
       <div class="row"> <label>IBAN <input id="is-iban" value="${esc(s.invoiceSettings?.iban || '')}" placeholder="NL00 BANK 0000 0000 00"></label> <label>BIC <input id="is-bic" value="${esc(s.invoiceSettings?.bic || '')}" placeholder="BUNQNL2A"></label> </div>
       <div class="row"> <label>E-mail op factuur <input id="is-email" value="${esc(s.invoiceSettings?.email || '')}"></label> <span></span> </div>
       <div class="row"> <label>Betaaltermijn (dagen) <input id="is-days" type="number" min="1" max="90" value="${esc(String(s.invoiceSettings?.paymentDays ?? 7))}" style="max-width:110px"></label> <label>Standaard btw-tarief <select id="is-btw"><option value="21" ${Number(s.invoiceSettings?.btwPct ?? 21) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(s.invoiceSettings?.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(s.invoiceSettings?.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label> </div>
+      <div style="border-top:1px solid var(--line-soft,#e5e7eb);margin:12px 0 10px;padding-top:10px"><strong>Automatische betaalherinnering</strong>
+        <p class="muted small" style="margin:4px 0 8px">Verzonden facturen die na de vervaldatum nog openstaan krijgen vanzelf een vriendelijke herinnering (zelfde mail als de knop, met PDF). Zet eerst alle al betaalde facturen op "Betaald" — anders krijgt een klant onterecht een herinnering.</p>
+        <div class="row" style="align-items:center"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="is-autoremind" style="width:auto" ${s.invoiceSettings?.autoRemind ? 'checked' : ''}>Aan</label>
+        <label>Dagen ná vervaldatum <input id="is-remind-after" type="number" min="1" max="60" value="${esc(String(s.invoiceSettings?.remindAfterDays ?? 3))}" style="max-width:100px"></label></div>
+        <div class="row"><label>Herhaal om de (dagen) <input id="is-remind-repeat" type="number" min="2" max="60" value="${esc(String(s.invoiceSettings?.remindRepeatDays ?? 7))}" style="max-width:100px"></label>
+        <label>Maximaal aantal herinneringen <input id="is-remind-max" type="number" min="1" max="5" value="${esc(String(s.invoiceSettings?.remindMax ?? 2))}" style="max-width:100px"></label></div>
+      </div>
       <label>Garantie-regel (dik gedrukt op de factuur) <input id="is-warranty" value="${esc(s.invoiceSettings?.warranty || '')}"></label>
       <label>Juridische tekst (kleine lettertjes onderaan) <textarea id="is-legal" rows="3">${esc(s.invoiceSettings?.legal || '')}</textarea></label>
       <label>Voettekst op de factuur <input id="is-footer" value="${esc(s.invoiceSettings?.footer || '')}"></label>
@@ -2466,9 +2496,30 @@ async function loadSettings() {
     </div>
     <div data-sg="werk" class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div data-sg="werk" class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
+  // OVERZICHT: kaarten fysiek groeperen in dezelfde volgorde als de pillen, met een
+  // groepskopje erboven. Zo staat álles logisch bij elkaar — ook in het "Alles"-
+  // overzicht springt de lijst niet meer heen en weer tussen onderwerpen.
+  {
+    const GROUP_ORDER = ['bericht', 'facturen', 'werk', 'koppel', 'ai', 'systeem'];
+    const GROUP_LABELS = { bericht: 'Automatische berichten', facturen: 'Facturen', werk: 'Werkwijze & bord', koppel: 'Koppelingen', ai: 'AI', systeem: 'Systeem & back-ups' };
+    const cards = $$('#settingsPanel [data-sg]');
+    const parent = cards[0]?.parentElement;
+    if (parent) {
+      // Alleen directe kinderen sorteren (geneste kaarten in een wrapper blijven staan).
+      const top = cards.filter((el) => el.parentElement === parent);
+      for (const g of GROUP_ORDER) {
+        const head = document.createElement('div');
+        head.className = 'form-sec';
+        head.dataset.sg = g;
+        head.style.margin = '18px 0 10px';
+        head.textContent = GROUP_LABELS[g];
+        parent.appendChild(head);
+        top.filter((el) => el.dataset.sg === g).forEach((el) => parent.appendChild(el));
+      }
+    }
+  }
   // Sectie-chips werken als TABBLADEN: je ziet één onderwerp tegelijk i.p.v. de hele
-  // lange lijst. "Alles" blijft beschikbaar voor wie toch alles wil scrollen. Niets
-  // wordt verwijderd — alleen getoond/verborgen.
+  // lange lijst. "Alles" toont alles, netjes gegroepeerd met kopjes.
   const applySGroup = (g, scroll) => {
     $$('#settingsPanel [data-sg]').forEach((el) => { el.style.display = (g === 'alles' || el.dataset.sg === g) ? '' : 'none'; });
     $$('#settingsPanel .sg-chip').forEach((c) => c.classList.toggle('on', c.dataset.g === g));
@@ -2476,9 +2527,9 @@ async function loadSettings() {
     if (scroll) { const p = $('#settingsPanel'); if (p) p.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
   };
   $$('#settingsPanel .sg-chip').forEach((c) => c.onclick = () => applySGroup(c.dataset.g, true));
-  // Standaard NIET "Alles" (dat is een muur), maar het eerste onderwerp — of het
-  // laatst gekozen tabblad van deze sessie.
-  applySGroup(state._sgroup || 'bericht');
+  // Standaard "Alles" (gegroepeerd mét kopjes): dan mist niemand een instelling die
+  // toevallig onder een ander tabblad staat. Het laatst gekozen tabblad blijft leidend.
+  applySGroup(state._sgroup || 'alles');
 
   $('#saveApptMsg').onclick = async () => {
     const appointmentMsg = {
@@ -2574,6 +2625,10 @@ async function loadSettings() {
       iban: $('#is-iban').value, bic: $('#is-bic').value, email: $('#is-email').value,
       paymentDays: Number($('#is-days').value) || 7, btwPct: Number($('#is-btw').value),
       warranty: $('#is-warranty').value, legal: $('#is-legal').value, footer: $('#is-footer').value,
+      autoRemind: $('#is-autoremind').checked,
+      remindAfterDays: Number($('#is-remind-after').value) || 3,
+      remindRepeatDays: Number($('#is-remind-repeat').value) || 7,
+      remindMax: Number($('#is-remind-max').value) || 2,
     };
     try { await api('/api/settings', 'PATCH', { invoiceSettings }); toast('Factuurgegevens opgeslagen'); }
     catch (err) { toast(err.message, true); }

@@ -9,8 +9,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { db, id, now, save, saveSoon } from './db.js';
+import { db, id, now, save, saveSoon, logActivity } from './db.js';
 import { UPLOAD_DIR } from './storage.js';
+import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
+import { getEmailSignature } from './settings.js';
 
 const LOGO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'img', 'logo-factuur.png');
 
@@ -27,6 +29,14 @@ export const DEFAULT_INVOICE_SETTINGS = {
   website: 'https://keyservice247.nl',
   paymentDays: 7,
   quoteValidDays: 30,     // geldigheid van offertes
+  // Automatische betaalherinnering: X dagen ná de vervaldatum, herhaald met een
+  // tussenpoos, met een maximum — standaard UIT (eerst checken of alle betaalde
+  // facturen ook echt op 'betaald' staan, anders krijgt een klant onterecht een
+  // herinnering). Aanzetten kan in Instellingen → Facturen.
+  autoRemind: false,
+  remindAfterDays: 3,
+  remindRepeatDays: 7,
+  remindMax: 2,
   btwPct: 21,             // standaardtarief; per factuur aan te passen
   warranty: '3 jaar garantie op onze producten, 1 jaar garantie op arbeid.',
   legal: 'Bij reparatie- en montagewerkzaamheden aan bestaande kozijnen, deuren, ramen en beglazing kan ondanks zorgvuldig werken lichte, redelijkerwijs onvermijdbare gebruiksschade ontstaan (zoals kleine krasjes, haarscheurtjes of loslatende verf/kit op verouderde delen). Dergelijke geringe schade valt binnen het acceptabele werkrisico en geeft geen recht op schadevergoeding of verrekening. Reclamaties binnen 48 uur na uitvoering melden.',
@@ -57,11 +67,21 @@ export function lineExcl(l, btwPct) {
   if (l.priceIncl !== undefined) return r2((Number(l.priceIncl) || 0) / (1 + (Number(btwPct) || 0) / 100));
   return 0;
 }
-export function computeTotals(lines, btwPct) {
+// Korting: één korting per factuur/offerte — een percentage óf een vast bedrag
+// (EXCL. btw). De korting gaat van het subtotaal EXCL btw af; de btw wordt daarna
+// over het verlaagde bedrag gerekend (fiscaal juist).
+export function computeTotals(lines, btwPct, discount) {
   const pct = Number(btwPct) || 0;
-  const totalExcl = (lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * lineExcl(l, pct), 0);
+  const subtotalExcl = (lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * lineExcl(l, pct), 0);
+  let discountExcl = 0;
+  if (discount && Number(discount.value) > 0) {
+    discountExcl = discount.type === 'pct'
+      ? subtotalExcl * (Math.min(100, Number(discount.value)) / 100)
+      : Math.min(Number(discount.value), subtotalExcl);
+  }
+  const totalExcl = subtotalExcl - discountExcl;
   const btw = totalExcl * (pct / 100);
-  return { totalExcl: r2(totalExcl), btw: r2(btw), totalIncl: r2(totalExcl + btw) };
+  return { subtotalExcl: r2(subtotalExcl), discountExcl: r2(discountExcl), totalExcl: r2(totalExcl), btw: r2(btw), totalIncl: r2(totalExcl + btw) };
 }
 
 function sanitizeLines(lines, btwPct) {
@@ -94,10 +114,49 @@ export function saveInvoiceFields(inv, body) {
       inv.signature = ''; // leeg/ongeldig = wissen (nooit een kapotte handtekening opslaan)
     }
   }
-  Object.assign(inv, computeTotals(inv.lines, btwPct));
+  // Korting instellen/weghalen (percentage of vast bedrag, EXCL btw).
+  if ('discount' in body) {
+    const d = body.discount || {};
+    const raw = Number(d.value);
+    const val = Math.max(0, Math.min(999999, Number.isFinite(raw) ? raw : 0));
+    if (val > 0) inv.discount = { type: d.type === 'pct' ? 'pct' : 'bedrag', value: d.type === 'pct' ? Math.min(100, val) : val };
+    else delete inv.discount;
+  }
+  // Een al VERZONDEN document inhoudelijk wijzigen mag (ná de expliciete
+  // waarschuwing in het scherm), maar wordt zichtbaar vastgelegd — de klant heeft
+  // immers al een andere versie ontvangen.
+  if (inv.status === 'verzonden') inv.editedAfterSendAt = now();
+  Object.assign(inv, computeTotals(inv.lines, btwPct, inv.discount));
   inv.updatedAt = now();
   saveSoon();
   return { invoice: inv };
+}
+
+// Betaalherinnering — gedeeld door de handmatige knop én de automatische ronde:
+// zelfde nette mail met de PDF opnieuw als bijlage; teller en tijdstip worden
+// bijgehouden zodat er nooit te vaak herinnerd wordt.
+export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'systeem' } = {}) {
+  if (inv.type === 'offerte') return { error: 'Herinnering is voor facturen. Verstuur de offerte desnoods opnieuw.' };
+  if (inv.status !== 'verzonden') return { error: 'Alleen voor verzonden (nog niet betaalde) facturen.' };
+  const customer = db().customers.find((c) => c.id === inv.customerId) || {};
+  const to = (toOverride || inv.sentTo || customer.email || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
+  if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
+  const cfg = getInvoiceSettings();
+  const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
+  const pdf = await buildInvoicePdf(inv, order, customer);
+  const sig = getEmailSignature();
+  const body = `Beste ${customer.name || 'klant'},\n\nVolgens onze administratie staat factuur ${inv.number} (€ ${inv.totalIncl.toFixed(2).replace('.', ',')}) nog open. Mogelijk is het aan uw aandacht ontsnapt — dat kan gebeuren.\n\nWilt u het bedrag overmaken${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer? De factuur zit nogmaals in de bijlage.\n\nHeeft u al betaald of heeft u een vraag? Reageer gerust op deze e-mail.`;
+  await sendMail({
+    to, subject: `Betaalherinnering: factuur ${inv.number} — ${cfg.companyName}`,
+    text: sig ? `${body}\n\n${sig}` : body,
+    attachments: [{ filename: `factuur-${inv.number}.pdf`, content: pdf }],
+  });
+  inv.remindedAt = now();
+  inv.remindCount = (inv.remindCount || 0) + 1;
+  saveSoon();
+  logActivity(by, 'betaalherinnering verstuurd', `${inv.number} → ${to}`);
+  return { ok: true, to };
 }
 
 export function upsertInvoice(order, body, actorName) {
@@ -136,7 +195,8 @@ export function copyInvoice(src, { actorName = '', createdById = '', copyType } 
   const inv = {
     id: id('inv'), number: nextInvoiceNumber(t), type: t, orderId: src.orderId || null, customerId: src.customerId,
     status: 'concept', lines: (src.lines || []).map((l) => ({ ...l })), btwPct: src.btwPct,
-    note: src.note || '', ...computeTotals(src.lines || [], src.btwPct),
+    discount: src.discount ? { ...src.discount } : undefined,
+    note: src.note || '', ...computeTotals(src.lines || [], src.btwPct, src.discount),
     createdAt: now(), createdBy: actorName, createdById, copiedFrom: src.number,
   };
   db().invoices.unshift(inv);
@@ -262,8 +322,18 @@ export function buildInvoicePdf(inv, order, customer) {
       if (y > 640) { doc.addPage(); y = 60; }
     }
 
-    // Totalen.
+    // Totalen (met aparte subtotaal- en kortingsregel wanneer er korting is gegeven).
     y += 6;
+    if (Number(inv.discountExcl) > 0) {
+      doc.fontSize(10).fillColor(muted)
+        .text('Subtotaal excl. btw', 330, y, { width: 140, align: 'right' })
+        .fillColor(ink).text(eur(inv.subtotalExcl ?? (inv.totalExcl + inv.discountExcl)), 478, y, { width: 60, align: 'right' });
+      y += 16;
+      const kortLabel = inv.discount && inv.discount.type === 'pct' ? `Korting (${inv.discount.value}%)` : 'Korting';
+      doc.fillColor(muted).text(kortLabel, 330, y, { width: 140, align: 'right' })
+        .fillColor(ink).text(`- ${eur(inv.discountExcl)}`, 470, y, { width: 68, align: 'right' });
+      y += 16;
+    }
     doc.fontSize(10).fillColor(muted)
       .text('Totaalbedrag excl. btw', 330, y, { width: 140, align: 'right' }).fillColor(ink).text(eur(inv.totalExcl), 478, y, { width: 60, align: 'right' });
     y += 16;

@@ -8,6 +8,7 @@ import {
   getAttachmentCleanup,
 } from './settings.js';
 import { deleteFile } from './storage.js';
+import { getInvoiceSettings, sendInvoiceReminder } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
 import { lastHealth } from './health.js';
@@ -419,6 +420,43 @@ async function runMailboxQuotaCheck() {
   console.log('[mailbox-quotum]', txt);
 }
 
+// ---------- Automatische betaalherinnering (1x per dag) ----------
+// Verzonden facturen die voorbij de vervaldatum + X dagen zijn krijgen automatisch
+// dezelfde nette herinnering als de handmatige knop, met tussenpozen en een maximum.
+// Vangrails: nooit voor stokoude facturen (>120 dagen — die zijn vaak buiten het
+// systeem om afgehandeld), max 10 mails per ronde, en de teller telt handmatige én
+// automatische herinneringen samen.
+async function runInvoiceAutoReminders() {
+  const cfg = getInvoiceSettings();
+  if (!cfg.autoRemind || !smtpConfigured()) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (db().settings._invRemindDay === today) return;
+  db().settings._invRemindDay = today;
+  const nowMs = Date.now();
+  let n = 0;
+  for (const inv of db().invoices || []) {
+    if (inv.type === 'offerte' || inv.status !== 'verzonden' || !inv.sentAt) continue;
+    const sent = new Date(inv.sentAt).getTime();
+    if (!Number.isFinite(sent) || nowMs - sent > 120 * 86400000) continue;
+    const due = sent + (cfg.paymentDays || 7) * 86400000;
+    if (nowMs < due + (cfg.remindAfterDays || 3) * 86400000) continue;
+    if ((inv.remindCount || 0) >= (cfg.remindMax || 2)) continue;
+    const last = inv.remindedAt ? new Date(inv.remindedAt).getTime() : 0;
+    if (nowMs - last < (cfg.remindRepeatDays || 7) * 86400000) continue;
+    try {
+      const r = await sendInvoiceReminder(inv, { by: 'systeem (automatische herinnering)' });
+      if (r.ok) n++;
+      else if (r.error && !/e-mailadres/.test(r.error)) console.error('[auto-herinnering]', inv.number, r.error);
+    } catch (e) { console.error('[auto-herinnering]', inv.number, e.message); }
+    if (n >= 10) break; // nooit een mailstorm in één ronde
+  }
+  if (n) {
+    logActivity('systeem', 'automatische betaalherinneringen', `${n} verstuurd`);
+    console.log(`[auto-herinnering] ${n} betaalherinnering(en) automatisch verstuurd`);
+  }
+  saveSoon();
+}
+
 // ---------- Bijlage-opschoning (1x per dag) ----------
 // Verwijdert bestandsbijlages van AFGERONDE/GEANNULEERDE kaarten (en berichten in de
 // prullenbak-leeftijd) ouder dan de ingestelde periode. Uitdrukkelijk NOOIT:
@@ -486,6 +524,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runWeeklyReport(); } catch (e) { console.error('[ceo-rapport]', e.message); }
     try { await runMailboxQuotaCheck(); } catch (e) { console.error('[mailbox-quotum]', e.message); }
     try { runAttachmentCleanup(); } catch (e) { console.error('[bijlage-opschoning]', e.message); }
+    try { await runInvoiceAutoReminders(); } catch (e) { console.error('[auto-herinnering]', e.message); }
   };
   const fast = async () => {
     try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }
