@@ -163,6 +163,26 @@ export async function appendSentMail({ from, to, subject, text }) {
 //
 // De genormaliseerde body begint bewust met "Nieuwe aanvraag via de website ..." —
 // daarop draaien de website-herkenning en de site+mail-ontdubbeling in de pipeline.
+// Zet HTML-mail om naar leesbare tekst. FormSubmit (en veel formulieren) sturen de
+// velden als een HTML-TABEL; de platte-tekstversie is dan vaak leeg. We maken van
+// "<td>label</td><td>waarde</td>" -> "label: waarde" en van rij/blok-einden nieuwe
+// regels, zodat de veld-parser hieronder er gewoon "Naam: ...", "Telefoon: ..." uit
+// haalt. Zonder deze stap parste een HTML-only FormSubmit-mail leeg (geen telefoon/
+// e-mail -> geen ontdubbeling -> een tweede, lege "Form"-kaart).
+export function htmlToText(html) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<\/t[dh]>\s*<t[dh][^>]*>/gi, ': ')       // tussen twee cellen: "label: waarde"
+    .replace(/<\/(tr|table|div|p|h\d|li|ul|ol)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>').replace(/&#0?39;|&apos;/gi, "'").replace(/&quot;/gi, '"')
+    .replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function parseFormSubmit(text, subject) {
   const t = String(text || '');
   // Alle bekende labels (mét spellingvarianten én de ENGELSE veldnamen die het
@@ -248,14 +268,17 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
         // FormSubmit-zin in de tekst. Zo ja: de ruwe mailtekst vervangen door een
         // genormaliseerde body (nette velden), zodat naam/tel/e-mail/adres
         // betrouwbaar worden opgeslagen en de website-herkenning aanslaat.
-        const rawText = (parsed.text || '').toString();
+        // Altijd een leesbare tekst hebben: platte tekst als die er is, anders de
+        // HTML omgezet naar tekst (FormSubmit-mails zijn vaak HTML-only).
+        const rawText = ((parsed.text || '').toString() || htmlToText(parsed.html)).slice(0, 12000);
         const fromText = (parsed.from?.text || '').toLowerCase();
         const isFormSubmit = fromText.includes('formsubmit')
           || /offerte-?aanvraag/i.test(parsed.subject || '')
-          || /submitted your form on/i.test(rawText);
+          || /submitted your form on/i.test(rawText)
+          || /nieuwe aanvraag via de website/i.test(rawText);
         const body = isFormSubmit
           ? parseFormSubmit(rawText, parsed.subject || '')
-          : (parsed.text || parsed.html || '').toString().slice(0, 8000);
+          : rawText.slice(0, 8000);
 
         const result = await ingestMessage({
           channel: 'email',
