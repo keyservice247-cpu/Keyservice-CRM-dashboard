@@ -179,6 +179,36 @@ export function getPriceList() {
   return Array.isArray(p) && p.length ? p : DEFAULT_PRICE_LIST;
 }
 
+// PAKKETTEN (bundels): één knop die meerdere factuurregels tegelijk toevoegt, bv.
+// "Hefschuifpui complete reparatie" = loopwagens + hefsluiting + arbeid als APARTE
+// regels met eigen prijs (i.p.v. één regel van 740). Elk pakket: { id, name, lines:
+// [{description, qty, priceExcl}] }. Bewerkbaar in Instellingen én aan te maken vanuit
+// een factuur ("deze regels opslaan als pakket").
+export function getPriceBundles() {
+  const b = db().settings.priceBundles;
+  return Array.isArray(b) ? b : [];
+}
+export function sanitizeBundleLines(lines) {
+  return (Array.isArray(lines) ? lines : [])
+    .map((l) => ({
+      description: String(l.description || '').slice(0, 200),
+      qty: (() => { const q = Number(l.qty); return Math.max(0, Math.min(9999, Number.isFinite(q) ? q : 1)); })(),
+      priceExcl: Math.max(0, Math.min(999999, Number(l.priceExcl) || 0)),
+    }))
+    .filter((l) => l.description || l.priceExcl > 0)
+    .slice(0, 40);
+}
+export function sanitizeBundles(input) {
+  return (Array.isArray(input) ? input : [])
+    .map((b) => ({
+      id: String(b.id || ('bnd_' + Math.random().toString(36).slice(2, 9))),
+      name: String(b.name || '').slice(0, 120).trim(),
+      lines: sanitizeBundleLines(b.lines),
+    }))
+    .filter((b) => b.name && b.lines.length)
+    .slice(0, 60);
+}
+
 // WhatsApp-meldingen voor het team: seintje in een groep (of 1-op-1) bij elke
 // nieuwe te-controleren aanvraag en bij klantreacties. Groep aanbevolen: maak een
 // WhatsApp-groep (bv. "CRM meldingen") met het wegwerp-nummer + de assistente erin.

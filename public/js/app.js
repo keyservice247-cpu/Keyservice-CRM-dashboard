@@ -1447,10 +1447,10 @@ function openWerkbonModal(o) {
 // type = 'factuur' of 'offerte' — telt alleen bij het AANMAKEN; bestaat er al een
 // gekoppeld document, dan opent gewoon dat document (type wijzigt nooit stiekem).
 function openInvoiceModal(o, type = 'factuur') {
-  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [] }) => {
+  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [], bundles = [] }) => {
     renderInvoiceEditor({
       inv: invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept', type },
-      customer: o.customer || {}, contextTitle: o.title, werkbon: o.werkbon || null, priceList,
+      customer: o.customer || {}, contextTitle: o.title, werkbon: o.werkbon || null, priceList, bundles,
       save: (body) => api(`/api/orders/${o.id}/invoice`, 'POST', { ...body, type }),
       after: () => loadBoard(),
     });
@@ -1458,9 +1458,9 @@ function openInvoiceModal(o, type = 'factuur') {
 }
 
 function openStandaloneInvoice(invId) {
-  api(`/api/invoices/${invId}`).then(({ invoice, customer, order, priceList = [] }) => {
+  api(`/api/invoices/${invId}`).then(({ invoice, customer, order, priceList = [], bundles = [] }) => {
     renderInvoiceEditor({
-      inv: invoice, customer: customer || {}, contextTitle: order?.title || (customer?.name || ''), werkbon: order?.werkbon || null, priceList,
+      inv: invoice, customer: customer || {}, contextTitle: order?.title || (customer?.name || ''), werkbon: order?.werkbon || null, priceList, bundles,
       save: (body) => api(`/api/invoices/${invoice.id}`, 'PATCH', body),
       after: () => { if (state._invoices) loadInvoices(); },
     });
@@ -1531,10 +1531,13 @@ function renderInvoiceEditor(ctx) {
       <div class="row"><label>E-mail <input id="cust-email" value="${esc(customer.email || '')}"></label><label>Adres (straat, postcode, plaats) <input id="cust-address" value="${esc(customer.address || '')}"></label></div>
       <button type="button" class="btn btn-sm" id="cust-save">Klantgegevens opslaan</button><span class="muted small" style="margin-left:8px">Wijzigingen gelden voor deze klant overal in het CRM.</span>
     </details>` : ''}
+    ${bundles.length && !locked ? `<details class="pl-collapse" open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('tag', 13)} Pakketten — één klik voegt meerdere regels toe</summary><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${bundles.map((bn, bi) => { const tot = (bn.lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.priceExcl) || 0), 0); return `<button type="button" class="chip bn-add" data-bi="${bi}" title="${esc((bn.lines || []).map((l) => l.description).join(' · '))}" style="cursor:pointer;border-color:var(--brand,#2563eb)">${icon('tag', 12)} ${esc(bn.name.slice(0, 40))} · ${bn.lines.length} regels · ${eur(tot)}</button>`; }).join('')}</div></details>` : ''}
     ${priceList.length && !locked ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('tag', 13)} Prijzenlijst — klik om te openen en snel toe te voegen</summary><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${priceList.map((p, pi) => `<button type="button" class="chip pl-add" data-pi="${pi}" title="€ ${Number(p.priceExcl).toFixed(2)} excl. btw" style="cursor:pointer">${esc(p.description.slice(0, 44))} · ${eur(p.priceExcl)}</button>`).join('')}</div></details>` : ''}
     <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
     ${locked ? '' : `<button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
-    ${ctx.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}`}
+    ${ctx.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}
+    <button type="button" class="btn btn-sm" id="il-to-pricelist" title="Alle regels hierboven toevoegen aan je vaste prijzenlijst">${icon('tag', 12)} Regels → prijslijst</button>
+    <button type="button" class="btn btn-sm" id="il-to-bundle" title="Deze regels bewaren als pakket, om ze later met één klik toe te voegen">${icon('tag', 12)} Regels → pakket</button>`}
     <div class="row" style="margin-top:10px"> <label>Btw-tarief <select id="inv-btw" ${locked ? 'disabled' : ''}><option value="21" ${Number(inv.btwPct) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(inv.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(inv.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label>
       <label>Opmerking op de ${esc(woord.toLowerCase())} <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel" ${locked ? 'disabled' : ''}></label> </div>
     <div class="row"> <label>Korting <select id="inv-disc-type" ${locked ? 'disabled' : ''}><option value="" ${!inv.discount ? 'selected' : ''}>Geen korting</option><option value="pct" ${inv.discount?.type === 'pct' ? 'selected' : ''}>Percentage (%)</option><option value="bedrag" ${inv.discount?.type === 'bedrag' ? 'selected' : ''}>Vast bedrag (excl. btw)</option></select></label>
@@ -1592,6 +1595,29 @@ function renderInvoiceEditor(ctx) {
   $('#inv-btw').onchange = renderTotals;
   if ($('#il-add')) $('#il-add').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: '', qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
   $$('.pl-add').forEach((b) => b.onclick = () => { const p = priceList[Number(b.dataset.pi)]; if (!p) return; $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: p.description, qty: 1, priceExcl: p.priceExcl }, 99)); bindRows(); renderTotals(); });
+  // Pakket: voeg ALLE regels van het pakket in één keer toe (arbeid + producten los).
+  $$('.bn-add').forEach((b) => b.onclick = () => {
+    const bn = (ctx.bundles || [])[Number(b.dataset.bi)]; if (!bn) return;
+    // Een lege eerste regel (het standaard-lege concept) eerst opruimen.
+    const first = $('#inv-lines .inv-line');
+    if (first && !$('.il-desc', first).value.trim() && !(Number($('.il-price', first).value) > 0)) first.remove();
+    for (const l of bn.lines || []) $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: l.description, qty: l.qty ?? 1, priceExcl: l.priceExcl ?? 0 }, 99));
+    bindRows(); renderTotals(); toast(`Pakket "${bn.name}" toegevoegd (${bn.lines.length} regels)`);
+  });
+  // Alle huidige regels opslaan in de vaste prijslijst (losse producten).
+  if ($('#il-to-pricelist')) $('#il-to-pricelist').onclick = async () => {
+    const items = readLines(); if (!items.length) { toast('Geen regels om op te slaan', true); return; }
+    try { const r = await api('/api/pricelist/add', 'POST', { items }); toast(`${r.added} nieuw in de prijslijst opgeslagen (${items.length} regel(s) verwerkt)`); }
+    catch (err) { toast(err.message, true); }
+  };
+  // Alle huidige regels opslaan als pakket (bundel) onder een naam naar keuze.
+  if ($('#il-to-bundle')) $('#il-to-bundle').onclick = async () => {
+    const items = readLines(); if (!items.length) { toast('Geen regels om op te slaan', true); return; }
+    const name = prompt(`Naam voor dit pakket (bv. "Hefschuifpui complete reparatie"):`, ctx.contextTitle || '');
+    if (!name || !name.trim()) return;
+    try { await api('/api/bundles/add', 'POST', { name: name.trim(), lines: items }); toast(`Pakket "${name.trim()}" opgeslagen — voortaan één klik`); }
+    catch (err) { toast(err.message, true); }
+  };
   if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (ctx.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
   // Handtekening-canvas: teken direct op de factuur/offerte (los van een werkbon).
   let sigDrawn = false;   // klant heeft nu getekend
@@ -2406,6 +2432,23 @@ async function loadSettings() {
       <button type="button" class="btn btn-sm" id="plAdd">+ Product/werkzaamheid toevoegen</button>
       <div style="margin-top:12px"><button class="btn btn-primary" id="savePriceList">Prijslijst opslaan</button></div>
     </div>
+    <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Pakketten — één knop, meerdere regels</h3>
+      <p class="muted small">Een pakket voegt in één klik <strong>meerdere</strong> factuurregels toe, met arbeid en producten apart. Bijvoorbeeld "Hefschuifpui complete reparatie" = loopwagens + hefsluiting + arbeid, elk met eigen prijs. Handig maken kan ook rechtstreeks vanuit een factuur: vul de regels in en klik <strong>"Regels → pakket"</strong>.</p>
+      <div id="bnRows">${(s.priceBundles || []).map((bn) => `
+        <div class="bn-block" data-id="${esc(bn.id || '')}" style="border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;padding:10px;margin-bottom:10px">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><input class="bn-name" value="${esc(bn.name)}" placeholder="Naam van het pakket" style="flex:3;font-weight:600"><button type="button" class="btn btn-sm bn-del" title="Pakket verwijderen">${icon('trash', 12)}</button></div>
+          <div class="bn-lines">${(bn.lines || []).map((l) => `
+            <div class="bn-line" style="display:flex;gap:6px;margin-bottom:4px;align-items:center">
+              <input class="bnl-desc" value="${esc(l.description)}" placeholder="Omschrijving" style="flex:3">
+              <input class="bnl-qty" type="number" min="0" step="1" value="${esc(String(l.qty ?? 1))}" style="width:60px" title="Aantal">
+              <input class="bnl-price" type="number" min="0" step="0.01" value="${esc(String(l.priceExcl ?? 0))}" style="width:96px" title="Prijs excl. btw">
+              <button type="button" class="btn btn-sm bnl-del">${icon('x', 12)}</button>
+            </div>`).join('')}</div>
+          <button type="button" class="btn btn-sm bnl-add">+ Regel</button>
+        </div>`).join('')}</div>
+      <button type="button" class="btn btn-sm" id="bnAdd">+ Pakket toevoegen</button>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveBundles">Pakketten opslaan</button></div>
+    </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-melding bij nieuwe aanvragen (team)</h3>
       <p class="muted small">Krijg een WhatsApp-seintje zodra er iets nieuws in het CRM staat: een <strong>nieuwe aanvraag om te controleren</strong> of een <strong>klantreactie</strong> op een lopende kaart. Aanbevolen: maak een WhatsApp-groep (bv. "CRM meldingen") met het <strong>wegwerp-nummer</strong> en je assistente erin — dan ziet het hele team het. Max 1 melding per 2 minuten; drukte wordt gebundeld ("+N andere").</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ca-enabled" style="width:auto" ${s.crmAlerts?.enabled ? 'checked' : ''}> Meldingen aanzetten</label>
@@ -2659,6 +2702,24 @@ async function loadSettings() {
   $('#savePriceList').onclick = async () => {
     const priceList = $$('#plRows .pl-row').map((r) => ({ description: $('.pl-desc', r).value, priceExcl: Number($('.pl-price', r).value) || 0 })).filter((p) => p.description);
     try { await api('/api/settings', 'PATCH', { priceList }); toast('Prijslijst opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  // Pakketten (bundels) beheren in Instellingen.
+  const bnLineRow = () => `<div class="bn-line" style="display:flex;gap:6px;margin-bottom:4px;align-items:center"><input class="bnl-desc" placeholder="Omschrijving" style="flex:3"><input class="bnl-qty" type="number" min="0" step="1" value="1" style="width:60px" title="Aantal"><input class="bnl-price" type="number" min="0" step="0.01" value="0" style="width:96px" title="Prijs excl. btw"><button type="button" class="btn btn-sm bnl-del">${icon('x', 12)}</button></div>`;
+  const bindBn = () => {
+    $$('#bnRows .bn-del').forEach((b) => b.onclick = () => b.closest('.bn-block').remove());
+    $$('#bnRows .bnl-del').forEach((b) => b.onclick = () => b.closest('.bn-line').remove());
+    $$('#bnRows .bnl-add').forEach((b) => b.onclick = () => { b.closest('.bn-block').querySelector('.bn-lines').insertAdjacentHTML('beforeend', bnLineRow()); bindBn(); });
+  };
+  bindBn();
+  if ($('#bnAdd')) $('#bnAdd').onclick = () => { $('#bnRows').insertAdjacentHTML('beforeend', `<div class="bn-block" style="border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;padding:10px;margin-bottom:10px"><div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><input class="bn-name" placeholder="Naam van het pakket" style="flex:3;font-weight:600"><button type="button" class="btn btn-sm bn-del">${icon('trash', 12)}</button></div><div class="bn-lines">${bnLineRow()}</div><button type="button" class="btn btn-sm bnl-add">+ Regel</button></div>`); bindBn(); };
+  if ($('#saveBundles')) $('#saveBundles').onclick = async () => {
+    const priceBundles = $$('#bnRows .bn-block').map((blk) => ({
+      id: blk.dataset.id || '',
+      name: $('.bn-name', blk).value,
+      lines: $$('.bn-line', blk).map((r) => ({ description: $('.bnl-desc', r).value, qty: Number($('.bnl-qty', r).value) || 1, priceExcl: Number($('.bnl-price', r).value) || 0 })).filter((l) => l.description),
+    })).filter((b) => b.name && b.lines.length);
+    try { await api('/api/settings', 'PATCH', { priceBundles }); toast('Pakketten opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveCrmAlerts').onclick = async () => {

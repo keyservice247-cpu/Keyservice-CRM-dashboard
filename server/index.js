@@ -62,6 +62,7 @@ import {
   getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
+  getPriceBundles, sanitizeBundles, sanitizeBundleLines,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1553,6 +1554,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     crmAlerts: getCrmAlerts(),
     invoiceSettings: getInvoiceSettings(),
     priceList: getPriceList(),
+    priceBundles: getPriceBundles(),
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true, keywordRoutes: [] },
   });
 });
@@ -1710,6 +1712,10 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       .map((p) => ({ description: String(p.description || '').slice(0, 200), priceExcl: Math.max(0, Math.min(999999, Number(p.priceExcl) || 0)) }))
       .filter((p) => p.description)
       .slice(0, 150);
+  }
+  // Pakketten (bundels): één knop = meerdere regels.
+  if ('priceBundles' in b) {
+    db().settings.priceBundles = sanitizeBundles(b.priceBundles);
   }
   if ('crmAlerts' in b) {
     const c = b.crmAlerts || {};
@@ -2233,7 +2239,7 @@ app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const inv = (db().invoices || []).find((i) => i.id === order.invoiceId) || null;
-  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: getPriceList() });
+  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: getPriceList(), bundles: getPriceBundles() });
 });
 
 // Factuur aanmaken/bijwerken via de kaart (concept).
@@ -2278,6 +2284,45 @@ app.post('/api/invoices', requireAuth, (req, res) => {
   res.json({ invoice: inv, customer });
 });
 
+// Regels uit een factuur opslaan in de vaste PRIJSLIJST (losse producten/
+// werkzaamheden), zodat je ze nooit meer hoeft over te typen. Dedup op omschrijving
+// (hoofdletter-ongevoelig): een bestaande regel wordt bijgewerkt met de nieuwe prijs.
+app.post('/api/pricelist/add', requirePerm('settings'), (req, res) => {
+  const items = sanitizeBundleLines(req.body?.items).map((l) => ({ description: l.description, priceExcl: l.priceExcl }));
+  if (!items.length) return res.status(400).json({ error: 'Geen regels om op te slaan.' });
+  const cur = Array.isArray(db().settings.priceList) ? db().settings.priceList
+    : getPriceList().map((p) => ({ ...p }));
+  const norm = (d) => d.toLowerCase().replace(/\s+/g, ' ').trim();
+  let added = 0;
+  for (const it of items) {
+    const ex = cur.find((p) => norm(p.description) === norm(it.description));
+    if (ex) ex.priceExcl = it.priceExcl;
+    else { cur.push(it); added++; }
+  }
+  db().settings.priceList = cur.slice(0, 150);
+  saveSoon();
+  logActivity(req.user.name, 'regels opgeslagen in prijslijst', `${items.length} regel(s)`);
+  res.json({ ok: true, added, priceList: db().settings.priceList });
+});
+
+// Regels uit een factuur opslaan als PAKKET (bundel): één knop die deze regels later
+// in één keer toevoegt. Bestaand pakket met dezelfde naam wordt overschreven.
+app.post('/api/bundles/add', requirePerm('settings'), (req, res) => {
+  const name = String(req.body?.name || '').slice(0, 120).trim();
+  const lines = sanitizeBundleLines(req.body?.lines);
+  if (!name) return res.status(400).json({ error: 'Geef het pakket een naam.' });
+  if (!lines.length) return res.status(400).json({ error: 'Geen regels om op te slaan.' });
+  const cur = getPriceBundles().slice();
+  const norm = (d) => d.toLowerCase().replace(/\s+/g, ' ').trim();
+  const ex = cur.find((b) => norm(b.name) === norm(name));
+  if (ex) { ex.lines = lines; }
+  else cur.push({ id: 'bnd_' + Math.random().toString(36).slice(2, 9), name, lines });
+  db().settings.priceBundles = sanitizeBundles(cur);
+  saveSoon();
+  logActivity(req.user.name, 'pakket opgeslagen', `${name} (${lines.length} regels)`);
+  res.json({ ok: true, bundles: db().settings.priceBundles });
+});
+
 // Eén factuur/offerte ophalen (voor de editor).
 app.get('/api/invoices/:id', requireAuth, (req, res) => {
   const inv = findInv(req.params.id);
@@ -2285,7 +2330,7 @@ app.get('/api/invoices/:id', requireAuth, (req, res) => {
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || null) : null;
-  res.json({ invoice: inv, customer, order: order ? { id: order.id, title: order.title, werkbon: order.werkbon || null } : null, settings: getInvoiceSettings(), priceList: getPriceList() });
+  res.json({ invoice: inv, customer, order: order ? { id: order.id, title: order.title, werkbon: order.werkbon || null } : null, settings: getInvoiceSettings(), priceList: getPriceList(), bundles: getPriceBundles() });
 });
 
 // Regels/btw/notitie bijwerken. Betaald/geaccepteerd = vergrendeld.

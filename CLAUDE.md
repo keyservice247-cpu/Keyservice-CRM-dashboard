@@ -67,6 +67,14 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
   nooit >120 dagen oud, max 10/ronde. Facturen-overzicht "verlopen" volgt de échte
   betaaltermijn (dueAt van de server). Instellingen-pagina: kaarten gegroepeerd per
   pil met kopjes, standaard "Alles".
+- **Prijslijst-opslag + PAKKETTEN (20 jul):** in de factuur-editor kun je alle
+  ingevulde regels met één knop opslaan in de vaste prijslijst ("Regels → prijslijst",
+  dedup op omschrijving) óf als PAKKET ("Regels → pakket"). Een pakket (bundel,
+  settings.priceBundles) voegt met één klik MEERDERE regels tegelijk toe — arbeid en
+  producten los, elk met eigen prijs (bv. "Hefschuifpui complete reparatie" = loop-
+  wagens + hefsluiting + arbeid i.p.v. één regel van 740). Endpoints
+  /api/pricelist/add en /api/bundles/add; pakketten ook bewerkbaar in Instellingen →
+  Facturen. Editor-endpoints geven bundles mee.
 - **Offerte-automatisering (20 jul):** offerte op "Goedgekeurd" → automatisch een
   factuur-CONCEPT klaargezet (kopie, nieuw nummer, niet verzonden; idempotent via
   inv.convertedInvoiceId; koppelt de kaart aan de nieuwe factuur; instelbaar
