@@ -42,7 +42,7 @@ import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
 import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport } from './automations.js';
-import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder } from './invoices.js';
+import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
@@ -1693,6 +1693,11 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       remindAfterDays: Math.max(1, Math.min(60, Number(v.remindAfterDays) || 3)),
       remindRepeatDays: Math.max(2, Math.min(60, Number(v.remindRepeatDays) || 7)),
       remindMax: Math.max(1, Math.min(5, Number(v.remindMax) || 2)),
+      autoInvoiceOnAccept: v.autoInvoiceOnAccept !== false,
+      autoQuoteFollowup: !!v.autoQuoteFollowup,
+      quoteFollowupAfterDays: Math.max(1, Math.min(60, Number(v.quoteFollowupAfterDays) || 3)),
+      quoteFollowupRepeatDays: Math.max(2, Math.min(60, Number(v.quoteFollowupRepeatDays) || 5)),
+      quoteFollowupMax: Math.max(1, Math.min(5, Number(v.quoteFollowupMax) || 2)),
       btwPct: (Number.isFinite(Number(v.btwPct)) ? Math.max(0, Math.min(21, Number(v.btwPct))) : 21),
       warranty: String(v.warranty || '').slice(0, 300),
       legal: String(v.legal || '').slice(0, 1200),
@@ -2427,7 +2432,12 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
   if (s === 'goedgekeurd') inv.acceptedAt = now();
   saveSoon();
   logActivity(req.user.name, `${inv.type === 'offerte' ? 'offerte' : 'factuur'} ${s}`, inv.number);
-  res.json(inv);
+  // Offerte goedgekeurd -> automatisch een factuur-concept klaarzetten (instelbaar).
+  let autoInvoice = null;
+  if (s === 'goedgekeurd' && inv.type === 'offerte' && getInvoiceSettings().autoInvoiceOnAccept !== false) {
+    try { autoInvoice = autoConvertQuoteToInvoice(inv, req.user.name); } catch (e) { console.error('[auto-factuur]', e.message); }
+  }
+  res.json(autoInvoice ? { ...inv, autoInvoice: { id: autoInvoice.id, number: autoInvoice.number } } : inv);
 });
 
 // Overzicht (kantoor alles; monteur alleen eigen kaarten + zelf aangemaakte losse).

@@ -37,6 +37,16 @@ export const DEFAULT_INVOICE_SETTINGS = {
   remindAfterDays: 3,
   remindRepeatDays: 7,
   remindMax: 2,
+  // Offerte goedgekeurd -> automatisch een factuur-CONCEPT klaarzetten (niet
+  // versturen). Scheelt de assistente een handeling en voorkomt vergeten factureren.
+  autoInvoiceOnAccept: true,
+  // Automatische offerte-opvolging: verzonden offerte die na X dagen nog niet is
+  // goedgekeurd/afgekeurd krijgt een vriendelijke opvolgmail (met de offerte-PDF),
+  // herhaald met tussenpoos en een maximum. Standaard UIT.
+  autoQuoteFollowup: false,
+  quoteFollowupAfterDays: 3,
+  quoteFollowupRepeatDays: 5,
+  quoteFollowupMax: 2,
   btwPct: 21,             // standaardtarief; per factuur aan te passen
   warranty: '3 jaar garantie op onze producten, 1 jaar garantie op arbeid.',
   legal: 'Bij reparatie- en montagewerkzaamheden aan bestaande kozijnen, deuren, ramen en beglazing kan ondanks zorgvuldig werken lichte, redelijkerwijs onvermijdbare gebruiksschade ontstaan (zoals kleine krasjes, haarscheurtjes of loslatende verf/kit op verouderde delen). Dergelijke geringe schade valt binnen het acceptabele werkrisico en geeft geen recht op schadevergoeding of verrekening. Reclamaties binnen 48 uur na uitvoering melden.',
@@ -156,6 +166,49 @@ export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'syst
   inv.remindCount = (inv.remindCount || 0) + 1;
   saveSoon();
   logActivity(by, 'betaalherinnering verstuurd', `${inv.number} → ${to}`);
+  return { ok: true, to };
+}
+
+// Offerte goedgekeurd -> automatisch een factuur-concept aanmaken (kopie van de
+// offerte, nieuw factuurnummer, status concept — NIET verzonden). Idempotent: doet
+// niets als er al een factuur uit deze offerte is gemaakt. Koppelt de kaart aan de
+// nieuwe factuur zodat de "Factuur"-knop meteen de juiste opent.
+export function autoConvertQuoteToInvoice(inv, actorName = 'systeem') {
+  if (!inv || inv.type !== 'offerte') return null;
+  if (inv.convertedInvoiceId && (db().invoices || []).some((i) => i.id === inv.convertedInvoiceId)) return null;
+  const factuur = copyInvoice(inv, { actorName, copyType: 'factuur' });
+  inv.convertedInvoiceId = factuur.id;
+  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+  if (order && (!order.invoiceId || order.invoiceId === inv.id)) order.invoiceId = factuur.id;
+  saveSoon();
+  logActivity(actorName, 'offerte goedgekeurd → factuur-concept', `${inv.number} → ${factuur.number}`);
+  return factuur;
+}
+
+// Vriendelijke opvolging van een VERZONDEN offerte die nog niet is beantwoord.
+// Gedeeld door een (eventuele) knop en de automatische ronde: zelfde nette mail met
+// de offerte-PDF opnieuw, met een teller zodat er nooit te vaak wordt opgevolgd.
+export async function sendQuoteFollowup(inv, { by = 'systeem' } = {}) {
+  if (inv.type !== 'offerte') return { error: 'Alleen voor offertes.' };
+  if (inv.status !== 'verzonden') return { error: 'Alleen voor verzonden (nog niet beantwoorde) offertes.' };
+  const customer = db().customers.find((c) => c.id === inv.customerId) || {};
+  const to = (inv.sentTo || customer.email || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
+  if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
+  const cfg = getInvoiceSettings();
+  const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
+  const pdf = await buildInvoicePdf(inv, order, customer);
+  const sig = getEmailSignature();
+  const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (€ ${inv.totalIncl.toFixed(2).replace('.', ',')} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!`;
+  await sendMail({
+    to, subject: `Nog vragen over offerte ${inv.number}? — ${cfg.companyName}`,
+    text: sig ? `${body}\n\n${sig}` : body,
+    attachments: [{ filename: `offerte-${inv.number}.pdf`, content: pdf }],
+  });
+  inv.quoteFollowupAt = now();
+  inv.quoteFollowupCount = (inv.quoteFollowupCount || 0) + 1;
+  saveSoon();
+  logActivity(by, 'offerte-opvolging verstuurd', `${inv.number} → ${to}`);
   return { ok: true, to };
 }
 

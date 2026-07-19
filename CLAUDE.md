@@ -67,6 +67,14 @@ Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban
   nooit >120 dagen oud, max 10/ronde. Facturen-overzicht "verlopen" volgt de échte
   betaaltermijn (dueAt van de server). Instellingen-pagina: kaarten gegroepeerd per
   pil met kopjes, standaard "Alles".
+- **Offerte-automatisering (20 jul):** offerte op "Goedgekeurd" → automatisch een
+  factuur-CONCEPT klaargezet (kopie, nieuw nummer, niet verzonden; idempotent via
+  inv.convertedInvoiceId; koppelt de kaart aan de nieuwe factuur; instelbaar
+  autoInvoiceOnAccept, default AAN). Automatische offerte-OPVOLGING: verzonden
+  offerte die na X dagen niet is beantwoord → vriendelijke opvolgmail met offerte-PDF
+  (sendQuoteFollowup, teller quoteFollowupCount, max; standaard UIT). Beide in
+  Instellingen → Facturen. Los van de bestaande kanban-follow-up (followup.js op
+  order-status offerte_verzonden).
 - **Offertes + losse facturen:** naast kaart-facturen ook LOSSTAANDE facturen/offertes
   (Facturen-pagina → + Factuur / + Offerte → klant kiezen of nieuw). Offerte: nummer
   OFF-2026-…, eigen PDF (geldigheidsdatum, Voor akkoord-blok), status concept/verzonden/

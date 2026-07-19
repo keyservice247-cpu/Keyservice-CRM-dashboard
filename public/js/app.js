@@ -1654,8 +1654,16 @@ function renderInvoiceEditor(ctx) {
   };
   const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = async () => { try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }; };
   statusBtn('#inv-paid', 'betaald', 'Gemarkeerd als betaald ✓');
-  statusBtn('#inv-accept', 'goedgekeurd', 'Offerte goedgekeurd ✓');
   statusBtn('#inv-reject', 'afgekeurd', 'Offerte afgekeurd');
+  // Goedkeuren: als er automatisch een factuur-concept van wordt gemaakt, dat meteen melden.
+  if ($('#inv-accept')) $('#inv-accept').onclick = async () => {
+    try {
+      const r = await api(`/api/invoices/${inv.id}/status`, 'POST', { status: 'goedgekeurd' });
+      if (r && r.autoInvoice) toast(`Offerte goedgekeurd ✓ — factuur-concept ${r.autoInvoice.number} klaargezet`);
+      else toast('Offerte goedgekeurd ✓');
+      closeModal(); if (ctx.after) ctx.after();
+    } catch (err) { toast(err.message, true); }
+  };
   if ($('#inv-remind')) $('#inv-remind').onclick = async () => {
     if (!confirm(`Vriendelijke betaalherinnering sturen naar ${inv.sentTo || customer.email}?`)) return;
     try { await api(`/api/invoices/${inv.id}/remind`, 'POST', {}); done('Herinnering verstuurd'); } catch (err) { toast(err.message, true); }
@@ -2375,6 +2383,13 @@ async function loadSettings() {
         <div class="row"><label>Herhaal om de (dagen) <input id="is-remind-repeat" type="number" min="2" max="60" value="${esc(String(s.invoiceSettings?.remindRepeatDays ?? 7))}" style="max-width:100px"></label>
         <label>Maximaal aantal herinneringen <input id="is-remind-max" type="number" min="1" max="5" value="${esc(String(s.invoiceSettings?.remindMax ?? 2))}" style="max-width:100px"></label></div>
       </div>
+      <div style="border-top:1px solid var(--line-soft,#e5e7eb);margin:12px 0 10px;padding-top:10px"><strong>Offertes</strong>
+        <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" id="is-autofactuur" style="width:auto" ${s.invoiceSettings?.autoInvoiceOnAccept !== false ? 'checked' : ''}>Bij <strong>Goedgekeurd</strong> automatisch een factuur-concept klaarzetten (niet versturen)</label>
+        <p class="muted small" style="margin:4px 0 8px">Zo hoef je na akkoord alleen nog de factuur te controleren en versturen — je vergeet nooit meer te factureren.</p>
+        <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="is-autoquote" style="width:auto" ${s.invoiceSettings?.autoQuoteFollowup ? 'checked' : ''}>Verzonden offerte die blijft liggen automatisch opvolgen (vriendelijke mail met de offerte)</label>
+        <div class="row" style="margin-top:6px"><label>Dagen na versturen <input id="is-quote-after" type="number" min="1" max="60" value="${esc(String(s.invoiceSettings?.quoteFollowupAfterDays ?? 3))}" style="max-width:100px"></label>
+        <label>Max. aantal <input id="is-quote-max" type="number" min="1" max="5" value="${esc(String(s.invoiceSettings?.quoteFollowupMax ?? 2))}" style="max-width:100px"></label></div>
+      </div>
       <label>Garantie-regel (dik gedrukt op de factuur) <input id="is-warranty" value="${esc(s.invoiceSettings?.warranty || '')}"></label>
       <label>Juridische tekst (kleine lettertjes onderaan) <textarea id="is-legal" rows="3">${esc(s.invoiceSettings?.legal || '')}</textarea></label>
       <label>Voettekst op de factuur <input id="is-footer" value="${esc(s.invoiceSettings?.footer || '')}"></label>
@@ -2629,6 +2644,10 @@ async function loadSettings() {
       remindAfterDays: Number($('#is-remind-after').value) || 3,
       remindRepeatDays: Number($('#is-remind-repeat').value) || 7,
       remindMax: Number($('#is-remind-max').value) || 2,
+      autoInvoiceOnAccept: $('#is-autofactuur').checked,
+      autoQuoteFollowup: $('#is-autoquote').checked,
+      quoteFollowupAfterDays: Number($('#is-quote-after').value) || 3,
+      quoteFollowupMax: Number($('#is-quote-max').value) || 2,
     };
     try { await api('/api/settings', 'PATCH', { invoiceSettings }); toast('Factuurgegevens opgeslagen'); }
     catch (err) { toast(err.message, true); }

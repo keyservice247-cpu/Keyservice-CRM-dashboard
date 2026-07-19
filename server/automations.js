@@ -8,7 +8,7 @@ import {
   getAttachmentCleanup,
 } from './settings.js';
 import { deleteFile } from './storage.js';
-import { getInvoiceSettings, sendInvoiceReminder } from './invoices.js';
+import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
 import { lastHealth } from './health.js';
@@ -457,6 +457,37 @@ async function runInvoiceAutoReminders() {
   saveSoon();
 }
 
+// ---------- Automatische offerte-opvolging (1x per dag) ----------
+// Verzonden offertes die na de ingestelde periode nog niet zijn goedgekeurd/
+// afgekeurd krijgen een vriendelijke opvolgmail (met de offerte-PDF), herhaald met
+// tussenpoos en een maximum. Zelfde vangrails als de betaalherinnering.
+async function runQuoteFollowups() {
+  const cfg = getInvoiceSettings();
+  if (!cfg.autoQuoteFollowup || !smtpConfigured()) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (db().settings._quoteFollowupDay === today) return;
+  db().settings._quoteFollowupDay = today;
+  const nowMs = Date.now();
+  let n = 0;
+  for (const inv of db().invoices || []) {
+    if (inv.type !== 'offerte' || inv.status !== 'verzonden' || !inv.sentAt) continue;
+    const sent = new Date(inv.sentAt).getTime();
+    if (!Number.isFinite(sent) || nowMs - sent > 120 * 86400000) continue;
+    if (nowMs - sent < (cfg.quoteFollowupAfterDays || 3) * 86400000) continue;
+    if ((inv.quoteFollowupCount || 0) >= (cfg.quoteFollowupMax || 2)) continue;
+    const last = inv.quoteFollowupAt ? new Date(inv.quoteFollowupAt).getTime() : 0;
+    if (nowMs - last < (cfg.quoteFollowupRepeatDays || 5) * 86400000) continue;
+    try {
+      const r = await sendQuoteFollowup(inv, { by: 'systeem (automatische offerte-opvolging)' });
+      if (r.ok) n++;
+      else if (r.error && !/e-mailadres/.test(r.error)) console.error('[offerte-opvolging]', inv.number, r.error);
+    } catch (e) { console.error('[offerte-opvolging]', inv.number, e.message); }
+    if (n >= 10) break;
+  }
+  if (n) { logActivity('systeem', 'automatische offerte-opvolgingen', `${n} verstuurd`); console.log(`[offerte-opvolging] ${n} verstuurd`); }
+  saveSoon();
+}
+
 // ---------- Bijlage-opschoning (1x per dag) ----------
 // Verwijdert bestandsbijlages van AFGERONDE/GEANNULEERDE kaarten (en berichten in de
 // prullenbak-leeftijd) ouder dan de ingestelde periode. Uitdrukkelijk NOOIT:
@@ -525,6 +556,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runMailboxQuotaCheck(); } catch (e) { console.error('[mailbox-quotum]', e.message); }
     try { runAttachmentCleanup(); } catch (e) { console.error('[bijlage-opschoning]', e.message); }
     try { await runInvoiceAutoReminders(); } catch (e) { console.error('[auto-herinnering]', e.message); }
+    try { await runQuoteFollowups(); } catch (e) { console.error('[offerte-opvolging]', e.message); }
   };
   const fast = async () => {
     try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }
