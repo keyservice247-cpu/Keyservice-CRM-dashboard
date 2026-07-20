@@ -46,7 +46,7 @@ import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, save
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
-import { saveBuffer, deleteFile, UPLOAD_DIR } from './storage.js';
+import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries } from './storage.js';
 import Busboy from 'busboy';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
 import {
@@ -1310,7 +1310,8 @@ app.post('/api/ingest/form', async (req, res) => {
   if (isMultipart) {
     const parsed = await parseMultipartForm(req);
     mb = parsed.fields;
-    formAttachments = parsed.attachments;
+    // Identieke bestanden binnen dezelfde inzending direct ontdubbelen (op inhoud).
+    formAttachments = dedupeAttachments(parsed.attachments);
     rejectedFiles = parsed.rejected;
   }
   const dropSavedFiles = () => { for (const a of formAttachments) { try { deleteFile(a.file); } catch { /* al weg */ } } };
@@ -3130,6 +3131,21 @@ app.listen(PORT, () => {
   console.log(`\n  Keyservice CRM draait op  http://localhost:${PORT}`);
   console.log(`  AI-modus: ${aiMode() === 'ai' ? 'AI (Claude)' : 'DEMO (regels)'}`);
   console.log(`  E-mail versturen (SMTP): ${smtpConfigured() ? 'actief' : 'niet geconfigureerd'}`);
+  // Eenmalige veilige opruiming: bestaande dubbele foto's (zelfde inhoud) op kaarten
+  // en berichten ontdubbelen — alleen dubbele verwijzingen weg, bestanden blijven staan.
+  try {
+    if (!db().settings._attDedupV1) {
+      let removed = 0;
+      for (const o of db().orders || []) {
+        if (o.attachments) { const r = dedupeListEntries(o.attachments); o.attachments = r.list; removed += r.removed; }
+        for (const t of o.thread || []) if (t.attachments) { const r = dedupeListEntries(t.attachments); t.attachments = r.list; removed += r.removed; }
+      }
+      for (const m of db().messages || []) if (m.attachments) { const r = dedupeListEntries(m.attachments); m.attachments = r.list; removed += r.removed; }
+      db().settings._attDedupV1 = true;
+      if (removed) console.log(`[bijlage-dedup] ${removed} dubbele foto-verwijzing(en) opgeruimd`);
+      save();
+    }
+  } catch (e) { console.error('[bijlage-dedup]', e.message); }
   // Storing-herstel in vaste volgorde: eerst "groep <id>" → echte naam helen (bron-chip
   // klopt weer, ook op bestaande kaarten), dan mislukte groeps-berichten opnieuw in de
   // wachtrij, dan gemiste opdrachten alsnog automatisch naar de monteur.

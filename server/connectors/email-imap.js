@@ -9,7 +9,7 @@
 // binnengekomen opdracht niet als iemand de mail eerst in webmail/Outlook opent.
 import { db, id, now, saveSoon, logActivity } from '../db.js';
 import { ingestMessage, findCustomer } from '../pipeline.js';
-import { saveBuffer } from '../storage.js';
+import { saveBuffer, dedupeAttachments } from '../storage.js';
 import { maybeSendAutoReply } from '../autoreply.js';
 
 let polling = false;
@@ -199,9 +199,16 @@ export function parseFormSubmit(text, subject) {
   // FormSubmit-voettekst (anders bloedt die boilerplate in het laatste veld door).
   const nextLabel = '(?:\\n|^)[ \\t>*|]*(?:' + labelSrc.concat(['you are receiving this', 'submitted your form on']).join('|') + ')\\b\\s*:?';
   const grab = (labelPat) => {
-    const re = new RegExp('(?:\\n|^)[ \\t>*|]*(?:' + labelPat + ')\\b[ \\t]*:?[ \\t]*([\\s\\S]*?)(?=' + nextLabel + '|$)', 'i');
-    const m = t.match(re);
-    return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+    // Alle voorkomens langslopen en de EERSTE bruikbare waarde nemen. FormSubmit zet
+    // vaak een kop-rij "Name | Value" bovenaan de tabel; die wordt "Name: Value" en
+    // zou anders als klantnaam "Value" worden opgepikt. Zulke kop-woorden (value/
+    // waarde/field/veld) slaan we over en pakken de echte waarde in de rij eronder.
+    const re = new RegExp('(?:\\n|^)[ \\t>*|]*(?:' + labelPat + ')\\b[ \\t]*:?[ \\t]*([\\s\\S]*?)(?=' + nextLabel + '|$)', 'ig');
+    for (const m of t.matchAll(re)) {
+      const v = (m[1] || '').replace(/\s+/g, ' ').trim();
+      if (v && !/^(value|waarde|field|veld)$/i.test(v)) return v;
+    }
+    return '';
   };
 
   const naam = grab('naam|name');
@@ -258,12 +265,13 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
         const msg = await client.fetchOne(uid, { source: true }, { uid: true });
         if (!msg || !msg.source) continue;
         const parsed = await simpleParser(msg.source);
-        const attachments = [];
+        let attachments = [];
         for (const att of parsed.attachments || []) {
           if (!att.content || !att.content.length) continue; // inline-logo's e.d. overslaan
           const saved = saveBuffer(att.content, { mime: att.contentType, filename: att.filename });
           if (saved) attachments.push(saved);
         }
+        attachments = dedupeAttachments(attachments); // identieke bijlages in één mail: 1x
         // FormSubmit-mail herkennen aan de afzender, het onderwerp óf de bekende
         // FormSubmit-zin in de tekst. Zo ja: de ruwe mailtekst vervangen door een
         // genormaliseerde body (nette velden), zodat naam/tel/e-mail/adres

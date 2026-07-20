@@ -129,9 +129,15 @@ server/pipeline.js — er bestaat geen pad eromheen.
    (bestandsvelden "bijlage", max 10MB totaal, jpg/png/webp/heic/heif/pdf; een
    bijlage-fout laat de lead nooit sneuvelen). Extra mailboxen meelezen via env
    IMAP_INGEST_ACCOUNTS="user:wachtwoord,user2:ww2" (zelfde IMAP-host);
-   FormSubmit-mails worden geparsed naar een genormaliseerde aanvraag; dezelfde
-   aanvraag via site én mail wordt binnen 15 min ontdubbeld op tel/e-mail
-   (bijlages hangen aan de bestaande lead). Bron per lead: message.mailbox.
+   FormSubmit-mails worden geparsed naar een genormaliseerde aanvraag (kop-rij
+   "Name/Value" wordt overgeslagen; HTML-tabel wordt gelezen; ruwe tekst als
+   vangnet); dezelfde aanvraag via site én mail wordt binnen 3 UUR ontdubbeld op
+   tel/e-mail (bijlages hangen aan de bestaande lead). Bron per lead:
+   message.mailbox. BIJLAGE-ONTDUBBELING: elke opgeslagen bijlage krijgt een
+   inhoud-hash (storage.js); identieke foto's worden nooit dubbel aan een kaart
+   gehangen (mergeAttachments/dedupeAttachments), binnen één upload/mail én bij
+   samenvoegen. Eenmalige veilige opruiming bij boot (_attDedupV1): dubbele
+   verwijzingen weg, bestanden blijven op schijf.
 LET OP: md-bestanden zijn dev-documentatie; de runtime-regels staan in code +
 settings. Wijzig je het één, houd BEIDE synchroon.
 

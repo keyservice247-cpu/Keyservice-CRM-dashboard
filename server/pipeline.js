@@ -3,6 +3,7 @@
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters } from './settings.js';
+import { mergeAttachments, dedupeAttachments } from './storage.js';
 import { sendPush } from './push.js';
 
 // ---------- WhatsApp-melding naar het team (groep "CRM meldingen" of 1-op-1) ----------
@@ -272,7 +273,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
       attachments: origMsg.attachments || [],
     });
     if (origMsg.attachments && origMsg.attachments.length) {
-      order.attachments = origMsg.attachments.slice();
+      order.attachments = dedupeAttachments(origMsg.attachments);
     }
     // Is er bij binnenkomst een automatische ontvangstbevestiging gestuurd? Toon die in
     // de historie en zet een vlag voor het icoontje op de kaart.
@@ -375,11 +376,16 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const phoneOf = (t) => { const mm = String(t || '').match(/(?:\+?31|0)\s?6[\s-]?\d(?:[\s-]?\d){7}|\b0\d{1,3}[\s-]?\d{6,8}\b/); return mm ? mm[0].replace(/[^\d]/g, '').replace(/^31/, '0') : ''; };
   const myPhone = phoneOf(body);
 
-  // WEBSITE-DEDUP (15 min): dezelfde aanvraag komt vaak dubbel binnen — één keer
-  // rechtstreeks van de site (POST /api/ingest/form) en één keer als (FormSubmit-)
-  // e-mail op de mailbox. Herken dat op telefoon/e-mail binnen een kwartier en hang
-  // de tweede binnenkomst (incl. eventuele bijlages!) aan de eerste lead, in plaats
-  // van een tweede lead te maken.
+  // Binnen dit bericht al identieke bijlages weghalen (bv. een formulier dat dezelfde
+  // foto dubbel meestuurt).
+  attachments = dedupeAttachments(attachments);
+
+  // WEBSITE-DEDUP: dezelfde aanvraag komt vaak dubbel binnen — één keer rechtstreeks
+  // van de site (POST /api/ingest/form) en één keer als (FormSubmit-)e-mail op de
+  // mailbox. Die mail kan flink vertragen (aflevering + IMAP-poll), dus we kijken tot
+  // 3 UUR terug en ontdubbelen op telefoon/e-mail. De tweede binnenkomst (incl.
+  // bijlages, maar zonder identieke dubbelen) hangt aan de eerste lead i.p.v. een
+  // tweede kaart te maken.
   // REACTIE-HERKENNING e-mail (deterministisch, hier al nodig): een antwoord in een
   // bestaande wisseling — Re:/Antw:-onderwerp of In-Reply-To-header — is nooit een
   // nieuwe aanvraag én mag ook niet door de website-dedup worden opgeslokt (het
@@ -391,7 +397,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const WEBSITE_LEAD_RE = /(nieuwe aanvraag via de website|submitted your form on|offerte-?aanvraag (schuifpui|via)|nieuwe (offerte|contact)aanvraag via|aanvraag via de website)/i;
   const looksWebsiteLead = !isEmailReply && (forceRelevant || WEBSITE_LEAD_RE.test(`${subject || ''}\n${body || ''}`));
   if (looksWebsiteLead) {
-    const win = Date.now() - 15 * 60000;
+    const win = Date.now() - 180 * 60000;
     const mailOf = (t) => ((String(t || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])
       .map((e) => e.toLowerCase()).find((e) => !/keyservice247\.nl|keyservice-crm|formsubmit/.test(e)) || '');
     const myMail = mailOf(body);
@@ -404,11 +410,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     });
     if (twin) {
       if (attachments && attachments.length) {
-        twin.attachments = (twin.attachments || []).concat(attachments);
+        // Identieke foto's (zelfde inhoud) niet nóg een keer toevoegen.
+        twin.attachments = mergeAttachments(twin.attachments || [], attachments);
         const rev0 = db().reviews.find((r) => r.messageId === twin.id);
         if (rev0 && rev0.orderId) {
           const ord = db().orders.find((o) => o.id === rev0.orderId);
-          if (ord) { ord.attachments = (ord.attachments || []).concat(attachments); ord.updatedAt = now(); }
+          if (ord) { ord.attachments = mergeAttachments(ord.attachments || [], attachments); ord.updatedAt = now(); }
         }
       }
       saveSoon();
@@ -431,7 +438,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
       if (order) {
         order.thread = order.thread || [];
         order.thread.push({ id: id('thr'), channel, sender: sender || '', subject: subject || '', body: body || '', at: now(), attachments: attachments || [] });
-        if (attachments?.length) order.attachments = (order.attachments || []).concat(attachments);
+        if (attachments?.length) order.attachments = mergeAttachments(order.attachments || [], attachments);
         order.updatedAt = now();
         saveSoon();
         logActivity('systeem', 'dubbele WhatsApp (doorgestuurd) samengevoegd', order.title);
@@ -622,9 +629,10 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
         subject: subject || '', body: body || '', at: now(),
         attachments: attachments || [],
       });
-      // Bijlagen ook op opdracht-niveau verzamelen (foto's/video's van de klant).
+      // Bijlagen ook op opdracht-niveau verzamelen (foto's/video's van de klant),
+      // zonder identieke dubbelen.
       if (attachments && attachments.length) {
-        openOrder.attachments = (openOrder.attachments || []).concat(attachments);
+        openOrder.attachments = mergeAttachments(openOrder.attachments || [], attachments);
       }
       // Markeer dat de KLANT heeft gereageerd -> melding op de kaart.
       openOrder.customerReplied = true;
