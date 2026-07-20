@@ -3,6 +3,29 @@
 Trello/Notion-achtig opdrachten-dashboard voor Keyservice (sleutel-/slotenmaker).
 Inkomende e-mail + WhatsApp → AI categoriseert → controlewachtrij → kanban.
 
+## TESTREGEL (bindend — NOOIT overslaan, ook niet "voor een kleine wijziging")
+Vóór elke `git push`/deploy geldt: eerst testen, dan live. Zeg nooit "getest" of
+"live" zonder dat de betreffende test daadwerkelijk groen draaide.
+1. **Altijd** `node --check` op elk gewijzigd `.js`-bestand.
+2. **Backend-wijziging** (server/): draai de relevante lokale server-test met een
+   verse test-DB (`DATA_DIR=<scratch> INGEST_TOKEN=test123 SESSION_SECRET=test`),
+   plus de scenario-regressie (`scratchpad/scenarios.mjs`, de 10 lead-instroom-
+   wetten) — die MOET groen blijven.
+3. **Frontend-wijziging** (public/js/app.js, public/*.html/css): draai ALTIJD de
+   headless-browser-smoketest (`scratchpad/browser-test.mjs`, Chromium via
+   playwright-core op `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`). Die
+   logt in, opent de betrokken schermen (o.a. factuur/offerte-editor, instellingen)
+   en FAALT bij elke JS-console-fout. Reden: server-tests vangen een
+   ReferenceError in het scherm NIET — dat kostte ooit een kapotte factuur-editor
+   ("Can't find variable: bundles").
+4. Na deploy: hard verifiëren (`git merge-base --is-ancestor HEAD origin/main`) +
+   de live-site pollen tot hij herstart en weer 200 geeft.
+Een gefaalde assertie door verouderde TESTDATA corrigeer je in de test — niet door
+de regel te negeren. De tests staan in `test/` (zie `test/README.md` voor het
+draaien): `test/scenarios.mjs` (50 backend-assertions), `test/factuur-test.mjs`,
+`test/browser-test.mjs` (headless Chromium). Nieuwe functie = assertie erbij, zodat
+de regressie meegroeit.
+
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`), opslag = JSON-bestand `data/db.json` (geen DB).
 - **Frontend:** vanilla HTML/CSS/JS (`public/`), geen buildstap. Design: rustige SaaS-stijl

@@ -1,0 +1,268 @@
+// Verplicht testplan uit de masterprompt: 10 scenario's + opdracht 1 (multipart) +
+// opdracht 2 (site+mail-dedup). Draait tegen een lokale server met verse test-DB.
+const BASE = 'http://localhost:3113';
+const TOKEN = 'test123';
+const RAF_ID = '120363177872957422';
+const RAF_NAME = 'Raf breda en vliegende keer Rhenen straal 30 KM';
+
+let cookie = '';
+let passed = 0, failed = 0;
+const bad = [];
+function ok(name, cond, extra = '') {
+  if (cond) { passed++; console.log(`  ✓ ${name}`); }
+  else { failed++; bad.push(name); console.log(`  ✗ FAIL: ${name}${extra ? ' — ' + extra : ''}`); }
+}
+async function api(method, path, body, useToken = false) {
+  const headers = { 'content-type': 'application/json' };
+  if (useToken) headers['x-ingest-token'] = TOKEN;
+  if (cookie && !useToken) headers.cookie = cookie;
+  const r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const setC = r.headers.get('set-cookie');
+  if (setC) cookie = setC.split(';')[0];
+  let json = null;
+  try { json = await r.json(); } catch { /* leeg */ }
+  return { status: r.status, json };
+}
+const orders = async () => (await api('GET', '/api/orders')).json || [];
+const customers = async () => (await api('GET', '/api/customers')).json || [];
+const outboxQ = async () => (await api('GET', '/api/outbox', null, true)).json || [];
+
+// ---------- Setup ----------
+console.log('\n== Setup ==');
+const login = await api('POST', '/api/login', { email: 'admin@keyservice.nl', password: 'admin123' });
+ok('inloggen', login.status === 200);
+await api('PATCH', '/api/settings', {
+  whatsappOrderGroups: 'raf breda, tilburg',
+  crmAlerts: { enabled: true, group: 'CRM meldingen', phone: '', notifyReplies: true },
+});
+const mont = await api('POST', '/api/monteurs', { name: 'Youssef', phone: '0687654321', waGroup: 'Youssef Keyservice247' });
+const MID = mont.json.id;
+await api('PATCH', '/api/settings', {
+  monteurDispatch: { autoEnabled: true, days: [0, 1, 2, 3, 4, 5, 6], autoMonteurId: MID, trigger: 'intake', onlyDrs: true },
+});
+const baselineCust = (await customers()).length;
+
+// ---------- Scenario 1: nieuwe klant in DRS-groep, complete gegevens ----------
+console.log('\n== 1. Nieuwe klant appt in DRS-groep met complete gegevens ==');
+const s1 = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Karin Smit',
+  body: 'Karin Smit, Dorpsstraat 12, 3911 AB Rhenen, 0611111111, cilinderslot voordeur kapot, graag vandaag',
+  externalId: 'sc1',
+}, true);
+ok('volautomatisch goedgekeurd (auto_approved)', s1.json?.status === 'auto_approved', JSON.stringify(s1.json));
+let os = await orders();
+const o1 = os.find((o) => o.originGroup === RAF_NAME && (o.customer?.phone || '').includes('0611111111'));
+ok('nieuwe kaart aangemaakt met juiste herkomst', !!o1, JSON.stringify(os.map((o) => o.title)));
+ok('nieuwe klant aangemaakt', (await customers()).some((c) => (c.phone || '').includes('0611111111')));
+ok('kaart draagt intake-gegevens van deze aanvraag', o1 && o1.intake && (o1.intake.phone || '').includes('0611111111'), o1 && JSON.stringify(o1.intake));
+ok('automatisch naar monteur in wachtrij', (await outboxQ()).some((x) => x.orderId === o1?.id));
+
+// ---------- Scenario 3: zelfde tekst doorgestuurd naar monteursgroep binnen 24u ----------
+console.log('\n== 3. Identieke tekst doorgestuurd (monteursgroep) -> inhoud-dedup ==');
+const s3 = await api('POST', '/api/ingest/whatsapp', {
+  group: 'Youssef Keyservice247', name: 'Abdel',
+  body: 'Karin Smit, Dorpsstraat 12, 3911 AB Rhenen, 0611111111, cilinderslot voordeur kapot, graag vandaag',
+  externalId: 'sc3',
+}, true);
+ok('géén tweede kaart (duplicate)', s3.json?.duplicate === true, JSON.stringify(s3.json));
+ok('kaarten-aantal ongewijzigd', (await orders()).length === os.length);
+
+// ---------- Scenario 2 + 4: zelfde klant, nieuwe (bijna-zelfde maar niet identieke) aanvraag ----------
+console.log('\n== 2+4. Bestaande klant, nieuwe aanvraag -> NIEUWE kaart + samenvoeg-suggestie ==');
+const before24 = (await orders()).length;
+const s2 = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Karin Smit',
+  body: 'Karin Smit, Dorpsstraat 12, 3911 AB Rhenen, 0611111111, nu ook achterdeur slot vervangen graag',
+  externalId: 'sc2',
+}, true);
+ok('nieuwe aanvraag volautomatisch goedgekeurd', s2.json?.status === 'auto_approved', JSON.stringify(s2.json));
+os = await orders();
+ok('NIEUWE kaart aangemaakt (geen automatische merge)', os.length === before24 + 1, `${before24} -> ${os.length}`);
+const o2 = os.find((o) => /achterdeur/i.test(`${o.title} ${o.description}`));
+ok('zelfde klant op beide kaarten', o2 && o1 && o2.customerId === o1.customerId);
+ok('samenvoeg-SUGGESTIE aanwezig (mens beslist)', o2 && o2.mergeSuggestion && o2.mergeSuggestion.orderId === o1.id, o2 && JSON.stringify(o2.mergeSuggestion));
+ok('klantenbestand: nog steeds één Karin', (await customers()).filter((c) => (c.phone || '').includes('0611111111')).length === 1);
+
+// ---------- Scenario 7: bekende klant, ander adres ----------
+console.log('\n== 7. Bekende klant met ANDER adres -> suggestie, record ongewijzigd, kaart met nieuw adres ==');
+const s7 = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Karin Smit',
+  body: 'Karin Smit, Nieuwe Laan 99, 6811 CD Arnhem, 0611111111, buitengesloten bij vakantiehuis',
+  externalId: 'sc7',
+}, true);
+ok('goedgekeurd', s7.json?.status === 'auto_approved');
+os = await orders();
+const o7 = os.find((o) => /vakantiehuis|buitengesloten/i.test(`${o.title} ${o.description}`));
+ok('kaart-intake heeft het NIEUWE adres', o7 && /nieuwe laan|arnhem/i.test(o7.intake?.address || ''), o7 && JSON.stringify(o7.intake));
+ok('suggestie "adres wijkt af" op de kaart', o7 && (o7.dataSuggestions || []).some((s) => s.field === 'adres'), o7 && JSON.stringify(o7.dataSuggestions));
+const karin = (await customers()).find((c) => (c.phone || '').includes('0611111111'));
+ok('klantrecord-adres ONGEWIJZIGD (Rhenen)', /rhenen/i.test(karin?.address || ''), karin?.address);
+const dispatch7 = (await outboxQ()).find((x) => x.orderId === o7?.id);
+ok('monteur-bericht gebruikt het AANVRAAG-adres (Arnhem)', dispatch7 && /arnhem/i.test(dispatch7.text), dispatch7 && dispatch7.text.slice(0, 120));
+// Suggestie toepassen via de kaart-knop -> record wél bijgewerkt (bewust, gelogd)
+await api('POST', `/api/orders/${o7.id}/data-suggestion`, { field: 'adres', action: 'apply' });
+const karin2 = (await customers()).find((c) => (c.phone || '').includes('0611111111'));
+ok('na klik "Bijwerken": klantrecord nu wél bijgewerkt', /arnhem/i.test(karin2?.address || ''), karin2?.address);
+
+// ---------- Scenario 5: geen echte klantnaam -> Klant onbekend ----------
+console.log('\n== 5. AI vindt geen klantnaam -> "Klant onbekend", nooit klant "Key Service" ==');
+const s5 = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Key Service',
+  body: 'Spoedje: Marktweg 4, 5011 AB Tilburg, 0622222222, slot dicht na inbraak',
+  externalId: 'sc5',
+}, true);
+ok('goedgekeurd', s5.json?.status === 'auto_approved');
+os = await orders();
+const o5 = os.find((o) => (o.intake?.phone || '').includes('0622222222'));
+ok('kaart gemarkeerd "Klant onbekend — aanvullen"', o5 && o5.customerIncomplete === true, o5 && JSON.stringify({ ci: o5.customerIncomplete }));
+ok('klantrecord heet "Onbekende klant"', o5 && o5.customer?.name === 'Onbekende klant', o5 && o5.customer?.name);
+ok('GEEN klant "Key Service" aangemaakt', !(await customers()).some((c) => /^key\s?service$/i.test(c.name || '')));
+
+// ---------- Scenario 6: twee verschillende klanten via dezelfde DRS-afzender ----------
+console.log('\n== 6. Twee klanten via dezelfde afzender -> twee klanten, twee kaarten ==');
+const custBefore6 = (await customers()).length;
+await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Raf DRS',
+  body: 'Klant A: Bergweg 1, 1211 AB Hilversum, 0633333333, slot vervangen', externalId: 'sc6a',
+}, true);
+await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Raf DRS',
+  body: 'Klant B: Zeeweg 8, 2011 CD Haarlem, 0644444444, deur opengaan lukt niet', externalId: 'sc6b',
+}, true);
+const custAfter6 = await customers();
+ok('twee NIEUWE klantrecords (niet samengevoegd op afzendernaam)', custAfter6.length === custBefore6 + 2, `${custBefore6} -> ${custAfter6.length}`);
+os = await orders();
+const o6a = os.find((o) => (o.intake?.phone || '').includes('0633333333'));
+const o6b = os.find((o) => (o.intake?.phone || '').includes('0644444444'));
+ok('twee losse kaarten met elk hun eigen klant', o6a && o6b && o6a.customerId !== o6b.customerId);
+
+// ---------- Scenario 8: orderbevestiging/factuur-mail -> stil naar Overige ----------
+console.log('\n== 8. Orderbevestiging op info@ -> geen lead, geen melding ==');
+const outboxBefore8 = (await outboxQ()).length;
+const custBefore8 = (await customers()).length;
+const s8 = await api('POST', '/api/ingest/email', {
+  from: 'no-reply@webshop-sloten.nl',
+  subject: 'Orderbevestiging #45821 — uw bestelling is verzonden',
+  body: 'Bedankt voor uw bestelling! Bezorgadres: Keyservice, Rhenen. Track & trace: XYZ. Totaal: 149,95. Tel: 0612121212',
+  externalId: 'sc8',
+}, true);
+ok('naar Overige (geen pending lead)', s8.json?.status === 'overige', JSON.stringify(s8.json));
+ok('geen team-melding in wachtrij', (await outboxQ()).length === outboxBefore8);
+ok('geen klant aangemaakt uit leveranciersmail', (await customers()).length === custBefore8);
+
+// ---------- Scenario 9: websiteformulier -> wél lead ----------
+console.log('\n== 9. Websiteformulier -> wel lead (ongewijzigd) ==');
+const s9 = await api('POST', '/api/ingest/form?token=' + TOKEN, {
+  name: 'Nora Visser', phone: '0655555555', email: 'nora@example.nl',
+  city: 'Breda', postcode: '4811 AB', address: 'Kerkstraat 8',
+  message: 'Schuifpui klemt, graag offerte', formType: 'offerte', site: 'schuifpuiservice.com',
+});
+ok('website-lead -> Te controleren (pending)', s9.json?.status === 'pending', JSON.stringify(s9.json));
+ok('NIET automatisch een kaart (mens keurt)', !(await orders()).some((o) => (o.intake?.phone || '').includes('0655555555')));
+
+// ---------- Scenario 10: los 1-op-1 appje ----------
+console.log('\n== 10. Los 1-op-1 appje -> Te controleren, geen kaart/klant ==');
+const custBefore10 = (await customers()).length;
+const ordersBefore10 = (await orders()).length;
+const s10 = await api('POST', '/api/ingest/whatsapp', {
+  name: 'Willem', body: 'hoi, kunnen jullie langskomen?\nTelefoon: +31677777777', externalId: 'sc10',
+}, true);
+ok('naar Te controleren (pending)', s10.json?.status === 'pending', JSON.stringify(s10.json));
+ok('geen kaart aangemaakt', (await orders()).length === ordersBefore10);
+ok('geen klant aangemaakt (pas na menselijke goedkeuring)', (await customers()).length === custBefore10);
+
+// ---------- Reactie-verkeer: klant met open kaart appt 1-op-1 -> aan de kaart ----------
+console.log('\n== Extra: 1-op-1 reactie van klant mét open kaart blijft aan de kaart hangen ==');
+const s11 = await api('POST', '/api/ingest/whatsapp', {
+  name: 'Karin Smit', body: 'is morgen 10:00 ook goed?\nTelefoon: +31611111111', externalId: 'sc11',
+}, true);
+ok('reactie samengevoegd met lopende kaart (chat blijft werken)', !!s11.json && !s11.json.reviewId, JSON.stringify(s11.json));
+os = await orders();
+const oK = os.filter((o) => o.customerId === o1.customerId).find((o) => o.customerReplied);
+ok('kaart toont "Nieuw bericht" van klant', !!oK);
+
+// ---------- Opdracht 1: multipart met bijlage ----------
+console.log('\n== O1. Multipart-formulier met bijlages ==');
+const png1 = Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001080600000000000000', 'hex');
+const png2 = Buffer.from('89504e470d0a1a0a0000000d4948445200000002000000020806000000aabbccdd', 'hex');
+const fd = new FormData();
+fd.append('name', 'Foto Klant');
+fd.append('phone', '0666666666');
+fd.append('email', 'foto@example.nl');
+fd.append('city', 'Utrecht');
+fd.append('message', 'Zie foto van de kapotte pui');
+fd.append('formType', 'offerte');
+fd.append('site', 'schuifpuireparatie-utrecht.nl');
+fd.append('bijlage', new Blob([png1], { type: 'image/png' }), 'pui.png');
+fd.append('bijlage', new Blob([png2], { type: 'image/jpeg' }), 'pui2.jpg');
+const r1 = await fetch(`${BASE}/api/ingest/form?token=${TOKEN}`, { method: 'POST', body: fd });
+const j1 = await r1.json();
+ok('multipart geaccepteerd', r1.status === 200 && j1.ok, JSON.stringify(j1));
+ok('2 bijlages opgeslagen', j1.bijlagen?.opgeslagen === 2, JSON.stringify(j1.bijlagen));
+const revs = await api('GET', '/api/reviews?limit=50');
+const revO1 = (revs.json.items || []).find((r) => r.message && /foto@example\.nl/i.test(r.message.body || ''));
+ok('lead in Te controleren mét bijlages op het bericht', revO1 && (revO1.message.attachments || []).length === 2, revO1 && JSON.stringify((revO1.message.attachments || []).length));
+ok('bron gemarkeerd als website-direct', revO1 && revO1.message.mailbox === 'website-direct', revO1 && revO1.message.mailbox);
+
+// Verkeerd type + te groot: lead blijft, bijlage netjes geweigerd
+const fd2 = new FormData();
+fd2.append('name', 'Pdf Test');
+fd2.append('phone', '0666666667');
+fd2.append('message', 'verkeerd bestand test');
+fd2.append('bijlage', new Blob(['gewoon tekst'], { type: 'text/plain' }), 'notitie.txt');
+fd2.append('bijlage', new Blob([Buffer.alloc(11 * 1024 * 1024)], { type: 'image/jpeg' }), 'groot.jpg');
+const r2 = await fetch(`${BASE}/api/ingest/form?token=${TOKEN}`, { method: 'POST', body: fd2 });
+const j2 = await r2.json();
+ok('lead zelf gaat DOOR ondanks bijlage-fouten', r2.status === 200 && j2.ok && j2.reviewId, JSON.stringify(j2));
+ok('txt geweigerd (type) én jpg geweigerd (te groot)', (j2.bijlagen?.geweigerd || []).length === 2 && j2.bijlagen?.opgeslagen === 0, JSON.stringify(j2.bijlagen));
+const pre = await fetch(`${BASE}/api/ingest/form`, { method: 'OPTIONS' });
+ok('OPTIONS-preflight antwoordt 204', pre.status === 204);
+
+// ---------- Opdracht 2: site+mail-dedup binnen 15 min ----------
+console.log('\n== O2. Zelfde aanvraag via site én (FormSubmit-)mail -> één lead ==');
+const revCountBefore = ((await api('GET', '/api/reviews?limit=60')).json.items || []).length;
+const sMail = await api('POST', '/api/ingest/email', {
+  from: 'FormSubmit <noreply@formsubmit.co>',
+  subject: 'Offerte-aanvraag schuifpui (schuifpuiservice.com)',
+  body: 'Nieuwe aanvraag via de website schuifpuiservice.com (FormSubmit-mail).\nNaam: Nora Visser\nTelefoon: 0655555555\nE-mail: nora@example.nl\nAdres: Breda\n\nSchuifpui klemt, graag offerte',
+  externalId: 'sc-o2',
+}, true);
+ok('FormSubmit-mail herkend als duplicaat van de site-lead', sMail.json?.duplicate === true, JSON.stringify(sMail.json));
+const revs2 = await api('GET', '/api/reviews?limit=60');
+ok('geen tweede lead in Te controleren', (revs2.json.items || []).length === revCountBefore);
+
+// ---------- E-mail-reactie: antwoord in bestaande wisseling -> gesprekshistorie ----------
+console.log('\n== Extra: e-mailreactie van klant -> in de kaart, GEEN nieuwe kaart/inbox-item ==');
+// Nora's website-lead goedkeuren zodat ze een open kaart heeft.
+const revsN = await api('GET', '/api/reviews?limit=60');
+const revN = (revsN.json.items || []).find((r) => r.message && /0655555555/.test(r.message.body || ''));
+const apprN = await api('POST', `/api/reviews/${revN.id}/approve`, {});
+ok('website-lead goedgekeurd -> kaart', apprN.status === 200 && apprN.json.order?.id);
+const revCountBeforeR = ((await api('GET', '/api/reviews?limit=80')).json.items || []).length;
+const ordersBeforeR = (await orders()).length;
+// Klant antwoordt in de mailwisseling — mét geciteerde klantgegevens (postcode+tel).
+const sR = await api('POST', '/api/ingest/email', {
+  from: 'Nora Visser <nora@example.nl>',
+  subject: 'Re: Offerteaanvraag via schuifpuiservice.com',
+  inReplyTo: '<abc123@keyservice247.nl>',
+  body: 'Ja graag, kom maar langs!\n\n> Op 18 jul schreef Keyservice:\n> Klant: Nora Visser, Kerkstraat 8, 4811 AB Breda, 0655555555\n> Schuifpui klemt, graag offerte',
+  externalId: 'sc-reply1',
+}, true);
+ok('reactie -> samengevoegd met kaart (geen nieuw inbox-item)', sR.json && !sR.json.reviewId, JSON.stringify(sR.json));
+ok('geen nieuwe kaart aangemaakt', (await orders()).length === ordersBeforeR);
+ok('geen nieuw item in Te controleren', ((await api('GET', '/api/reviews?limit=80')).json.items || []).length === revCountBeforeR);
+const oN = (await orders()).find((o) => o.id === apprN.json.order.id);
+ok('kaart toont Nieuw bericht + reactie in historie', oN && oN.customerReplied === true);
+// Tegenproef: een Fwd: MET klantgegevens is wél een (mogelijke) nieuwe aanvraag.
+const sF = await api('POST', '/api/ingest/email', {
+  from: 'Abdel <abdel@keyservice247.nl>',
+  subject: 'Fwd: nieuwe klus',
+  body: 'Doorgestuurd: Klant Peters, Molenweg 3, 7311 AB Apeldoorn, 0688888888, slot klemt',
+  externalId: 'sc-fwd1',
+}, true);
+ok('Fwd met klantgegevens -> wél Te controleren (nieuwe aanvraag)', sF.json?.status === 'pending', JSON.stringify(sF.json));
+
+// ---------- Samenvatting ----------
+console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
+if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
+process.exit(0);
