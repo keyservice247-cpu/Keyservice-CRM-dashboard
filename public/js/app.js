@@ -1507,7 +1507,7 @@ async function resendInvoice(invId, label, prefillEmail, after) {
 }
 
 function renderInvoiceEditor(ctx) {
-  const { inv, customer, priceList } = ctx;
+  const { inv, customer, priceList, bundles = [] } = ctx;
   const isQuote = inv.type === 'offerte';
   const woord = isQuote ? 'Offerte' : 'Factuur';
   const locked = inv.status === 'betaald' || inv.status === 'goedgekeurd';
