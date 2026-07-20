@@ -241,6 +241,25 @@ async function alertAdmins(title, body) {
   logActivity('systeem', 'alarm', `${title}: ${body}`);
 }
 
+// Pure beslis-logica voor een systeemcheck-alarm met grace-periode (testbaar).
+// Geeft terug wat de watchdog moet doen: badSince zetten/wissen, alarmeren of herstel
+// melden. Alarmeert pas als iets minstens graceMin minuten onafgebroken slecht is, en
+// nooit dubbel (alerted). Herstelt (recover) alleen als er eerder gealarmeerd was.
+export function healthAlarmDecision({ bad, badSince, alerted, graceMin, nowMs }) {
+  if (bad) {
+    const sinceMs = badSince ? new Date(badSince).getTime() : nowMs;
+    const downMin = (nowMs - sinceMs) / 60000;
+    return {
+      setBadSince: !badSince,
+      clearBadSince: false,
+      alert: downMin >= graceMin && !alerted,
+      recover: false,
+      downMin,
+    };
+  }
+  return { setBadSince: false, clearBadSince: !!badSince, alert: false, recover: !!alerted, downMin: 0 };
+}
+
 async function runWatchdog() {
   const s = db().settings;
   s._alerts = s._alerts || {};
@@ -255,18 +274,30 @@ async function runWatchdog() {
       await alertAdmins('WhatsApp-bridge weer actief', 'De WhatsApp-verbinding doet het weer. Berichten komen weer binnen.');
     }
   }
-  // Systeemcheck-onderdelen (SMTP/AI/database) die falen.
+  // Systeemcheck-onderdelen (SMTP/AI/database) die falen. GRACE-periode: pas alarm
+  // slaan als iets een tijdje ONAFGEBROKEN onbereikbaar blijft, zodat een korte
+  // netwerk-hikje (bv. "fetch failed" richting de AI van een paar seconden) geen
+  // mail meer geeft — een échte storing wél. AI krijgt de langste marge (blips zijn
+  // daar het vaakst), database/SMTP een kortere (die willen we sneller weten).
+  const GRACE_MIN = { ai: 6, smtp: 4, database: 3 };
+  const LABEL = { smtp: 'e-mail versturen', ai: 'de AI', database: 'de database' };
+  const LABEL_UP = { smtp: 'E-mail versturen', ai: 'De AI', database: 'De database' };
   const h = lastHealth();
   if (h) {
+    s._healthBadSince = s._healthBadSince || {};
     for (const key of ['smtp', 'ai', 'database']) {
       const part = h[key];
       if (!part) continue;
-      const bad = part.ok === false;
-      if (bad && !s._alerts[key]) {
+      const d = healthAlarmDecision({ bad: part.ok === false, badSince: s._healthBadSince[key], alerted: !!s._alerts[key], graceMin: GRACE_MIN[key] || 5, nowMs: Date.now() });
+      if (d.setBadSince) { s._healthBadSince[key] = now(); save(); }
+      if (d.clearBadSince && s._healthBadSince[key]) { delete s._healthBadSince[key]; save(); }
+      if (d.alert) {
         s._alerts[key] = now(); save();
-        await alertAdmins(`Probleem met ${key === 'smtp' ? 'e-mail versturen' : key === 'ai' ? 'de AI' : 'de database'}`, part.detail || 'Zie AI-controle → Systeemcheck.');
-      } else if (!bad && s._alerts[key]) {
+        await alertAdmins(`Probleem met ${LABEL[key]}`, `${part.detail || 'Zie AI-controle → Systeemcheck.'} (al ${Math.round(d.downMin)} min onbereikbaar)`);
+      }
+      if (d.recover && s._alerts[key]) {
         delete s._alerts[key]; save();
+        await alertAdmins(`${LABEL_UP[key]} weer bereikbaar`, 'Het werkt weer normaal.');
       }
     }
   }
