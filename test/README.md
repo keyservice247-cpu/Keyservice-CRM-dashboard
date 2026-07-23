@@ -8,8 +8,9 @@ productie. Ze gebruiken de demo-login `admin@keyservice.nl` / `admin123`.
 DATA_DIR=/tmp/crmtest INGEST_TOKEN=test123 SESSION_SECRET=test PORT=3113 node server/index.js &
 node test/scenarios.mjs      # 50 assertions: matching, dedup, e-mailreacties, multipart, bijlages
 node test/factuur-test.mjs   # kortingen, PDF, kopie, dueAt, instellingen  (draai op PORT=3117)
+node test/briefing-test.mjs  # AI-ochtendbriefing: instellingen, WhatsApp-kanaal, inhoud (PORT=3119)
 ```
-Poorten in de scripts (3113/3117) moeten overeenkomen met de gestarte server.
+Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 
 ## Frontend / headless-browser-smoketest (VERPLICHT bij elke public/-wijziging)
 Logt in met een echte Chromium en opent de schermen (factuur/offerte-editor,

@@ -480,6 +480,30 @@ Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je zie
   return { text, engine: `ai:${model}`, analyzed: Math.min(messages.length, 200) };
 }
 
+// Korte AI-duiding voor de ochtendbriefing: 2-3 zinnen "focus vandaag op X, want Y".
+// Zonder API-key of bij een fout komt er gewoon '' terug — de briefing zelf (de
+// feiten) gaat dan alsnog uit, alleen zonder duiding.
+export async function morningInsight({ facts, companyProfile = '', tone = 'coachend' }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || !facts) return '';
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const stijl = tone === 'zakelijk'
+    ? 'Zakelijk en puntig, alleen de kern.'
+    : 'Coachend en menselijk, alsof een slimme rechterhand even meedenkt.';
+  const system = `Je bent de operationeel rechterhand van Keyservice, een sleutel-/slotenmakersbedrijf. Je krijgt de feiten van vanochtend uit het CRM. Schrijf in het Nederlands een korte duiding van 2 à 3 zinnen: waar moet vandaag de focus liggen en waarom. Verwijs naar concrete aantallen of namen uit de feiten. Geen opsomming, geen begroeting, geen emoji. ${stijl}${companyProfile ? `\n\nOver het bedrijf:\n${String(companyProfile).slice(0, 1500)}` : ''}`;
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model, max_tokens: 300, system, messages: [{ role: 'user', content: `Feiten van vanochtend:\n${facts}` }] }),
+    });
+    if (!resp.ok) return '';
+    const json = await resp.json();
+    recordAIUsage(json.usage, model);
+    return (json.content || []).map((c) => c.text || '').join('').trim();
+  } catch { return ''; }
+}
+
 // AI-vraagbaak: beantwoordt een vrije vraag op basis van de opgeslagen WhatsApp/
 // e-mail-berichten. Bv. "hoeveel omzet is in de groep van Youssef genoemd?" of
 // "wat is er met de opdracht van mevrouw Jansen gebeurd?".

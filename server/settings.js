@@ -223,6 +223,23 @@ export function getCrmAlerts() {
   };
 }
 
+// AI-ochtendbriefing: elke ochtend een kort overzicht (afspraken vandaag, wat om
+// actie vraagt, geld deze week, nieuwe leads) met 2-3 zinnen AI-duiding erbij.
+// WhatsApp gebruikt hetzelfde doel als de CRM-meldingen (groep of 1-op-1); die
+// meldingen hoeven daarvoor NIET aan te staan.
+export const DEFAULT_MORNING_BRIEFING = { enabled: false, hour: 7, weekdaysOnly: true, channel: 'whatsapp', email: '', tone: 'coachend' };
+export function getMorningBriefing() {
+  const c = db().settings.morningBriefing || {};
+  return {
+    enabled: !!c.enabled,
+    hour: Math.max(0, Math.min(23, Number(c.hour) >= 0 ? Number(c.hour) : DEFAULT_MORNING_BRIEFING.hour)),
+    weekdaysOnly: c.weekdaysOnly !== false,
+    channel: ['whatsapp', 'email', 'beide'].includes(c.channel) ? c.channel : 'whatsapp',
+    email: String(c.email || '').slice(0, 200).trim(),
+    tone: c.tone === 'zakelijk' ? 'zakelijk' : 'coachend',
+  };
+}
+
 // Afspraakbevestiging naar de klant (+ herinnering X uur vooraf).
 // "Monteur onderweg"-bericht: met één knop op de kaart krijgt de klant een mail
 // én een appje dat de monteur er nu aankomt. Teksten aanpasbaar in Instellingen.

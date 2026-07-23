@@ -41,7 +41,7 @@ import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport } from './automations.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -62,7 +62,7 @@ import {
   getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
-  getPriceBundles, sanitizeBundles, sanitizeBundleLines,
+  getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1553,6 +1553,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     reviewRequest: getReviewRequest(),
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     crmAlerts: getCrmAlerts(),
+    morningBriefing: getMorningBriefing(),
     invoiceSettings: getInvoiceSettings(),
     priceList: getPriceList(),
     priceBundles: getPriceBundles(),
@@ -1725,6 +1726,17 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       group: String(c.group || 'CRM meldingen').slice(0, 100),
       phone: String(c.phone || '').replace(/[^\d+]/g, '').slice(0, 20),
       notifyReplies: c.notifyReplies !== false,
+    };
+  }
+  if ('morningBriefing' in b) {
+    const m = b.morningBriefing || {};
+    db().settings.morningBriefing = {
+      enabled: !!m.enabled,
+      hour: Math.max(0, Math.min(23, Number(m.hour) >= 0 ? Number(m.hour) : 7)),
+      weekdaysOnly: m.weekdaysOnly !== false,
+      channel: ['whatsapp', 'email', 'beide'].includes(m.channel) ? m.channel : 'whatsapp',
+      email: String(m.email || '').slice(0, 200).trim(),
+      tone: m.tone === 'zakelijk' ? 'zakelijk' : 'coachend',
     };
   }
   if ('reviewRequest' in b) {
@@ -2550,6 +2562,15 @@ app.post('/api/finance/weekly-report/test', requirePerm('finance'), async (req, 
   if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
   try { await sendWeeklyCeoReport(to, true); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+// AI-ochtendbriefing: nu een test versturen via de ingestelde kanalen.
+app.post('/api/morning-briefing/test', requirePerm('settings'), async (req, res) => {
+  try {
+    const r = await sendMorningBriefing({ isTest: true });
+    if (r.error) return res.status(400).json({ error: r.error });
+    logActivity(req.user.name, 'ochtendbriefing test verstuurd', r.via.join(' + '));
+    res.json({ ok: true, via: r.via, text: r.text });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/finance', requirePerm('finance'), (req, res) => {
   const out = addEntry(req.body || {}, req.user.name);

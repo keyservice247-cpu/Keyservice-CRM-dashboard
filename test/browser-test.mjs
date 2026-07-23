@@ -68,6 +68,9 @@ await page.evaluate(() => window.loadSettings && window.loadSettings());
 await page.waitForTimeout(1500);
 noErr('Instellingen laden');
 
+// 7) Instellingen → AI: ochtendbriefing-kaart rendert met alle velden
+ok('ochtendbriefing-instellingen zichtbaar', await page.locator('#mb-enabled').count() > 0 && await page.locator('#mb-channel').count() > 0 && await page.locator('#testMorningBrief').count() > 0);
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

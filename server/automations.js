@@ -5,8 +5,9 @@ import { db, id, now, save, saveSoon, logActivity, diskFreeMB, backupNow, saveFa
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
-  getAttachmentCleanup,
+  getAttachmentCleanup, getMorningBriefing, getCrmAlerts, getCompanyProfile,
 } from './settings.js';
+import { morningInsight } from './ai/categorizer.js';
 import { deleteFile } from './storage.js';
 import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -417,6 +418,115 @@ async function runWeeklyReport() {
   try { await sendWeeklyCeoReport(); } catch (e) { console.error('[ceo-rapport]', e.message); }
 }
 
+// ---------- 6c. AI-ochtendbriefing ----------
+// Elke ochtend één bericht met wat er vandaag speelt: afspraken, wat om actie
+// vraagt, de cijfers van deze week en nieuwe leads — afgesloten met 2-3 zinnen
+// AI-duiding ("focus vandaag op X, want Y"). Via WhatsApp (zelfde groep/nummer
+// als de CRM-meldingen) en/of e-mail; de feiten gaan ALTIJD uit, ook als de AI
+// even niet bereikbaar is (dan alleen zonder duiding).
+const todayNL = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+export function morningBriefingData() {
+  const nowMs = Date.now();
+  const vandaag = todayNL();
+  const open = (db().orders || []).filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
+  const appts = open
+    .filter((o) => String(o.appointmentAt || '').slice(0, 10) === vandaag)
+    .sort((a, b) => String(a.appointmentAt).localeCompare(String(b.appointmentAt)))
+    .map((o) => {
+      const c = custOf(o);
+      return {
+        time: String(o.appointmentAt).slice(11, 16),
+        title: o.title || '',
+        name: c.name || '',
+        place: (o.intake && o.intake.address) || c.address || '',
+        confirmed: !!(o.apptMsg && o.apptMsg.confirmedFor === o.appointmentAt),
+      };
+    });
+  const unanswered = open.filter((o) => (o.unreadReplies || 0) > 0).length;
+  const stale = open.filter((o) => o.updatedAt && nowMs - new Date(o.updatedAt).getTime() > 5 * 86400000).length;
+  const invCfg = getInvoiceSettings();
+  const invoices = db().invoices || [];
+  const quoteStale = invoices.filter((i) => i.type === 'offerte' && i.status === 'verzonden' && i.sentAt && nowMs - new Date(i.sentAt).getTime() > 4 * 86400000).length;
+  const overdue = invoices.filter((i) => i.type !== 'offerte' && i.status === 'verzonden' && i.sentAt && nowMs > new Date(i.sentAt).getTime() + (invCfg.paymentDays || 7) * 86400000);
+  const overdueTotal = overdue.reduce((s, i) => s + (i.totalIncl || 0), 0);
+  const pendingLeads = ((db().reviews || [])).filter((r) => r.status === 'pending').length;
+  const week = weeklyReportData(db().monteurs || []);
+  return { appts, unanswered, stale, quoteStale, overdueCount: overdue.length, overdueTotal, pendingLeads, week };
+}
+
+export async function sendMorningBriefing({ isTest = false } = {}) {
+  const cfg = getMorningBriefing();
+  const d = morningBriefingData();
+  const dagNL = new Date().toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam', weekday: 'long', day: 'numeric', month: 'long' });
+  const lines = [`${isTest ? '[TEST] ' : ''}☀️ Ochtendbriefing — ${dagNL}`, ''];
+  if (d.appts.length) {
+    lines.push(`AFSPRAKEN VANDAAG (${d.appts.length})`);
+    for (const a of d.appts) lines.push(`• ${a.time || '?'} ${a.name || a.title}${a.place ? ` — ${a.place}` : ''}${a.confirmed ? '' : ' (nog NIET bevestigd)'}`);
+  } else {
+    lines.push('AFSPRAKEN VANDAAG: geen');
+  }
+  const acts = [];
+  if (d.unanswered) acts.push(`${d.unanswered} klantreactie(s) nog onbeantwoord`);
+  if (d.pendingLeads) acts.push(`${d.pendingLeads} nieuwe lead(s) te controleren in de inbox`);
+  if (d.quoteStale) acts.push(`${d.quoteStale} verzonden offerte(s) al 4+ dagen zonder reactie`);
+  if (d.overdueCount) acts.push(`${d.overdueCount} factuur/facturen VERLOPEN (samen ${eur(d.overdueTotal)})`);
+  if (d.stale) acts.push(`${d.stale} kaart(en) 5+ dagen niet aangeraakt`);
+  lines.push('', acts.length ? 'VRAAGT OM ACTIE' : 'VRAAGT OM ACTIE: niets — alles loopt.');
+  for (const a of acts) lines.push(`• ${a}`);
+  lines.push('', 'GELD DEZE WEEK', `• Omzet ${eur(d.week.thisWeek.income)} · Winst ${eur(d.week.thisWeek.profit)} · Openstaand ${eur(d.week.unpaidTotal)} (${d.week.unpaidCount} factuur/facturen)`);
+  // AI-duiding op basis van dezelfde feiten; mag nooit de briefing blokkeren.
+  let insight = '';
+  try { insight = await morningInsight({ facts: lines.join('\n'), companyProfile: getCompanyProfile(), tone: cfg.tone }); } catch { /* zonder duiding verder */ }
+  if (insight) lines.push('', insight);
+  lines.push('', 'Dashboard: https://keyservice-crm.onrender.com');
+  const text = lines.join('\n');
+  const sentVia = [];
+  if (cfg.channel === 'whatsapp' || cfg.channel === 'beide') {
+    // Zelfde doel als de CRM-meldingen (groep of 1-op-1), maar mét eigen afzender-
+    // label en ZONDER de 2-minuten-rem — een briefing mag nooit stil wegvallen.
+    const target = getCrmAlerts();
+    const item = { id: id('out'), text, status: 'queued', createdAt: now(), by: 'ochtendbriefing' };
+    if (target.phone) { item.kind = 'whatsapp_customer'; item.phone = target.phone; item.group = '__klant_dm__'; }
+    else {
+      item.group = target.group;
+      const gid = groupIdForName(target.group);
+      if (gid) item.groupId = gid;
+    }
+    db().outbox.unshift(item);
+    sentVia.push('whatsapp');
+  }
+  if (cfg.channel === 'email' || cfg.channel === 'beide') {
+    const to = cfg.email || getBackupMail().email || '';
+    if (to && smtpConfigured()) {
+      try {
+        await sendMail({ to, subject: `${isTest ? '[TEST] ' : ''}Ochtendbriefing — ${dagNL}`, text });
+        sentVia.push('email');
+      } catch (e) { console.error('[ochtendbriefing] mail mislukt:', e.message); }
+    }
+  }
+  if (!sentVia.length) return { error: 'Geen kanaal beschikbaar: kies WhatsApp (en stel bij Instellingen → Automatische berichten de meldingen-groep of het nummer in) óf vul een e-mailadres in.' };
+  if (!isTest) db().settings._lastMorningBriefDay = todayNL();
+  saveSoon();
+  logActivity('systeem', `ochtendbriefing ${isTest ? '(test) ' : ''}verstuurd`, sentVia.join(' + '));
+  return { ok: true, via: sentVia, text };
+}
+
+async function runMorningBriefing() {
+  const cfg = getMorningBriefing();
+  if (!cfg.enabled) return;
+  const hour = Number(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hour12: false }));
+  if (hour !== cfg.hour) return;
+  if (cfg.weekdaysOnly) {
+    const wd = new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', weekday: 'short' });
+    if (/^(Sat|Sun)/.test(wd)) return;
+  }
+  if (db().settings._lastMorningBriefDay === todayNL()) return;
+  try {
+    const r = await sendMorningBriefing();
+    if (r.error) console.error('[ochtendbriefing]', r.error);
+  } catch (e) { console.error('[ochtendbriefing]', e.message); }
+}
+
 // ---------- 7. Nachtelijke statusscan ----------
 let _runStatusScan = null;
 async function runNightlyScan() {
@@ -590,6 +700,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { runAttachmentCleanup(); } catch (e) { console.error('[bijlage-opschoning]', e.message); }
     try { await runInvoiceAutoReminders(); } catch (e) { console.error('[auto-herinnering]', e.message); }
     try { await runQuoteFollowups(); } catch (e) { console.error('[offerte-opvolging]', e.message); }
+    try { await runMorningBriefing(); } catch (e) { console.error('[ochtendbriefing]', e.message); }
   };
   const fast = async () => {
     try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }

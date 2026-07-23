@@ -115,6 +115,18 @@ de regressie meegroeit.
   goedgekeurd/afgekeurd, 1-klik omzetten naar factuur. Verder: kopiëren, verwijderen
   (betaald nooit, verzonden alleen admin), betaalherinnering (met teller), verlopen-detectie
   in het overzicht. Rechten: monteur alleen eigen kaarten + zelf aangemaakte records.
+- **AI-ochtendbriefing (23 jul):** elke ochtend één bericht met afspraken van vandaag
+  (tijd + bevestigd ja/nee), actiepunten (onbeantwoorde klantreacties, nieuwe leads,
+  offertes 4+ dagen stil, verlopen facturen, kaarten 5+ dagen stil), geld deze week
+  (weeklyReportData) en 2-3 zinnen AI-duiding (morningInsight in categorizer.js,
+  ANTHROPIC_ANALYZE_MODEL, faalt stil → feiten gaan altijd uit). Kanaal WhatsApp
+  (zelfde doel als CRM-meldingen, óók als die uit staan; eigen outbox-item
+  by:'ochtendbriefing', geen 2-min-rem) en/of e-mail (fallback backup-mail-adres).
+  Instelbaar in Instellingen → AI: aan/uit (default UIT), uur (default 7), alleen
+  werkdagen, toon coachend/zakelijk, test-knop (POST /api/morning-briefing/test).
+  sendMorningBriefing/runMorningBriefing in automations.js (dagvlag
+  _lastMorningBriefDay, Europe/Amsterdam). Test: test/briefing-test.mjs (8 assertions,
+  PORT=3119).
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).

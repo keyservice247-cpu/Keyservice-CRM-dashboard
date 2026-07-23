@@ -2535,6 +2535,30 @@ async function loadSettings() {
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
+    <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('sparkles', 15)} AI-ochtendbriefing</h3>
+      <p class="muted small">Elke ochtend één bericht met wat er vandaag speelt: <strong>afspraken van vandaag</strong> (met tijd en of ze bevestigd zijn), alles wat <strong>om actie vraagt</strong> (onbeantwoorde klantreacties, nieuwe leads, stille offertes, verlopen facturen, stilliggende kaarten), de <strong>cijfers van deze week</strong> — afgesloten met 2-3 zinnen AI-advies waar de focus moet liggen. Via WhatsApp gaat de briefing naar dezelfde groep of het nummer van de <strong>WhatsApp-meldingen</strong> (Automatische berichten-pil); die meldingen hoeven daarvoor niet aan te staan. Kost ongeveer 1 cent per briefing.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="mb-enabled" style="width:auto" ${s.morningBriefing?.enabled ? 'checked' : ''}> Ochtendbriefing aanzetten</label>
+      <div class="row">
+        <label>Tijdstip (uur) <input id="mb-hour" type="number" min="0" max="23" value="${esc(String(s.morningBriefing?.hour ?? 7))}" style="max-width:110px"></label>
+        <label>Kanaal <select id="mb-channel">
+          <option value="whatsapp" ${(s.morningBriefing?.channel || 'whatsapp') === 'whatsapp' ? 'selected' : ''}>WhatsApp</option>
+          <option value="email" ${s.morningBriefing?.channel === 'email' ? 'selected' : ''}>E-mail</option>
+          <option value="beide" ${s.morningBriefing?.channel === 'beide' ? 'selected' : ''}>Allebei</option>
+        </select></label>
+      </div>
+      <div class="row">
+        <label>E-mailadres (bij kanaal e-mail) <input id="mb-email" type="email" value="${esc(s.morningBriefing?.email || '')}" placeholder="leeg = adres van de back-up-mail"></label>
+        <label>Toon <select id="mb-tone">
+          <option value="coachend" ${(s.morningBriefing?.tone || 'coachend') === 'coachend' ? 'selected' : ''}>Coachend — met advies</option>
+          <option value="zakelijk" ${s.morningBriefing?.tone === 'zakelijk' ? 'selected' : ''}>Zakelijk-kort — alleen feiten</option>
+        </select></label>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="mb-weekdays" style="width:auto" ${s.morningBriefing?.weekdaysOnly !== false ? 'checked' : ''}> Alleen werkdagen (ma t/m vr)</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn btn-primary" id="saveMorningBrief">Opslaan</button>
+        <button class="btn" id="testMorningBrief">Stuur nu een test</button>
+      </div>
+    </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een kaart, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="md-auto" style="width:auto"> Automatisch versturen aanzetten</label>
       <div class="row"> <label>Welke monteur (auto) <select id="md-monteur"></select></label> <label>Wanneer <select id="md-trigger"><option value="approved">zodra ik de opdracht goedkeur</option><option value="appointment">zodra een afspraak is ingepland</option><option value="intake">volautomatisch — meteen bij binnenkomst</option></select></label> </div>
@@ -2734,6 +2758,30 @@ async function loadSettings() {
     const crmAlerts = { enabled: $('#ca-enabled').checked, group: $('#ca-group').value, phone: $('#ca-phone').value, notifyReplies: $('#ca-replies').checked };
     try { await api('/api/settings', 'PATCH', { crmAlerts }); toast('WhatsApp-meldingen opgeslagen'); }
     catch (err) { toast(err.message, true); }
+  };
+  $('#saveMorningBrief').onclick = async () => {
+    const morningBriefing = {
+      enabled: $('#mb-enabled').checked,
+      hour: Number($('#mb-hour').value),
+      weekdaysOnly: $('#mb-weekdays').checked,
+      channel: $('#mb-channel').value,
+      email: $('#mb-email').value.trim(),
+      tone: $('#mb-tone').value,
+    };
+    try { await api('/api/settings', 'PATCH', { morningBriefing }); toast('Ochtendbriefing opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#testMorningBrief').onclick = async () => {
+    const btn = $('#testMorningBrief');
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Versturen…';
+    try {
+      // Eerst opslaan wat er nu staat, zodat de test de zichtbare instellingen gebruikt.
+      const morningBriefing = { enabled: $('#mb-enabled').checked, hour: Number($('#mb-hour').value), weekdaysOnly: $('#mb-weekdays').checked, channel: $('#mb-channel').value, email: $('#mb-email').value.trim(), tone: $('#mb-tone').value };
+      await api('/api/settings', 'PATCH', { morningBriefing });
+      const r = await api('/api/morning-briefing/test', 'POST', {});
+      toast(`Test-briefing verstuurd via ${(r.via || []).map((v) => v === 'whatsapp' ? 'WhatsApp' : 'e-mail').join(' + ')}`);
+    } catch (err) { toast(err.message, true); }
+    finally { btn.disabled = false; btn.textContent = old; }
   };
   $$('.tm-send').forEach((btn) => btn.onclick = async () => {
     const to = ($('#tm-to')?.value || '').trim();
