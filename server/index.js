@@ -1417,6 +1417,29 @@ function maybeRelayMonteurConfirmation({ group, body }) {
       && o.sentToMonteur.at && new Date(o.sentToMonteur.at).getTime() >= since)
     .sort((a, b) => new Date(b.sentToMonteur.at) - new Date(a.sentToMonteur.at))[0];
   if (!order) return;
+  // NUANCE (23 jul): een kort "ok" telt alléén als opdracht-bevestiging als het
+  // ook echt op de doorgestuurde opdracht kan slaan. Zat er NÁ het doorsturen
+  // ander verkeer in de monteursgroep (dagrapport, foto, vraag), dan ging het
+  // "ok" daar hoogstwaarschijnlijk over — en blijft de relay stil. Liever één
+  // keer geen automatische bevestiging dan een onterecht "wordt opgepakt" in de
+  // opdrachtgroep. Het gewone pad — opdracht doorgestuurd, monteur zegt direct
+  // "ok" — verandert hier NIET door: dan zit er niets tussen.
+  const sentAtMs = new Date(order.sentToMonteur.at).getTime();
+  const intervening = (db().messages || []).some((m) => {
+    if (!m.group || norm(m.group) !== g) return false;
+    const t = m.receivedAt ? new Date(m.receivedAt).getTime() : 0;
+    if (!(t > sentAtMs)) return false;
+    const b = String(m.body || '').trim();
+    // Korte bevestigingen ("ok", "top", ook dit bericht zelf) tellen niet als
+    // tussenliggend gesprek; al het andere (rapport, foto, vraag) wél.
+    const isShortConfirm = b && b.length <= 40 && MONTEUR_CONFIRM_RE.test(b);
+    const hasContent = b.length > 0 || (Array.isArray(m.attachments) && m.attachments.length > 0);
+    return hasContent && !isShortConfirm;
+  });
+  if (intervening) {
+    logActivity('systeem', 'kort "ok" in monteursgroep genegeerd', `ander verkeer tussen de opdracht en het "ok" (${monteur.name}) — geen bevestiging naar ${order.originGroup}`);
+    return;
+  }
   db().outbox.unshift({
     id: id('out'), orderId: order.id, group: order.originGroup, monteurName: monteur.name,
     groupId: groupIdForName(order.originGroup) || undefined, // direct op id kunnen versturen

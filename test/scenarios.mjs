@@ -262,6 +262,37 @@ const sF = await api('POST', '/api/ingest/email', {
 }, true);
 ok('Fwd met klantgegevens -> wél Te controleren (nieuwe aanvraag)', sF.json?.status === 'pending', JSON.stringify(sF.json));
 
+// ---------- Extra: monteur-"ok" alleen relayen als het over de opdracht gaat ----------
+// Een kort "ok" in de monteursgroep vlak na een doorgestuurde opdracht -> bevestiging
+// naar de opdrachtgroep (bestaand gedrag). Maar zat er ANDER verkeer tussen (bv. een
+// dagrapport), dan sloeg het "ok" dáárop en mag er GEEN "wordt opgepakt" uitgaan.
+console.log('\n== Extra: monteur-"ok" alleen bevestigen als het over de opdracht gaat ==');
+const pauze = () => new Promise((r) => setTimeout(r, 30));
+await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Pier Post',
+  body: 'Pier Post, Kerkweg 8, 3911 CC Rhenen, 0644444455, slot achterdeur klemt, graag langskomen',
+  externalId: 'ack1',
+}, true);
+await pauze();
+await api('POST', '/api/ingest/whatsapp', { group: 'Youssef Keyservice247', name: 'Youssef', body: 'Ok', externalId: 'ack2' }, true);
+const ackCount1 = (await outboxQ()).filter((x) => x.by === 'monteur-bevestiging').length;
+ok('direct "ok" van de monteur -> bevestiging naar de opdrachtgroep', ackCount1 === 1, `count=${ackCount1}`);
+await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Sanne Vos',
+  body: 'Sanne Vos, Bergweg 21, 3912 AD Rhenen, 0655554444, cilinder bijmaken sleutel kwijt',
+  externalId: 'ack3',
+}, true);
+await pauze();
+await api('POST', '/api/ingest/whatsapp', {
+  group: 'Youssef Keyservice247', name: 'Youssef',
+  body: 'Donderdag 23-07\nAfgerond\n3262DJ oud Beijerland €665,49 pin (€135 kosten)\nAnulering stuur ik morgen beter',
+  externalId: 'ack4',
+}, true);
+await pauze();
+await api('POST', '/api/ingest/whatsapp', { group: 'Youssef Keyservice247', name: 'Abdel', body: 'Oke', externalId: 'ack5' }, true);
+const ackCount2 = (await outboxQ()).filter((x) => x.by === 'monteur-bevestiging').length;
+ok('"oke" op een dagrapport -> GEEN onterechte bevestiging naar de opdrachtgroep', ackCount2 === ackCount1, `count=${ackCount2}`);
+
 // ---------- Samenvatting ----------
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
