@@ -56,6 +56,24 @@ await api('PATCH', '/api/settings', { invoiceSettings: { companyName: 'Key servi
 const st = await api('GET', '/api/settings');
 ok('auto-herinnering-instellingen bewaard', st.json.invoiceSettings?.autoRemind === true && st.json.invoiceSettings?.remindAfterDays === 5 && st.json.invoiceSettings?.paymentDays === 14, JSON.stringify(st.json.invoiceSettings));
 
+console.log('\n== Offerte-herinnering via WhatsApp (klant met alleen 06) ==');
+const custW = await api('POST', '/api/customers', { name: 'Wa Klant', phone: '0612345600' });
+let off = (await api('POST', '/api/invoices', { customerId: custW.json.id, type: 'offerte' })).json; off = off.invoice || off;
+await api('PATCH', `/api/invoices/${off.id}`, { lines: [{ description: 'Reparatie', qty: 1, priceExcl: 300 }], btwPct: 21, note: '' });
+await api('POST', `/api/invoices/${off.id}/status`, { status: 'verzonden' });
+const fu = await api('POST', `/api/invoices/${off.id}/quote-followup`, {});
+ok('herinnering gaat via WhatsApp (geen e-mail bekend)', fu.json.ok && fu.json.via === 'whatsapp', JSON.stringify(fu.json));
+const ob = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+ok('appje in wachtrij naar het 06 van de klant', ob.some((x) => x.by === 'offerte-opvolging' && x.phone === '0612345600'), JSON.stringify(ob.map((x) => x.by)));
+ok('opvolg-teller opgehoogd', ((await api('GET', `/api/invoices/${off.id}`)).json.invoice || {}).quoteFollowupCount === 1);
+// Klant zonder e-mail én zonder 06 -> nette foutmelding, geen crash.
+const custN = await api('POST', '/api/customers', { name: 'Niks Klant' });
+let off2 = (await api('POST', '/api/invoices', { customerId: custN.json.id, type: 'offerte' })).json; off2 = off2.invoice || off2;
+await api('PATCH', `/api/invoices/${off2.id}`, { lines: [{ description: 'X', qty: 1, priceExcl: 100 }], btwPct: 21, note: '' });
+await api('POST', `/api/invoices/${off2.id}/status`, { status: 'verzonden' });
+const fu2 = await api('POST', `/api/invoices/${off2.id}/quote-followup`, {});
+ok('zonder e-mail en 06: nette foutmelding', fu2.status === 400 && /telefoonnummer/.test(fu2.json.error || ''), JSON.stringify(fu2.json));
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

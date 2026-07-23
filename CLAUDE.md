@@ -102,8 +102,11 @@ de regressie meegroeit.
   factuur-CONCEPT klaargezet (kopie, nieuw nummer, niet verzonden; idempotent via
   inv.convertedInvoiceId; koppelt de kaart aan de nieuwe factuur; instelbaar
   autoInvoiceOnAccept, default AAN). Automatische offerte-OPVOLGING: verzonden
-  offerte die na X dagen niet is beantwoord → vriendelijke opvolgmail met offerte-PDF
-  (sendQuoteFollowup, teller quoteFollowupCount, max; standaard UIT). Beide in
+  offerte die na X dagen niet is beantwoord → vriendelijke opvolgmail met offerte-PDF;
+  heeft de klant GEEN e-mail maar wel een 06 → herinnering als WhatsApp-appje via de
+  bridge (sendQuoteFollowup kiest zelf het kanaal; teller quoteFollowupCount, max;
+  standaard UIT). Handmatige "Herinnering"-knop op verzonden offertes doet hetzelfde
+  (POST /api/invoices/:id/quote-followup). Beide in
   Instellingen → Facturen. Los van de bestaande kanban-follow-up (followup.js op
   order-status offerte_verzonden).
 - **Offertes + losse facturen:** naast kaart-facturen ook LOSSTAANDE facturen/offertes

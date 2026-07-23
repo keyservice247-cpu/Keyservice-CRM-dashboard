@@ -42,7 +42,7 @@ import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
 import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport } from './automations.js';
-import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice } from './invoices.js';
+import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
@@ -2454,6 +2454,19 @@ app.post('/api/invoices/:id/remind', requireAuth, async (req, res) => {
     const r = await sendInvoiceReminder(inv, { to: req.body?.to || '', by: req.user.name });
     if (r.error) return res.status(400).json({ error: r.error });
     res.json({ ok: true, invoice: inv });
+  } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
+});
+
+// Handmatige offerte-opvolging (herinnering): e-mail met PDF, of WhatsApp als de
+// klant alleen een 06 heeft. Zelfde kern als de automatische ronde.
+app.post('/api/invoices/:id/quote-followup', requireAuth, async (req, res) => {
+  const inv = findInv(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze offerte' });
+  try {
+    const r = await sendQuoteFollowup(inv, { by: req.user.name });
+    if (r.error) return res.status(400).json({ error: r.error });
+    res.json({ ok: true, via: r.via, to: r.to, invoice: inv });
   } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
 

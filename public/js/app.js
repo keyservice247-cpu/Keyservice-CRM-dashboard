@@ -1552,7 +1552,7 @@ function renderInvoiceEditor(ctx) {
     <div class="modal-actions">
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${inv.id && !isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button><button class="btn" id="inv-remind">${icon('bell', 13)} Herinnering</button>` : ''}
-        ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button>` : ''}
+        ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button><button class="btn" id="inv-qremind" title="Vriendelijke herinnering: per e-mail met PDF, of via WhatsApp als de klant alleen een 06 heeft">${icon('bell', 13)} Herinnering${inv.quoteFollowupCount ? ` (${inv.quoteFollowupCount}x)` : ''}</button>` : ''}
         ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">→ Maak factuur</button>` : ''}
         ${inv.id ? `<button class="btn" id="inv-copy">${icon('merge', 13)} Kopieer</button>` : ''}
         ${inv.id && inv.status !== 'betaald' ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}
@@ -1693,6 +1693,14 @@ function renderInvoiceEditor(ctx) {
   if ($('#inv-remind')) $('#inv-remind').onclick = async () => {
     if (!confirm(`Vriendelijke betaalherinnering sturen naar ${inv.sentTo || customer.email}?`)) return;
     try { await api(`/api/invoices/${inv.id}/remind`, 'POST', {}); done('Herinnering verstuurd'); } catch (err) { toast(err.message, true); }
+  };
+  if ($('#inv-qremind')) $('#inv-qremind').onclick = async () => {
+    const doel = customer.email || customer.phone || 'de klant';
+    if (!confirm(`Vriendelijke offerte-herinnering sturen naar ${doel}? (E-mail met PDF, of WhatsApp als er alleen een 06 is.)`)) return;
+    try {
+      const r = await api(`/api/invoices/${inv.id}/quote-followup`, 'POST', {});
+      done(`Herinnering verstuurd via ${r.via === 'whatsapp' ? 'WhatsApp' : 'e-mail'}`);
+    } catch (err) { toast(err.message, true); }
   };
   if ($('#inv-copy')) $('#inv-copy').onclick = async () => {
     try { const copy = await api(`/api/invoices/${inv.id}/copy`, 'POST', {}); toast(`Gekopieerd → ${copy.number}`); closeModal(); openStandaloneInvoice(copy.id); } catch (err) { toast(err.message, true); }

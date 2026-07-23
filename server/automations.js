@@ -494,7 +494,9 @@ async function runInvoiceAutoReminders() {
 // tussenpoos en een maximum. Zelfde vangrails als de betaalherinnering.
 async function runQuoteFollowups() {
   const cfg = getInvoiceSettings();
-  if (!cfg.autoQuoteFollowup || !smtpConfigured()) return;
+  // Geen SMTP-gate hier: de opvolging kan óók via WhatsApp (klant met alleen een 06);
+  // sendQuoteFollowup kiest zelf het kanaal en meldt netjes als beide ontbreken.
+  if (!cfg.autoQuoteFollowup) return;
   const today = new Date().toISOString().slice(0, 10);
   if (db().settings._quoteFollowupDay === today) return;
   db().settings._quoteFollowupDay = today;
@@ -511,7 +513,7 @@ async function runQuoteFollowups() {
     try {
       const r = await sendQuoteFollowup(inv, { by: 'systeem (automatische offerte-opvolging)' });
       if (r.ok) n++;
-      else if (r.error && !/e-mailadres/.test(r.error)) console.error('[offerte-opvolging]', inv.number, r.error);
+      else if (r.error && !/e-mailadres|telefoonnummer/.test(r.error)) console.error('[offerte-opvolging]', inv.number, r.error);
     } catch (e) { console.error('[offerte-opvolging]', inv.number, e.message); }
     if (n >= 10) break;
   }

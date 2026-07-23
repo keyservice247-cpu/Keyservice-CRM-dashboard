@@ -186,30 +186,59 @@ export function autoConvertQuoteToInvoice(inv, actorName = 'systeem') {
 }
 
 // Vriendelijke opvolging van een VERZONDEN offerte die nog niet is beantwoord.
-// Gedeeld door een (eventuele) knop en de automatische ronde: zelfde nette mail met
-// de offerte-PDF opnieuw, met een teller zodat er nooit te vaak wordt opgevolgd.
+// Gedeeld door de knop en de automatische ronde. Kanaal-keuze: éérst e-mail (met de
+// offerte-PDF opnieuw als bijlage); heeft de klant geen (geldig) e-mailadres maar
+// wél een 06, dan gaat de herinnering als WhatsApp-appje via de bridge (tekst —
+// een PDF kan daar niet mee). Teller voorkomt te vaak opvolgen.
 export async function sendQuoteFollowup(inv, { by = 'systeem' } = {}) {
   if (inv.type !== 'offerte') return { error: 'Alleen voor offertes.' };
   if (inv.status !== 'verzonden') return { error: 'Alleen voor verzonden (nog niet beantwoorde) offertes.' };
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
-  const to = (inv.sentTo || customer.email || '').trim();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
-  if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
   const cfg = getInvoiceSettings();
-  const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
-  const pdf = await buildInvoicePdf(inv, order, customer);
-  const sig = getEmailSignature();
-  const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (€ ${inv.totalIncl.toFixed(2).replace('.', ',')} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!`;
-  await sendMail({
-    to, subject: `Nog vragen over offerte ${inv.number}? — ${cfg.companyName}`,
-    text: sig ? `${body}\n\n${sig}` : body,
-    attachments: [{ filename: `offerte-${inv.number}.pdf`, content: pdf }],
-  });
-  inv.quoteFollowupAt = now();
-  inv.quoteFollowupCount = (inv.quoteFollowupCount || 0) + 1;
-  saveSoon();
-  logActivity(by, 'offerte-opvolging verstuurd', `${inv.number} → ${to}`);
-  return { ok: true, to };
+  const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || null) : null;
+  const bedrag = `€ ${Number(inv.totalIncl || 0).toFixed(2).replace('.', ',')}`;
+  const markFollowedUp = () => {
+    inv.quoteFollowupAt = now();
+    inv.quoteFollowupCount = (inv.quoteFollowupCount || 0) + 1;
+  };
+
+  // 1) E-mail (voorkeur: nette mail mét de offerte-PDF opnieuw).
+  const to = (inv.sentTo || customer.email || '').trim();
+  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to) && smtpConfigured()) {
+    const pdf = await buildInvoicePdf(inv, order || {}, customer);
+    const sig = getEmailSignature();
+    const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (${bedrag} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!`;
+    await sendMail({
+      to, subject: `Nog vragen over offerte ${inv.number}? — ${cfg.companyName}`,
+      text: sig ? `${body}\n\n${sig}` : body,
+      attachments: [{ filename: `offerte-${inv.number}.pdf`, content: pdf }],
+    });
+    markFollowedUp();
+    saveSoon();
+    logActivity(by, 'offerte-opvolging verstuurd (e-mail)', `${inv.number} → ${to}`);
+    return { ok: true, to, via: 'e-mail' };
+  }
+
+  // 2) WhatsApp-pad: klant heeft alleen een telefoonnummer (of e-mail/SMTP werkt niet).
+  const phone = String(customer.phone || (order && order.intake && order.intake.phone) || '').trim();
+  if (phone.replace(/\D/g, '').length >= 10) {
+    const text = `Beste ${customer.name || 'klant'}, een tijdje geleden stuurden wij u offerte ${inv.number} (${bedrag} incl. btw). Heeft u nog vragen, of wilt u dat we de werkzaamheden inplannen? Reageer gerust op dit bericht — we helpen u graag verder. — ${cfg.companyName}`;
+    db().outbox.unshift({
+      id: id('out'), kind: 'whatsapp_customer', phone, group: '__klant_dm__', text,
+      orderId: inv.orderId || undefined, status: 'queued', createdAt: now(), by: 'offerte-opvolging',
+    });
+    if (order) {
+      order.thread = order.thread || [];
+      order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (offerte-opvolging)', body: text, at: now() });
+      order.updatedAt = now();
+    }
+    markFollowedUp();
+    saveSoon();
+    logActivity(by, 'offerte-opvolging via WhatsApp in wachtrij', `${inv.number} → ${phone}`);
+    return { ok: true, to: phone, via: 'whatsapp' };
+  }
+
+  return { error: 'Geen geldig e-mailadres én geen telefoonnummer bekend bij deze klant.' };
 }
 
 export function upsertInvoice(order, body, actorName) {
