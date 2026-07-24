@@ -9,6 +9,7 @@ DATA_DIR=/tmp/crmtest INGEST_TOKEN=test123 SESSION_SECRET=test PORT=3113 node se
 node test/scenarios.mjs      # 50 assertions: matching, dedup, e-mailreacties, multipart, bijlages
 node test/factuur-test.mjs   # kortingen, PDF, kopie, dueAt, instellingen  (draai op PORT=3117)
 node test/briefing-test.mjs  # AI-ochtendbriefing: instellingen, WhatsApp-kanaal, inhoud (PORT=3119)
+node test/google-test.mjs    # Google Agenda: sync-filter, koppeling-alarm, no-op zonder verbinding (GEEN server nodig)
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 

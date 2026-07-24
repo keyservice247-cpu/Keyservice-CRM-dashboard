@@ -130,6 +130,15 @@ de regressie meegroeit.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).
+- **Google Agenda-sync bewaakt + zelfherstellend (24 jul):** sync alleen voor monteur
+  "Abdel Rafour" of schuifpui-klussen (shouldSyncToGoogle, bewuste keuze eigenaar).
+  Zelfherstel: PATCH op verdwenen event (404/410) → verwijzing weg + nieuw event;
+  aanmaken is idempotent (zoekt eerst op extendedProperty ksOrderId → nooit dubbel).
+  Uurlijkse vangnet-ronde (runGoogleCalendarSweep) synct komende afspraken zonder
+  event/na fout alsnog (max 20/ronde). Alarmen (watchdog): koppeling stil verbroken
+  (invalid_grant → disconnectReason, calendarAlarmDecision) → direct melding +
+  herstelmelding; komende afspraken met googleSyncError → 1 melding/dag. Test:
+  test/google-test.mjs (10 assertions, zonder server).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

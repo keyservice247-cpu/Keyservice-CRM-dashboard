@@ -30,7 +30,7 @@ const TIMEZONE = 'Europe/Amsterdam';
 const GOOGLE_SYNC_MONTEUR = 'abdel';                        // monteurnaam bevat dit (kleine letters)
 const GOOGLE_SYNC_KEYWORDS = /schuifpui|schuifdeur|schuifwand|schuifsysteem/i;
 
-function shouldSyncToGoogle(order, monteur) {
+export function shouldSyncToGoogle(order, monteur) {
   const monteurName = ((monteur && monteur.name) || '').toLowerCase();
   if (GOOGLE_SYNC_MONTEUR && monteurName.includes(GOOGLE_SYNC_MONTEUR)) return true;
   const text = `${order.title || ''} ${order.description || ''}`;
@@ -139,16 +139,27 @@ export async function exchangeCode(code, req) {
     }
   } catch { /* niet kritiek */ }
   if (!g.defaultCalendarId) g.defaultCalendarId = 'primary';
+  delete g.disconnectReason; // opnieuw verbonden -> eventueel alarm opheffen
   save();
   return { ok: true, email: g.email || '' };
 }
 
-export function disconnect() {
+// reason: alleen gezet bij een AUTOMATISCHE verbreking (token ingetrokken/verlopen).
+// De watchdog slaat daar alarm op; een handmatige ontkoppeling (knop) blijft stil.
+export function disconnect(reason) {
   const g = gstore();
   delete g.refreshToken;
   delete g.email;
   delete g.connectedAt;
+  if (reason) g.disconnectReason = reason; else delete g.disconnectReason;
   save();
+}
+
+// Pure beslis-logica voor het koppeling-alarm (testbaar, zelfde stijl als
+// healthAlarmDecision): alarm bij een nieuwe automatische verbreking, herstel-
+// melding zodra er weer verbonden is.
+export function calendarAlarmDecision({ disconnectReason, alerted }) {
+  return { alert: !!disconnectReason && !alerted, recover: !disconnectReason && !!alerted };
 }
 
 // Korte cache van het access-token (verloopt na ~1 uur).
@@ -167,8 +178,9 @@ async function getAccessToken() {
   });
   const json = await resp.json();
   if (!resp.ok) {
-    // Token ingetrokken / ongeldig → koppeling als verbroken beschouwen.
-    if (json.error === 'invalid_grant') { disconnect(); throw new Error('Google-koppeling verlopen — opnieuw verbinden in Instellingen'); }
+    // Token ingetrokken / ongeldig → koppeling als verbroken beschouwen. De reden
+    // blijft bewaard zodat de watchdog er een melding van maakt (stil verbreken mag niet).
+    if (json.error === 'invalid_grant') { disconnect('Google heeft de toegang ingetrokken of het token is verlopen'); throw new Error('Google-koppeling verlopen — opnieuw verbinden in Instellingen'); }
     throw new Error(json.error_description || json.error || `token-fout ${resp.status}`);
   }
   _tok = { value: json.access_token, exp: Date.now() + (json.expires_in || 3600) * 1000 };
@@ -184,8 +196,22 @@ async function gapi(method, url, payload) {
   });
   if (resp.status === 204) return {};
   const json = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((json.error && json.error.message) || `Google API ${resp.status}`);
+  if (!resp.ok) {
+    const err = new Error((json.error && json.error.message) || `Google API ${resp.status}`);
+    err.status = resp.status; // zodat de sync een verdwenen event (404/410) kan herkennen
+    throw err;
+  }
   return json;
+}
+
+// Zoek een bestaand event van deze opdracht (op ksOrderId). Maakt het aanmaken
+// idempotent: ook als de kaart z'n event-verwijzing kwijt is (bv. na een database-
+// terugzetting) vinden we het event terug i.p.v. een dubbel aan te maken.
+async function findEventByOrderId(calId, orderId) {
+  try {
+    const out = await gapi('GET', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?privateExtendedProperty=${encodeURIComponent(`ksOrderId=${orderId}`)}&maxResults=2&showDeleted=false`);
+    return (out.items || [])[0] || null;
+  } catch { return null; }
 }
 
 // ---------- Agenda's ----------
@@ -269,10 +295,28 @@ export async function syncOrderToGoogle(order) {
 
     const body = buildEventBody(order, customer);
     if (order.googleEvent && order.googleEvent.eventId) {
-      await gapi('PATCH', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetCal)}/events/${encodeURIComponent(order.googleEvent.eventId)}`, body);
-    } else {
-      const ev = await gapi('POST', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetCal)}/events`, body);
-      order.googleEvent = { calendarId: targetCal, eventId: ev.id };
+      try {
+        await gapi('PATCH', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetCal)}/events/${encodeURIComponent(order.googleEvent.eventId)}`, body);
+      } catch (e) {
+        // ZELFHERSTEL: verwijst de kaart naar een event dat niet (meer) bestaat
+        // (bv. handmatig verwijderd of na een database-terugzetting), dan bleef de
+        // sync vroeger voor altijd stil falen. Nu: verwijzing weggooien en hieronder
+        // gewoon een nieuw event aanmaken.
+        if (e.status === 404 || e.status === 410) order.googleEvent = null;
+        else throw e;
+      }
+    }
+    if (!order.googleEvent || !order.googleEvent.eventId) {
+      // Eerst kijken of er al een event van déze opdracht bestaat (idempotent):
+      // gevonden -> bijwerken i.p.v. een dubbele afspraak in de agenda zetten.
+      const bestaand = await findEventByOrderId(targetCal, order.id);
+      if (bestaand) {
+        await gapi('PATCH', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetCal)}/events/${encodeURIComponent(bestaand.id)}`, body);
+        order.googleEvent = { calendarId: targetCal, eventId: bestaand.id };
+      } else {
+        const ev = await gapi('POST', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetCal)}/events`, body);
+        order.googleEvent = { calendarId: targetCal, eventId: ev.id };
+      }
     }
     order.googleSyncedAt = now();
     order.googleSyncError = null;

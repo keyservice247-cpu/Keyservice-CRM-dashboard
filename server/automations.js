@@ -8,6 +8,7 @@ import {
   getAttachmentCleanup, getMorningBriefing, getCrmAlerts, getCompanyProfile,
 } from './settings.js';
 import { morningInsight } from './ai/categorizer.js';
+import { syncOrderToGoogle, isConnected as googleIsConnected, calendarAlarmDecision } from './google.js';
 import { deleteFile } from './storage.js';
 import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -357,6 +358,30 @@ async function runWatchdog() {
       }
     }
   } catch { /* watchdog mag nooit crashen */ }
+  // Google Agenda: (1) koppeling die STIL is verbroken (token ingetrokken) -> direct
+  // alarm + herstelmelding; (2) komende afspraken die ondanks de sync-pogingen niet
+  // in Google staan -> max 1 melding per dag. Nooit meer geruisloos een lege agenda.
+  try {
+    const g = s.google || {};
+    const d = calendarAlarmDecision({ disconnectReason: g.disconnectReason, alerted: !!s._alerts.googleCal });
+    if (d.alert) {
+      s._alerts.googleCal = now(); save();
+      await alertAdmins('Google Agenda-koppeling VERBROKEN', `De koppeling met Google Agenda werkt niet meer (${g.disconnectReason}). Nieuwe afspraken komen NIET meer automatisch in je agenda. Ga naar Instellingen → Koppelingen en verbind Google opnieuw.`);
+    } else if (d.recover) {
+      delete s._alerts.googleCal; save();
+      await alertAdmins('Google Agenda weer verbonden', 'De koppeling doet het weer — afspraken worden weer automatisch in de agenda gezet.');
+    }
+    const nowMs = Date.now();
+    const broken = (db().orders || []).filter((o) => !o.archivedWeek && o.appointmentAt && o.googleSyncError
+      && o.status !== 'geannuleerd' && new Date(o.appointmentAt).getTime() > nowMs);
+    const today = new Date().toISOString().slice(0, 10);
+    if (broken.length && s._alerts.googleSyncDay !== today) {
+      s._alerts.googleSyncDay = today; save();
+      await alertAdmins('Afspraken NIET in Google Agenda', `${broken.length} komende afspraak/afspraken staan niet in Google Agenda (laatste fout: ${broken[0].googleSyncError}). Het systeem blijft het elk uur opnieuw proberen; check anders Instellingen → Koppelingen.`);
+    } else if (!broken.length && s._alerts.googleSyncDay) {
+      delete s._alerts.googleSyncDay; save();
+    }
+  } catch { /* watchdog mag nooit crashen */ }
   // Off-site back-up-mail: als hij AAN staat maar al >36 uur niet is gelukt, alarm.
   try {
     if (s.backupMail && s.backupMail.enabled && smtpConfigured()) {
@@ -631,6 +656,30 @@ async function runQuoteFollowups() {
   saveSoon();
 }
 
+// ---------- Google Agenda vangnet-ronde (elk uur) ----------
+// Komende afspraken die (nog) niet in Google Agenda staan — sync ooit stil mislukt,
+// verwijzing kwijt na een terugzetting, of net gemist — worden alsnog gesynct.
+// syncOrderToGoogle is idempotent (zoekt eerst het bestaande event op ksOrderId),
+// dus dit kan nooit dubbele agenda-items opleveren. Max 20 per ronde.
+async function runGoogleCalendarSweep() {
+  if (!googleIsConnected()) return;
+  const nowMs = Date.now();
+  const due = (db().orders || []).filter((o) => !o.archivedWeek && o.appointmentAt
+    && o.status !== 'geannuleerd'
+    && new Date(o.appointmentAt).getTime() > nowMs - 6 * 3600000
+    && (!o.googleEvent || o.googleSyncError));
+  let n = 0;
+  for (const o of due.slice(0, 20)) {
+    const had = !!(o.googleEvent && o.googleEvent.eventId) && !o.googleSyncError;
+    await syncOrderToGoogle(o);
+    if (!had && o.googleEvent && !o.googleSyncError) n++;
+  }
+  if (n) {
+    logActivity('systeem', 'Google Agenda hersteld', `${n} afspraak/afspraken alsnog in de agenda gezet`);
+    console.log(`[google-vangnet] ${n} afspraak/afspraken alsnog gesynct`);
+  }
+}
+
 // ---------- Bijlage-opschoning (1x per dag) ----------
 // Verwijdert bestandsbijlages van AFGERONDE/GEANNULEERDE kaarten (en berichten in de
 // prullenbak-leeftijd) ouder dan de ingestelde periode. Uitdrukkelijk NOOIT:
@@ -701,6 +750,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runInvoiceAutoReminders(); } catch (e) { console.error('[auto-herinnering]', e.message); }
     try { await runQuoteFollowups(); } catch (e) { console.error('[offerte-opvolging]', e.message); }
     try { await runMorningBriefing(); } catch (e) { console.error('[ochtendbriefing]', e.message); }
+    try { await runGoogleCalendarSweep(); } catch (e) { console.error('[google-vangnet]', e.message); }
   };
   const fast = async () => {
     try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }
