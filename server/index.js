@@ -35,7 +35,7 @@ import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules,
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
-  findCustomerStrong, senderPhoneFromText,
+  findCustomerStrong, senderPhoneFromText, matchPhone,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
@@ -278,9 +278,11 @@ app.get('/api/customers', requireAuth, (req, res) => {
 app.get('/api/customers/:id/history', requireAuth, (req, res) => {
   const customer = db().customers.find((c) => c.id === req.params.id);
   if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
-  // AVG: een monteur mag alleen de historie van klanten van zijn eigen opdrachten zien.
+  // AVG: een monteur mag alleen de historie van klanten van zijn eigen opdrachten
+  // zien. LET OP de o.monteurId-guard: zonder die matcht null === null en leest een
+  // monteur-account zonder koppeling álles (zelfde patroon als GET /api/customers).
   if (req.user.role === 'monteur') {
-    const mine = db().orders.some((o) => o.customerId === customer.id && o.monteurId === req.user.monteurId);
+    const mine = db().orders.some((o) => o.customerId === customer.id && o.monteurId && o.monteurId === req.user.monteurId);
     if (!mine) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
   }
   const items = [];
@@ -293,16 +295,22 @@ app.get('/api/customers/:id/history', requireAuth, (req, res) => {
       items.push({ ...t, orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', standalone: false });
     }
   }
-  // Losse inbox-berichten (nooit aan een kaart gehangen) op harde identiteit.
+  // Losse inbox-berichten (nooit aan een kaart gehangen) op harde identiteit:
+  // telefoon GENORMALISEERD exact (via het eigen klantnummer, o(1) — geen scan per
+  // bericht over alle klanten) en e-mail EXACT (het hele adres, nooit includes():
+  // "jan@x.nl" mag nooit de post van "marjan@x.nl" binnenhalen — Regel 2).
   const custEmail = String(customer.email || '').toLowerCase();
+  const custPhoneNorm = matchPhone(customer.phone || '');
+  const EMAIL_IN_SENDER = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
   for (const m of db().messages || []) {
     if (m.skipped || m.bounce || !m.body) continue;
     let match = false;
-    if (m.channel === 'whatsapp' && !m.group) {
-      const p = senderPhoneFromText(m.body);
-      match = !!p && findCustomerStrong({ phone: p })?.id === customer.id;
+    if (m.channel === 'whatsapp' && !m.group && custPhoneNorm.length >= 6) {
+      const p = matchPhone(senderPhoneFromText(m.body));
+      match = p.length >= 6 && p === custPhoneNorm;
     } else if (m.channel === 'email' && custEmail) {
-      match = String(m.sender || '').toLowerCase().includes(custEmail);
+      const em = ((String(m.sender || '').match(EMAIL_IN_SENDER) || [''])[0]).toLowerCase();
+      match = !!em && em === custEmail;
     }
     if (!match || seen.has(key(m.channel, m.body))) continue;
     items.push({ id: m.id, channel: m.channel, sender: m.sender, subject: m.subject, body: m.body, at: m.receivedAt, attachments: m.attachments || [], standalone: true });

@@ -301,8 +301,39 @@ const sW2 = await api('POST', '/api/ingest/whatsapp', {
 ok('tweede aanvraag binnen venster -> GEEN nieuwe kaart', (await orders()).length === ordersBeforeW2, `${ordersBeforeW2} -> ${(await orders()).length}`);
 const oW = (await orders()).find((o) => (o.intake?.phone || '').includes('0633334444'));
 ok('tweede bericht in de thread + systeemnotitie samenvoegen', oW && (oW.thread || []).some((t) => /reservesleutel/i.test(t.body || '')) && (oW.thread || []).some((t) => /automatisch aan deze kaart/i.test(t.body || '')));
-ok('kaart maar één keer naar de monteur (dispatch-guard)', (await outboxQ()).filter((x) => x.orderId === oW?.id).length <= 1);
+const obW = (await outboxQ()).filter((x) => x.orderId === oW?.id);
+ok('geen dubbele volledige dispatch, wél aanvulling naar de monteur', obW.filter((x) => x.by !== 'samenvoegen-aanvulling').length === 1 && obW.some((x) => x.by === 'samenvoegen-aanvulling'), JSON.stringify(obW.map((x) => x.by)));
+ok('kaart kreeg "Nieuw bericht"-badge bij samenvoegen (nooit stil)', oW && oW.customerReplied === true && (oW.unreadReplies || 0) >= 1);
+// Ander adres binnen het venster -> tóch een nieuwe kaart (andere klus, Regel 1).
+const ordersBeforeW3 = (await orders()).length;
+await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Vera Venster',
+  body: 'Vera Venster, Havenkade 55, 8011 AB Zwolle, 0633334444, schuifpui vakantiehuis klemt',
+  externalId: 'w3',
+}, true);
+ok('zelfde klant, ANDER adres -> wél nieuwe kaart (andere klus)', (await orders()).length === ordersBeforeW3 + 1, `${ordersBeforeW3} -> ${(await orders()).length}`);
 await api('PATCH', '/api/settings', { autoMergeWindowHours: 0 }); // terug voor de rest
+
+// ---------- Vangrails identiteit: LID-onzin + e-mail-exact + monteur-afscherming ----------
+console.log('\n== Vangrails: LID-nummer, e-mail-exact, monteur-afscherming ==');
+// (a) Een WhatsApp-LID (18 cijfers, bridge-storing) mag nooit een klantnummer worden.
+const sLid = await api('POST', '/api/ingest/whatsapp', {
+  from: '123456789012345678@lid', name: 'Storing Klant',
+  body: 'slot kapot, kunnen jullie komen? Dorpsweg 2, 3911 AB Rhenen', externalId: 'lid1',
+}, true);
+if (sLid.json?.reviewId) await api('POST', `/api/reviews/${sLid.json.reviewId}/approve`, {});
+ok('LID-onzin (18 cijfers) nooit als klantnummer opgeslagen', !(await customers()).some((c) => String(c.phone || '').replace(/\D/g, '').length > 13));
+// (b) Klanthistorie matcht e-mail EXACT: jan@ krijgt nooit de post van marjan@.
+const custJan = await api('POST', '/api/customers', { name: 'Jan Janssen', email: 'jan@example.com' });
+await api('POST', '/api/ingest/email', { from: 'Marjan Bakker <marjan@example.com>', subject: 'Vertrouwelijk', body: 'Prive-bericht van Marjan over haar reservesleutel', externalId: 'mj1' }, true);
+const histJan = await api('GET', `/api/customers/${custJan.json.id}/history`);
+ok('historie van Jan bevat NIETS van marjan@ (exacte match)', histJan.status === 200 && !(histJan.json.items || []).some((x) => /Marjan/i.test(x.sender || '')), JSON.stringify((histJan.json.items || []).map((x) => x.sender)));
+// (c) Monteur-account ZONDER gekoppeld monteur-record mag geen klanthistorie lezen.
+await api('POST', '/api/users', { name: 'Losse Monteur', email: 'los@keyservice.nl', password: 'test12345', role: 'monteur' });
+const rLogin = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'los@keyservice.nl', password: 'test12345' }) });
+const monCookie = (rLogin.headers.get('set-cookie') || '').split(';')[0];
+const rHist = await fetch(`${BASE}/api/customers/${custJan.json.id}/history`, { headers: { cookie: monCookie } });
+ok('monteur zonder koppeling krijgt 403 op klanthistorie', rHist.status === 403, `status=${rHist.status}`);
 
 // ---------- Klant-hint op inbox-items + klanthistorie-endpoint ----------
 console.log('\n== Klant-hint op inbox-items + klanthistorie ==');

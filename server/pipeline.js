@@ -89,7 +89,7 @@ export function isGenericName(name) { return !name || GENERIC_NAMES.test(String(
 // nationaal (0031… / 31… → 0…), zodat "+31 6 11 11 11 11" en "0611111111" als
 // HETZELFDE nummer tellen — het bekendste gat waardoor een klant-reactie niet aan
 // z'n kaart hing.
-const matchPhone = (v) => String(v || '').replace(/[^\d]/g, '').replace(/^0031/, '0').replace(/^31(?=\d{9})/, '0');
+export const matchPhone = (v) => String(v || '').replace(/[^\d]/g, '').replace(/^0031/, '0').replace(/^31(?=\d{9})/, '0');
 
 export function findCustomer({ name, phone, email }) {
   const customers = db().customers;
@@ -251,8 +251,22 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
   // Klantrecord-regels (2/3) veranderen niet: upsertCustomer hierboven heeft al
   // gematcht op harde identificatoren en niets stil overschreven.
   const mergeWindowH = getAutoMergeWindowHours();
-  const openRefMs = openOrder ? new Date(openOrder.updatedAt || openOrder.createdAt).getTime() : NaN;
-  if (openOrder && mergeWindowH > 0 && Number.isFinite(openRefMs) && (Date.now() - openRefMs) < mergeWindowH * 3600000) {
+  // Venster op CREATEDAT: "wanneer begon deze klus" — bewust niet updatedAt, want
+  // die schuift op door elke handeling (dan zou een 3 weken oude kaart waar net op
+  // is geantwoord een compleet nieuwe klus opslokken, en sloot het venster nooit).
+  const openRefMs = openOrder ? new Date(openOrder.createdAt || openOrder.updatedAt).getTime() : NaN;
+  // De mens heeft in het goedkeur-scherm iets WEZENLIJKS aangepast (andere kolom,
+  // eigen titel, monteur gekozen)? Dan is dit bewust een eigen kaart — niet mergen.
+  const humanChanged = !auto && (
+    (overrides.status && normalizeStatus(overrides.status) !== normalizeStatus(s.status))
+    || (typeof overrides.title === 'string' && overrides.title.trim() && overrides.title.trim() !== String(s.title || '').trim())
+    || !!overrides.monteurId
+  );
+  // Ander adres dan de open kaart? Dan is het vrijwel zeker een ANDERE klus — Regel 1.
+  const otherAddress = !!(intake.address && addressDiffers((openOrder && openOrder.intake && openOrder.intake.address) || customer.address, intake.address));
+  if (openOrder && mergeWindowH > 0 && Number.isFinite(openRefMs)
+      && (Date.now() - openRefMs) < mergeWindowH * 3600000
+      && !humanChanged && !otherAddress) {
     const origMsg2 = db().messages.find((m) => m.id === review.messageId);
     openOrder.thread = openOrder.thread || [];
     if (origMsg2) {
@@ -270,8 +284,35 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
       const seen = new Set((openOrder.dataSuggestions || []).map((x) => `${x.field}:${x.to}`));
       openOrder.dataSuggestions = [...(openOrder.dataSuggestions || []), ...custSuggestions.filter((x) => !seen.has(`${x.field}:${x.to}`))];
     }
-    if (intake.address && addressDiffers(customer.address, intake.address)) {
-      openOrder.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: `⚠ LET OP: deze aanvraag noemt een ANDER adres: "${intake.address}" — bekend: "${customer.address}". Even checken welk adres klopt vóór het inplannen.`, at: now() });
+    // ZICHTBAAR maken (nooit stil): badge + teller + push, en spoed erft over.
+    openOrder.customerReplied = true;
+    openOrder.unreadReplies = (openOrder.unreadReplies || 0) + 1;
+    openOrder.lastCustomerReplyAt = now();
+    if (s.urgent) openOrder.urgent = true;
+    // Intake-gaten aanvullen met déze aanvraag (nooit overschrijven — Regel 3) en de
+    // probleemomschrijving AANVULLEN zodat een (latere) monteur-dispatch alles bevat.
+    openOrder.intake = openOrder.intake || {};
+    for (const k of ['name', 'phone', 'email', 'address']) {
+      if (!openOrder.intake[k] && intake[k]) openOrder.intake[k] = intake[k];
+    }
+    const extraProblem = String(s.problem || '').trim();
+    if (extraProblem && !String(openOrder.description || '').includes(extraProblem.slice(0, 60))) {
+      openOrder.description = (openOrder.description ? `${openOrder.description}\n— Aanvulling: ` : '') + extraProblem;
+    }
+    // Is de kaart al naar de monteur? Stuur dan een korte AANVULLING naar dezelfde
+    // groep — de nieuwe informatie mag nooit stil in de kaart blijven hangen.
+    if (openOrder.sentToMonteur && origMsg2) {
+      const mont = db().monteurs.find((m) => m.id === (openOrder.sentToMonteur.monteurId || openOrder.monteurId));
+      if (mont && mont.waGroup) {
+        db().outbox.unshift({
+          id: id('out'), orderId: openOrder.id, group: mont.waGroup,
+          groupId: groupIdForName(mont.waGroup) || undefined,
+          phone: String(mont.phone || '').trim() || undefined, monteurName: mont.name,
+          text: `*Aanvulling bij eerdere opdracht* — ${openOrder.title}\n${customer.name ? `Klant: ${customer.name}\n` : ''}${String(origMsg2.body || '').slice(0, 600)}`,
+          status: 'queued', createdAt: now(), by: 'samenvoegen-aanvulling',
+        });
+        logActivity('systeem', 'aanvulling naar monteur', `${openOrder.title} -> ${mont.name}`);
+      }
     }
     openOrder.updatedAt = now();
     review.status = auto ? 'auto_approved' : 'approved';
@@ -282,6 +323,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     review.reviewedBy = actorName;
     review.reviewedAt = now();
     logActivity(actorName, 'aanvraag automatisch samengevoegd', `${customer.name || 'klant'}: ${openOrder.title} (binnen ${mergeWindowH}u)`);
+    sendPush({ title: 'Aanvraag samengevoegd', body: `${customer.name || 'Klant'}: extra aanvraag toegevoegd aan "${openOrder.title}"`, url: '/' }).catch(() => {});
     saveSoon();
     return openOrder;
   }
@@ -538,9 +580,14 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // bridge/Cloud-API geeft het mee als fromPhone-veld; anders lezen we de laatste
   // regel "Telefoon: +31…" die de bridge altijd onder de body plakt. In een GROEP
   // is de afzender de doorstuurder (DRS/monteur), dus daar geldt dit bewust NIET.
-  const waFrom = (channel === 'whatsapp' && !group)
+  const waFromRaw = (channel === 'whatsapp' && !group)
     ? (String(fromPhone || '').replace(/[^\d+]/g, '') || senderPhoneFromText(body))
     : '';
+  // Alleen een PLAUSIBEL nummer telt als afzender-identiteit (6-13 cijfers).
+  // Een WhatsApp-LID (15-18 cijfers, bij een storing in de nummer-opzoeking van de
+  // bridge) of ander onzin-id mag nooit als telefoonnummer het klantbestand in.
+  const waFromDigits = waFromRaw.replace(/[^\d]/g, '').length;
+  const waFrom = (waFromDigits >= 6 && waFromDigits <= 13) ? waFromRaw : '';
   // Verkeerde contactgegevens opschonen: nooit het eigen bedrijf, een reclame-/
   // magazine- of no-reply-adres als KLANT bewaren. Anders worden losse mensen verkeerd
   // samengevoegd en plakt reclame naar info@... aan kaarten.
@@ -551,8 +598,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   if (suggestion.customerPhone && COMPANY_PHONES.includes(normPhone(suggestion.customerPhone))) suggestion.customerPhone = '';
   // Onzin-nummers uit de TEKST (bv. tikfout-handtekening "+278520207007866") mogen
   // nooit een klantrecord worden of de matching sturen: geen echt telefoonnummer is
-  // langer dan 13 cijfers. Zo'n nummer zou later ook nooit een appje kunnen ontvangen.
-  if (suggestion.customerPhone && normPhone(suggestion.customerPhone).length > 13) suggestion.customerPhone = '';
+  // langer dan 13 cijfers. Zet de AI twee nummers in één veld, knip dan het eerste
+  // plausibele nummer eruit i.p.v. alles weg te gooien.
+  if (suggestion.customerPhone && normPhone(suggestion.customerPhone).length > 13) {
+    const first = (String(suggestion.customerPhone).match(/\+?\d[\d\s().-]{5,}/) || [''])[0];
+    suggestion.customerPhone = (first && normPhone(first).length >= 6 && normPhone(first).length <= 13) ? first.trim() : '';
+  }
   // Bij een 1-op-1 appje is het échte afzendernummer de betrouwbaarste identiteit:
   // gebruik het als klantnummer wanneer de tekst-extractie niets (bruikbaars) gaf.
   if (waFrom && !suggestion.customerPhone) suggestion.customerPhone = waFrom;
