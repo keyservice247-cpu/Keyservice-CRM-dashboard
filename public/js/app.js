@@ -1008,7 +1008,11 @@ function openOrderModal(id, pool) {
     }
   }
   // Los bericht uit de historie verwijderen (opschonen van spam/verkeerd toegevoegd).
-  $$('.chat-del').forEach((b) => b.onclick = async (e) => {
+  // GEDELEGEERD op de chat-container: overleeft ook het heen-en-weer wisselen van
+  // "Alles van deze klant" (innerHTML-vervanging zou losse knop-handlers doden).
+  if (chat && o) chat.addEventListener('click', async (e) => {
+    const b = e.target.closest('.chat-del');
+    if (!b) return;
     e.stopPropagation();
     if (!confirm('Dit bericht uit de gesprekshistorie verwijderen?')) return;
     try {
@@ -3584,6 +3588,9 @@ function modal(html) {
   $('.modal-backdrop').onclick = closeModal;
 }
 function closeModal() {
+  // Geen venster open (bv. Escape op een gewone pagina)? Dan óók niet scrollen —
+  // anders sprong de pagina naar boven.
+  if ($('#modalRoot').hidden) return;
   const m = $('#modal'); m.style.transform = ''; m.style.transition = '';
   $('#modalRoot').hidden = true; m.innerHTML = '';
   document.body.classList.remove('modal-open');

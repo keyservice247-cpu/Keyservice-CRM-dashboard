@@ -18,15 +18,29 @@ import { sendPush } from '../push.js';
 // aan de kaart waar de mislukte mail vandaan kwam (op Message-ID, anders op het
 // geweigerde adres), zetten daar een duidelijke waarschuwing in de historie en
 // sturen een melding. Zo weet het team ALTIJD wanneer een klant-mail niet aankwam.
-function looksLikeBounce(parsed, rawText) {
+export function looksLikeBounce(parsed, rawText) {
   const from = (parsed.from?.text || '').toLowerCase();
   const subj = (parsed.subject || '').toLowerCase();
-  return /mailer-daemon|postmaster@/.test(from)
-    || /undeliver|delivery (status|has failed)|failure notice|returned mail|niet bezorgd|kon niet worden (afgeleverd|bezorgd)/i.test(subj)
-    || /report-type=delivery-status/i.test(String(parsed.headerLines?.find?.((h) => h.key === 'content-type')?.line || ''))
-    || /final-recipient:|action:\s*failed/i.test(rawText || '');
+  // Doorgestuurde/beantwoorde mail is per definitie geen machine-bounce — een klant
+  // die "Fwd: Undeliverable" doorstuurt of over een bounce SCHRIJFT is een klant.
+  if (/^\s*(fwd|fw|re|aw|antw)\s*:/i.test(subj)) return false;
+  // MACHINE-indicatie is verplicht: afzender mailer-daemon/postmaster, een echt
+  // DSN-rapport (report-type=delivery-status) of DSN-velden in de inhoud. Alleen
+  // een onderwerp ("niet bezorgd") is NOOIT genoeg — anders sneuvelt een echte
+  // klantmail stil, en dat verbieden de lead-instroom-wetten.
+  const ct = String(parsed.headerLines?.find?.((h) => h.key === 'content-type')?.line || '');
+  const machine = /mailer-daemon|postmaster@/.test(from)
+    || /report-type=delivery-status/i.test(ct)
+    || /final-recipient:|original-recipient:|diagnostic-code:/i.test(rawText || '');
+  if (!machine) return false;
+  // Alleen ÉCHT gefaald telt. Een vertragings-DSN ("delayed"/"warning only") is
+  // geen bounce: de mail staat nog in de wachtrij en komt meestal gewoon aan.
+  const hay = `${subj}\n${String(rawText || '').slice(0, 3000)}`;
+  if (/action:\s*delayed|\(delay\)|this is a warning only/i.test(hay)) return false;
+  return /action:\s*failed|status:\s*5\.\d/i.test(rawText || '')
+    || /undeliver|delivery (status|has failed)|failure notice|returned mail|niet bezorgd|kon niet worden (afgeleverd|bezorgd)/i.test(subj);
 }
-function handleBounce(parsed, rawText, mid) {
+export function handleBounce(parsed, rawText, mid) {
   const text = String(rawText || '');
   // Het oorspronkelijke Message-ID uit het bounce-rapport (niet dat van de bounce zelf).
   const mids = [...text.matchAll(/message-id:\s*(<[^>]+>)/gi)].map((m) => m[1]).filter((x) => x !== mid);
@@ -34,7 +48,10 @@ function handleBounce(parsed, rawText, mid) {
   const rcpt = ((text.match(/(?:final|original)-recipient:[^;\n]*;\s*([^\s<>;,]+@[^\s<>;,]+)/i) || [])[1]
     || (text.match(/<?([^\s<>;,:]+@[^\s<>;,:]+)>?:?\s+(?:host|user|mailbox|address|recipient)/i) || [])[1]
     || '').toLowerCase();
-  const reason = ((text.match(/(?:diagnostic-code:\s*(?:smtp;)?|said:)\s*([^\n]{10,160})/i) || [])[1] || 'zie de bounce-mail in de mailbox').trim();
+  // Reden: eerst de volledige Diagnostic-Code (de echte uitleg), dan pas "said:".
+  const reason = ((text.match(/diagnostic-code:\s*(?:smtp;?\s*)?([^\n]{10,180})/i) || [])[1]
+    || (text.match(/said:\s*([^\n]{10,160})/i) || [])[1]
+    || 'zie de bounce-mail in de mailbox').trim();
   // Kaart zoeken: eerst exact op het Message-ID van onze uitgaande mail, anders op
   // het geweigerde adres (meest recente kaart met een uitgaande mail daarnaartoe).
   let order = null; let entry = null;
@@ -316,6 +333,15 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
         const msg = await client.fetchOne(uid, { source: true }, { uid: true });
         if (!msg || !msg.source) continue;
         const parsed = await simpleParser(msg.source);
+        // BOUNCE ("mail niet afgeleverd")? Eerst checken — vóór het opslaan van
+        // bijlages. Het originele Message-ID zit bij echte DSN's vaak in een
+        // text/rfc822-headers-bijlage, dus die tekst kijkt mee.
+        const preText = ((parsed.text || '').toString() || htmlToText(parsed.html)).slice(0, 12000);
+        const dsnExtra = (parsed.attachments || [])
+          .filter((a) => /rfc822|delivery-status|text/i.test(String(a.contentType || '')))
+          .map((a) => String(a.content || '').slice(0, 4000)).join('\n');
+        const bounceText = dsnExtra ? `${preText}\n${dsnExtra}` : preText;
+        if (looksLikeBounce(parsed, bounceText)) { handleBounce(parsed, bounceText, mid); continue; }
         let attachments = [];
         for (const att of parsed.attachments || []) {
           if (!att.content || !att.content.length) continue; // inline-logo's e.d. overslaan
@@ -329,10 +355,7 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
         // betrouwbaar worden opgeslagen en de website-herkenning aanslaat.
         // Altijd een leesbare tekst hebben: platte tekst als die er is, anders de
         // HTML omgezet naar tekst (FormSubmit-mails zijn vaak HTML-only).
-        const rawText = ((parsed.text || '').toString() || htmlToText(parsed.html)).slice(0, 12000);
-        // BOUNCE ("mail niet afgeleverd")? Terugkoppelen aan de kaart + melding,
-        // en nooit als lead verwerken.
-        if (looksLikeBounce(parsed, rawText)) { handleBounce(parsed, rawText, mid); continue; }
+        const rawText = preText;
         const fromText = (parsed.from?.text || '').toLowerCase();
         const isFormSubmit = fromText.includes('formsubmit')
           || /offerte-?aanvraag/i.test(parsed.subject || '')

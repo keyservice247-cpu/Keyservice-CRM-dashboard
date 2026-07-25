@@ -64,15 +64,23 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
     // koppelen is aan het juiste gesprek).
     if (inReplyTo) { mail.inReplyTo = inReplyTo; mail.references = references || inReplyTo; }
     const info = await tx.sendMail(mail);
-    // Weigert de server de ontvanger (accepted leeg / rejected gevuld), dan is de
-    // mail NIET aangekomen — dat is een fout, geen succes.
-    if ((info.rejected && info.rejected.length) || (Array.isArray(info.accepted) && info.accepted.length === 0)) {
+    // ALLE ontvangers geweigerd (accepted leeg)? Dan is de mail écht niet
+    // aangekomen — fout. De verbinding zelf is gezond, dus die blijft staan.
+    if (Array.isArray(info.accepted) && info.accepted.length === 0) {
       const err = new Error(`De mailserver weigerde de ontvanger (${(info.rejected || []).join(', ') || to}). Controleer het e-mailadres.`);
+      err.rejectedRecipient = true; // al geregistreerd; catch hieronder slaat 'm over
       recordMailFailure(to, subject, err.message);
       throw err;
     }
+    // GEDEELTELIJK geweigerd (meerdere adressen, één fout): de mail IS bezorgd bij
+    // de rest — wél registreren, niet falen.
+    if (info.rejected && info.rejected.length) {
+      recordMailFailure(info.rejected.join(', '), subject, 'Deze ontvanger is door de mailserver geweigerd (de overige ontvangers kregen de mail wél)');
+    }
     return { messageId: info.messageId, accepted: info.accepted || [], rejected: info.rejected || [] };
   } catch (err) {
+    // Geweigerde ontvanger: al geregistreerd, verbinding gezond, tekst klopt al.
+    if (err && err.rejectedRecipient) throw err;
     // Verbinding weggooien zodat de volgende poging een verse maakt (bv. na wachtwoordwijziging).
     transporter = null;
     // Maak veelvoorkomende SMTP-fouten begrijpelijk voor het team.
@@ -86,7 +94,7 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
     }
     // Elke mislukte mail wordt centraal geregistreerd (logboek + dagelijks alarm) —
     // óók wanneer de aanroepende code de fout zelf stilletjes zou negeren.
-    if (!/weigerde de ontvanger/.test(String(out.message || ''))) recordMailFailure(to, subject, out.message);
+    recordMailFailure(to, subject, out.message);
     throw out;
   }
 }

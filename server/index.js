@@ -2729,9 +2729,19 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
   try {
     // ECHTE THREADING: verwijs naar het laatste inkomende bericht van dit adres,
     // zodat het antwoord bij de klant in dezelfde conversatie valt (In-Reply-To) én
-    // een eventuele bounce later aan het juiste gesprek te koppelen is.
-    const lastIn = [...db().messages].reverse().find((m) => m.channel === 'email' && m.externalId
-      && String(m.sender || '').toLowerCase().includes(String(to).toLowerCase()));
+    // een eventuele bounce later aan het juiste gesprek te koppelen is. Adres wordt
+    // EXACT vergeleken (jan@ mag nooit de thread van marjan@ pakken) en de lijst
+    // wordt achterstevoren doorlopen zonder kopie.
+    const toAddr = String(to).toLowerCase().trim();
+    const EMAIL_RE_SENDER = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+    let lastIn = null;
+    const msgsAll = db().messages;
+    for (let i = msgsAll.length - 1; i >= 0; i--) {
+      const m = msgsAll[i];
+      if (m.channel !== 'email' || !m.externalId) continue;
+      const em = ((String(m.sender || '').match(EMAIL_RE_SENDER) || [''])[0]).toLowerCase();
+      if (em && em === toAddr) { lastIn = m; break; }
+    }
     const sent = await sendMail({ to, subject, text, inReplyTo: lastIn ? lastIn.externalId : undefined });
     // Zet de mail ook in je IMAP Verzonden-map (best-effort, niet blokkerend), zodat
     // je 'm in TransIP/Outlook terugziet bij "Verzonden".

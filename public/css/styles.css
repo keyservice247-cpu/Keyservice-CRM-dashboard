@@ -182,10 +182,10 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
        op een oude positie tijdens (momentum-)scrollen en liet de hoogte springen
        wanneer de browserbalk in-/uitklapt ("zwevende balk"). */
     transform: translateZ(0);
-    will-change: transform;
     backface-visibility: hidden;
     min-height: calc(56px + env(safe-area-inset-bottom));
   }
+  .bn-item { justify-content: center; } /* icoon+label netjes centreren in de hogere balk */
   /* Tijdens een open venster is de balk toch volledig bedekt — echt weghalen
      maakt "balk zweeft over de open kaart" onmogelijk. */
   body.modal-open .bottom-nav { display: none; }
@@ -447,7 +447,7 @@ tr:last-child td { border-bottom: none; }
 .thread-head { font-weight: 600; font-size: 15px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; color: var(--ink); }
 .thread-count { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 9px; font-size: 12px; font-weight: 600; }
 .thread-last { font-size: 11px; font-weight: 400; margin-left: auto; }
-.chat { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; padding: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); overscroll-behavior: contain; touch-action: pan-y; }
+.chat { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; padding: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); overscroll-behavior: contain; touch-action: pan-y pinch-zoom; }
 .chat-msg { display: flex; flex-direction: column; max-width: 82%; }
 .chat-msg.in { align-self: flex-start; align-items: flex-start; }
 .chat-msg.out { align-self: flex-end; align-items: flex-end; }

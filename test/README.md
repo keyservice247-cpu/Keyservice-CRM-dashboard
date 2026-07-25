@@ -11,6 +11,7 @@ node test/scenarios.mjs      # 62 assertions: matching, dedup, e-mailreacties, m
 node test/factuur-test.mjs   # kortingen, PDF, kopie, dueAt, instellingen  (draai op PORT=3117)
 node test/briefing-test.mjs  # AI-ochtendbriefing: instellingen, WhatsApp-kanaal, inhoud (PORT=3119)
 node test/google-test.mjs    # Google Agenda: sync-filter, koppeling-alarm, no-op zonder verbinding (GEEN server nodig)
+node test/mail-test.mjs      # Bounce-detectie: echte DSN wel, klantmail/Fwd/delayed nooit (GEEN server nodig)
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 
