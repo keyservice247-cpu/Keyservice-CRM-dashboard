@@ -906,7 +906,7 @@ function openOrderModal(id, pool) {
           <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button> <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden> </div> <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div> </div>` : ''}
     ${o && o.thread && o.thread.length ? `
       <div class="thread">
-        <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}</div>
+        <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}${o.customerId ? `<button type="button" class="btn btn-sm" id="f-history" style="margin-left:8px" title="Alle WhatsApp- en e-mailberichten van deze klant, over alle kaarten heen — gewoon terugscrollen">${icon('clock', 12)} Alles van deze klant</button>` : ''}</div>
         <div class="chat" id="f-chat">
           ${o.thread.map((t) => {
             const q = splitQuoted(t.body || '');
@@ -970,6 +970,43 @@ function openOrderModal(id, pool) {
   }
   // Gesprek meteen naar het nieuwste bericht scrollen.
   const chat = $('#f-chat'); if (chat) chat.scrollTop = chat.scrollHeight;
+  // VOLLEDIGE klanthistorie in het chat-blok: één klik toont alle WhatsApp- en
+  // e-mailberichten van deze klant over ALLE kaarten heen (incl. losse inbox-
+  // berichten), chronologisch met datum-scheiders en een kaart-label. Nog een
+  // klik en je bent terug bij alleen deze kaart.
+  {
+    const histBtn = $('#f-history');
+    if (histBtn && chat && o) {
+      let origHTML = null;
+      histBtn.onclick = async () => {
+        if (origHTML !== null) {
+          chat.innerHTML = origHTML; origHTML = null;
+          histBtn.innerHTML = `${icon('clock', 12)} Alles van deze klant`;
+          chat.scrollTop = chat.scrollHeight;
+          return;
+        }
+        histBtn.disabled = true;
+        try {
+          const h = await api(`/api/customers/${o.customerId}/history`);
+          origHTML = chat.innerHTML;
+          let lastDay = '';
+          chat.innerHTML = (h.items || []).map((t) => {
+            const day = String(t.at || '').slice(0, 10);
+            const sep = day && day !== lastDay ? `<div class="muted small" style="text-align:center;margin:10px 0 4px">— ${esc(new Date(day + 'T12:00:00').toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))} —</div>` : '';
+            if (day) lastDay = day;
+            const label = t.standalone
+              ? '<span class="chip" style="font-size:10px;padding:1px 7px">los bericht (inbox)</span>'
+              : (t.orderId && t.orderId !== o.id ? `<span class="chip" style="font-size:10px;padding:1px 7px" title="Uit een andere kaart van deze klant">${esc((t.orderTitle || 'andere kaart').slice(0, 40))}</span>` : '');
+            const q = splitQuoted(t.body || '');
+            return `${sep}<div class="chat-msg ${t.outgoing ? 'out' : 'in'}"><div class="chat-meta">${t.outgoing ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (t.outgoing ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)} ${label}</div><div class="chat-bubble">${esc(q.text)}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div></div>`;
+          }).join('') || '<div class="empty">Geen berichten gevonden voor deze klant.</div>';
+          histBtn.innerHTML = `${icon('clock', 12)} Alleen deze kaart`;
+          chat.scrollTop = chat.scrollHeight;
+        } catch (err) { toast(err.message, true); }
+        finally { histBtn.disabled = false; }
+      };
+    }
+  }
   // Los bericht uit de historie verwijderen (opschonen van spam/verkeerd toegevoegd).
   $$('.chat-del').forEach((b) => b.onclick = async (e) => {
     e.stopPropagation();
@@ -1157,7 +1194,7 @@ function reviewHTML(r) {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}
+    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open kaart: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
       ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('hardDelete') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
@@ -2584,6 +2621,11 @@ async function loadSettings() {
       <label>Naar de groep van <select id="tk-monteur"></select></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="md-save">Verstuur-instellingen opslaan</button></div>
     </div>
+    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>${icon('users', 15)} Zelfde-moment-aanvragen automatisch samenvoegen</h3>
+      <p class="muted small">Vraagt dezelfde klant kort na elkaar (nogmaals) iets aan — tweede appje, foto's erbij, of via de website én DRS tegelijk — dan hangt de goedgekeurde aanvraag <strong>automatisch aan de bestaande open kaart</strong>, met een zichtbare systeemnotitie. Is de open kaart ouder dan dit venster, dan wordt het gewoon een nieuwe kaart met een samenvoeg-suggestie (jij beslist). Zet op <strong>0</strong> om alles weer handmatig te doen.</p>
+      <label>Venster (uren) <input id="amw-hours" type="number" min="0" max="72" value="${esc(String(s.autoMergeWindowHours ?? 6))}" style="max-width:120px"></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoMerge">Opslaan</button></div>
+    </div>
     <div data-sg="werk" class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div data-sg="werk" class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
   // OVERZICHT: kaarten fysiek groeperen in dezelfde volgorde als de pillen, met een
@@ -2757,6 +2799,10 @@ async function loadSettings() {
   $('#saveCrmAlerts').onclick = async () => {
     const crmAlerts = { enabled: $('#ca-enabled').checked, group: $('#ca-group').value, phone: $('#ca-phone').value, notifyReplies: $('#ca-replies').checked };
     try { await api('/api/settings', 'PATCH', { crmAlerts }); toast('WhatsApp-meldingen opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveAutoMerge').onclick = async () => {
+    try { await api('/api/settings', 'PATCH', { autoMergeWindowHours: Number($('#amw-hours').value) }); toast('Samenvoeg-venster opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveMorningBrief').onclick = async () => {
@@ -3525,10 +3571,28 @@ function modal(html) {
   $('#modal').innerHTML = html;
   $('#modalRoot').hidden = false;
   $('#modalRoot').scrollTop = 0;
+  // ECHTE scroll-lock (iOS): body vastpinnen op de huidige scrollpositie.
+  // Zonder dit schilderde Safari de vaste onderbalk soms op de oude positie
+  // ("zwevende balk") en sprong de pagina na sluiten naar boven. Alleen de
+  // positie bewaren bij de EERSTE modal (modal() wordt soms geketend aangeroepen).
+  if (!document.body.classList.contains('modal-open')) {
+    const y = window.scrollY || 0;
+    document.body.dataset.lockY = String(y);
+    document.body.style.top = `-${y}px`;
+  }
   document.body.classList.add('modal-open'); // achtergrond vastzetten
   $('.modal-backdrop').onclick = closeModal;
 }
-function closeModal() { const m = $('#modal'); m.style.transform = ''; m.style.transition = ''; $('#modalRoot').hidden = true; m.innerHTML = ''; document.body.classList.remove('modal-open'); }
+function closeModal() {
+  const m = $('#modal'); m.style.transform = ''; m.style.transition = '';
+  $('#modalRoot').hidden = true; m.innerHTML = '';
+  document.body.classList.remove('modal-open');
+  // Scrollpositie exact herstellen (zie modal()).
+  const y = Number(document.body.dataset.lockY || 0);
+  document.body.style.top = '';
+  delete document.body.dataset.lockY;
+  window.scrollTo(0, y);
+}
 
 // Bottom-sheet: op mobiel sluit je een venster door het balkje/de titel bovenaan
 // vast te pakken en omlaag te swipen (zoals je van apps gewend bent).

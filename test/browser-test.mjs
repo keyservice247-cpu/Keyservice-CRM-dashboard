@@ -70,6 +70,26 @@ noErr('Instellingen laden');
 
 // 7) Instellingen → AI: ochtendbriefing-kaart rendert met alle velden
 ok('ochtendbriefing-instellingen zichtbaar', await page.locator('#mb-enabled').count() > 0 && await page.locator('#mb-channel').count() > 0 && await page.locator('#testMorningBrief').count() > 0);
+ok('samenvoeg-venster-instelling zichtbaar', await page.locator('#amw-hours').count() > 0);
+
+// 8) Kaart-modal: gesprekshistorie + "Alles van deze klant" (klanthistorie)
+clear();
+const ordId = await page.evaluate(async () => {
+  const post = (p, b, h = {}) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify(b) }).then((r) => r.json());
+  const ord = await post('/api/orders', { customerName: 'Browsertest Klant', customerPhone: '0611000000', title: 'Kaart voor historietest' });
+  // 1-op-1 appje van dezelfde klant -> hangt aan de kaart (thread gevuld).
+  await post('/api/ingest/whatsapp', { name: 'Browsertest Klant', body: 'foto volgt zo\nTelefoon: +31611000000', externalId: 'bt-hist-1' }, { 'x-ingest-token': 'test123' });
+  state.orders = await fetch('/api/orders').then((r) => r.json());
+  openOrderModal(ord.id);
+  return ord.id;
+});
+await page.waitForTimeout(900);
+ok('kaart-modal opent met gesprekshistorie', !!ordId && await page.locator('#f-chat').count() > 0);
+ok('"Alles van deze klant"-knop aanwezig', await page.locator('#f-history').count() > 0);
+await page.click('#f-history');
+await page.waitForTimeout(900);
+ok('klanthistorie geladen (knop wisselt naar "Alleen deze kaart")', /Alleen deze kaart/i.test(await page.locator('#f-history').innerText().catch(() => '')));
+noErr('Kaart + klanthistorie');
 
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();

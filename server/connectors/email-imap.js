@@ -8,9 +8,60 @@
 // ontdubbelen op messageId — NIET op de "ongelezen"-vlag. Zo verdwijnt een
 // binnengekomen opdracht niet als iemand de mail eerst in webmail/Outlook opent.
 import { db, id, now, saveSoon, logActivity } from '../db.js';
-import { ingestMessage, findCustomer } from '../pipeline.js';
+import { ingestMessage, findCustomer, queueCrmWhatsappAlert } from '../pipeline.js';
 import { saveBuffer, dedupeAttachments } from '../storage.js';
 import { maybeSendAutoReply } from '../autoreply.js';
+import { sendPush } from '../push.js';
+
+// ---------- Bounce-detectie ("mail kon niet worden afgeleverd") ----------
+// Een bounce van MAILER-DAEMON/postmaster is nooit een lead: we koppelen 'm terug
+// aan de kaart waar de mislukte mail vandaan kwam (op Message-ID, anders op het
+// geweigerde adres), zetten daar een duidelijke waarschuwing in de historie en
+// sturen een melding. Zo weet het team ALTIJD wanneer een klant-mail niet aankwam.
+function looksLikeBounce(parsed, rawText) {
+  const from = (parsed.from?.text || '').toLowerCase();
+  const subj = (parsed.subject || '').toLowerCase();
+  return /mailer-daemon|postmaster@/.test(from)
+    || /undeliver|delivery (status|has failed)|failure notice|returned mail|niet bezorgd|kon niet worden (afgeleverd|bezorgd)/i.test(subj)
+    || /report-type=delivery-status/i.test(String(parsed.headerLines?.find?.((h) => h.key === 'content-type')?.line || ''))
+    || /final-recipient:|action:\s*failed/i.test(rawText || '');
+}
+function handleBounce(parsed, rawText, mid) {
+  const text = String(rawText || '');
+  // Het oorspronkelijke Message-ID uit het bounce-rapport (niet dat van de bounce zelf).
+  const mids = [...text.matchAll(/message-id:\s*(<[^>]+>)/gi)].map((m) => m[1]).filter((x) => x !== mid);
+  // Het geweigerde adres.
+  const rcpt = ((text.match(/(?:final|original)-recipient:[^;\n]*;\s*([^\s<>;,]+@[^\s<>;,]+)/i) || [])[1]
+    || (text.match(/<?([^\s<>;,:]+@[^\s<>;,:]+)>?:?\s+(?:host|user|mailbox|address|recipient)/i) || [])[1]
+    || '').toLowerCase();
+  const reason = ((text.match(/(?:diagnostic-code:\s*(?:smtp;)?|said:)\s*([^\n]{10,160})/i) || [])[1] || 'zie de bounce-mail in de mailbox').trim();
+  // Kaart zoeken: eerst exact op het Message-ID van onze uitgaande mail, anders op
+  // het geweigerde adres (meest recente kaart met een uitgaande mail daarnaartoe).
+  let order = null; let entry = null;
+  for (const o of db().orders || []) {
+    const t = (o.thread || []).find((x) => x.outgoing && x.messageId && mids.includes(x.messageId));
+    if (t) { order = o; entry = t; break; }
+  }
+  if (!order && rcpt) {
+    const candidates = (db().orders || []).filter((o) => (o.thread || []).some((x) => x.outgoing && x.channel === 'email'
+      && (String(x.sentTo || '').toLowerCase() === rcpt
+        || String((db().customers.find((c) => c.id === o.customerId) || {}).email || '').toLowerCase() === rcpt)));
+    order = candidates.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0] || null;
+  }
+  const who = rcpt || 'de klant';
+  if (order) {
+    if (entry) { entry.delivered = false; entry.bounce = reason.slice(0, 160); }
+    order.thread = order.thread || [];
+    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (bezorging)', body: `⚠ E-MAIL NIET AANGEKOMEN bij ${who}. De mailserver van de ontvanger weigerde het bericht (${reason.slice(0, 160)}). Controleer het e-mailadres of bel/app de klant.`, at: now() });
+    order.updatedAt = now();
+  }
+  logActivity('systeem', 'e-mail gebounced (niet afgeleverd)', `${who}${order ? ` — kaart: ${order.title}` : ''}`);
+  sendPush({ title: 'E-mail niet aangekomen', body: `Mail aan ${who} is geweigerd${order ? ` (kaart: ${order.title})` : ''}. Even checken.`, url: '/' }).catch(() => {});
+  queueCrmWhatsappAlert(`⚠ CRM: e-mail aan ${who} is NIET aangekomen${order ? ` (kaart "${order.title}")` : ''}. Controleer het adres of bel de klant.`);
+  // Bounce registreren als verwerkt bericht — nooit een lead, nooit opnieuw verwerken.
+  db().messages.push({ id: id('msg'), externalId: mid, channel: 'email', bounce: true, sender: parsed.from?.text || '', subject: parsed.subject || '', at: now() });
+  saveSoon();
+}
 
 let polling = false;
 
@@ -279,6 +330,9 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
         // Altijd een leesbare tekst hebben: platte tekst als die er is, anders de
         // HTML omgezet naar tekst (FormSubmit-mails zijn vaak HTML-only).
         const rawText = ((parsed.text || '').toString() || htmlToText(parsed.html)).slice(0, 12000);
+        // BOUNCE ("mail niet afgeleverd")? Terugkoppelen aan de kaart + melding,
+        // en nooit als lead verwerken.
+        if (looksLikeBounce(parsed, rawText)) { handleBounce(parsed, rawText, mid); continue; }
         const fromText = (parsed.from?.text || '').toLowerCase();
         const isFormSubmit = fromText.includes('formsubmit')
           || /offerte-?aanvraag/i.test(parsed.subject || '')

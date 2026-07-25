@@ -34,6 +34,10 @@ ok('inloggen', login.status === 200);
 await api('PATCH', '/api/settings', {
   whatsappOrderGroups: 'raf breda, tilburg',
   crmAlerts: { enabled: true, group: 'CRM meldingen', phone: '', notifyReplies: true },
+  // Wetten-scenario's draaien met het zelfde-moment-venster UIT (0), zodat de
+  // basisregel (nieuwe kaart + suggestie) getest blijft. Het venster zelf heeft
+  // verderop zijn eigen scenario's.
+  autoMergeWindowHours: 0,
 });
 const mont = await api('POST', '/api/monteurs', { name: 'Youssef', phone: '0687654321', waGroup: 'Youssef Keyservice247' });
 const MID = mont.json.id;
@@ -261,6 +265,57 @@ const sF = await api('POST', '/api/ingest/email', {
   externalId: 'sc-fwd1',
 }, true);
 ok('Fwd met klantgegevens -> wél Te controleren (nieuwe aanvraag)', sF.json?.status === 'pending', JSON.stringify(sF.json));
+
+// ---------- Karin-casus (25 jul): tikfout-nummer in de tekst mag matching nooit breken ----------
+// De klant zet ZELF een (fout) nummer onder haar bericht; de bridge plakt het échte
+// afzendernummer als laatste regel. Het échte nummer moet winnen: het bericht hoort
+// in de kaart-thread van de bestaande klant — nooit een los inbox-item of duplicaat-
+// klant met een fantasienummer.
+console.log('\n== Karin-casus: écht afzendernummer wint van tikfout-nummer in de tekst ==');
+const custBeforeKC = (await customers()).length;
+const sKC = await api('POST', '/api/ingest/whatsapp', {
+  name: 'Karin van Kemenade',
+  body: 'Beste Keyservice, ik ben onverwachts eerder op vakantie. De afspraak kan geannuleerd worden.\nKarin van Kemenade\nTelefoon: +278520207007866\nTelefoon: +31611111111',
+  externalId: 'kc1',
+}, true);
+ok('annulering hangt aan de bestaande kaart (geen los inbox-item)', !!sKC.json && !sKC.json.reviewId, JSON.stringify(sKC.json));
+ok('geen duplicaat-klant met fantasienummer aangemaakt', (await customers()).length === custBeforeKC && !(await customers()).some((c) => (c.phone || '').includes('278520207007866')));
+const oKC = (await orders()).filter((o) => o.customerId === o1.customerId).find((o) => (o.thread || []).some((t) => /vakantie/i.test(t.body || '')));
+ok('annulering zichtbaar in de gesprekshistorie van de klantkaart', !!oKC);
+
+// ---------- Zelfde-moment-venster: tweede aanvraag hangt automatisch aan de kaart ----------
+console.log('\n== Zelfde-moment-venster: aanvragen kort na elkaar -> één kaart ==');
+await api('PATCH', '/api/settings', { autoMergeWindowHours: 6 });
+const sW1 = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Vera Venster',
+  body: 'Vera Venster, Marktplein 3, 3901 AB Veenendaal, 0633334444, voordeurslot dicht, spoed',
+  externalId: 'w1',
+}, true);
+ok('eerste aanvraag -> kaart', sW1.json?.status === 'auto_approved');
+const ordersBeforeW2 = (await orders()).length;
+const sW2 = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Vera Venster',
+  body: 'Vera Venster, Marktplein 3, 3901 AB Veenendaal, 0633334444, oja en graag ook een reservesleutel meenemen',
+  externalId: 'w2',
+}, true);
+ok('tweede aanvraag binnen venster -> GEEN nieuwe kaart', (await orders()).length === ordersBeforeW2, `${ordersBeforeW2} -> ${(await orders()).length}`);
+const oW = (await orders()).find((o) => (o.intake?.phone || '').includes('0633334444'));
+ok('tweede bericht in de thread + systeemnotitie samenvoegen', oW && (oW.thread || []).some((t) => /reservesleutel/i.test(t.body || '')) && (oW.thread || []).some((t) => /automatisch aan deze kaart/i.test(t.body || '')));
+ok('kaart maar één keer naar de monteur (dispatch-guard)', (await outboxQ()).filter((x) => x.orderId === oW?.id).length <= 1);
+await api('PATCH', '/api/settings', { autoMergeWindowHours: 0 }); // terug voor de rest
+
+// ---------- Klant-hint op inbox-items + klanthistorie-endpoint ----------
+console.log('\n== Klant-hint op inbox-items + klanthistorie ==');
+await api('POST', '/api/ingest/form?token=' + TOKEN, {
+  name: 'Karin Smit', phone: '0611111111', message: 'Nieuwe klus: garagedeurslot vervangen graag', formType: 'contact', site: 'keyservice247.nl',
+});
+const revsH = (await api('GET', '/api/reviews?status=pending&limit=80')).json.items || [];
+const hinted = revsH.find((r) => r.knownCustomer && (r.knownCustomer.name || '').includes('Karin'));
+ok('inbox-item toont bekende klant + open kaart', !!hinted && !!hinted.knownCustomer.openOrderId, JSON.stringify(revsH.map((r) => r.knownCustomer && r.knownCustomer.name)));
+const custKarin = (await customers()).find((c) => (c.phone || '').includes('0611111111'));
+const hist = await api('GET', `/api/customers/${custKarin.id}/history`);
+ok('klanthistorie: meerdere berichten over kaarten heen', hist.status === 200 && (hist.json.items || []).length >= 3, `items=${(hist.json.items || []).length}`);
+ok('klanthistorie: chronologisch + kaart-labels', (hist.json.items || []).every((x, i, a) => i === 0 || String(a[i - 1].at || '').localeCompare(String(x.at || '')) <= 0) && (hist.json.items || []).some((x) => x.orderTitle));
 
 // ---------- Extra: monteur-"ok" alleen relayen als het over de opdracht gaat ----------
 // Een kort "ok" in de monteursgroep vlak na een doorgestuurde opdracht -> bevestiging

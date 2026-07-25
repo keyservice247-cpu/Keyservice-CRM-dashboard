@@ -2,7 +2,7 @@
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
-import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters } from './settings.js';
+import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours } from './settings.js';
 import { mergeAttachments, dedupeAttachments } from './storage.js';
 import { sendPush } from './push.js';
 
@@ -106,6 +106,13 @@ export function findCustomer({ name, phone, email }) {
   }
   return null;
 }
+
+// Het échte afzendernummer uit de berichttekst van een 1-op-1 WhatsApp: de bridge
+// en de Cloud-API plakken dat ALTIJD als laatste regel "Telefoon: +31…" onder de
+// body. $ zonder /m matcht alleen het einde van de hele tekst — dus dit pakt nooit
+// een nummer dat de klant zelf midden in het bericht typte.
+export const senderPhoneFromText = (body) =>
+  ((String(body || '').match(/telefoon:\s*(\+?[\d][\d\s()-]{6,})\s*$/i) || [])[1] || '').replace(/[^\d+]/g, '');
 
 // STERKE match: alleen op telefoon of e-mail. Gebruikt om te beslissen of een nieuw
 // bericht aan een BESTAANDE kaart mag worden gehangen (samenvoegen). Naam alleen is te
@@ -235,6 +242,50 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     !o.archivedWeek &&
     !['afgerond', 'geannuleerd'].includes(o.status));
 
+  // VERFIJNING Regel 1 (25 jul, akkoord Abdel): "zelfde moment"-samenvoegen.
+  // Heeft deze klant een open kaart die KORT geleden (venster, standaard 6 uur,
+  // instelbaar, 0 = uit) is aangemaakt of bijgewerkt, dan is deze aanvraag vrijwel
+  // altijd dezelfde klus (tweede appje, foto's erbij, website + DRS tegelijk) —
+  // dan hangt hij DIRECT aan die kaart, met een zichtbare systeemnotitie. Is de
+  // open kaart ouder, dan geldt Regel 1 onverkort: nieuwe kaart + suggestie.
+  // Klantrecord-regels (2/3) veranderen niet: upsertCustomer hierboven heeft al
+  // gematcht op harde identificatoren en niets stil overschreven.
+  const mergeWindowH = getAutoMergeWindowHours();
+  const openRefMs = openOrder ? new Date(openOrder.updatedAt || openOrder.createdAt).getTime() : NaN;
+  if (openOrder && mergeWindowH > 0 && Number.isFinite(openRefMs) && (Date.now() - openRefMs) < mergeWindowH * 3600000) {
+    const origMsg2 = db().messages.find((m) => m.id === review.messageId);
+    openOrder.thread = openOrder.thread || [];
+    if (origMsg2) {
+      openOrder.thread.push({
+        id: id('thr'), channel: origMsg2.channel, sender: origMsg2.sender,
+        subject: origMsg2.subject, body: origMsg2.body, at: origMsg2.receivedAt,
+        attachments: origMsg2.attachments || [],
+      });
+      if (origMsg2.attachments && origMsg2.attachments.length) {
+        openOrder.attachments = mergeAttachments(openOrder.attachments || [], origMsg2.attachments);
+      }
+    }
+    openOrder.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (samenvoegen)', body: `Nieuwe aanvraag van dezelfde klant binnen ${mergeWindowH} uur — automatisch aan deze kaart toegevoegd. (Venster instelbaar bij Instellingen → Werkwijze; los te maken via de historie.)`, at: now() });
+    if (custSuggestions.length) {
+      const seen = new Set((openOrder.dataSuggestions || []).map((x) => `${x.field}:${x.to}`));
+      openOrder.dataSuggestions = [...(openOrder.dataSuggestions || []), ...custSuggestions.filter((x) => !seen.has(`${x.field}:${x.to}`))];
+    }
+    if (intake.address && addressDiffers(customer.address, intake.address)) {
+      openOrder.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: `⚠ LET OP: deze aanvraag noemt een ANDER adres: "${intake.address}" — bekend: "${customer.address}". Even checken welk adres klopt vóór het inplannen.`, at: now() });
+    }
+    openOrder.updatedAt = now();
+    review.status = auto ? 'auto_approved' : 'approved';
+    review.finalStatus = openOrder.status;
+    review.orderId = openOrder.id;
+    review.mergedIntoOrder = true;
+    review.correctedStatus = null;
+    review.reviewedBy = actorName;
+    review.reviewedAt = now();
+    logActivity(actorName, 'aanvraag automatisch samengevoegd', `${customer.name || 'klant'}: ${openOrder.title} (binnen ${mergeWindowH}u)`);
+    saveSoon();
+    return openOrder;
+  }
+
   const order = {
     id: id('ord'),
     title: overrides.title || s.title || 'Nieuwe opdracht',
@@ -335,7 +386,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
 
 // Verwerk een binnenkomend bericht: ontdubbelen -> opslaan -> AI categoriseren
 // -> review aanmaken -> eventueel automatisch goedkeuren bij hoge zekerheid.
-export async function ingestMessage({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '', inReplyTo = '' }) {
+export async function ingestMessage({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '', inReplyTo = '', fromPhone = '' }) {
   // Stuurt de bridge naam ÉN groeps-id mee? Dan die koppeling meteen leren (self-healing:
   // valt de naam later weg door een WhatsApp-storing, dan kent het CRM de groep al).
   if (groupId && group) learnGroupAlias(groupId, group);
@@ -482,6 +533,14 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   suggestion.aiStatus = suggestion.status;
   suggestion.status = firstStatusKey();
 
+  // HET ÉCHTE AFZENDERNUMMER bij een 1-op-1 WhatsApp-bericht (WET Regel 2: harde
+  // identificator — net als het échte afzenderadres bij e-mailreacties). Nieuwere
+  // bridge/Cloud-API geeft het mee als fromPhone-veld; anders lezen we de laatste
+  // regel "Telefoon: +31…" die de bridge altijd onder de body plakt. In een GROEP
+  // is de afzender de doorstuurder (DRS/monteur), dus daar geldt dit bewust NIET.
+  const waFrom = (channel === 'whatsapp' && !group)
+    ? (String(fromPhone || '').replace(/[^\d+]/g, '') || senderPhoneFromText(body))
+    : '';
   // Verkeerde contactgegevens opschonen: nooit het eigen bedrijf, een reclame-/
   // magazine- of no-reply-adres als KLANT bewaren. Anders worden losse mensen verkeerd
   // samengevoegd en plakt reclame naar info@... aan kaarten.
@@ -490,6 +549,13 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const normPhone = (v) => String(v || '').replace(/[^\d]/g, '');
   if (suggestion.customerEmail && JUNK_EMAIL_RE.test(suggestion.customerEmail)) suggestion.customerEmail = '';
   if (suggestion.customerPhone && COMPANY_PHONES.includes(normPhone(suggestion.customerPhone))) suggestion.customerPhone = '';
+  // Onzin-nummers uit de TEKST (bv. tikfout-handtekening "+278520207007866") mogen
+  // nooit een klantrecord worden of de matching sturen: geen echt telefoonnummer is
+  // langer dan 13 cijfers. Zo'n nummer zou later ook nooit een appje kunnen ontvangen.
+  if (suggestion.customerPhone && normPhone(suggestion.customerPhone).length > 13) suggestion.customerPhone = '';
+  // Bij een 1-op-1 appje is het échte afzendernummer de betrouwbaarste identiteit:
+  // gebruik het als klantnummer wanneer de tekst-extractie niets (bruikbaars) gaf.
+  if (waFrom && !suggestion.customerPhone) suggestion.customerPhone = waFrom;
   // Website-formulieren komen van ons EIGEN adres (info@...); de echte klant staat in de
   // body bij "Email: ...". Als er nog geen geldig klant-adres is, haal het eerste
   // niet-bedrijfsadres uit de body. Zo gaat ook de auto-bevestiging naar de juiste klant.
@@ -613,9 +679,18 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const fromEmail = channel === 'email'
     ? ((String(sender || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [''])[0])
     : '';
-  const existingCustomer = (isNewAanvraag || ((looksMarketing || looksSupplier) && !isFormLead)) ? null
-    : ((isEmailReply && fromEmail ? findCustomerStrong({ email: fromEmail }) : null)
-      || findCustomerStrong({ phone: suggestion.customerPhone, email: suggestion.customerEmail }));
+  // HARDE afzender-treffer: het échte e-mailadres (bij een reply) of het échte
+  // WhatsApp-afzendernummer (1-op-1). Zo'n treffer wint van het AI-oordeel
+  // "geen opdracht" (looksMarketing): een klant die z'n afspraak annuleert of iets
+  // korts terugstuurt hoort ALTIJD in de gesprekshistorie van z'n kaart — nooit
+  // als losse lead. Het leveranciersfilter (Regel 4, expliciete lijst) blijft wel
+  // boven alles gaan, en aanvraag-verkeer blijft een nieuwe kaart (Regel 1).
+  const hardSender = (isEmailReply && fromEmail ? findCustomerStrong({ email: fromEmail }) : null)
+    || (waFrom ? findCustomerStrong({ phone: waFrom }) : null);
+  const existingCustomer = (isNewAanvraag || (looksSupplier && !isFormLead)) ? null
+    : (hardSender
+      || ((looksMarketing && !isFormLead) ? null
+        : findCustomerStrong({ phone: suggestion.customerPhone, email: suggestion.customerEmail })));
   if (existingCustomer) {
     // zoek een nog lopende (niet-afgeronde/geannuleerde/ingeklapte) opdracht
     const openOrder = db().orders.find((o) =>

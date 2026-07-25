@@ -35,6 +35,7 @@ import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules,
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
+  findCustomerStrong, senderPhoneFromText,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
@@ -62,7 +63,7 @@ import {
   getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
-  getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing,
+  getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -267,6 +268,48 @@ app.get('/api/customers', requireAuth, (req, res) => {
     return res.json(list.filter((c) => mineIds.has(c.id)));
   }
   res.json(list);
+});
+
+// VOLLEDIGE klanthistorie: alle gesprekken (kaart-threads, óók gearchiveerd/
+// prullenbak) plus losse inbox-berichten die op harde identificatoren (écht
+// WhatsApp-afzendernummer / e-mailadres) bij deze klant horen. Chronologisch,
+// met kaart-label per bericht — zodat je in de kaart gewoon kunt terugscrollen
+// door ALLES van deze klant.
+app.get('/api/customers/:id/history', requireAuth, (req, res) => {
+  const customer = db().customers.find((c) => c.id === req.params.id);
+  if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
+  // AVG: een monteur mag alleen de historie van klanten van zijn eigen opdrachten zien.
+  if (req.user.role === 'monteur') {
+    const mine = db().orders.some((o) => o.customerId === customer.id && o.monteurId === req.user.monteurId);
+    if (!mine) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
+  }
+  const items = [];
+  const seen = new Set(); // dedup: zelfde bericht op kaart én als los bericht
+  const key = (channel, body) => `${channel}|${String(body || '').replace(/\s+/g, ' ').trim().slice(0, 180)}`;
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    if (o.customerId !== customer.id) continue;
+    for (const t of o.thread || []) {
+      seen.add(key(t.channel, t.body));
+      items.push({ ...t, orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', standalone: false });
+    }
+  }
+  // Losse inbox-berichten (nooit aan een kaart gehangen) op harde identiteit.
+  const custEmail = String(customer.email || '').toLowerCase();
+  for (const m of db().messages || []) {
+    if (m.skipped || m.bounce || !m.body) continue;
+    let match = false;
+    if (m.channel === 'whatsapp' && !m.group) {
+      const p = senderPhoneFromText(m.body);
+      match = !!p && findCustomerStrong({ phone: p })?.id === customer.id;
+    } else if (m.channel === 'email' && custEmail) {
+      match = String(m.sender || '').toLowerCase().includes(custEmail);
+    }
+    if (!match || seen.has(key(m.channel, m.body))) continue;
+    items.push({ id: m.id, channel: m.channel, sender: m.sender, subject: m.subject, body: m.body, at: m.receivedAt, attachments: m.attachments || [], standalone: true });
+  }
+  items.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+  const limit = Math.min(500, Math.max(20, Number(req.query.limit) || 300));
+  res.json({ customer: { id: customer.id, name: customer.name }, items: items.slice(-limit), total: items.length });
 });
 
 app.post('/api/customers', requirePerm('customers'), (req, res) => {
@@ -816,7 +859,30 @@ app.get('/api/reviews', requireAuth, (req, res) => {
   const all = db().reviews
     .filter((r) => (status === 'all' ? true : r.status === status))
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-  const items = all.slice(offset, offset + limit).map((r) => ({ ...r, message: msgById.get(r.messageId) || null }));
+  // KLANT-HINT: laat op elk inbox-item zien of de afzender een BEKENDE klant is
+  // (harde identificatoren: écht WhatsApp-afzendernummer, écht e-mailadres, of de
+  // geëxtraheerde contactgegevens) en of die klant een open kaart heeft. Zo hoeft
+  // niemand meer zelf uit te zoeken "wie is dit?" bij bv. een annulering.
+  const knownCustomerFor = (r, m) => {
+    try {
+      let c = null;
+      if (m && m.channel === 'whatsapp' && !m.group) {
+        const p = senderPhoneFromText(m.body);
+        if (p) c = findCustomerStrong({ phone: p });
+      } else if (m && m.channel === 'email') {
+        const em = (String(m.sender || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [''])[0];
+        if (em) c = findCustomerStrong({ email: em });
+      }
+      if (!c && r.suggestion) c = findCustomerStrong({ phone: r.suggestion.customerPhone, email: r.suggestion.customerEmail });
+      if (!c) return null;
+      const open = db().orders.find((o) => o.customerId === c.id && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
+      return { id: c.id, name: c.name || '', openOrderId: open ? open.id : null, openOrderTitle: open ? open.title : '' };
+    } catch { return null; }
+  };
+  const items = all.slice(offset, offset + limit).map((r) => {
+    const m = msgById.get(r.messageId) || null;
+    return { ...r, message: m, knownCustomer: r.status === 'pending' || r.status === 'overige' ? knownCustomerFor(r, m) : null };
+  });
   res.json({ items, total: all.length, offset, limit });
 });
 
@@ -1377,7 +1443,7 @@ app.post('/api/ingest/form', async (req, res) => {
 });
 
 app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
-  const { from, sender, name, body, text, message, externalId, groupId } = req.body || {};
+  const { from, sender, name, body, text, message, externalId, groupId, fromPhone } = req.body || {};
   // Groep-ID -> echte naam vertalen (bij WhatsApp-storing levert de bridge "groep <id>").
   // Doe het hier al, zodat ook het onderwerp/de kaart-titel de echte naam toont.
   const group = resolveGroupAlias(req.body?.group);
@@ -1389,6 +1455,9 @@ app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
     group,
     groupId, // nieuwere bridge stuurt het groeps-id mee -> CRM leert de koppeling zelf
     externalId,
+    // Het échte afzendernummer (harde identificator, Regel 2). Nieuwere bridge stuurt
+    // fromPhone; oudere geeft alleen "31612345678@c.us" in from — beide bruikbaar.
+    fromPhone: String(fromPhone || (from ? String(from).replace(/@.*$/, '') : '') || ''),
   });
   // Volautomatisch: DRS-opdracht direct goedkeuren + naar monteur (indien ingesteld).
   try { maybeIntakeAutoSend(result); } catch (e) { console.error('intake-autosend:', e.message); }
@@ -1527,6 +1596,7 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
             body,
             externalId: msg.id, // ontdubbelen via Meta's bericht-id
             attachments,
+            fromPhone: phone, // échte afzendernummer als harde identificator (Regel 2)
           });
         }
       }
@@ -1577,6 +1647,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     crmAlerts: getCrmAlerts(),
     morningBriefing: getMorningBriefing(),
+    autoMergeWindowHours: getAutoMergeWindowHours(),
     invoiceSettings: getInvoiceSettings(),
     priceList: getPriceList(),
     priceBundles: getPriceBundles(),
@@ -1750,6 +1821,10 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       phone: String(c.phone || '').replace(/[^\d+]/g, '').slice(0, 20),
       notifyReplies: c.notifyReplies !== false,
     };
+  }
+  if ('autoMergeWindowHours' in b) {
+    const v = Number(b.autoMergeWindowHours);
+    db().settings.autoMergeWindowHours = Number.isFinite(v) && v >= 0 ? Math.min(72, v) : 6;
   }
   if ('morningBriefing' in b) {
     const m = b.morningBriefing || {};
@@ -2644,7 +2719,12 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
   if (!smtpConfigured()) return res.status(503).json({ error: 'E-mail versturen is nog niet ingesteld (SMTP). Zie docs/INTEGRATIES.md.' });
   if (!to) return res.status(400).json({ error: 'Geen e-mailadres van de klant bekend' });
   try {
-    await sendMail({ to, subject, text });
+    // ECHTE THREADING: verwijs naar het laatste inkomende bericht van dit adres,
+    // zodat het antwoord bij de klant in dezelfde conversatie valt (In-Reply-To) én
+    // een eventuele bounce later aan het juiste gesprek te koppelen is.
+    const lastIn = [...db().messages].reverse().find((m) => m.channel === 'email' && m.externalId
+      && String(m.sender || '').toLowerCase().includes(String(to).toLowerCase()));
+    const sent = await sendMail({ to, subject, text, inReplyTo: lastIn ? lastIn.externalId : undefined });
     // Zet de mail ook in je IMAP Verzonden-map (best-effort, niet blokkerend), zodat
     // je 'm in TransIP/Outlook terugziet bij "Verzonden".
     appendSentMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER || '', to, subject, text }).catch(() => {});
@@ -2653,11 +2733,13 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
       const order = db().orders.find((o) => o.id === orderId);
       if (order) {
         // Ons antwoord als bericht in de gesprekshistorie (zo blijft het gesprek
-        // compleet op de kaart, met wie wat wanneer stuurde).
+        // compleet op de kaart, met wie wat wanneer stuurde). messageId maakt een
+        // bounce ("mail niet afgeleverd") later exact terug te koppelen.
         order.thread = order.thread || [];
         order.thread.push({
           id: id('thr'), channel: 'email', outgoing: true,
           sender: `${req.user.name} (Keyservice)`, subject, body: text, at: now(),
+          messageId: (sent && sent.messageId) || undefined, sentTo: to,
         });
         order.lastReplyAt = now();
         // Antwoord verstuurd -> van "Nieuw" automatisch naar "In behandeling".

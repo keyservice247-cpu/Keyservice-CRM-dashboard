@@ -381,10 +381,11 @@ async function postForward(payload) {
   if (!resp.ok) throw new Error(`status ${resp.status}`);
 }
 
-async function forward({ channel, sender, group, groupId, body, externalId }) {
+async function forward({ channel, sender, group, groupId, body, externalId, fromPhone }) {
   // groupId gaat mee zodat het CRM de koppeling id→naam automatisch leert (en bij een
-  // storing zelf kan vertalen). Bij 1-op-1 berichten is er geen groep(-id).
-  const payload = { name: sender, group, groupId, body, externalId };
+  // storing zelf kan vertalen). Bij 1-op-1 berichten is er geen groep(-id), maar wél
+  // fromPhone: het échte afzendernummer als hard veld (het CRM matcht daarop de klant).
+  const payload = { name: sender, group, groupId, body, externalId, fromPhone };
   const label = `${sender}${group ? ' in ' + group : ''}`;
   try {
     await postForward(payload);
@@ -453,7 +454,7 @@ client.on('message', async (msg) => {
       // nummer mee in de body zodat het dashboard het herkent
       const phone = (contact?.number || String(msg.from || '').replace(/@.*$/, '')).replace(/[^\d+]/g, '');
       const body = `${msg.body || `[${msg.type}]`}${phone ? `\nTelefoon: +${phone}` : ''}`;
-      await forward({ channel: '1-op-1', sender, body, externalId: msg.id?._serialized });
+      await forward({ channel: '1-op-1', sender, body, externalId: msg.id?._serialized, fromPhone: phone ? `+${phone}` : '' });
     }
   } catch (e) {
     console.error('Verwerkingsfout:', e.message);

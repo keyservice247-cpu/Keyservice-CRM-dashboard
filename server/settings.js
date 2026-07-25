@@ -223,6 +223,15 @@ export function getCrmAlerts() {
   };
 }
 
+// "Zelfde moment"-samenvoegen (25 jul, op verzoek Abdel): een goedgekeurde aanvraag
+// van een klant die binnen dit venster al een open kaart kreeg/bijwerkte, hangt
+// automatisch aan die kaart (zelfde klus: tweede appje, foto's erbij, site + DRS
+// tegelijk). 0 = uit (dan geldt de oude regel: altijd nieuwe kaart + suggestie).
+export function getAutoMergeWindowHours() {
+  const v = Number(db().settings.autoMergeWindowHours);
+  return Number.isFinite(v) && v >= 0 ? Math.min(72, v) : 6;
+}
+
 // AI-ochtendbriefing: elke ochtend een kort overzicht (afspraken vandaag, wat om
 // actie vraagt, geld deze week, nieuwe leads) met 2-3 zinnen AI-duiding erbij.
 // WhatsApp gebruikt hetzelfde doel als de CRM-meldingen (groep of 1-op-1); die

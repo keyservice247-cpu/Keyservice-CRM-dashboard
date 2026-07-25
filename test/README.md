@@ -6,7 +6,8 @@ productie. Ze gebruiken de demo-login `admin@keyservice.nl` / `admin123`.
 ## Backend / scenario-regressie (de 10 lead-instroom-wetten + facturen)
 ```bash
 DATA_DIR=/tmp/crmtest INGEST_TOKEN=test123 SESSION_SECRET=test PORT=3113 node server/index.js &
-node test/scenarios.mjs      # 50 assertions: matching, dedup, e-mailreacties, multipart, bijlages
+node test/scenarios.mjs      # 62 assertions: matching, dedup, e-mailreacties, multipart, bijlages,
+                             # Karin-casus (écht afzendernummer), zelfde-moment-venster, klant-hint, historie
 node test/factuur-test.mjs   # kortingen, PDF, kopie, dueAt, instellingen  (draai op PORT=3117)
 node test/briefing-test.mjs  # AI-ochtendbriefing: instellingen, WhatsApp-kanaal, inhoud (PORT=3119)
 node test/google-test.mjs    # Google Agenda: sync-filter, koppeling-alarm, no-op zonder verbinding (GEEN server nodig)

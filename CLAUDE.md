@@ -55,6 +55,23 @@ de regressie meegroeit.
 - **Dedup:** vervolgberichten van dezelfde klant (e-mail/telefoon) hangen aan de lopende kaart;
   ook bij goedkeuren. Inhoud-dedup voor doorgestuurde WhatsApp (DRS→Youssef). Handmatig
   "Samenvoegen"-knop als backup.
+- **Slimmer samenvoegen + klant-context (25 jul):** (1) "zelfde moment"-venster —
+  aanvraag van klant met open kaart <6u (instelbaar, Instellingen → Werkwijze, 0=uit)
+  hangt bij goedkeuren automatisch aan die kaart (systeemnotitie, dispatch-guard);
+  (2) 1-op-1 WhatsApp matcht op het ÉCHTE afzendernummer (fromPhone/laatste
+  "Telefoon:"-regel, senderPhoneFromText) — tikfout-nummers in klanttekst (>13
+  cijfers) genegeerd; (3) inbox-items tonen "Bekende klant: X — open kaart: Y"
+  (knownCustomer op GET /api/reviews); (4) kaart-chatblok heeft "Alles van deze
+  klant": GET /api/customers/:id/history = alle threads (incl. archief/prullenbak)
+  + losse inbox-berichten, chronologisch met kaart-labels (monteur alleen eigen
+  klanten).
+- **Mail-bewaking (25 jul):** sendMail registreert ELKE mislukte mail centraal
+  (db()._mailFailures + logboek) → watchdog max 1 verzamel-alarm/dag; rejected-
+  ontvangers tellen als fout; uitgaande replies krijgen In-Reply-To/References
+  (echte threading) + messageId op de thread-entry; BOUNCE-detectie in de IMAP-
+  poller (mailer-daemon/DSN) → waarschuwing op de juiste kaart + melding, nooit
+  een lead. Mobiel: bottom-nav zweeft niet meer (body scroll-lock met scrollY-
+  herstel, eigen compositielaag, verborgen bij open modal).
 - **Bulk-acties inbox:** selectie + afwijzen, "Alle geklets afwijzen", "Hele lijst afwijzen",
   "Accepteer boven drempel" (≥70/80/90% AI-zekerheid, slaat 'geen opdracht' over). Opschonen
   (strenge her-filtering naar Overige).
@@ -148,20 +165,34 @@ hij wijzigt, samenvoegt of overschrijft NOOIT zelf klanten of kaarten. Zelfde in
 geeft altijd zelfde uitkomst. Alle instroomkanalen (WhatsApp-bridge, Cloud API,
 IMAP-mailboxen, websiteformulier) lopen door ingestMessage/applyReview in
 server/pipeline.js — er bestaat geen pad eromheen.
-1. Elke AANVRAAG wordt een NIEUWE kaart, ook bij een bestaande klant. Nooit
-   automatisch samenvoegen: open kaart zelfde klant → mergeSuggestion-badge (mens
-   klikt Samenvoegen/Negeren, via bestaand POST /api/orders/merge). Automatische
-   uitzonderingen: exacte-inhoud-dedup van doorgestuurde WhatsApp (24u, alleen
-   IDENTIEKE tekst) + REACTIE-verkeer blijft in de kaart-thread: een 1-op-1 appje
-   van een klant mét open kaart, én elke e-mail met Re:/Antw:-onderwerp of
-   In-Reply-To-header (isEmailReply — wint van intake-herkenning én van de
-   website-dedup; matching op het échte afzenderadres). Fwd: telt bewust NIET als
-   reactie. Anders sterven chat-weergave en "Nieuw bericht"-badge.
+1. Elke AANVRAAG wordt een NIEUWE kaart, ook bij een bestaande klant; open kaart
+   zelfde klant → mergeSuggestion-badge (mens klikt Samenvoegen/Negeren, via
+   bestaand POST /api/orders/merge). VERFIJNING (25 jul, akkoord Abdel): het
+   "ZELFDE MOMENT"-VENSTER — heeft de klant een open kaart die minder dan
+   autoMergeWindowHours geleden (default 6u, instelbaar in Instellingen →
+   Werkwijze, 0 = uit) is aangemaakt/bijgewerkt, dan hangt de goedgekeurde
+   aanvraag automatisch aan díe kaart (applyReview, systeemnotitie + review.
+   mergedIntoOrder; dispatch-guard sentToMonteur voorkomt dubbel versturen).
+   Ouder dan het venster → nieuwe kaart + suggestie, zoals altijd. Overige
+   automatische uitzonderingen: exacte-inhoud-dedup van doorgestuurde WhatsApp
+   (24u, alleen IDENTIEKE tekst) + REACTIE-verkeer blijft in de kaart-thread:
+   een 1-op-1 appje van een klant mét open kaart, én elke e-mail met Re:/Antw:-
+   onderwerp of In-Reply-To-header (isEmailReply — wint van intake-herkenning én
+   van de website-dedup; matching op het échte afzenderadres). Fwd: telt bewust
+   NIET als reactie. Anders sterven chat-weergave en "Nieuw bericht"-badge.
 2. Klant-matching ALLEEN op harde identificatoren: e-mail exact óf telefoon
    genormaliseerd (matchPhone: +31/0031 ↔ 0). Naam is NOOIT koppelgrond.
-   Generieke namen (GENERIC_NAMES: "Key Service", "DRS", …) worden nooit een
-   klantnaam: record heet "Onbekende klant" + kaartvlag customerIncomplete
-   ("Klant onbekend — aanvullen"). De afzender is nooit de klant.
+   Bij 1-op-1 WhatsApp is het ÉCHTE afzendernummer de hardste identificator
+   (25 jul, Karin-casus): bridge/Cloud-API sturen fromPhone mee én plakken het
+   als laatste regel "Telefoon: +31…" onder de body (senderPhoneFromText leest
+   de LAATSTE regel — nooit een nummer dat de klant zelf in de tekst typte);
+   een harde afzender-treffer (waFrom/fromEmail) wint van het AI-oordeel
+   aiNotOrder/looksMarketing, niet van het leveranciersfilter. Onzin-nummers
+   (>13 cijfers, bv. tikfout-handtekening) worden nooit klantnummer. In een
+   groep geldt dit bewust NIET (afzender = doorstuurder). Generieke namen
+   (GENERIC_NAMES: "Key Service", "DRS", …) worden nooit een klantnaam: record
+   heet "Onbekende klant" + kaartvlag customerIncomplete ("Klant onbekend —
+   aanvullen"). De afzender is nooit de klant.
 3. Klantrecord NOOIT stil overschrijven. Afwijkend adres/telefoon/e-mail/naam →
    dataSuggestions op de kaart (knoppen Bijwerken/Negeren, endpoint
    /api/orders/:id/data-suggestion). Elke kaart draagt order.intake (gegevens van

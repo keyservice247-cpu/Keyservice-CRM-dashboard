@@ -239,7 +239,9 @@ const BRIDGE_DOWN_MS = 12 * 60 * 1000;
 async function alertAdmins(title, body) {
   sendPush({ title, body, url: '/' }).catch(() => {});
   const to = getBackupMail().email; // zelfde adres als de back-up-mail (indien ingesteld)
-  if (to && smtpConfigured()) { try { await sendMail({ to, subject: `⚠ ${title} — Keyservice CRM`, text: body }); } catch { /* push is al weg */ } }
+  // Faalt de alarm-mail zelf, dan is de push al weg én registreert sendMail de fout
+  // centraal (logboek + verzamel-alarm) — maar log 'm hier óók, nooit meer stil.
+  if (to && smtpConfigured()) { try { await sendMail({ to, subject: `⚠ ${title} — Keyservice CRM`, text: body }); } catch (e) { console.error('[alarm-mail] versturen mislukt:', e.message); } }
   logActivity('systeem', 'alarm', `${title}: ${body}`);
 }
 
@@ -380,6 +382,21 @@ async function runWatchdog() {
       await alertAdmins('Afspraken NIET in Google Agenda', `${broken.length} komende afspraak/afspraken staan niet in Google Agenda (laatste fout: ${broken[0].googleSyncError}). Het systeem blijft het elk uur opnieuw proberen; check anders Instellingen → Koppelingen.`);
     } else if (!broken.length && s._alerts.googleSyncDay) {
       delete s._alerts.googleSyncDay; save();
+    }
+  } catch { /* watchdog mag nooit crashen */ }
+  // E-mail: mislukte mails van de afgelopen 24 uur (centraal geregistreerd in
+  // sendMail — dekt óók de automatische mails die vroeger stil faalden: afspraak-
+  // bevestiging, herinnering, review-verzoek, follow-ups, facturen) -> max 1
+  // verzamel-melding per dag. Heft zichzelf op zodra er 24 uur niets misgaat.
+  try {
+    const fails = (db()._mailFailures || []).filter((f) => f.at && Date.now() - new Date(f.at).getTime() < 24 * 3600000);
+    const today = new Date().toISOString().slice(0, 10);
+    if (fails.length && s._alerts.mailFailDay !== today) {
+      s._alerts.mailFailDay = today; save();
+      const wie = [...new Set(fails.map((f) => f.to).filter(Boolean))].slice(0, 5).join(', ');
+      await alertAdmins('E-mail(s) NIET verstuurd', `${fails.length} e-mail(s) in de afgelopen 24 uur mislukt (aan: ${wie}). Laatste fout: ${fails[0].error}. Deze klanten hebben de mail NIET gekregen — zie het logboek voor alle gevallen.`);
+    } else if (!fails.length && s._alerts.mailFailDay) {
+      delete s._alerts.mailFailDay; save();
     }
   } catch { /* watchdog mag nooit crashen */ }
   // Off-site back-up-mail: als hij AAN staat maar al >36 uur niet is gelukt, alarm.
