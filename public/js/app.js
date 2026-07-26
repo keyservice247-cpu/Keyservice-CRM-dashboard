@@ -1131,12 +1131,15 @@ function openOrderModal(id, pool) {
     }
     try {
       if (o) {
-        await api(`/api/orders/${o.id}`, 'PATCH', payload);
-        // Klantgegevens (naam/telefoon/e-mail/adres) van de gekoppelde klant bijwerken.
+        // Klantgegevens op de kaart bewerkt? Dan gaan die naar het klantrecord ÉN
+        // naar order.intake — zodat "Stuur naar monteur" altijd de verbeterde
+        // gegevens gebruikt (nooit meer de oude AI-extractie).
         if (canWrite && o.customer) {
           const cp = { name: $('#f-ccname')?.value, phone: $('#f-ccphone')?.value, email: $('#f-ccemail')?.value, address: $('#f-ccaddress')?.value };
+          payload.intake = { name: cp.name, phone: cp.phone, email: cp.email, address: cp.address };
           await api(`/api/customers/${o.customer.id}`, 'PATCH', cp).catch(() => {});
         }
+        await api(`/api/orders/${o.id}`, 'PATCH', payload);
       } else {
         payload.customerName = $('#f-cname').value;
         payload.customerPhone = $('#f-cphone').value;

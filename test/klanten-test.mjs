@@ -81,6 +81,17 @@ ok('bridge kan de foto met token ophalen', dl.status === 200);
 const dlNo = await fetch(`${BASE}${item.media[0].url}`);
 ok('zonder token/login blijft de foto afgeschermd', dlNo.status === 401 || dlNo.status === 403 || dlNo.redirected === true, `status=${dlNo.status}`);
 
+console.log('\n== Kaart-correctie wint: dispatch gebruikt de verbeterde gegevens ==');
+// Casus Piotr: kaart had oude AI-extractie ("Klant: U"); de mens verbetert de
+// gegevens op de kaart -> "Stuur naar monteur" moet de NIEUWE gegevens sturen.
+await api('PATCH', `/api/orders/${ord.json.id}`, { intake: { name: 'Karin Vijfhuizen', phone: '0650638809', email: '', address: 'Sportlaan 12, 2141 AB Vijfhuizen' } });
+const disp2 = await api('POST', `/api/orders/${ord.json.id}/send-monteur`, { monteurId: fm.id });
+ok('tweede dispatch geaccepteerd', disp2.status === 200);
+const ob2 = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+const item2 = ob2.find((x) => x.orderId === ord.json.id && /Karin Vijfhuizen/.test(x.text || ''));
+ok('monteur-bericht bevat de VERBETERDE gegevens (naam+adres)', !!item2 && /Sportlaan 12/.test(item2.text) && /0650638809/.test(item2.text), item2 ? item2.text.slice(0, 120) : 'geen item');
+ok('oude gegevens niet meer in het nieuwste bericht', !!item2 && !/Klant: U\b/.test(item2.text));
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

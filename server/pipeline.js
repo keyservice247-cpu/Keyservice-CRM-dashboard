@@ -769,6 +769,14 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
       if (!existingCustomer.email && suggestion.customerEmail) existingCustomer.email = suggestion.customerEmail;
       if (!existingCustomer.phone && suggestion.customerPhone) existingCustomer.phone = suggestion.customerPhone;
       if (!existingCustomer.address && suggestion.customerAddress) existingCustomer.address = suggestion.customerAddress;
+      // …en óók de LEGE intake-velden van de kaart (gegevens uit de gesprekshistorie
+      // horen vanzelf op de kaart te komen — nooit overschrijven, alleen aanvullen;
+      // een generieke naam zoals "U"/"Key Service" wordt nooit een klantnaam).
+      openOrder.intake = openOrder.intake || {};
+      if (!openOrder.intake.name && suggestion.customerName && !isGenericName(suggestion.customerName) && String(suggestion.customerName).trim().length >= 2) openOrder.intake.name = suggestion.customerName;
+      if (!openOrder.intake.phone && suggestion.customerPhone) openOrder.intake.phone = suggestion.customerPhone;
+      if (!openOrder.intake.email && suggestion.customerEmail) openOrder.intake.email = suggestion.customerEmail;
+      if (!openOrder.intake.address && suggestion.customerAddress) openOrder.intake.address = suggestion.customerAddress;
       // Noemt het bericht een ÁNDER adres dan bekend? Niet stil overschrijven (nog geen
       // mens naar gekeken), maar wél duidelijk waarschuwen op de kaart — anders rijdt de
       // monteur straks naar het verkeerde adres.

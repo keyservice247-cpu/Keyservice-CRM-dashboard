@@ -907,6 +907,19 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
   if (b.status && !isValidStatus(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
 
+  // MENSELIJKE CORRECTIE = hoogste waarheid: worden de klantgegevens op de kaart
+  // bewerkt, dan werkt dat óók order.intake bij (de kaart-eigen gegevens waar de
+  // monteur-dispatch mee wordt opgebouwd). Anders ging een verbeterde kaart alsnog
+  // met de oude AI-extractie ("Klant: U") naar de monteur.
+  if (req.user.role !== 'monteur' && b.intake && typeof b.intake === 'object') {
+    order.intake = {
+      name: String(b.intake.name || '').slice(0, 120).trim(),
+      phone: String(b.intake.phone || '').slice(0, 40).trim(),
+      email: String(b.intake.email || '').slice(0, 120).trim(),
+      address: String(b.intake.address || '').slice(0, 200).trim(),
+    };
+  }
+
   // Verplichte notitie: een monteur moet eerst een notitie/omschrijving invullen voordat
   // hij een opdracht naar Offerte verzonden, Afgerond of Geannuleerd verplaatst.
   const NOTE_REQUIRED_STATUSES = ['offerte_verzonden', 'afgerond', 'geannuleerd'];
