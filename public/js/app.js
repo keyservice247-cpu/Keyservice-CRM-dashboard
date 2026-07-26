@@ -458,6 +458,10 @@ async function loadOverview() {
             <span style="width:9px;height:9px;border-radius:50%;background:${prioDot[x.prio] || prioDot.middel};margin-top:5px;flex:none"></span>
             <span style="color:var(--ink)"><strong>${esc(x.titel)}</strong>${x.waarom ? ` <span class="muted">— ${esc(x.waarom)}</span>` : ''}</span>
           </div>`).join('')}</div>` : '<div class="muted small">Geen acties — alles loopt.</div>'}
+        ${(a.beantwoorden || []).length ? `
+        <div style="margin-top:10px"><div class="small" style="font-weight:600;color:var(--accent);margin-bottom:4px">${icon('reply', 12)} Beantwoorden vandaag</div>
+          ${a.beantwoorden.map((b) => `<div class="muted small" style="padding:2px 0">${b.kanaal === 'whatsapp' ? icon('whatsapp', 11) : icon('mail', 11)} <strong style="color:var(--ink)">${esc(b.wie || 'Onbekend')}</strong>${b.waarover ? ` — ${esc(b.waarover)}` : ''}${b.urgent ? ' <span style="color:#ef4444;font-weight:700">· urgent</span>' : ''}</div>`).join('')}
+        </div>` : ''}
         ${(a.kansen || []).length || (a.risicos || []).length ? `
         <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
           ${(a.kansen || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#0d7a43;margin-bottom:4px">Kansen</div>${a.kansen.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}

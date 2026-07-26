@@ -517,9 +517,10 @@ ${companyProfile ? `\nOver het bedrijf:\n${String(companyProfile).slice(0, 1500)
 Antwoord UITSLUITEND met geldige JSON (geen tekst eromheen, geen markdown):
 {"kop":"één krachtige zin die de dag samenvat",
  "acties":[{"prio":"hoog","titel":"...","waarom":"...","waar":"inbox"}],
+ "beantwoorden":[{"wie":"naam of afzender","kanaal":"email","waarover":"...","urgent":true}],
  "kansen":["..."],
  "risicos":["..."]}
-Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar = "inbox"|"opdrachten"|"facturen"|"agenda"|"klanten"), max 3 kansen (omzet/vervolgklussen die je in het verkeer ziet), max 3 risico's (dingen die stil dreigen mis te gaan). Wees CONCREET: gebruik namen, plaatsen en bedragen uit de gegevens. Nederlands, geen emoji, geen verzinsels — alleen wat je echt ziet.`;
+Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar = "inbox"|"opdrachten"|"facturen"|"agenda"|"klanten"). "beantwoorden" = jouw ADVISEURSROL: max 5 berichten/mails uit het verkeer die een antwoord verwachten of te belangrijk zijn om te missen (wachtende klanten, vragen zonder reactie, boze of dringende toon, zakelijke kansen; kanaal = "email"|"whatsapp"; urgent alleen bij echte haast) — sla over wat al beantwoord lijkt. Max 3 kansen (omzet/vervolgklussen die je in het verkeer ziet), max 3 risico's (dingen die stil dreigen mis te gaan). Wees CONCREET: gebruik namen, plaatsen en bedragen uit de gegevens. Nederlands, geen emoji, geen verzinsels — alleen wat je echt ziet.`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
@@ -543,6 +544,12 @@ Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar =
       waarom: String(a.waarom || '').slice(0, 200),
       waar: ['inbox', 'opdrachten', 'facturen', 'agenda', 'klanten'].includes(a.waar) ? a.waar : 'opdrachten',
     })).filter((a) => a.titel),
+    beantwoorden: arr(parsed.beantwoorden, 5).map((b) => ({
+      wie: String((b && b.wie) || '').slice(0, 80),
+      kanaal: (b && b.kanaal) === 'whatsapp' ? 'whatsapp' : 'email',
+      waarover: String((b && b.waarover) || '').slice(0, 160),
+      urgent: !!(b && b.urgent),
+    })).filter((b) => b.wie || b.waarover),
     kansen: arr(parsed.kansen, 3).map((k) => String(k).slice(0, 200)).filter(Boolean),
     risicos: arr(parsed.risicos, 3).map((k) => String(k).slice(0, 200)).filter(Boolean),
   };
