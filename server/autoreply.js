@@ -38,6 +38,18 @@ export async function maybeSendAutoReply(result) {
     // Markeer het bericht; de bevestiging komt in de historie zodra de kaart is aangemaakt.
     const msg = db().messages.find((m) => m.id === messageId);
     if (msg) msg.autoReplied = { at: now(), to: email, subject: cfg.subject, body: text };
+    // Is de kaart al aangemaakt (auto-accept boven de drempel draait VÓÓR deze mail)?
+    // Zet de bevestiging dan alsnog zichtbaar in de gesprekshistorie + kaart-vlag,
+    // anders ziet de assistente niet dat de klant al bericht heeft gehad.
+    if (review.orderId) {
+      const order = db().orders.find((o) => o.id === review.orderId);
+      if (order && !order.autoReplied) {
+        order.thread = order.thread || [];
+        order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, autoReply: true, sender: 'Keyservice (automatische bevestiging)', subject: cfg.subject, body: text, at: now() });
+        order.autoReplied = { at: now() };
+        order.updatedAt = now();
+      }
+    }
     logActivity('systeem', 'automatische ontvangstbevestiging verstuurd', email);
     console.log(`[bevestiging] verstuurd naar ${email}`);
     saveSoon();

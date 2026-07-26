@@ -233,11 +233,15 @@ server/pipeline.js — er bestaat geen pad eromheen.
    patronen in settings.emailFilters; match alléén op afzender+onderwerp) → STIL
    naar Overige, geen lead, geen melding; wint van intake-herkenning; het
    websiteformulier wint van alles. Auto-kaart via de DREMPEL mag uit opdracht-
-   groepen én uit website-formulieren (isFormLead — eigen site + FormSubmit;
-   verfijning 27 jul op verzoek Abdel, incl. ontvangstbevestiging bij
-   auto-accept); volautomatische intake-flow blijft alleen opdracht-groepen.
-   Losse 1-op-1 appjes en losse e-mails gaan ALTIJD eerst langs een mens in
-   Te controleren. Drempel 0 = alles handmatig.
+   groepen én van het EIGEN websiteformulier — STRIKT alleen de directe
+   site-POST (forceRelevant) mét contactgegevens en niet-generieke naam, nooit
+   een e-mailreactie (verfijning 27 jul; formAutoOk in pipeline.js). Een mail
+   die op formuliertekst LIJKT (FormSubmit-kopie/citaat/webshopmail) telt NIET
+   — anders sneuvelt Regel 4. Auto-accept meldt zich altijd (push + team-app)
+   en draait dezelfde monteur-dispatch als handmatig goedkeuren; ontvangst-
+   bevestiging gaat ook uit én is zichtbaar op de kaart. Volautomatische
+   intake-flow blijft alleen opdracht-groepen. Losse 1-op-1 appjes en losse
+   e-mails gaan ALTIJD eerst langs een mens. Drempel 0 = alles handmatig.
 5. Website-leads: /api/ingest/form accepteert JSON én multipart/form-data
    (bestandsvelden "bijlage", max 10MB totaal, jpg/png/webp/heic/heif/pdf; een
    bijlage-fout laat de lead nooit sneuvelen). Extra mailboxen meelezen via env

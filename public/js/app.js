@@ -400,6 +400,7 @@ async function loadOverview() {
     ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
     : `<div class="muted small">${empty}</div>`;
   $('#overviewPanel').innerHTML = `
+    ${state.me.role === 'monteur' ? '' : `
     <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <h3 style="margin:0">${icon('sparkles', 16)} Jouw dag in één oogopslag</h3>
@@ -407,7 +408,7 @@ async function loadOverview() {
         ${state.me.role !== 'monteur' ? `<button class="btn btn-sm" id="dayov-refresh" title="Nieuwe AI-scan: WhatsApp tot 7 dagen + e-mail tot 14 dagen terug">${icon('refresh', 13)} Ververs</button>` : ''}
       </div>
       <div id="dayov-body" class="muted small" style="margin-top:10px">Dagoverzicht laden…</div>
-    </div>
+    </div>`}
     <div class="kpi-grid">
       ${card(k.teControleren, 'Te controleren', 'inbox', k.teControleren ? 'kpi-attn' : '')}
       ${card(k.klantReacties, 'Klant reageerde', 'board', k.klantReacties ? 'kpi-attn' : '')}
@@ -485,6 +486,7 @@ async function loadOverview() {
     }
   };
   const loadDayOverview = async (refresh = false) => {
+    if (!$('#dayov')) return; // monteur-rol heeft dit blok niet (AVG)
     try { renderDayOverview(await api(`/api/day-overview${refresh ? '?refresh=1' : ''}`)); }
     catch (err) { const b = $('#dayov-body'); if (b) b.textContent = 'Dagoverzicht niet beschikbaar: ' + err.message; }
   };
@@ -2889,8 +2891,8 @@ async function loadSettings() {
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('sparkles', 15)} AI-dagoverzicht (Start-pagina)</h3>
       <p class="muted small">Het blok "Jouw dag in één oogopslag" bovenaan Start scant elke dag het échte verkeer (<strong>WhatsApp tot 7 dagen</strong>, <strong>e-mail tot 14 dagen</strong> terug) plus alle kaarten, afspraken en facturen — en zet daar de belangrijkste acties, kansen en risico's uit op een rij. Wordt 1x per dag gemaakt; met de Ververs-knop op Start forceer je een nieuwe scan.</p>
       <label>AI-niveau <select id="ov-model">
-        <option value="standaard" ${s.aiOverviewModel !== 'opus' ? 'selected' : ''}>Standaard (Sonnet) — ± €0,05 per scan</option>
-        <option value="opus" ${s.aiOverviewModel === 'opus' ? 'selected' : ''}>Hoogste niveau (Opus) — scherper, ± €0,25 per scan</option>
+        <option value="standaard" ${s.aiOverviewModel !== 'opus' ? 'selected' : ''}>Standaard (Sonnet) — ± €0,10 per scan</option>
+        <option value="opus" ${s.aiOverviewModel === 'opus' ? 'selected' : ''}>Hoogste niveau (Opus) — scherper, ± €0,50 per scan</option>
       </select></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveOvModel">Opslaan</button></div>
     </div>

@@ -45,9 +45,16 @@ ok('e-mail zonder SMTP/adres: nette foutmelding', t2.status === 400 && /kanaal/i
 
 console.log('\n== AI-dagoverzicht (zonder AI-sleutel: nette feiten-fallback) ==');
 const ov1 = await api('GET', '/api/day-overview');
-ok('dagoverzicht antwoordt met feiten-fallback', ov1.status === 200 && ov1.json.error === 'geen-ai' && ov1.json.facts && typeof ov1.json.facts.pendingLeads === 'number', JSON.stringify({ error: ov1.json.error }));
+ok('dagoverzicht antwoordt met feiten-fallback (nooit kapot blok)', ov1.status === 200 && !ov1.json.data && ov1.json.facts && typeof ov1.json.facts.pendingLeads === 'number' && ['geen-ai', 'nachtrust'].includes(ov1.json.error), JSON.stringify({ error: ov1.json.error }));
 const ov2 = await api('GET', '/api/day-overview');
-ok('tweede aanroep komt uit de dagcache', ov2.status === 200 && ov2.json.cached === true);
+if (ov1.json.error === 'geen-ai') ok('fout wordt kort hergebruikt (geen dubbele dure AI-call)', ov2.status === 200 && ov2.json.at === ov1.json.at, `${ov1.json.at} vs ${ov2.json.at}`);
+else ok('nachtrust-modus blijft feiten geven', ov2.status === 200 && !!ov2.json.facts);
+// AVG: een monteur-account mag het bedrijfsbrede dagoverzicht NIET zien.
+await api('POST', '/api/users', { name: 'Ov Monteur', email: 'ovmont@keyservice.nl', password: 'test12345', role: 'monteur' });
+const rL = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'ovmont@keyservice.nl', password: 'test12345' }) });
+const mCookie = (rL.headers.get('set-cookie') || '').split(';')[0];
+const rOv = await fetch(`${BASE}/api/day-overview`, { headers: { cookie: mCookie } });
+ok('monteur krijgt 403 op het dagoverzicht (AVG)', rOv.status === 403, `status=${rOv.status}`);
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

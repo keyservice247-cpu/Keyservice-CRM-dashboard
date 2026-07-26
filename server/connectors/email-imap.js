@@ -279,7 +279,10 @@ export function parseFormSubmit(text, subject) {
       // wordt de klantnaam "Value Naam Johan Goslinga" i.p.v. "Johan Goslinga".
       v = v.replace(/^[|>*\s:-]+|[|>*\s:-]+$/g, '');
       v = v.replace(/^(?:(?:value|waarde|field|veld)\b[\s:|-]*)+/i, '');
-      v = v.replace(new RegExp('^(?:' + labelPat + ')\\b[\\s:|-]*', 'i'), '');
+      // Herhaald label alléén strippen als er een scheidingsteken achter staat
+      // ("Naam | Johan", "Naam: Johan") — nooit een echte waarde aansnijden zoals
+      // "Stad van de Zon 4" (adres) of "Probleem is dat de deur klemt" (bericht).
+      v = v.replace(new RegExp('^(?:' + labelPat + ')\\b[ \\t]*[:|-]+[ \\t]*', 'i'), '');
       if (v && !/^(value|waarde|field|veld)$/i.test(v)) return v;
     }
     return '';
@@ -289,7 +292,7 @@ export function parseFormSubmit(text, subject) {
   const telefoon = grab('tele(?:foon)?(?:nummer)?|phone|tel');
   const email = grab('e-?mail(?:adres)?');
   const woonplaats = grab('woonplaats|plaats|city|stad|adres|address');
-  const type = grab('type\\s*schuifpui|onderwerp|subject');
+  const type = grab('type[\\s_]*schuifpui|onderwerp|subject');
   const probleem = grab('probleem|problem|bericht|message|comment');
   const toelichting = grab('toelichting');
 

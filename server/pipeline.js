@@ -826,11 +826,18 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
 
   const threshold = autoApproveThreshold();
   // WET (Regel 5, verfijnd 27 jul op verzoek Abdel): aanvragen uit de OPDRACHT-
-  // GROEPEN én WEBSITE-FORMULIEREN (eigen site + FormSubmit — dat is per definitie
-  // klantverkeer, het leveranciersfilter kan hier nooit gelden) mogen boven de
-  // ingestelde drempel automatisch een kaart worden. Losse 1-op-1 appjes en losse
-  // e-mails blijven ALTIJD eerst langs een mens gaan. Drempel 0 = alles handmatig.
-  if ((isOrderGroupMsg || isFormLead) && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  // GROEPEN én van het EIGEN WEBSITEFORMULIER mogen boven de ingestelde drempel
+  // automatisch een kaart worden. STRIKT: alleen de DIRECTE site-POST
+  // (forceRelevant) telt — een mail die op formuliertekst LIJKT (FormSubmit-kopie,
+  // geciteerd origineel onder een Re:, webshop-mail met zo'n zin erin) kan anders
+  // langs het leveranciersfilter een kaart worden. Verder verplicht: échte
+  // contactgegevens en geen generieke naam, en nooit een e-mailreactie. Losse
+  // 1-op-1 appjes en losse e-mails blijven ALTIJD eerst langs een mens.
+  // Drempel 0 = alles handmatig.
+  const formAutoOk = forceRelevant && !isEmailReply
+    && !!(suggestion.customerPhone || suggestion.customerEmail)
+    && !isGenericName(suggestion.customerName);
+  if ((isOrderGroupMsg || formAutoOk) && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 
@@ -852,15 +859,19 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
 
   saveSoon();
   logActivity('systeem', 'bericht ontvangen', `${channel} van ${sender || 'onbekend'}`);
-  // Melding alleen bij een echte nieuwe aanvraag (niet bij geklets/overige).
-  if (review.status === 'pending') {
+  // Melding bij een echte nieuwe aanvraag (niet bij geklets/overige) — óók wanneer
+  // hij automatisch is goedgekeurd: een lead mag NOOIT stil binnenkomen.
+  if (['pending', 'auto_approved'].includes(review.status)) {
     const who = suggestion.customerName || sender || 'Onbekend';
     const what = (subject || body || '').replace(/\s+/g, ' ').slice(0, 80);
-    notifyPush('Nieuwe aanvraag', `${who}${what ? ' — ' + what : ''}`);
+    const isAuto = review.status === 'auto_approved';
+    notifyPush(isAuto ? 'Aanvraag automatisch goedgekeurd' : 'Nieuwe aanvraag', `${who}${what ? ' — ' + what : ''}`);
     // WhatsApp-seintje naar het team (groep "CRM meldingen" of de assistente 1-op-1).
     const src = channel === 'email' ? 'e-mail/website' : channel;
     const place = (suggestion.customerAddress || '').replace(/\s+/g, ' ').slice(0, 60);
-    queueCrmWhatsappAlert(`🔔 CRM: nieuwe aanvraag te controleren — ${who}${place ? ` (${place})` : ''} via ${src}.\nOpen de inbox: https://keyservice-crm.onrender.com`);
+    queueCrmWhatsappAlert(isAuto
+      ? `✅ CRM: aanvraag AUTOMATISCH goedgekeurd — ${who}${place ? ` (${place})` : ''} via ${src}. De kaart staat op het bord.\nhttps://keyservice-crm.onrender.com`
+      : `🔔 CRM: nieuwe aanvraag te controleren — ${who}${place ? ` (${place})` : ''} via ${src}.\nOpen de inbox: https://keyservice-crm.onrender.com`);
   }
   return { message, review };
 }

@@ -137,9 +137,12 @@ export function runFinanceAutoSync() {
   if (!persisted.autoSyncSince) { persisted.autoSyncSince = today(); saveSoon(); }
   const since = persisted.autoSyncSince;
   const entries = fin().entries;
-  const seen = new Set(entries.map((e) => e.sourceRef).filter(Boolean));
+  // Dedup op sourceRef ÉN op de grafstenen: verwijdert een mens een automatische
+  // boeking bewust, dan komt die er bij de volgende ronde NIET stiekem weer in.
+  const seen = new Set([...entries.map((e) => e.sourceRef), ...(fin().removedRefs || [])].filter(Boolean));
   // Alleen echte kaarten — een kaart in de prullenbak mag nooit een fee boeken.
   const orderById = new Map((db().orders || []).map((o) => [o.id, o]));
+  const nlDay = (d) => new Date(d || Date.now()).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   let income = 0; let fees = 0;
   for (const inv of db().invoices || []) {
     if (inv.type === 'offerte' || inv.status !== 'betaald') continue;
@@ -154,7 +157,7 @@ export function runFinanceAutoSync() {
       : /schuifpui|schuifdeur|schuifwand/i.test(hay) ? 'Schuifpui reparatie'
       : 'Overig';
     entries.unshift({
-      id: id('fin'), kind: 'income', date: String(inv.paidAt || now()).slice(0, 10), amount, category,
+      id: id('fin'), kind: 'income', date: nlDay(inv.paidAt), amount, category,
       monteurId: (order && order.monteurId) || null, source: null, orderId: (order && order.id) || null,
       note: `Factuur ${inv.number || ''} betaald (excl. btw)${order ? ` — ${order.title}` : ''}`.trim(),
       sourceRef: ref, auto: true, createdBy: 'systeem (facturen)', createdAt: now(),
@@ -169,7 +172,7 @@ export function runFinanceAutoSync() {
       const ref = `drsfee:${o.id}`;
       if (seen.has(ref)) continue;
       entries.unshift({
-        id: id('fin'), kind: 'expense', date: String(o.completedAt || o.updatedAt || now()).slice(0, 10),
+        id: id('fin'), kind: 'expense', date: nlDay(o.completedAt || o.updatedAt),
         amount: s.drsFeePerJob, category: 'Fee per opdracht',
         monteurId: o.monteurId || null, source: null, orderId: o.id,
         note: `Fee afgeronde DRS-opdracht — ${o.title}`.slice(0, 160),
@@ -318,9 +321,30 @@ export function updateEntry(id2, b) {
 
 export function deleteEntry(id2) {
   const before = fin().entries.length;
+  // Grafsteen voor automatische boekingen: bewust verwijderd = verwijderd. Zonder
+  // dit boekte de uurlijkse autosync de entry binnen een uur gewoon opnieuw.
+  const victim = fin().entries.find((x) => x.id === id2);
+  if (victim && victim.sourceRef) {
+    fin().removedRefs = Array.isArray(fin().removedRefs) ? fin().removedRefs : [];
+    if (!fin().removedRefs.includes(victim.sourceRef)) fin().removedRefs.push(victim.sourceRef);
+    fin().removedRefs = fin().removedRefs.slice(-2000);
+  }
   fin().entries = fin().entries.filter((x) => x.id !== id2);
   saveSoon();
   return { ok: fin().entries.length < before };
+}
+
+// Factuur is niet meer 'betaald' (teruggedraaid)? Haal dan ook de automatische
+// omzet-boeking weg — anders blijft omzet in de maand staan die er niet is.
+export function removeAutoIncomeForInvoice(invId) {
+  const ref = `inv:${invId}`;
+  const before = fin().entries.length;
+  fin().entries = fin().entries.filter((e) => !(e.sourceRef === ref && e.auto));
+  // De grafsteen juist WEGHALEN: wordt de factuur later opnieuw betaald, dan mag
+  // de autosync 'm gewoon weer boeken.
+  fin().removedRefs = (fin().removedRefs || []).filter((r) => r !== ref);
+  if (fin().entries.length < before) saveSoon();
+  return before - fin().entries.length;
 }
 
 // Maandoverzicht: entries + samenvatting (omzet/kosten/winst + uitsplitsingen).
