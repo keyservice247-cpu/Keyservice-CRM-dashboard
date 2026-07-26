@@ -34,6 +34,7 @@ import {
 } from './auth.js';
 import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
+import { amsterdamParts } from './week.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
   findCustomerStrong, senderPhoneFromText, matchPhone,
@@ -1431,12 +1432,17 @@ app.post('/api/whatsapp/groups', checkIngestToken, (req, res) => {
 });
 
 // Begin (maandag 00:00) en einde (volgende maandag 00:00) van de kalenderweek rond ref.
+// "Vandaag" en "deze week" op de NEDERLANDSE klok (Europe/Amsterdam) — de server
+// draait op Render in UTC, waardoor 's nachts (00:00-02:00 NL) en op de
+// zondag/maandag-grens de tellingen anders verschoven.
+function amsMidnightMs(ref = new Date()) {
+  const a = amsterdamParts(ref);
+  return ref.getTime() - (((a.hour * 60 + a.minute) * 60 + (a.second || 0)) * 1000) - (ref.getTime() % 1000);
+}
 function weekBounds(ref = new Date()) {
-  const d = new Date(ref);
-  const dow = (d.getDay() + 6) % 7; // 0 = maandag ... 6 = zondag
-  const start = new Date(d); start.setHours(0, 0, 0, 0); start.setDate(d.getDate() - dow);
-  const end = new Date(start); end.setDate(start.getDate() + 7);
-  return { start: start.getTime(), end: end.getTime() };
+  const a = amsterdamParts(ref);
+  const start = amsMidnightMs(ref) - (a.dow - 1) * 86400000;
+  return { start, end: start + 7 * 86400000 };
 }
 
 // Overzicht/Home: kerncijfers (KPI's) + lijstjes die aandacht vragen + activiteit.
@@ -1445,12 +1451,12 @@ app.get('/api/overview', requireAuth, (req, res) => {
   const labels = getStatusLabels();
   const custMap = new Map((db().customers || []).map((c) => [c.id, c]));
   const custName = (o) => (custMap.get(o.customerId) || {}).name || '';
-  const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
-  const endToday = startToday.getTime() + 86400000;
+  const startTodayMs = amsMidnightMs();
+  const endToday = startTodayMs + 86400000;
   const wk = weekBounds();
   const threeDays = Date.now() - 3 * 86400000;
 
-  const isToday = (d) => { const t = new Date(d).getTime(); return t >= startToday.getTime() && t < endToday; };
+  const isToday = (d) => { const t = new Date(d).getTime(); return t >= startTodayMs && t < endToday; };
   const apptToday = active.filter((o) => o.appointmentAt && isToday(o.appointmentAt) && !['afgerond', 'geannuleerd'].includes(o.status))
     .sort((a, b) => new Date(a.appointmentAt) - new Date(b.appointmentAt))
     .map((o) => ({ id: o.id, title: o.title, at: o.appointmentAt, customer: custName(o) }));
@@ -1468,7 +1474,9 @@ app.get('/api/overview', requireAuth, (req, res) => {
       openOffertes: active.filter((o) => o.status === 'offerte_verzonden').length,
       afsprakenVandaag: apptToday.length,
       klantReacties: repliedList.length,
-      afgerondDezeWeek: db().orders.filter((o) => o.status === 'afgerond' && new Date(o.updatedAt).getTime() >= wk.start && new Date(o.updatedAt).getTime() < wk.end).length,
+      // Op het ECHTE afrondmoment (completedAt) — updatedAt schuift op door elke
+      // aanraking (notitie, badge) en trok oude kaarten terug "deze week" in.
+      afgerondDezeWeek: db().orders.filter((o) => o.status === 'afgerond' && new Date(o.completedAt || o.updatedAt).getTime() >= wk.start && new Date(o.completedAt || o.updatedAt).getTime() < wk.end).length,
       actief: active.length,
     },
     whatsapp: { online: ageSec != null && ageSec < 180, configured: !!last, lastSeen: last },
@@ -2944,7 +2952,8 @@ app.get('/api/invoices', requireAuth, (req, res) => {
 app.get('/api/finance', requirePerm('finance'), (req, res) => {
   const month = String(req.query.month || '').slice(0, 7);
   const monteurs = db().monteurs || [];
-  bookRecurringDue(); // vaste kosten van de lopende periode automatisch bijboeken
+  // Vaste kosten worden door de uurlijkse automatisering geboekt — niet meer als
+  // verrassing bij het openen van deze pagina (GET hoort geen boekingen te doen).
   res.json({
     report: monthReport(month, monteurs),
     trend: trend(6, month),
@@ -3670,6 +3679,26 @@ app.listen(PORT, () => {
       save();
     }
   } catch (e) { console.error('[bijlage-dedup]', e.message); }
+  // Eenmalige opschoning: NEP-correcties uit het AI-feedback-geheugen. Door een
+  // vergelijkingsfout telde élke gewone goedkeuring als "mens koos nieuw"-correctie
+  // (honderden stuks) — dat vervuilde de leervoorbeelden die naar de AI meegaan én
+  // maakte de "juist ingedeeld"-statistiek onzin. Echte correcties (mens koos een
+  // andere kolom) blijven volledig staan.
+  try {
+    if (!db().settings._fbNoiseV1) {
+      const before = (db().feedback || []).length;
+      db().feedback = (db().feedback || []).filter((f) => !(f.type === 'correction' && f.shouldBe === 'nieuw'));
+      const removed = before - db().feedback.length;
+      // Ook de reviews-teller herstellen: "correctie naar nieuw" was nooit een echte correctie.
+      let fixedReviews = 0;
+      for (const r of db().reviews || []) {
+        if (r.correctedStatus === 'nieuw') { r.correctedStatus = null; fixedReviews++; }
+      }
+      db().settings._fbNoiseV1 = true;
+      if (removed || fixedReviews) logActivity('systeem', 'AI-leerdata opgeschoond', `${removed} nep-correcties verwijderd, ${fixedReviews} statistiek-vlaggen hersteld`);
+      save();
+    }
+  } catch (e) { console.error('[feedback-opschoning]', e.message); }
   // Storing-herstel in vaste volgorde: eerst "groep <id>" → echte naam helen (bron-chip
   // klopt weer, ook op bestaande kaarten), dan mislukte groeps-berichten opnieuw in de
   // wachtrij, dan gemiste opdrachten alsnog automatisch naar de monteur.

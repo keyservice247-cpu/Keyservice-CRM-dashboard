@@ -129,14 +129,23 @@ export function bookRecurringDue(actorName = 'systeem') {
 export function runFinanceAutoSync() {
   const s = getFinanceSettings();
   if (!s.autoSync) return { income: 0, fees: 0 };
+  // STARTDATUM: alleen gebeurtenissen vanaf het moment dat de autosync voor het
+  // eerst draaide worden geboekt. Anders zou de eerste run de hele historie
+  // opnieuw boeken — bovenop wat de eigenaar toen al HANDMATIG had geboekt
+  // (dubbele bedragen), en zouden afgesloten maanden achteraf veranderen.
+  const persisted = db().settings.financeSettings || (db().settings.financeSettings = {});
+  if (!persisted.autoSyncSince) { persisted.autoSyncSince = today(); saveSoon(); }
+  const since = persisted.autoSyncSince;
   const entries = fin().entries;
   const seen = new Set(entries.map((e) => e.sourceRef).filter(Boolean));
-  const orderById = new Map([...(db().orders || []), ...(db().trash || [])].map((o) => [o.id, o]));
+  // Alleen echte kaarten — een kaart in de prullenbak mag nooit een fee boeken.
+  const orderById = new Map((db().orders || []).map((o) => [o.id, o]));
   let income = 0; let fees = 0;
   for (const inv of db().invoices || []) {
     if (inv.type === 'offerte' || inv.status !== 'betaald') continue;
     const amount = r2(inv.totalExcl || 0);
     if (!(amount > 0)) continue;
+    if (String(inv.paidAt || '').slice(0, 10) < since) continue;
     const ref = `inv:${inv.id}`;
     if (seen.has(ref)) continue;
     const order = inv.orderId ? orderById.get(inv.orderId) : null;
@@ -156,6 +165,7 @@ export function runFinanceAutoSync() {
     for (const o of orderById.values()) {
       if (o.status !== 'afgerond') continue;
       if (!o.originGroup || !isWhatsappOrderGroup(o.originGroup)) continue;
+      if (String(o.completedAt || o.updatedAt || '').slice(0, 10) < since) continue;
       const ref = `drsfee:${o.id}`;
       if (seen.has(ref)) continue;
       entries.unshift({
@@ -246,11 +256,17 @@ export function weeklyReportData(monteurs = []) {
   const thisWeek = sum(thisStart, now2 + 86400000);
   const lastWeek = sum(lastStart, thisStart);
   const weekAgo = now2 - 7 * 86400000;
-  const newLeads = (db().reviews || []).filter((r) => r.createdAt && new Date(r.createdAt).getTime() >= weekAgo).length;
+  // Alleen ECHTE leads tellen — afgewezen berichten en "Overige" (geklets/reclame)
+  // horen niet in "nieuwe leads", anders is het getal structureel te hoog.
+  const newLeads = (db().reviews || []).filter((r) => r.createdAt && new Date(r.createdAt).getTime() >= weekAgo
+    && !['rejected', 'overige'].includes(r.status)).length;
   const invoices = db().invoices || [];
   const unpaid = invoices.filter((i) => i.type !== 'offerte' && i.status === 'verzonden');
   const unpaidTotal = r2(unpaid.reduce((s, i) => s + (i.totalIncl || 0), 0));
-  const overdue = unpaid.filter((i) => i.sentAt && (now2 - new Date(i.sentAt).getTime()) > 7 * 86400000);
+  // VERLOPEN volgt de ingestelde betaaltermijn (zelfde definitie als het facturen-
+  // scherm en de ochtendbriefing) — niet een vaste 7 dagen.
+  const payDays = Number((db().settings.invoiceSettings || {}).paymentDays) || 7;
+  const overdue = unpaid.filter((i) => i.sentAt && (now2 - new Date(i.sentAt).getTime()) > payDays * 86400000);
   const staleOrders = (db().orders || []).filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status) && new Date(o.updatedAt).getTime() < now2 - 5 * 86400000).length;
   const monthNow = monthReport(new Date().toISOString().slice(0, 7), monteurs);
   return { thisWeek, lastWeek, newLeads, unpaidCount: unpaid.length, unpaidTotal, overdueCount: overdue.length, staleOrders, monthProfit: monthNow.profit, monthIncome: monthNow.income };

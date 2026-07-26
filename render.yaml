@@ -13,6 +13,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Nederlandse tijd voor alle datum-/weekberekeningen ("vandaag", weekgrens):
+      - key: TZ
+        value: Europe/Amsterdam
       # Geheimen worden automatisch en veilig gegenereerd:
       - key: SESSION_SECRET
         generateValue: true

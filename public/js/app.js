@@ -1352,7 +1352,7 @@ function renderCustomers() {
   };
   const eurC = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
   $('#customerList').innerHTML = `
-    <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>Laatste status</th><th>Opdrachten</th><th>Gefactureerd</th>${canWrite ? '<th></th>' : ''}
+    <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>Laatste status</th><th>Opdrachten</th><th title="Verzonden + betaalde facturen, incl. btw (offertes tellen niet mee)">Gefactureerd</th>${canWrite ? '<th></th>' : ''}
     </tr></thead><tbody> ${list.map((c) => `<tr> <td><strong class="cust-open" data-dossier="${esc(c.id)}" style="cursor:pointer;color:var(--accent)" title="Open het klantdossier (alles van deze klant op één scherm)">${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}${c.email ? `<div class="muted small">${esc(c.email)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td> <td>${lastCell(c)}</td> <td>${c.orderCount}${c.activeCount ? ` <span class="muted small">(${c.activeCount} actief)</span>` : ''}</td> <td>${c.invoiceCount ? `<span class="cust-invoiced">${eurC(c.invoicedTotal)}<div class="muted small">${c.invoiceCount} factuur${c.invoiceCount > 1 ? 'en' : ''}</div></span>` : '<span class="muted small">—</span>'}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
     </tr>`).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
     </tbody></table>`;
@@ -2382,7 +2382,7 @@ function renderInvoices() {
   else if (f === 'verlopen') items = all.filter(isOverdue);
   else if (f !== 'all') items = all.filter((i) => i.status === f);
   const open = all.filter((i) => i.type !== 'offerte' && i.status === 'verzonden').reduce((s, i) => s + (i.totalIncl || 0), 0);
-  const paid = all.filter((i) => i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
+  const paid = all.filter((i) => i.type !== 'offerte' && i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
   const overdueCount = all.filter(isOverdue).length;
   let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong>${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}</div>
     <div id="invTodoWrap"></div>`;
@@ -2490,7 +2490,7 @@ function renderFinance() {
         <td>${esc(e.date.slice(8) + '-' + e.date.slice(5, 7))}</td>
         <td><span class="chip" style="color:${e.kind === 'income' ? 'var(--ok)' : 'var(--danger)'}">${e.kind === 'income' ? 'in' : 'uit'}</span></td>
         <td>${esc(e.category)}</td>
-        <td class="muted small">${esc(e.monteurName || e.source || '')}</td>
+        <td class="muted small">${esc(e.monteurName || e.source || '')}${e.auto ? ' <span class="chip" style="font-size:10px;padding:1px 7px" title="Automatisch geboekt door het systeem (factuur/DRS-fee/vaste kosten)">automatisch</span>' : ''}</td>
         <td class="muted small">${esc((e.note || '').slice(0, 40))}</td>
         <td style="text-align:right"><strong style="color:${e.kind === 'income' ? 'var(--ok)' : 'var(--danger)'}">${e.kind === 'income' ? '+' : '−'}${eurF(e.amount).replace('€ ', '€')}</strong></td>
         <td><button class="btn btn-sm fin-del" data-id="${esc(e.id)}" title="Verwijderen">${icon('x', 12)}</button></td>

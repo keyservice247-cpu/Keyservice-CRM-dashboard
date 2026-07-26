@@ -8,14 +8,14 @@ export function amsterdamParts(date = new Date()) {
   const fmt = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Amsterdam',
     year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
     weekday: 'short',
   });
   const p = Object.fromEntries(fmt.formatToParts(date).map((x) => [x.type, x.value]));
   const weekdayMap = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
   return {
     year: Number(p.year), month: Number(p.month), day: Number(p.day),
-    hour: Number(p.hour), minute: Number(p.minute),
+    hour: Number(p.hour), minute: Number(p.minute), second: Number(p.second) || 0,
     dow: weekdayMap[p.weekday] || 1, // 1 = maandag ... 7 = zondag
   };
 }

@@ -396,10 +396,14 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
   review.status = auto ? 'auto_approved' : 'approved';
   review.finalStatus = status;
   review.orderId = order.id;
-  // Vergelijk met wat de AI oorspronkelijk dacht (aiStatus), niet de in de inbox
-  // getoonde 'nieuw'-status.
+  // Vergelijk met wat de AI oorspronkelijk dacht (aiStatus) — maar tel alléén een
+  // ECHTE menselijke keuze als correctie. Het inbox-formulier staat standaard op
+  // "nieuw" (en aiStatus kan nooit "nieuw" zijn), dus zonder deze guard telde ELKE
+  // goedkeuring als correctie: de "juist ingedeeld"-statistiek stond daardoor
+  // structureel op ~0% en de AI-feedback werd gevoed met nep-correcties.
   const aiThought = s.aiStatus || s.status;
-  review.correctedStatus = status !== aiThought ? status : null;
+  const humanPicked = !auto && overrides.status && normalizeStatus(overrides.status) !== 'nieuw';
+  review.correctedStatus = (humanPicked && normalizeStatus(overrides.status) !== normalizeStatus(aiThought)) ? status : null;
   review.reviewedBy = actorName;
   review.reviewedAt = now();
 
