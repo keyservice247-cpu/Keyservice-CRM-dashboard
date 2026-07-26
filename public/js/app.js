@@ -819,8 +819,8 @@ function attachmentsHTML(atts) {
   if (!atts || !atts.length) return '<div class="muted small">Nog geen foto’s of bestanden.</div>';
   return atts.map((a) => {
     if (a.kind === 'image') return `<a class="att att-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.url)}" loading="lazy"></a>`;
-    if (a.kind === 'video') return `<a class="att att-vid" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">${icon('video', 22)}<span>video</span></a>`;
-    if (a.kind === 'audio') return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">${icon('mic', 22)}<span>audio</span></a>`;
+    if (a.kind === 'video') return `<video class="att att-video" controls preload="metadata" playsinline title="${esc(a.filename)}" style="max-width:100%;border-radius:10px;background:#000"><source src="${esc(a.url)}"></video>`;
+    if (a.kind === 'audio') return `<audio class="att att-audio" controls preload="metadata" title="${esc(a.filename)}" style="max-width:100%" src="${esc(a.url)}"></audio>`;
     return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">${icon('file', 22)}<span>${esc((a.filename || 'bestand').slice(0, 14))}</span></a>`;
   }).join('');
 }

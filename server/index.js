@@ -3580,9 +3580,16 @@ app.get('/uploads/:file', allowUploadAccess, (req, res) => {
   // of .svg met verborgen script) wordt geforceerd gedownload i.p.v. uitgevoerd in
   // onze eigen origin. nosniff voorkomt dat de browser het type zelf herinterpreteert.
   const ext = (req.params.file.split('.').pop() || '').toLowerCase();
-  const inlineOk = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'].includes(ext);
+  // Video's en spraakberichten (WhatsApp) spelen gewoon af in de browser; alleen
+  // actieve inhoud (html/svg met script) blijft geforceerd downloaden.
+  const inlineOk = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf',
+    'mp4', 'mov', 'webm', 'm4v', '3gp', 'mkv',
+    'mp3', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'wav', 'amr'].includes(ext);
   res.set('X-Content-Type-Options', 'nosniff');
   if (!inlineOk) res.set('Content-Disposition', `attachment; filename="${req.params.file}"`);
+  if (ext === 'mov') res.type('video/quicktime');
+  if (ext === 'opus' || ext === 'oga') res.type('audio/ogg');
+  if (ext === 'amr') res.type('audio/amr');
   res.sendFile(path.join(UPLOAD_DIR, req.params.file));
 });
 
