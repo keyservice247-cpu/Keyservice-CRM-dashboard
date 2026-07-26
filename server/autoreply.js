@@ -15,7 +15,9 @@ export async function maybeSendAutoReply(result) {
   // bericht aan een bestaande, lopende kaart hangt (klant is dan al in behandeling/
   // offerte) — dan is "bedankt voor uw aanvraag, stuur foto's" niet meer passend.
   if (!review) { console.log('[bevestiging] bericht hing aan bestaande kaart (terugkerende klant) — overgeslagen'); return; }
-  if (review.status !== 'pending') { console.log(`[bevestiging] review-status '${review.status}' (geen nieuwe aanvraag) — overgeslagen`); return; }
+  // Ook automatisch goedgekeurde website-leads (drempel) krijgen gewoon een
+  // ontvangstbevestiging — de klant merkt anders niets van z'n aanvraag.
+  if (!['pending', 'auto_approved'].includes(review.status)) { console.log(`[bevestiging] review-status '${review.status}' (geen nieuwe aanvraag) — overgeslagen`); return; }
   if (review.channel !== 'email') { console.log(`[bevestiging] kanaal '${review.channel}' (geen e-mail/website) — overgeslagen`); return; }
   const s = review.suggestion || {};
   const messageId = review.messageId;

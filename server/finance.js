@@ -2,7 +2,8 @@
 // uitgaven, met heldere categorieën, koppeling aan monteur/bron, en maand-overzicht
 // (omzet / kosten / winst + uitsplitsingen). Later: auto-omzet uit monteursrapporten
 // en AI-suggesties. Bewust simpel en stabiel — geen boekhoudpakket, wél clarity.
-import { db, id, now, saveSoon } from './db.js';
+import { db, id, now, saveSoon, logActivity } from './db.js';
+import { isWhatsappOrderGroup } from './settings.js';
 
 // Vaste categorieën (het bedrijfsmodel van de eigenaar). Uitbreidbaar via 'Overig'.
 export const INCOME_CATEGORIES = ['DRS opdracht', 'Schuifpui reparatie', 'Overig'];
@@ -34,6 +35,8 @@ export const DEFAULT_FINANCE_SETTINGS = {
     { id: 'rec_drs', label: 'Marketing fee DRS', amount: 65, period: 'week', category: 'Marketing fee DRS', active: true, lastBooked: '' },
   ],
   weeklyReport: { enabled: false, email: '', hour: 8 }, // elke maandag om {hour}:00
+  autoSync: true,        // betaalde facturen + DRS-fee automatisch boeken
+  drsFeePerJob: 42.5,    // fee per afgeronde DRS-opdracht
 };
 export function getFinanceSettings() {
   const s = (db().settings.financeSettings) || {};
@@ -50,6 +53,8 @@ export function getFinanceSettings() {
       email: String((s.weeklyReport && s.weeklyReport.email) || '').slice(0, 120),
       hour: (() => { const h = Number(s.weeklyReport && s.weeklyReport.hour); return Number.isFinite(h) ? Math.max(0, Math.min(23, h)) : 8; })(),
     },
+    autoSync: s.autoSync !== false,
+    drsFeePerJob: Number.isFinite(+s.drsFeePerJob) ? Math.max(0, r2(s.drsFeePerJob)) : DEFAULT_FINANCE_SETTINGS.drsFeePerJob,
   };
 }
 export function saveFinanceSettings(b) {
@@ -67,6 +72,8 @@ export function saveFinanceSettings(b) {
       email: String((b.weeklyReport && b.weeklyReport.email) || cur.weeklyReport.email).slice(0, 120),
       hour: (() => { const h = Number(b.weeklyReport && b.weeklyReport.hour); return Number.isFinite(h) ? Math.max(0, Math.min(23, h)) : cur.weeklyReport.hour; })(),
     },
+    autoSync: 'autoSync' in b ? !!b.autoSync : cur.autoSync,
+    drsFeePerJob: Number.isFinite(+b.drsFeePerJob) ? Math.max(0, r2(+b.drsFeePerJob)) : cur.drsFeePerJob,
   };
   db().settings.financeSettings = merged;
   saveSoon();
@@ -106,6 +113,66 @@ export function bookRecurringDue(actorName = 'systeem') {
   });
   if (booked) saveSoon();
   return booked;
+}
+
+// ---------- AUTOMATISCHE BOEKINGEN (27 jul, op verzoek eigenaar) ----------
+// "Alles staat er al" — dus boekt het systeem het zelf:
+// 1) Elke BETAALDE factuur wordt automatisch als OMZET geboekt (excl. btw — btw is
+//    geen omzet). Bron-heuristiek: kaart uit een DRS-groep -> "DRS opdracht";
+//    schuifpui in titel/omschrijving -> "Schuifpui reparatie"; anders "Overig".
+//    Monteur van de kaart wordt gekoppeld. Dedup via sourceRef "inv:<id>".
+// 2) Elke AFGERONDE DRS-kaart boekt automatisch de vaste fee (default €42,50,
+//    "Fee per opdracht"). Dedup via sourceRef "drsfee:<orderId>".
+// Instelbaar (Cijfers -> Vaste kosten & rapport): autoSync aan/uit + fee-bedrag.
+// Draait elk uur mee met de automatiseringen; boekt nooit dubbel en verwijdert
+// nooit iets — handmatig corrigeren blijft altijd mogelijk.
+export function runFinanceAutoSync() {
+  const s = getFinanceSettings();
+  if (!s.autoSync) return { income: 0, fees: 0 };
+  const entries = fin().entries;
+  const seen = new Set(entries.map((e) => e.sourceRef).filter(Boolean));
+  const orderById = new Map([...(db().orders || []), ...(db().trash || [])].map((o) => [o.id, o]));
+  let income = 0; let fees = 0;
+  for (const inv of db().invoices || []) {
+    if (inv.type === 'offerte' || inv.status !== 'betaald') continue;
+    const amount = r2(inv.totalExcl || 0);
+    if (!(amount > 0)) continue;
+    const ref = `inv:${inv.id}`;
+    if (seen.has(ref)) continue;
+    const order = inv.orderId ? orderById.get(inv.orderId) : null;
+    const hay = `${(order && order.title) || ''} ${(inv.lines || []).map((l) => l.description).join(' ')}`;
+    const category = (order && order.originGroup && isWhatsappOrderGroup(order.originGroup)) ? 'DRS opdracht'
+      : /schuifpui|schuifdeur|schuifwand/i.test(hay) ? 'Schuifpui reparatie'
+      : 'Overig';
+    entries.unshift({
+      id: id('fin'), kind: 'income', date: String(inv.paidAt || now()).slice(0, 10), amount, category,
+      monteurId: (order && order.monteurId) || null, source: null, orderId: (order && order.id) || null,
+      note: `Factuur ${inv.number || ''} betaald (excl. btw)${order ? ` — ${order.title}` : ''}`.trim(),
+      sourceRef: ref, auto: true, createdBy: 'systeem (facturen)', createdAt: now(),
+    });
+    seen.add(ref); income++;
+  }
+  if (s.drsFeePerJob > 0) {
+    for (const o of orderById.values()) {
+      if (o.status !== 'afgerond') continue;
+      if (!o.originGroup || !isWhatsappOrderGroup(o.originGroup)) continue;
+      const ref = `drsfee:${o.id}`;
+      if (seen.has(ref)) continue;
+      entries.unshift({
+        id: id('fin'), kind: 'expense', date: String(o.completedAt || o.updatedAt || now()).slice(0, 10),
+        amount: s.drsFeePerJob, category: 'Fee per opdracht',
+        monteurId: o.monteurId || null, source: null, orderId: o.id,
+        note: `Fee afgeronde DRS-opdracht — ${o.title}`.slice(0, 160),
+        sourceRef: ref, auto: true, createdBy: 'systeem (DRS-fee)', createdAt: now(),
+      });
+      seen.add(ref); fees++;
+    }
+  }
+  if (income || fees) {
+    saveSoon();
+    logActivity('systeem', 'cijfers automatisch bijgeboekt', `${income} factuur-omzet, ${fees} DRS-fee(s)`);
+  }
+  return { income, fees };
 }
 
 // Zoek €-bedragen in monteursrapporten (monteursgroepen) van een maand -> import-suggesties.

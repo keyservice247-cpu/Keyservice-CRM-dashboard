@@ -400,6 +400,14 @@ async function loadOverview() {
     ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
     : `<div class="muted small">${empty}</div>`;
   $('#overviewPanel').innerHTML = `
+    <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <h3 style="margin:0">${icon('sparkles', 16)} Jouw dag in één oogopslag</h3>
+        <span class="muted small" id="dayov-meta" style="margin-left:auto"></span>
+        ${state.me.role !== 'monteur' ? `<button class="btn btn-sm" id="dayov-refresh" title="Nieuwe AI-scan: WhatsApp tot 7 dagen + e-mail tot 14 dagen terug">${icon('refresh', 13)} Ververs</button>` : ''}
+      </div>
+      <div id="dayov-body" class="muted small" style="margin-top:10px">Dagoverzicht laden…</div>
+    </div>
     <div class="kpi-grid">
       ${card(k.teControleren, 'Te controleren', 'inbox', k.teControleren ? 'kpi-attn' : '')}
       ${card(k.klantReacties, 'Klant reageerde', 'board', k.klantReacties ? 'kpi-attn' : '')}
@@ -434,6 +442,51 @@ async function loadOverview() {
     if (col) { state.boardTab = col; state._focusCol = col; } // open meteen de juiste kolom
     goView(el.dataset.go);
   });
+  // ---------- AI-dagoverzicht (1x per dag gegenereerd, Ververs forceert) ----------
+  const renderDayOverview = (d) => {
+    const body = $('#dayov-body'); if (!body) return;
+    const meta = $('#dayov-meta');
+    if (meta && d.at) meta.textContent = `${d.engine && /opus/i.test(d.engine) ? 'Opus · ' : ''}gemaakt ${fmtDate(d.at)}`;
+    const viewOf = { inbox: 'inbox', opdrachten: 'board', facturen: 'invoices', agenda: 'agenda', klanten: 'customers' };
+    const prioDot = { hoog: '#ef4444', middel: '#f59e0b', laag: '#10b981' };
+    if (d.data) {
+      const a = d.data;
+      body.innerHTML = `
+        ${a.kop ? `<div style="font-size:15.5px;color:var(--ink);font-weight:600;line-height:1.45;margin-bottom:10px">${esc(a.kop)}</div>` : ''}
+        ${(a.acties || []).length ? `<div>${a.acties.map((x) => `
+          <div class="dayov-act" data-go2="${esc(viewOf[x.waar] || 'board')}" style="display:flex;gap:9px;align-items:flex-start;padding:7px 8px;margin:2px -8px;border-radius:8px;cursor:pointer">
+            <span style="width:9px;height:9px;border-radius:50%;background:${prioDot[x.prio] || prioDot.middel};margin-top:5px;flex:none"></span>
+            <span style="color:var(--ink)"><strong>${esc(x.titel)}</strong>${x.waarom ? ` <span class="muted">— ${esc(x.waarom)}</span>` : ''}</span>
+          </div>`).join('')}</div>` : '<div class="muted small">Geen acties — alles loopt.</div>'}
+        ${(a.kansen || []).length || (a.risicos || []).length ? `
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
+          ${(a.kansen || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#0d7a43;margin-bottom:4px">Kansen</div>${a.kansen.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}
+          ${(a.risicos || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#b45309;margin-bottom:4px">Let op</div>${a.risicos.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}
+        </div>` : ''}`;
+      $$('.dayov-act', body).forEach((el) => {
+        el.onmouseenter = () => { el.style.background = 'var(--panel-2, #f6f8fb)'; };
+        el.onmouseleave = () => { el.style.background = ''; };
+        el.onclick = () => goView(el.dataset.go2);
+      });
+    } else {
+      // Zonder AI: de feiten netjes tonen — nooit een leeg of kapot blok.
+      const f = d.facts || {};
+      const rows = [
+        f.appts && f.appts.length ? `${f.appts.length} afspraak/afspraken vandaag` : 'Geen afspraken vandaag',
+        f.pendingLeads ? `${f.pendingLeads} lead(s) te controleren in de inbox` : '',
+        f.unanswered ? `${f.unanswered} klantreactie(s) onbeantwoord` : '',
+        f.overdueCount ? `${f.overdueCount} factuur/facturen verlopen` : '',
+      ].filter(Boolean);
+      body.innerHTML = `${rows.map((r) => `<div style="padding:2px 0">• ${esc(r)}</div>`).join('')}<div class="muted small" style="margin-top:8px">${d.error === 'geen-ai' ? 'Zet de AI aan (ANTHROPIC_API_KEY) voor het volledige dagoverzicht met acties, kansen en risico’s.' : 'AI-scan lukte even niet — dit zijn de kale feiten. Probeer Ververs.'}</div>`;
+    }
+  };
+  const loadDayOverview = async (refresh = false) => {
+    try { renderDayOverview(await api(`/api/day-overview${refresh ? '?refresh=1' : ''}`)); }
+    catch (err) { const b = $('#dayov-body'); if (b) b.textContent = 'Dagoverzicht niet beschikbaar: ' + err.message; }
+  };
+  loadDayOverview();
+  const rf = $('#dayov-refresh');
+  if (rf) rf.onclick = async () => { rf.disabled = true; rf.textContent = 'Scannen…'; await loadDayOverview(true); rf.disabled = false; rf.innerHTML = `${icon('refresh', 13)} Ververs`; };
   $$('#overviewPanel [data-open]').forEach((el) => el.onclick = async () => { if (!state.orders.length) state.orders = await api('/api/orders'); markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
   if ($('#wr-offset')) {
     const euro = (n) => '€ ' + Number(n || 0).toLocaleString('nl-NL', { maximumFractionDigits: 0 });
@@ -2510,6 +2563,11 @@ function openFinanceSettings() {
     </div>`;
   modal(`
     <h2>${icon('tag', 16)} Vaste kosten &amp; CEO-rapport</h2>
+    <h3 style="margin:0 0 6px">Automatisch boeken</h3>
+    <p class="muted small" style="margin-bottom:8px">Het systeem boekt zelf: elke <strong>betaalde factuur</strong> als omzet (excl. btw, juiste bron + monteur) en per <strong>afgeronde DRS-opdracht</strong> automatisch de vaste fee. Nooit dubbel; handmatig corrigeren blijft mogelijk.</p>
+    <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fs-autosync" style="width:auto" ${s.autoSync !== false ? 'checked' : ''}> Automatisch boeken aanzetten</label>
+    <label>Fee per afgeronde DRS-opdracht (€) <input id="fs-drsfee" type="number" min="0" step="0.5" value="${esc(String(s.drsFeePerJob ?? 42.5))}" style="max-width:130px"></label>
+    <hr style="border:none;border-top:1px solid var(--line-soft);margin:14px 0">
     <label>Gemiddelde kosten per schuifpui-klus (€) <input id="fs-avg" type="number" min="0" step="1" value="${esc(String(s.avgJobCost))}"><span class="muted small">Voor winstschatting en AI-context.</span></label>
     <h3 style="margin:14px 0 6px">Terugkerende kosten (worden automatisch geboekt)</h3>
     <p class="muted small" style="margin-bottom:8px">Bijvoorbeeld Google Ads €2000/maand en marketingfee DRS €65/week. Ze worden aan het begin van elke periode automatisch in de cijfers gezet.</p>
@@ -2525,6 +2583,8 @@ function openFinanceSettings() {
   bindRec();
   $('#rec-add').onclick = () => { $('#rec-rows').insertAdjacentHTML('beforeend', recRow({ id: 'rec_' + Date.now(), label: '', amount: 0, period: 'month', active: true })); bindRec(); };
   const collect = () => ({
+    autoSync: $('#fs-autosync').checked,
+    drsFeePerJob: Number($('#fs-drsfee').value) || 0,
     avgJobCost: Number($('#fs-avg').value) || 0,
     recurring: $$('#rec-rows .rec-row').map((r) => ({ id: r.dataset.id, label: $('.rec-label', r).value, amount: Number($('.rec-amount', r).value) || 0, period: $('.rec-period', r).value, active: $('.rec-active', r).checked, category: $('.rec-label', r).value })).filter((r) => r.label),
     weeklyReport: { enabled: $('#wr-enabled').checked, email: $('#wr-email').value, hour: Number($('#wr-hour').value) || 8 },
@@ -2822,6 +2882,14 @@ async function loadSettings() {
         <button class="btn" id="testMorningBrief">Stuur nu een test</button>
       </div>
     </div>
+    <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('sparkles', 15)} AI-dagoverzicht (Start-pagina)</h3>
+      <p class="muted small">Het blok "Jouw dag in één oogopslag" bovenaan Start scant elke dag het échte verkeer (<strong>WhatsApp tot 7 dagen</strong>, <strong>e-mail tot 14 dagen</strong> terug) plus alle kaarten, afspraken en facturen — en zet daar de belangrijkste acties, kansen en risico's uit op een rij. Wordt 1x per dag gemaakt; met de Ververs-knop op Start forceer je een nieuwe scan.</p>
+      <label>AI-niveau <select id="ov-model">
+        <option value="standaard" ${s.aiOverviewModel !== 'opus' ? 'selected' : ''}>Standaard (Sonnet) — ± €0,05 per scan</option>
+        <option value="opus" ${s.aiOverviewModel === 'opus' ? 'selected' : ''}>Hoogste niveau (Opus) — scherper, ± €0,25 per scan</option>
+      </select></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveOvModel">Opslaan</button></div>
+    </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een kaart, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="md-auto" style="width:auto"> Automatisch versturen aanzetten</label>
       <div class="row"> <label>Welke monteur (auto) <select id="md-monteur"></select></label> <label>Wanneer <select id="md-trigger"><option value="approved">zodra ik de opdracht goedkeur</option><option value="appointment">zodra een afspraak is ingepland</option><option value="intake">volautomatisch — meteen bij binnenkomst</option></select></label> </div>
@@ -3034,6 +3102,10 @@ async function loadSettings() {
   };
   $('#saveAutoMerge').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { autoMergeWindowHours: Number($('#amw-hours').value) }); toast('Samenvoeg-venster opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveOvModel').onclick = async () => {
+    try { await api('/api/settings', 'PATCH', { aiOverviewModel: $('#ov-model').value }); toast('AI-dagoverzicht-instelling opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveMorningBrief').onclick = async () => {

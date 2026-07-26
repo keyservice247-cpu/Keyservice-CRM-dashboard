@@ -314,6 +314,28 @@ await api('POST', '/api/ingest/whatsapp', {
 ok('zelfde klant, ANDER adres -> wél nieuwe kaart (andere klus)', (await orders()).length === ordersBeforeW3 + 1, `${ordersBeforeW3} -> ${(await orders()).length}`);
 await api('PATCH', '/api/settings', { autoMergeWindowHours: 0 }); // terug voor de rest
 
+// ---------- Website-lead boven drempel -> automatisch kaart (verfijning 27 jul) ----------
+console.log('\n== Website-lead boven drempel -> automatisch kaart + tweede formulier dedupt ==');
+await api('PATCH', '/api/settings', { aiAutoApproveThreshold: 0.65, autoMergeWindowHours: 6 });
+const sJG = await api('POST', '/api/ingest/form?token=' + TOKEN, {
+  name: 'Johan Goslinga', phone: '0646471096', email: 'jagoslinga@home.nl',
+  address: 'Dorpsweg 8', postcode: '9798 PB', city: 'Garmerwolde',
+  message: 'Houten schuifpui loopt zwaar en gaat slecht op slot; loopwielen en sluitmechanisme vervangen',
+  formType: 'offerte', site: 'schuifpuiservice.com',
+});
+ok('website-lead boven drempel -> automatisch goedgekeurd', sJG.json?.status === 'auto_approved', JSON.stringify(sJG.json));
+const oJG = (await orders()).find((o) => (o.intake?.phone || '').includes('0646471096'));
+ok('kaart automatisch aangemaakt (niet blijven hangen in inbox)', !!oJG);
+const ordersBeforeJG2 = (await orders()).length;
+const sJG2 = await api('POST', '/api/ingest/email', {
+  from: '"FormSubmit" <submissions@formsubmit.co>',
+  subject: 'Offerte-aanvraag schuifpui (schuifpuiservice.com)',
+  body: 'Nieuwe aanvraag via de website schuifpuiservice.com (FormSubmit-mail).\nNaam: Johan Goslinga\nTelefoon: 0646471096\nE-mail: jagoslinga@home.nl\nWoonplaats: Garmerwolde\nBericht: schuifpui loopt zwaar',
+  externalId: 'jg2',
+}, true);
+ok('tweede formulier (mail-route) zelfde klant -> duplicaat, geen tweede kaart', !!sJG2.json?.duplicate && (await orders()).length === ordersBeforeJG2, JSON.stringify(sJG2.json));
+await api('PATCH', '/api/settings', { aiAutoApproveThreshold: 0, autoMergeWindowHours: 0 });
+
 // ---------- Vangrails identiteit: LID-onzin + e-mail-exact + monteur-afscherming ----------
 console.log('\n== Vangrails: LID-nummer, e-mail-exact, monteur-afscherming ==');
 // (a) Een WhatsApp-LID (18 cijfers, bridge-storing) mag nooit een klantnummer worden.

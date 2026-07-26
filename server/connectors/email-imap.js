@@ -260,7 +260,7 @@ export function parseFormSubmit(text, subject) {
   const labelSrc = [
     'naam', 'name', 'tele(?:foon)?(?:nummer)?', 'phone', 'tel',
     'e-?mail(?:adres)?', 'woonplaats', 'plaats', 'city', 'stad', 'adres', 'address',
-    'postcode', 'zip', 'type\\s*schuifpui', 'onderwerp', 'subject', 'type',
+    'postcode', 'zip', 'type[\\s_]*schuifpui', 'onderwerp', 'subject', 'type',
     'probleem', 'problem', 'bericht', 'message', 'comment', 'toelichting',
   ];
   // De grens waar een veldwaarde stopt: het volgende bekende label OF de vaste
@@ -273,7 +273,13 @@ export function parseFormSubmit(text, subject) {
     // waarde/field/veld) slaan we over en pakken de echte waarde in de rij eronder.
     const re = new RegExp('(?:\\n|^)[ \\t>*|]*(?:' + labelPat + ')\\b[ \\t]*:?[ \\t]*([\\s\\S]*?)(?=' + nextLabel + '|$)', 'ig');
     for (const m of t.matchAll(re)) {
-      const v = (m[1] || '').replace(/\s+/g, ' ').trim();
+      let v = (m[1] || '').replace(/\s+/g, ' ').trim();
+      // Tabel-strepen en kopcel-woorden ("Value"/"Waarde"/"Field") die vóór de echte
+      // waarde blijven plakken eraf, plus een per ongeluk herhaald label — anders
+      // wordt de klantnaam "Value Naam Johan Goslinga" i.p.v. "Johan Goslinga".
+      v = v.replace(/^[|>*\s:-]+|[|>*\s:-]+$/g, '');
+      v = v.replace(/^(?:(?:value|waarde|field|veld)\b[\s:|-]*)+/i, '');
+      v = v.replace(new RegExp('^(?:' + labelPat + ')\\b[\\s:|-]*', 'i'), '');
       if (v && !/^(value|waarde|field|veld)$/i.test(v)) return v;
     }
     return '';

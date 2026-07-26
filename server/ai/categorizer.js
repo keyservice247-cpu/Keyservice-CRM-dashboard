@@ -504,6 +504,51 @@ export async function morningInsight({ facts, companyProfile = '', tone = 'coach
   } catch { return ''; }
 }
 
+// AI-DAGOVERZICHT (Start-pagina): leest de dashboard-feiten + het échte verkeer
+// (WhatsApp ≤7 dagen, e-mail ≤14 dagen) en geeft een gestructureerd overzicht
+// terug als JSON — kop, acties (met prioriteit + waar te klikken), kansen en
+// risico's. Model instelbaar tot Opus-niveau (Instellingen → AI).
+export async function dayOverview({ corpus = '', facts = '', companyProfile = '', model = '' }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return { error: 'geen-ai' };
+  const useModel = model || process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const system = `Je bent de scherpe operationeel rechterhand van Keyservice (sleutel-/slotenmakersbedrijf). Je krijgt (1) feiten uit het CRM-dashboard en (2) het ruwe berichtenverkeer van de afgelopen dagen. Maak daar het dagoverzicht van voor de eigenaar/assistente.
+${companyProfile ? `\nOver het bedrijf:\n${String(companyProfile).slice(0, 1500)}\n` : ''}
+Antwoord UITSLUITEND met geldige JSON (geen tekst eromheen, geen markdown):
+{"kop":"één krachtige zin die de dag samenvat",
+ "acties":[{"prio":"hoog","titel":"...","waarom":"...","waar":"inbox"}],
+ "kansen":["..."],
+ "risicos":["..."]}
+Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar = "inbox"|"opdrachten"|"facturen"|"agenda"|"klanten"), max 3 kansen (omzet/vervolgklussen die je in het verkeer ziet), max 3 risico's (dingen die stil dreigen mis te gaan). Wees CONCREET: gebruik namen, plaatsen en bedragen uit de gegevens. Nederlands, geen emoji, geen verzinsels — alleen wat je echt ziet.`;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: useModel, max_tokens: 2500, system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] }),
+  });
+  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
+  const json = await resp.json();
+  recordAIUsage(json.usage, useModel);
+  const text = (json.content || []).map((c) => c.text || '').join('').trim();
+  // Afgekapt/omringd antwoord redden: pak het buitenste JSON-blok.
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return { error: 'ai-onleesbaar' };
+  let parsed;
+  try { parsed = JSON.parse(m[0]); } catch { return { error: 'ai-onleesbaar' }; }
+  const arr = (x, n) => (Array.isArray(x) ? x.slice(0, n) : []);
+  const data = {
+    kop: String(parsed.kop || '').slice(0, 200),
+    acties: arr(parsed.acties, 6).map((a) => ({
+      prio: ['hoog', 'middel', 'laag'].includes(a.prio) ? a.prio : 'middel',
+      titel: String(a.titel || '').slice(0, 140),
+      waarom: String(a.waarom || '').slice(0, 200),
+      waar: ['inbox', 'opdrachten', 'facturen', 'agenda', 'klanten'].includes(a.waar) ? a.waar : 'opdrachten',
+    })).filter((a) => a.titel),
+    kansen: arr(parsed.kansen, 3).map((k) => String(k).slice(0, 200)).filter(Boolean),
+    risicos: arr(parsed.risicos, 3).map((k) => String(k).slice(0, 200)).filter(Boolean),
+  };
+  return { data, engine: `ai:${useModel}` };
+}
+
 // AI-vraagbaak: beantwoordt een vrije vraag op basis van de opgeslagen WhatsApp/
 // e-mail-berichten. Bv. "hoeveel omzet is in de groep van Youssef genoemd?" of
 // "wat is er met de opdracht van mevrouw Jansen gebeurd?".

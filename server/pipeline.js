@@ -821,11 +821,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   db().reviews.push(review);
 
   const threshold = autoApproveThreshold();
-  // WET (Regel 5): alleen aanvragen uit de OPDRACHT-groepen mogen automatisch een
-  // kaart worden (via de drempel hier, of volautomatisch via de intake-flow).
-  // Losse 1-op-1 appjes, e-mails en website-formulieren gaan ALTIJD eerst langs een
-  // mens in Te controleren — de AI vult nooit zelf ontbrekende gegevens in.
-  if (isOrderGroupMsg && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  // WET (Regel 5, verfijnd 27 jul op verzoek Abdel): aanvragen uit de OPDRACHT-
+  // GROEPEN én WEBSITE-FORMULIEREN (eigen site + FormSubmit — dat is per definitie
+  // klantverkeer, het leveranciersfilter kan hier nooit gelden) mogen boven de
+  // ingestelde drempel automatisch een kaart worden. Losse 1-op-1 appjes en losse
+  // e-mails blijven ALTIJD eerst langs een mens gaan. Drempel 0 = alles handmatig.
+  if ((isOrderGroupMsg || isFormLead) && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 

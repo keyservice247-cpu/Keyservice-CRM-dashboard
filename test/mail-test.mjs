@@ -49,6 +49,13 @@ ok('waarschuwing in de gesprekshistorie van de kaart', (ordBt.thread || []).some
 ok('reden = volledige Diagnostic-Code (niet het korte fragment)', /User unknown/.test((ordBt.thread.find((t) => /NIET AANGEKOMEN/.test(t.body || '')) || {}).body || ''));
 ok('bounce geregistreerd als verwerkt bericht (nooit een lead)', d.messages.some((m) => m.externalId === '<bounce-1@transip>' && m.bounce === true));
 
+console.log('\n== FormSubmit-parser: kopcellen en veldnamen lekken nooit in de waarden ==');
+const { parseFormSubmit } = await import('../server/connectors/email-imap.js');
+const pfsAll = parseFormSubmit('Naam Value\nNaam Johan Goslinga\nTelefoon 0646471096\nType_schuifpui Houten\nWoonplaats Garmerwolde\nBericht schuifpui loopt zwaar en gaat slecht op slot', 'Offerte-aanvraag schuifpui (schuifpuiservice.com)');
+const pfs = pfsAll.split('— Originele')[0]; // de geparste velden (de originele mail blijft bewust als bijlage-staart bewaard)
+ok('kopcel "Value" nooit onderdeel van de klantnaam', /Naam: Johan Goslinga\b/.test(pfs) && !/Value/i.test(pfs), pfs.slice(0, 120));
+ok('Type_schuifpui is een eigen veld (lekt niet in woonplaats)', !/Garmerwolde\s+Type/i.test(pfs));
+
 console.log('\n== HTML-handtekening (huisstijl-mail) ==');
 const { wrapHtmlMail } = await import('../server/connectors/email-smtp.js');
 const html = wrapHtmlMail('Beste klant,\n\nTot morgen!\n');

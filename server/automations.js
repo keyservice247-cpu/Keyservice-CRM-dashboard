@@ -14,7 +14,7 @@ import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup } from './in
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
 import { lastHealth } from './health.js';
-import { getFinanceSettings, weeklyReportData, bookRecurringDue } from './finance.js';
+import { getFinanceSettings, weeklyReportData, bookRecurringDue, runFinanceAutoSync } from './finance.js';
 import { checkMailboxQuota } from './connectors/email-imap.js';
 import { queueCrmWhatsappAlert } from './pipeline.js';
 
@@ -761,6 +761,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runReviewRequests(); } catch (e) { console.error('[reviews]', e.message); }
     try { await runNightlyScan(); } catch (e) { console.error('[auto-scan]', e.message); }
     try { bookRecurringDue(); } catch (e) { console.error('[vaste-kosten]', e.message); }
+    try { runFinanceAutoSync(); } catch (e) { console.error('[cijfers-autosync]', e.message); }
     try { await runWeeklyReport(); } catch (e) { console.error('[ceo-rapport]', e.message); }
     try { await runMailboxQuotaCheck(); } catch (e) { console.error('[mailbox-quotum]', e.message); }
     try { runAttachmentCleanup(); } catch (e) { console.error('[bijlage-opschoning]', e.message); }

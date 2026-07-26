@@ -43,6 +43,12 @@ await api('PATCH', '/api/settings', { morningBriefing: { enabled: true, hour: 7,
 const t2 = await api('POST', '/api/morning-briefing/test', {});
 ok('e-mail zonder SMTP/adres: nette foutmelding', t2.status === 400 && /kanaal/i.test(t2.json.error || ''), JSON.stringify(t2.json));
 
+console.log('\n== AI-dagoverzicht (zonder AI-sleutel: nette feiten-fallback) ==');
+const ov1 = await api('GET', '/api/day-overview');
+ok('dagoverzicht antwoordt met feiten-fallback', ov1.status === 200 && ov1.json.error === 'geen-ai' && ov1.json.facts && typeof ov1.json.facts.pendingLeads === 'number', JSON.stringify({ error: ov1.json.error }));
+const ov2 = await api('GET', '/api/day-overview');
+ok('tweede aanroep komt uit de dagcache', ov2.status === 200 && ov2.json.cached === true);
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

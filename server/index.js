@@ -32,7 +32,7 @@ import {
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
   can, requirePerm, PERM_KEYS,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
@@ -43,9 +43,9 @@ import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing } from './automations.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
-import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData } from './finance.js';
+import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries } from './storage.js';
@@ -1914,6 +1914,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     morningBriefing: getMorningBriefing(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
     htmlSignature: getHtmlSignature(),
+    aiOverviewModel: db().settings.aiOverviewModel === 'opus' ? 'opus' : 'standaard',
     invoiceSettings: getInvoiceSettings(),
     priceList: getPriceList(),
     priceBundles: getPriceBundles(),
@@ -2087,6 +2088,9 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       phone: String(c.phone || '').replace(/[^\d+]/g, '').slice(0, 20),
       notifyReplies: c.notifyReplies !== false,
     };
+  }
+  if ('aiOverviewModel' in b) {
+    db().settings.aiOverviewModel = b.aiOverviewModel === 'opus' ? 'opus' : 'standaard';
   }
   if ('htmlSignature' in b) {
     const h = b.htmlSignature || {};
@@ -2962,6 +2966,54 @@ app.post('/api/finance/import-income', requirePerm('finance'), (req, res) => {
   const n = importIncome(req.body?.items || [], req.user.name);
   logActivity(req.user.name, 'omzet geïmporteerd uit monteursrapporten', `${n} boeking(en)`);
   res.json({ ok: true, booked: n });
+});
+// ---------- AI-DAGOVERZICHT (Start-pagina) ----------
+// Eén keer per dag gegenereerd en gecachet; Ververs-knop forceert een nieuwe scan.
+// Leest de dashboard-feiten + het echte verkeer (WhatsApp ≤7 dagen, e-mail ≤14
+// dagen, ingekort). Zonder AI-sleutel komen alléén de feiten terug (nette fallback).
+app.get('/api/day-overview', requireAuth, async (req, res) => {
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const cache = db()._dayOverview;
+  const refresh = req.query.refresh === '1' && req.user.role !== 'monteur';
+  if (!refresh && cache && cache.day === today) return res.json({ ...cache, cached: true });
+  const factsData = morningBriefingData();
+  const facts = [
+    `Afspraken vandaag: ${factsData.appts.length}${factsData.appts.length ? ' — ' + factsData.appts.map((a) => `${a.time} ${a.name || a.title}${a.place ? ` (${a.place})` : ''}${a.confirmed ? '' : ' [NIET bevestigd]'}`).join('; ') : ''}`,
+    `Onbeantwoorde klantreacties: ${factsData.unanswered}`,
+    `Nieuwe leads te controleren: ${factsData.pendingLeads}`,
+    `Offertes 4+ dagen stil: ${factsData.quoteStale}`,
+    `Facturen verlopen: ${factsData.overdueCount} (samen € ${factsData.overdueTotal.toFixed(2)})`,
+    `Kaarten 5+ dagen stil: ${factsData.stale}`,
+    `Deze week: omzet € ${factsData.week.thisWeek.income.toFixed(2)}, winst € ${factsData.week.thisWeek.profit.toFixed(2)}, openstaand € ${factsData.week.unpaidTotal.toFixed(2)} (${factsData.week.unpaidCount})`,
+  ].join('\n');
+  let out = { error: 'geen-ai' };
+  try {
+    const nowMs = Date.now();
+    const msgs = (db().messages || []).filter((m) => {
+      if (!m.receivedAt || !m.body || m.skipped || m.bounce) return false;
+      const age = nowMs - new Date(m.receivedAt).getTime();
+      if (m.channel === 'whatsapp') return age <= 7 * 86400000;
+      if (m.channel === 'email') return age <= 14 * 86400000;
+      return false;
+    }).slice(-220);
+    const corpus = msgs.map((m) => `[${String(m.receivedAt).slice(5, 16).replace('T', ' ')}] (${m.channel}${m.group ? ' groep ' + String(m.group).slice(0, 28) : ''}) ${String(m.sender || '').slice(0, 30)}: ${String(m.body).replace(/\s+/g, ' ').slice(0, m.group ? 500 : 350)}`).join('\n').slice(0, 90000);
+    const modelPref = db().settings.aiOverviewModel === 'opus' ? 'claude-opus-5' : '';
+    out = await dayOverview({ corpus, facts, companyProfile: getCompanyProfile(), model: modelPref });
+  } catch (e) {
+    out = { error: 'ai-fout: ' + String(e.message || '').slice(0, 120) };
+  }
+  const payload = { day: today, at: now(), data: out.data || null, engine: out.engine || '', error: out.data ? '' : (out.error || 'ai-fout'), facts: factsData };
+  db()._dayOverview = payload;
+  saveSoon();
+  if (refresh) logActivity(req.user.name, 'AI-dagoverzicht ververst', out.engine || out.error || '');
+  res.json(payload);
+});
+
+// Automatische boekingen (betaalde facturen + DRS-fee) direct draaien — dezelfde
+// run als het uurlijkse proces; idempotent (nooit dubbel boeken).
+app.post('/api/finance/autosync', requirePerm('finance'), (req, res) => {
+  const r = runFinanceAutoSync();
+  res.json({ ok: true, ...r });
 });
 app.post('/api/finance/weekly-report/test', requirePerm('finance'), async (req, res) => {
   const to = (req.body?.to || getFinanceSettings().weeklyReport.email || '').trim();

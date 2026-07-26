@@ -132,6 +132,22 @@ de regressie meegroeit.
   goedgekeurd/afgekeurd, 1-klik omzetten naar factuur. Verder: kopiëren, verwijderen
   (betaald nooit, verzonden alleen admin), betaalherinnering (met teller), verlopen-detectie
   in het overzicht. Rechten: monteur alleen eigen kaarten + zelf aangemaakte records.
+- **Nachtronde 27 jul:** (1) WEBSITE-LEADS boven de drempel worden automatisch een
+  kaart (Regel 5-verfijning, isFormLead telt mee; ontvangstbevestiging óók bij
+  auto-accept; losse mail/1-op-1 blijven handmatig; drempel 0 = alles handmatig);
+  (2) CIJFERS-AUTOSYNC (finance.js runFinanceAutoSync, uurlijks + POST
+  /api/finance/autosync): betaalde factuur → omzet excl. btw (bron-heuristiek
+  DRS/Schuifpui/Overig, monteur gekoppeld, sourceRef inv:<id>), afgeronde
+  DRS-kaart → fee (default €42,50, drsFeePerJob, sourceRef drsfee:<id>);
+  instelbaar via financeSettings.autoSync (default AAN), nooit dubbel;
+  (3) AI-DAGOVERZICHT op Start (GET /api/day-overview, 1x/dag gecachet
+  _dayOverview, Ververs-knop): dayOverview() scant WhatsApp ≤7d + e-mail ≤14d
+  + dashboard-feiten → JSON (kop/acties met prio+doelpagina/kansen/risico's),
+  model instelbaar (aiOverviewModel standaard=Sonnet | opus=claude-opus-5),
+  zonder AI nette feiten-fallback; (4) parseFormSubmit-opschoning (kopcel
+  "Value"/herhaald label lekt nooit meer in waarden; Type_schuifpui-label).
+  Tests: cijfers-test.mjs (7, PORT=3123) + uitbreidingen in scenarios/briefing/
+  mail/browser.
 - **AI-ochtendbriefing (23 jul):** elke ochtend één bericht met afspraken van vandaag
   (tijd + bevestigd ja/nee), actiepunten (onbeantwoorde klantreacties, nieuwe leads,
   offertes 4+ dagen stil, verlopen facturen, kaarten 5+ dagen stil), geld deze week
@@ -216,9 +232,12 @@ server/pipeline.js — er bestaat geen pad eromheen.
 4. Leveranciers-/webshopmail (DEFAULT_EMAIL_FILTERS in settings.js + eigen
    patronen in settings.emailFilters; match alléén op afzender+onderwerp) → STIL
    naar Overige, geen lead, geen melding; wint van intake-herkenning; het
-   websiteformulier wint van alles. Auto-kaart (drempel/intake) mag ALLEEN uit
-   opdracht-groepen; 1-op-1, losse mail en formulier gaan altijd eerst langs een
-   mens in Te controleren.
+   websiteformulier wint van alles. Auto-kaart via de DREMPEL mag uit opdracht-
+   groepen én uit website-formulieren (isFormLead — eigen site + FormSubmit;
+   verfijning 27 jul op verzoek Abdel, incl. ontvangstbevestiging bij
+   auto-accept); volautomatische intake-flow blijft alleen opdracht-groepen.
+   Losse 1-op-1 appjes en losse e-mails gaan ALTIJD eerst langs een mens in
+   Te controleren. Drempel 0 = alles handmatig.
 5. Website-leads: /api/ingest/form accepteert JSON én multipart/form-data
    (bestandsvelden "bijlage", max 10MB totaal, jpg/png/webp/heic/heif/pdf; een
    bijlage-fout laat de lead nooit sneuvelen). Extra mailboxen meelezen via env

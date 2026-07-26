@@ -111,6 +111,14 @@ ok('campagne-scherm opent', await page.locator('#cp-subject').count() > 0);
 await page.evaluate(() => closeModal());
 noErr('Klanten-tools (dossier/import/campagne)');
 
+// 10) Start-pagina: AI-dagoverzicht rendert (feiten-fallback zonder AI-sleutel)
+clear();
+await page.evaluate(() => goView('overview'));
+await page.waitForTimeout(1200);
+ok('dagoverzicht-blok aanwezig op Start', await page.locator('#dayov').count() > 0);
+ok('dagoverzicht toont inhoud (geen leeg blok)', ((await page.locator('#dayov-body').innerText().catch(() => '')) || '').length > 10);
+noErr('Start + AI-dagoverzicht');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
