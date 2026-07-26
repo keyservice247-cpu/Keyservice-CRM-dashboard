@@ -223,6 +223,28 @@ export function getCrmAlerts() {
   };
 }
 
+// Mooie HTML-handtekening onder elke uitgaande mail (logo + naam + contact, met
+// blauwe accentbalk — zoals de handtekening van de eigenaar). De platte tekst-
+// handtekening blijft bestaan als fallback voor mail-apps zonder HTML.
+export const DEFAULT_HTML_SIGNATURE = {
+  enabled: true,
+  name: 'Abdel Rafour',
+  role: 'Eigenaar | Key Service 24/7',
+  tagline: 'Service is key',
+  phone: '085 060 2359',
+  email: 'info@keyservice247.nl',
+  website: 'www.keyservice247.nl',
+};
+export function getHtmlSignature() {
+  const c = db().settings.htmlSignature || {};
+  const pick = (k) => (c[k] !== undefined ? String(c[k]).slice(0, 120) : DEFAULT_HTML_SIGNATURE[k]);
+  return {
+    enabled: c.enabled !== undefined ? !!c.enabled : DEFAULT_HTML_SIGNATURE.enabled,
+    name: pick('name'), role: pick('role'), tagline: pick('tagline'),
+    phone: pick('phone'), email: pick('email'), website: pick('website'),
+  };
+}
+
 // "Zelfde moment"-samenvoegen (25 jul, op verzoek Abdel): een goedgekeurde aanvraag
 // van een klant die binnen dit venster al een open kaart kreeg/bijwerkte, hangt
 // automatisch aan die kaart (zelfde klus: tweede appje, foto's erbij, site + DRS

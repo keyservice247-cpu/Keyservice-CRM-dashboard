@@ -10,6 +10,7 @@ node test/scenarios.mjs      # 62 assertions: matching, dedup, e-mailreacties, m
                              # Karin-casus (écht afzendernummer), zelfde-moment-venster, klant-hint, historie
 node test/factuur-test.mjs   # kortingen, PDF, kopie, dueAt, instellingen  (draai op PORT=3117)
 node test/briefing-test.mjs  # AI-ochtendbriefing: instellingen, WhatsApp-kanaal, inhoud (PORT=3119)
+node test/klanten-test.mjs   # klantimport (CSV), dossier, nog-te-factureren, campagne, foto-dispatch (PORT=3121)
 node test/google-test.mjs    # Google Agenda: sync-filter, koppeling-alarm, no-op zonder verbinding (GEEN server nodig)
 node test/mail-test.mjs      # Bounce-detectie: echte DSN wel, klantmail/Fwd/delayed nooit (GEEN server nodig)
 ```

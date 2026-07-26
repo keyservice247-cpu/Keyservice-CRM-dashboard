@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // VANGNET: een losse fout in een achtergrondtaak (bv. IMAP-verbinding die wegvalt)
@@ -64,6 +65,7 @@ import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
+  getHtmlSignature,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -320,6 +322,171 @@ app.get('/api/customers/:id/history', requireAuth, (req, res) => {
   res.json({ customer: { id: customer.id, name: customer.name }, items: items.slice(-limit), total: items.length });
 });
 
+// KLANTDOSSIER: alles van één klant op één scherm — gegevens, alle kaarten (ook
+// gearchiveerd), alle facturen/offertes en de omzet-totalen. Monteur alleen eigen.
+app.get('/api/customers/:id/dossier', requireAuth, (req, res) => {
+  const customer = db().customers.find((c) => c.id === req.params.id);
+  if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
+  if (req.user.role === 'monteur') {
+    const mine = db().orders.some((o) => o.customerId === customer.id && o.monteurId && o.monteurId === req.user.monteurId);
+    if (!mine) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
+  }
+  const orders = (db().orders || []).filter((o) => o.customerId === customer.id)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .map((o) => ({ id: o.id, title: o.title, status: o.status, createdAt: o.createdAt, appointmentAt: o.appointmentAt, archivedWeek: o.archivedWeek || null, price: o.price || '' }));
+  const invoices = (db().invoices || []).filter((i) => i.customerId === customer.id)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .map((i) => ({ id: i.id, number: i.number, type: i.type, status: i.status, totalIncl: i.totalIncl || 0, createdAt: i.createdAt, sentAt: i.sentAt || null }));
+  const paid = invoices.filter((i) => i.type !== 'offerte' && i.status === 'betaald').reduce((s, i) => s + i.totalIncl, 0);
+  const open = invoices.filter((i) => i.type !== 'offerte' && i.status === 'verzonden').reduce((s, i) => s + i.totalIncl, 0);
+  res.json({ customer, orders, invoices, totals: { paid: Math.round(paid * 100) / 100, open: Math.round(open * 100) / 100, orders: orders.length } });
+});
+
+// ---------- KLANTIMPORT (CSV / Excel) ----------
+// Stap 1: bestand uploaden -> voorbeeld + automatisch herkende kolommen terug.
+// Stap 2: importeren met de (eventueel aangepaste) kolomkeuze. Dedupe op de harde
+// identificatoren (e-mail exact / telefoon genormaliseerd): bestaande klanten
+// worden NOOIT overschreven — alleen lege velden aangevuld (Regel 3).
+const _imports = new Map(); // importId -> { headers, rows, at } (kwartier geldig)
+function pruneImports() { const cut = Date.now() - 15 * 60000; for (const [k, v] of _imports) if (v.at < cut) _imports.delete(k); }
+function parseCsvBuffer(buf) {
+  const text = buf.toString('utf8').replace(/^﻿/, '');
+  const firstLine = text.slice(0, text.indexOf('\n') + 1 || text.length);
+  const delim = (firstLine.match(/;/g) || []).length >= (firstLine.match(/,/g) || []).length ? ';' : ',';
+  const rows = []; let row = []; let cell = ''; let inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false; }
+      else cell += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === delim) { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); cell = '';
+      if (row.some((c) => String(c).trim())) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  if (cell || row.length) { row.push(cell); if (row.some((c) => String(c).trim())) rows.push(row); }
+  return rows;
+}
+const IMPORT_FIELD_PATTERNS = {
+  name: /^(naam|name|klant(naam)?|contact(persoon)?|full ?name|voor.*achternaam)/i,
+  phone: /(telefoon|phone|^tel$|^tel\b|mobiel|gsm|mobile|06)/i,
+  email: /mail/i,
+  address: /(adres|address|straat|street)/i,
+  postcode: /(postcode|zip|postal)/i,
+  city: /(plaats|woonplaats|city|stad)/i,
+  notes: /(notitie|opmerking|note|comment|memo)/i,
+};
+function guessMapping(headers, rows) {
+  const mapping = {};
+  headers.forEach((h, idx) => {
+    for (const [field, re] of Object.entries(IMPORT_FIELD_PATTERNS)) {
+      if (mapping[field] === undefined && re.test(String(h || '').trim())) { mapping[field] = idx; return; }
+    }
+  });
+  // Inhoud-vangnet als de koppen niks zeggen: kolom vol e-mailadressen/06-nummers.
+  const sample = rows.slice(0, 20);
+  headers.forEach((h, idx) => {
+    const vals = sample.map((r) => String(r[idx] || '').trim()).filter(Boolean);
+    if (!vals.length) return;
+    if (mapping.email === undefined && vals.filter((v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)).length > vals.length / 2) mapping.email = idx;
+    if (mapping.phone === undefined && vals.filter((v) => /^[+\d][\d\s()-]{7,}$/.test(v)).length > vals.length / 2) mapping.phone = idx;
+  });
+  return mapping;
+}
+app.post('/api/customers/import-preview', requirePerm('customers'), async (req, res) => {
+  pruneImports();
+  const parsed = await parseMultipartRaw(req, 15 * 1024 * 1024);
+  if (!parsed.file) return res.status(400).json({ error: 'Geen bestand ontvangen. Kies een .csv- of Excel-bestand.' });
+  let rows = [];
+  try {
+    if (/\.(xlsx|xls|ods)$/i.test(parsed.filename) || /spreadsheet|excel|officedocument/.test(parsed.mime)) {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.read(parsed.file, { type: 'buffer' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' })
+        .map((r) => r.map((c) => String(c ?? '').trim()))
+        .filter((r) => r.some((c) => c));
+    } else {
+      rows = parseCsvBuffer(parsed.file);
+    }
+  } catch (e) {
+    return res.status(400).json({ error: 'Bestand niet leesbaar als CSV/Excel: ' + e.message });
+  }
+  if (rows.length < 2) return res.status(400).json({ error: 'Te weinig rijen gevonden (verwacht: een kop-rij + klanten).' });
+  if (rows.length > 5001) return res.status(400).json({ error: `Te veel rijen (${rows.length - 1}). Splits het bestand op in delen van max 5000 klanten.` });
+  const headers = rows[0].map((h) => String(h || '').trim());
+  const dataRows = rows.slice(1);
+  const importId = id('imp');
+  _imports.set(importId, { headers, rows: dataRows, at: Date.now() });
+  res.json({ importId, headers, sample: dataRows.slice(0, 5), total: dataRows.length, mapping: guessMapping(headers, dataRows) });
+});
+app.post('/api/customers/import', requirePerm('customers'), (req, res) => {
+  pruneImports();
+  const st = _imports.get(String(req.body?.importId || ''));
+  if (!st) return res.status(400).json({ error: 'Upload verlopen — kies het bestand opnieuw.' });
+  const map = req.body?.mapping || {};
+  const col = (r, f) => { const i = Number(map[f]); return Number.isInteger(i) && i >= 0 ? String(r[i] || '').trim() : ''; };
+  if (!Object.values(map).some((v) => Number.isInteger(Number(v)) && Number(v) >= 0)) {
+    return res.status(400).json({ error: 'Kies minimaal één kolom (bv. Naam).' });
+  }
+  let added = 0; let filled = 0; let dup = 0; let empty = 0;
+  for (const r of st.rows) {
+    const name = col(r, 'name');
+    const phone = col(r, 'phone');
+    const email = col(r, 'email').toLowerCase();
+    const address = [col(r, 'address'), [col(r, 'postcode'), col(r, 'city')].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    const notes = col(r, 'notes');
+    if (!name && !phone && !email) { empty++; continue; }
+    const existing = findCustomerStrong({ phone, email });
+    if (existing) {
+      // Nooit overschrijven — alleen gaten aanvullen (Regel 3).
+      let touched = false;
+      if (!existing.phone && phone) { existing.phone = phone; touched = true; }
+      if (!existing.email && email) { existing.email = email; touched = true; }
+      if (!existing.address && address) { existing.address = address; touched = true; }
+      if (!existing.notes && notes) { existing.notes = notes; touched = true; }
+      if (touched) filled++; else dup++;
+      continue;
+    }
+    db().customers.push({
+      id: id('cust'), name: name || 'Onbekende klant', phone, email, address,
+      type: 'klant', source: 'import', notes, createdAt: now(),
+    });
+    added++;
+  }
+  _imports.delete(String(req.body.importId));
+  save();
+  logActivity(req.user.name, 'klanten geïmporteerd', `${added} nieuw, ${filled} aangevuld, ${dup} dubbel, ${empty} leeg overgeslagen`);
+  res.json({ ok: true, added, filled, dup, empty, total: st.rows.length });
+});
+// Eén ruw bestand uit een multipart-upload lezen (voor de klantimport).
+function parseMultipartRaw(req, maxBytes) {
+  return new Promise((resolve) => {
+    const out = { file: null, filename: '', mime: '' };
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(out); } };
+    let bb;
+    try { bb = Busboy({ headers: req.headers, limits: { files: 1, fields: 5, fileSize: maxBytes } }); }
+    catch { return resolve(out); }
+    bb.on('file', (fname, stream, info) => {
+      out.filename = (info && info.filename) || '';
+      out.mime = String((info && info.mimeType) || '').toLowerCase();
+      const chunks = [];
+      let truncated = false;
+      stream.on('data', (c) => chunks.push(c));
+      stream.on('limit', () => { truncated = true; });
+      stream.on('end', () => { out.file = truncated ? null : Buffer.concat(chunks); });
+    });
+    bb.on('finish', finish);
+    bb.on('error', finish);
+    req.pipe(bb);
+  });
+}
+
 app.post('/api/customers', requirePerm('customers'), (req, res) => {
   const { name, phone, email, address, type, notes } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Naam verplicht' });
@@ -340,8 +507,50 @@ app.patch('/api/customers/:id', requirePerm('customers'), (req, res) => {
   for (const k of ['name', 'phone', 'email', 'address', 'type', 'notes']) {
     if (k in (req.body || {})) c[k] = req.body[k];
   }
+  if ('campaignOptOut' in (req.body || {})) c.campaignOptOut = !!req.body.campaignOptOut;
   saveSoon();
   res.json(c);
+});
+
+// ---------- E-MAILCAMPAGNE (klantselectie -> mailing) ----------
+// De assistente kiest klanten, schrijft één bericht ({naam} wordt ingevuld) en het
+// CRM verstuurt netjes met tussenpozen. Klanten zonder e-mail of met "geen mails"
+// worden overgeslagen; elk adres max 1x per campagne-aanroep; nette afmeld-voet.
+const CAMPAIGN_FOOTER = '\n\nU ontvangt deze e-mail als klant van Key Service 24/7. Liever geen e-mails meer ontvangen? Antwoord dan met "afmelden".';
+app.post('/api/campaign/send', requireRole('admin', 'assistent'), async (req, res) => {
+  if (!smtpConfigured()) return res.status(503).json({ error: 'E-mail versturen (SMTP) is nog niet ingesteld.' });
+  const subj = String(req.body?.subject || '').trim().slice(0, 200);
+  const tpl = String(req.body?.body || '').trim().slice(0, 8000);
+  if (!subj || !tpl) return res.status(400).json({ error: 'Vul onderwerp en bericht in.' });
+  const testTo = String(req.body?.test || '').trim();
+  if (testTo) {
+    try {
+      await sendMail({ to: testTo, subject: `[TEST] ${subj}`, text: tpl.replace(/\{naam\}/g, 'Voorbeeldklant') + CAMPAIGN_FOOTER });
+      return res.json({ ok: true, test: true });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+  const ids = Array.isArray(req.body?.customerIds) ? req.body.customerIds.slice(0, 100) : [];
+  if (!ids.length) return res.status(400).json({ error: 'Geen klanten geselecteerd.' });
+  let sent = 0; let skipped = 0; const failed = [];
+  const seenAddr = new Set();
+  for (const cid of ids) {
+    const c = db().customers.find((x) => x.id === cid);
+    const em = String(c?.email || '').toLowerCase().trim();
+    if (!c || !em || c.campaignOptOut || seenAddr.has(em)) { skipped++; continue; }
+    seenAddr.add(em);
+    try {
+      await sendMail({ to: c.email, subject: subj, text: tpl.replace(/\{naam\}/g, c.name || 'klant') + CAMPAIGN_FOOTER });
+      c.lastCampaignAt = now();
+      sent++;
+    } catch (e) { failed.push({ name: c.name || '', error: String(e.message || '').slice(0, 100) }); }
+    await new Promise((r) => setTimeout(r, 400)); // nette verzendsnelheid (geen spam-gedrag)
+  }
+  db().campaigns = Array.isArray(db().campaigns) ? db().campaigns : [];
+  db().campaigns.unshift({ id: id('cmp'), subject: subj, at: now(), by: req.user.name, sent, failed: failed.length, skipped });
+  db().campaigns = db().campaigns.slice(0, 50);
+  logActivity(req.user.name, 'campagne-mail verstuurd', `"${subj}" — ${sent} verstuurd, ${skipped} overgeslagen, ${failed.length} mislukt`);
+  saveSoon();
+  res.json({ ok: true, sent, skipped, failed });
 });
 
 app.delete('/api/customers/:id', requirePerm('customers'), (req, res) => {
@@ -536,6 +745,41 @@ app.post('/api/archives/run', requireRole('admin'), (req, res) => {
 // Lijst van bestaande back-ups.
 app.get('/api/backups', requireRole('admin'), (req, res) => {
   res.json({ backups: listBackups() });
+});
+// Schijfruimte-overzicht: wat neemt hoeveel in op de datamap (bijlages, back-ups,
+// database) en hoeveel is er nog vrij. Zo zie je in één oogopslag waarom de schijf
+// volloopt — en of opruimen of vergroten (Render-dashboard → Disks) nodig is.
+app.get('/api/disk-usage', requireRole('admin'), (req, res) => {
+  const DATA = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+  const dirSize = (dir) => {
+    let bytes = 0; let count = 0;
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        try { const st = fs.statSync(path.join(dir, f)); if (st.isFile()) { bytes += st.size; count++; } } catch { /* overslaan */ }
+      }
+    } catch { /* map bestaat niet */ }
+    return { mb: Math.round(bytes / 1048576 * 10) / 10, count };
+  };
+  const uploads = dirSize(path.join(DATA, 'uploads'));
+  const backups = dirSize(path.join(DATA, 'backups'));
+  let dbMb = 0; try { dbMb = Math.round(fs.statSync(path.join(DATA, 'db.json')).size / 1048576 * 10) / 10; } catch { /* leeg */ }
+  let freeMb = null; try { const st = fs.statfsSync(DATA); freeMb = Math.round((st.bavail * st.bsize) / 1048576); } catch { /* niet ondersteund */ }
+  res.json({ uploads, backups, dbMb, freeMb, cleanup: getAttachmentCleanup() });
+});
+// Extra back-ups opruimen (houd de N nieuwste). Handmatige noodrem als de schijf
+// vol raakt; de automatische prune (KEEP_BACKUPS) blijft gewoon bestaan.
+app.post('/api/backups/prune', requireRole('admin'), (req, res) => {
+  const keep = Math.max(3, Math.min(30, Number(req.body?.keep) || 5));
+  const DATA = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+  const dir = path.join(DATA, 'backups');
+  let removed = 0;
+  try {
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'))
+      .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t);
+    for (const x of files.slice(keep)) { try { fs.unlinkSync(path.join(dir, x.f)); removed++; } catch { /* overslaan */ } }
+  } catch { /* map bestaat niet */ }
+  logActivity(req.user.name, 'back-ups opgeruimd', `${removed} verwijderd (nieuwste ${keep} bewaard)`);
+  res.json({ ok: true, removed, kept: keep });
 });
 // Nu meteen een back-up maken.
 app.post('/api/backups/now', requireRole('admin'), (req, res) => {
@@ -1656,6 +1900,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     crmAlerts: getCrmAlerts(),
     morningBriefing: getMorningBriefing(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
+    htmlSignature: getHtmlSignature(),
     invoiceSettings: getInvoiceSettings(),
     priceList: getPriceList(),
     priceBundles: getPriceBundles(),
@@ -1828,6 +2073,18 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       group: String(c.group || 'CRM meldingen').slice(0, 100),
       phone: String(c.phone || '').replace(/[^\d+]/g, '').slice(0, 20),
       notifyReplies: c.notifyReplies !== false,
+    };
+  }
+  if ('htmlSignature' in b) {
+    const h = b.htmlSignature || {};
+    db().settings.htmlSignature = {
+      enabled: !!h.enabled,
+      name: String(h.name || '').slice(0, 120),
+      role: String(h.role || '').slice(0, 120),
+      tagline: String(h.tagline || '').slice(0, 120),
+      phone: String(h.phone || '').slice(0, 40),
+      email: String(h.email || '').slice(0, 120),
+      website: String(h.website || '').slice(0, 120),
     };
   }
   if ('autoMergeWindowHours' in b) {
@@ -2185,7 +2442,14 @@ app.post('/api/orders/:id/send-monteur', requireRole('admin', 'assistent'), (req
   if (!order.monteurId) order.monteurId = monteur.id;
   const r = queueToMonteur(order, monteur, req.user.name);
   if (r.error) return res.status(400).json({ error: r.error });
-  logActivity(req.user.name, 'naar monteur gestuurd', `${order.title} -> ${monteur.name}`);
+  // Aangevinkte foto's meesturen: de bridge stuurt ze ná de opdrachttekst naar
+  // dezelfde groep (max 6, alleen afbeeldingen van deze kaart).
+  const attIds = Array.isArray(req.body?.attachmentIds) ? req.body.attachmentIds : [];
+  if (attIds.length && r.item) {
+    const sel = (order.attachments || []).filter((a) => attIds.includes(a.id) && /^image\//.test(a.mime || ''));
+    if (sel.length) r.item.media = sel.slice(0, 6).map((a) => ({ url: a.url, name: a.filename || 'foto.jpg', mime: a.mime || 'image/jpeg' }));
+  }
+  logActivity(req.user.name, 'naar monteur gestuurd', `${order.title} -> ${monteur.name}${r.item?.media?.length ? ` (+${r.item.media.length} foto's)` : ''}`);
   saveSoon();
   res.json(withRelations(order));
 });
@@ -2399,6 +2663,12 @@ app.post('/api/invoices', requireAuth, (req, res) => {
   const customer = db().customers.find((c) => c.id === customerId);
   if (!customer) return res.status(400).json({ error: 'Kies een klant of vul een nieuwe klant in.' });
   const inv = createStandaloneInvoice({ customerId, type, actorName: req.user.name, createdById: req.user.id });
+  // Optioneel gekoppeld aan een kaart (bv. vanuit "Nog te factureren"): dan telt
+  // de klus als gefactureerd en toont de kaart de factuur.
+  if (b.orderId) {
+    const o = db().orders.find((x) => x.id === b.orderId && x.customerId === customerId);
+    if (o) { inv.orderId = o.id; if (type !== 'offerte') o.invoiceId = inv.id; o.updatedAt = now(); saveSoon(); }
+  }
   logActivity(req.user.name, `${type} aangemaakt (los)`, `${inv.number} — ${customer.name}`);
   res.json({ invoice: inv, customer });
 });
@@ -2443,6 +2713,24 @@ app.post('/api/bundles/add', requirePerm('settings'), (req, res) => {
 });
 
 // Eén factuur/offerte ophalen (voor de editor).
+// NOG TE FACTUREREN: afgeronde kaarten (ook gearchiveerd) waar géén factuur aan
+// hangt — zodat er nooit meer omzet wordt vergeten. Monteur ziet alleen eigen werk.
+// LET OP: vóór de /:id-route registreren, anders vangt die "todo" af.
+app.get('/api/invoices/todo', requireAuth, (req, res) => {
+  const invByOrder = new Set((db().invoices || []).filter((i) => i.orderId && i.type !== 'offerte').map((i) => i.orderId));
+  const maps = buildMaps();
+  let list = (db().orders || []).filter((o) => o.status === 'afgerond' && !o.invoiceId && !invByOrder.has(o.id));
+  if (req.user.role === 'monteur') list = list.filter((o) => o.monteurId && o.monteurId === req.user.monteurId);
+  res.json(list
+    .sort((a, b) => String(b.completedAt || b.updatedAt || '').localeCompare(String(a.completedAt || a.updatedAt || '')))
+    .slice(0, 100)
+    .map((o) => ({
+      id: o.id, title: o.title || '', price: o.price || '',
+      completedAt: o.completedAt || o.updatedAt || '',
+      customerId: o.customerId, customerName: (maps.customers.get(o.customerId) || {}).name || '',
+    })));
+});
+
 app.get('/api/invoices/:id', requireAuth, (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
@@ -3265,7 +3553,14 @@ app.get('/api/activity', requireAuth, (req, res) => {
 });
 
 // ---------- Bijlagen (alleen voor ingelogde gebruikers) ----------
-app.get('/uploads/:file', requireAuth, (req, res) => {
+// Bijlages: ingelogde gebruikers, ÓF de bridge met het ingest-token (die haalt
+// aangevinkte foto's op om ze naar de monteur-groep te sturen).
+const allowUploadAccess = (req, res, next) => {
+  const tok = req.headers['x-ingest-token'] || req.query.token;
+  if (tok && process.env.INGEST_TOKEN && tok === process.env.INGEST_TOKEN) return next();
+  return requireAuth(req, res, next);
+};
+app.get('/uploads/:file', allowUploadAccess, (req, res) => {
   if (!/^att_[a-zA-Z0-9_.]+$/.test(req.params.file)) return res.status(400).end();
   // Veilig serveren: een klant kan via e-mail/WhatsApp een bijlage sturen. Alleen
   // afbeeldingen/PDF's tonen we inline (voor de fotoviewer); al het andere (bv. .html

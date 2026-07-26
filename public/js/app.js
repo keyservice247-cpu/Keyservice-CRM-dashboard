@@ -843,18 +843,34 @@ function statusOptionsHTML(selected) {
 // Opdracht naar een monteur(-groep) sturen.
 function openSendMonteurModal(order) {
   const opts = state.monteurs.map((m) => `<option value="${m.id}" ${order.monteurId === m.id ? 'selected' : ''} ${!m.waGroup ? 'disabled' : ''}>${esc(m.name)}${m.waGroup ? ' — ' + esc(m.waGroup) : ' (geen WhatsApp-groep)'}</option>`).join('');
+  const imgs = (order.attachments || []).filter((a) => /^image\//.test(a.mime || ''));
   modal(`
     <h2>Naar monteur sturen</h2>
     <p class="muted small">De opdracht wordt als nette samenvatting naar de WhatsApp-groep van de monteur gestuurd via de bridge.</p>
     <label>Monteur <select id="sm-monteur">${opts || '<option>(geen monteurs)</option>'}</select></label>
+    ${imgs.length ? `
+    <label style="margin-top:10px">Foto's meesturen <span class="muted small">— vink aan wat de monteur moet zien (max 6)</span>
+      <button type="button" class="btn btn-sm" id="sm-imgall" style="margin-left:8px">alles</button></label>
+    <div class="attach-grid" style="margin-top:6px">${imgs.map((a) => `
+      <label class="sm-imgpick" style="position:relative;cursor:pointer;display:block">
+        <input type="checkbox" class="sm-img" value="${esc(a.id)}" style="position:absolute;top:6px;left:6px;width:18px;height:18px;z-index:2;accent-color:var(--accent)">
+        <img src="${esc(a.url)}" alt="" style="width:100%;height:90px;object-fit:cover;border-radius:8px;display:block;border:2px solid transparent">
+      </label>`).join('')}</div>` : ''}
     <p class="muted small">Heeft de monteur nog geen WhatsApp-groep? Stel die in bij Monteurs.</p>
     <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="sm-cancel">Annuleren</button> <button class="btn btn-primary" id="sm-send">Versturen</button> </div></div>`);
+  // Aangevinkte foto krijgt een blauw kader (duidelijk op mobiel).
+  $$('.sm-img').forEach((c) => c.addEventListener('change', () => { c.nextElementSibling.style.borderColor = c.checked ? 'var(--accent)' : 'transparent'; }));
+  const allBtn = $('#sm-imgall');
+  if (allBtn) allBtn.onclick = () => $$('.sm-img').forEach((c) => { c.checked = true; c.nextElementSibling.style.borderColor = 'var(--accent)'; });
   $('#sm-cancel').onclick = () => openOrderModal(order.id);
   $('#sm-send').onclick = async () => {
     const monteurId = $('#sm-monteur').value;
     if (!monteurId) return toast('Kies een monteur', true);
-    try { await api(`/api/orders/${order.id}/send-monteur`, 'POST', { monteurId }); closeModal(); toast('In de wachtrij gezet — wordt verstuurd'); loadBoard(); }
-    catch (err) { toast(err.message, true); }
+    const attachmentIds = $$('.sm-img:checked').map((c) => c.value);
+    try {
+      await api(`/api/orders/${order.id}/send-monteur`, 'POST', { monteurId, attachmentIds });
+      closeModal(); toast(`In de wachtrij gezet${attachmentIds.length ? ` met ${attachmentIds.length} foto('s)` : ''} — wordt verstuurd`); loadBoard();
+    } catch (err) { toast(err.message, true); }
   };
 }
 
@@ -906,7 +922,7 @@ function openOrderModal(id, pool) {
           <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button> <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden> </div> <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div> </div>` : ''}
     ${o && o.thread && o.thread.length ? `
       <div class="thread">
-        <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}${o.customerId ? `<button type="button" class="btn btn-sm" id="f-history" style="margin-left:8px" title="Alle WhatsApp- en e-mailberichten van deze klant, over alle kaarten heen — gewoon terugscrollen">${icon('clock', 12)} Alles van deze klant</button>` : ''}</div>
+        <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}<input id="f-chatsearch" type="search" placeholder="Zoeken…" style="margin-left:8px;max-width:120px;padding:4px 9px;font-size:12px" title="Zoek in de berichten hieronder">${o.customerId ? `<button type="button" class="btn btn-sm" id="f-history" style="margin-left:6px" title="Alle WhatsApp- en e-mailberichten van deze klant, over alle kaarten heen — gewoon terugscrollen">${icon('clock', 12)} Alles van deze klant</button>` : ''}</div>
         <div class="chat" id="f-chat">
           ${o.thread.map((t) => {
             const q = splitQuoted(t.body || '');
@@ -970,6 +986,16 @@ function openOrderModal(id, pool) {
   }
   // Gesprek meteen naar het nieuwste bericht scrollen.
   const chat = $('#f-chat'); if (chat) chat.scrollTop = chat.scrollHeight;
+  // Zoeken in de gesprekshistorie: filtert live de berichten (werkt óók in de
+  // "Alles van deze klant"-weergave, want het kijkt naar wat er nu in de chat staat).
+  {
+    const zoek = $('#f-chatsearch');
+    if (zoek && chat) zoek.addEventListener('input', () => {
+      const q = zoek.value.toLowerCase().trim();
+      $$('.chat-msg', chat).forEach((m) => { m.style.display = !q || m.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+      if (!q) chat.scrollTop = chat.scrollHeight;
+    });
+  }
   // VOLLEDIGE klanthistorie in het chat-blok: één klik toont alle WhatsApp- en
   // e-mailberichten van deze klant over ALLE kaarten heen (incl. losse inbox-
   // berichten), chronologisch met datum-scheiders en een kaart-label. Nog een
@@ -1267,15 +1293,64 @@ function renderCustomers() {
   const eurC = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
   $('#customerList').innerHTML = `
     <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>Laatste status</th><th>Opdrachten</th><th>Gefactureerd</th>${canWrite ? '<th></th>' : ''}
-    </tr></thead><tbody> ${list.map((c) => `<tr> <td><strong>${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}${c.email ? `<div class="muted small">${esc(c.email)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td> <td>${lastCell(c)}</td> <td>${c.orderCount}${c.activeCount ? ` <span class="muted small">(${c.activeCount} actief)</span>` : ''}</td> <td>${c.invoiceCount ? `<span class="cust-invoiced">${eurC(c.invoicedTotal)}<div class="muted small">${c.invoiceCount} factuur${c.invoiceCount > 1 ? 'en' : ''}</div></span>` : '<span class="muted small">—</span>'}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
+    </tr></thead><tbody> ${list.map((c) => `<tr> <td><strong class="cust-open" data-dossier="${esc(c.id)}" style="cursor:pointer;color:var(--accent)" title="Open het klantdossier (alles van deze klant op één scherm)">${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}${c.email ? `<div class="muted small">${esc(c.email)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td> <td>${lastCell(c)}</td> <td>${c.orderCount}${c.activeCount ? ` <span class="muted small">(${c.activeCount} actief)</span>` : ''}</td> <td>${c.invoiceCount ? `<span class="cust-invoiced">${eurC(c.invoicedTotal)}<div class="muted small">${c.invoiceCount} factuur${c.invoiceCount > 1 ? 'en' : ''}</div></span>` : '<span class="muted small">—</span>'}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
     </tr>`).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
     </tbody></table>`;
   $$('[data-edit]').forEach((b) => b.onclick = () => openCustomerModal(state._customers.find((c) => c.id === b.dataset.edit)));
   $$('[data-neworder]').forEach((b) => b.onclick = () => openNewOrderForCustomer(state._customers.find((c) => c.id === b.dataset.neworder)));
+  $$('.cust-open[data-dossier]').forEach((el) => el.onclick = () => openCustomerDossier(el.dataset.dossier));
   $$('.cust-last[data-open]').forEach((el) => el.onclick = async () => {
     if (!state.orders.length || !state.orders.find((x) => x.id === el.dataset.open)) state.orders = await api('/api/orders?includeArchived=1');
     markSeen(el.dataset.open); openOrderModal(el.dataset.open);
   });
+}
+
+// KLANTDOSSIER: alles van één klant op één scherm — gegevens, kaarten, facturen,
+// omzet-totalen — met snelknoppen voor een nieuwe factuur/offerte/opdracht.
+async function openCustomerDossier(custId) {
+  try {
+    const d = await api(`/api/customers/${custId}/dossier`);
+    const c = d.customer;
+    const eurD = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+    const canWrite = state.me.role !== 'monteur';
+    modal(`
+      <h2>${icon('user', 16)} ${esc(c.name)}</h2>
+      <p class="muted small">${[c.phone, c.email, c.address].filter(Boolean).map(esc).join(' · ') || 'Geen contactgegevens bekend'}</p>
+      ${c.notes ? `<p class="muted small" style="margin-top:4px">${icon('file', 12)} ${esc(c.notes)}</p>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 6px">
+        <span class="chip">${d.totals.orders} opdracht(en)</span>
+        <span class="chip" style="background:#e8f7ef;color:#0d7a43">Betaald: ${eurD(d.totals.paid)}</span>
+        ${d.totals.open ? `<span class="chip" style="background:#fdf1e3;color:#a05a00">Openstaand: ${eurD(d.totals.open)}</span>` : ''}
+      </div>
+      <h3 style="font-size:14px;margin:14px 0 4px">Opdrachten</h3>
+      <div style="max-height:200px;overflow-y:auto">${d.orders.map((o) => `
+        <div class="dos-row" data-order="${esc(o.id)}" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--line-soft,#e5e7eb);cursor:pointer">
+          <span>${esc(o.title)}${o.archivedWeek ? ' <span class="muted small">(archief)</span>' : ''}<span class="muted small" style="display:block">${fmtDateShort(o.createdAt)}${o.appointmentAt ? ' · afspraak ' + esc(String(o.appointmentAt).replace('T', ' ')) : ''}</span></span>
+          <span class="chip status-pill" style="color:${esc(statusColor(o.status))};background:${esc(statusColor(o.status))}1f">${esc(statusLabel(o.status))}</span>
+        </div>`).join('') || '<div class="empty">Nog geen opdrachten</div>'}</div>
+      <h3 style="font-size:14px;margin:14px 0 4px">Facturen &amp; offertes</h3>
+      <div style="max-height:170px;overflow-y:auto">${d.invoices.map((i) => `
+        <div class="dos-row" data-inv="${esc(i.id)}" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--line-soft,#e5e7eb);cursor:pointer">
+          <span>${esc(i.number || '(concept)')} <span class="muted small">· ${i.type === 'offerte' ? 'offerte' : 'factuur'} · ${esc(i.status)}</span></span>
+          <strong>${eurD(i.totalIncl)}</strong>
+        </div>`).join('') || '<div class="empty">Nog geen facturen of offertes</div>'}</div>
+      <div class="modal-actions"><span></span><div class="right">
+        <button class="btn" id="dos-invoice">+ Factuur</button>
+        <button class="btn" id="dos-quote">+ Offerte</button>
+        ${canWrite ? '<button class="btn" id="dos-order">+ Opdracht</button><button class="btn" id="dos-edit">Bewerken</button>' : ''}
+        <button class="btn btn-primary" id="dos-close">Sluiten</button>
+      </div></div>`);
+    $('#dos-close').onclick = closeModal;
+    const editBtn = $('#dos-edit'); if (editBtn) editBtn.onclick = () => openCustomerModal((state._customers || []).find((x) => x.id === custId) || c);
+    const ordBtn = $('#dos-order'); if (ordBtn) ordBtn.onclick = () => openNewOrderForCustomer(c);
+    $('#dos-invoice').onclick = async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'factuur' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } };
+    $('#dos-quote').onclick = async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'offerte' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } };
+    $$('.dos-row[data-order]').forEach((el) => el.onclick = async () => {
+      if (!state.orders.length || !state.orders.find((x) => x.id === el.dataset.order)) state.orders = await api('/api/orders?includeArchived=1');
+      markSeen(el.dataset.order); openOrderModal(el.dataset.order);
+    });
+    $$('.dos-row[data-inv]').forEach((el) => el.onclick = () => openStandaloneInvoice(el.dataset.inv));
+  } catch (err) { toast(err.message, true); }
 }
 
 // Maak een nieuwe opdracht voor een BESTAANDE klant (uit het klantenbestand).
@@ -1299,13 +1374,117 @@ function openNewOrderForCustomer(c) {
     } catch (err) { toast(err.message, true); }
   };
 }
+// ---------- KLANTIMPORT (CSV/Excel) ----------
+// Bestand kiezen -> voorbeeld + automatisch herkende kolommen -> zelf bijstellen ->
+// importeren. Dedupe op e-mail/telefoon; bestaande klanten worden nooit overschreven.
+const IMPORT_FIELD_LABELS = { skip: '— overslaan —', name: 'Naam', phone: 'Telefoon', email: 'E-mail', address: 'Adres', postcode: 'Postcode', city: 'Plaats', notes: 'Notities' };
+function openImportModal() {
+  modal(`
+    <h2>${icon('users', 16)} Klanten importeren</h2>
+    <p class="muted small">Kies een <strong>.csv</strong>- of <strong>Excel</strong>-bestand (bv. je export uit Rompslomp of Excel-lijst). Je krijgt eerst een voorbeeld te zien en kunt per kolom aangeven wat erin staat — pas daarna wordt er echt geïmporteerd. Bestaande klanten (zelfde e-mail of telefoonnummer) worden <strong>nooit overschreven</strong>: alleen lege velden worden aangevuld.</p>
+    <input type="file" id="imp-file" accept=".csv,.xlsx,.xls,.ods,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="margin-top:8px">
+    <div id="imp-preview" style="margin-top:12px"></div>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="imp-cancel">Sluiten</button><button class="btn btn-primary" id="imp-go" disabled>Importeren</button></div></div>`);
+  $('#imp-cancel').onclick = closeModal;
+  let importState = null;
+  $('#imp-file').addEventListener('change', async () => {
+    const f = $('#imp-file').files[0];
+    if (!f) return;
+    $('#imp-preview').innerHTML = '<div class="muted small">Bestand lezen…</div>';
+    try {
+      const fd = new FormData();
+      fd.append('bestand', f);
+      const r = await fetch('/api/customers/import-preview', { method: 'POST', body: fd });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Upload mislukt');
+      importState = j;
+      const selects = j.headers.map((h, idx) => {
+        const chosen = Object.entries(j.mapping || {}).find(([, v]) => v === idx)?.[0] || 'skip';
+        return `<th style="min-width:120px"><div class="muted small" style="font-weight:400">${esc(h || `kolom ${idx + 1}`)}</div>
+          <select class="imp-map" data-col="${idx}" style="margin-top:3px;font-size:12px">${Object.entries(IMPORT_FIELD_LABELS).map(([k, l]) => `<option value="${k}" ${k === chosen ? 'selected' : ''}>${l}</option>`).join('')}</select></th>`;
+      }).join('');
+      $('#imp-preview').innerHTML = `
+        <div class="muted small" style="margin-bottom:6px"><strong>${j.total}</strong> rijen gevonden. Controleer of elke kolom goed herkend is:</div>
+        <div class="table-wrap" style="overflow-x:auto"><table style="font-size:12.5px"><thead><tr>${selects}</tr></thead>
+        <tbody>${j.sample.map((row) => `<tr>${j.headers.map((_, i) => `<td>${esc(String(row[i] || '').slice(0, 40))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+      const go = $('#imp-go');
+      go.disabled = false;
+      go.textContent = `Importeer ${j.total} rijen`;
+    } catch (err) { $('#imp-preview').innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+  });
+  $('#imp-go').onclick = async () => {
+    if (!importState) return;
+    const mapping = {};
+    $$('.imp-map').forEach((s) => { if (s.value !== 'skip' && mapping[s.value] === undefined) mapping[s.value] = Number(s.dataset.col); });
+    if (mapping.name === undefined && mapping.phone === undefined && mapping.email === undefined) return toast('Wijs minimaal de kolom Naam, Telefoon of E-mail aan', true);
+    const go = $('#imp-go'); go.disabled = true; go.textContent = 'Bezig met importeren…';
+    try {
+      const r = await api('/api/customers/import', 'POST', { importId: importState.importId, mapping });
+      closeModal();
+      toast(`Import klaar: ${r.added} nieuw, ${r.filled} aangevuld, ${r.dup} dubbel en ${r.empty} leeg overgeslagen`);
+      loadCustomers();
+    } catch (err) { toast(err.message, true); go.disabled = false; go.textContent = 'Importeren'; }
+  };
+}
+
+// ---------- E-MAILCAMPAGNE ----------
+// Selecteer klanten (huidig zoekresultaat of alle klanten met e-mail), schrijf één
+// bericht ({naam} wordt per klant ingevuld) en het CRM verstuurt netjes met
+// tussenpozen — met testmail vooraf en een nette afmeld-voet eronder.
+function openCampaignModal() {
+  const all = (state._customers || []).filter((c) => c.email && !c.campaignOptOut);
+  const q = ($('#customerSearch')?.value || '').toLowerCase();
+  const filtered = all.filter((c) => !q || `${c.name} ${c.phone} ${c.email} ${c.address || ''}`.toLowerCase().includes(q));
+  if (!all.length) return toast('Geen klanten met een e-mailadres gevonden', true);
+  modal(`
+    <h2>${icon('mail', 16)} E-mail naar klanten sturen</h2>
+    <p class="muted small">Schrijf één bericht; <code>{naam}</code> wordt automatisch de klantnaam. Onderaan komt de huisstijl-handtekening + een nette afmeldregel. Verstuurd met tussenpozen (geen spam-gedrag).</p>
+    <label>Naar wie
+      <select id="cp-who">
+        <option value="filter" ${q ? 'selected' : ''}>Huidig zoekresultaat (${filtered.length} klanten met e-mail)</option>
+        <option value="all" ${q ? '' : 'selected'}>Alle klanten met e-mail (${all.length})</option>
+      </select></label>
+    <label>Onderwerp <input id="cp-subject" placeholder="bv. Zomeractie: gratis slotcheck"></label>
+    <label>Bericht <textarea id="cp-body" rows="7" placeholder="Beste {naam},&#10;&#10;..."></textarea></label>
+    <div class="row" style="align-items:flex-end"><label>Eerst testen naar <input id="cp-test" type="email" value="${esc(state.me?.email || '')}"></label><button class="btn" id="cp-testbtn" style="align-self:flex-end">Stuur testmail</button></div>
+    <div id="cp-progress" class="muted small" style="margin-top:8px"></div>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="cp-cancel">Annuleren</button><button class="btn btn-primary" id="cp-send">Versturen</button></div></div>`);
+  $('#cp-cancel').onclick = closeModal;
+  $('#cp-testbtn').onclick = async () => {
+    const to = $('#cp-test').value.trim();
+    if (!to) return toast('Vul een testadres in', true);
+    try { await api('/api/campaign/send', 'POST', { subject: $('#cp-subject').value, body: $('#cp-body').value, test: to }); toast(`Testmail verstuurd naar ${to}`); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#cp-send').onclick = async () => {
+    const doel = $('#cp-who').value === 'all' ? all : filtered;
+    const subject = $('#cp-subject').value.trim();
+    const body = $('#cp-body').value.trim();
+    if (!subject || !body) return toast('Vul onderwerp en bericht in', true);
+    if (!doel.length) return toast('Geen klanten in deze selectie', true);
+    if (!confirm(`Deze e-mail nu naar ${doel.length} klanten sturen?\n\nOnderwerp: ${subject}`)) return;
+    const btn = $('#cp-send'); btn.disabled = true;
+    let sent = 0; let skipped = 0; let failed = 0;
+    const prog = $('#cp-progress');
+    try {
+      for (let i = 0; i < doel.length; i += 50) {
+        prog.textContent = `Versturen… ${Math.min(i, doel.length)} van ${doel.length}`;
+        const r = await api('/api/campaign/send', 'POST', { subject, body, customerIds: doel.slice(i, i + 50).map((c) => c.id) });
+        sent += r.sent || 0; skipped += r.skipped || 0; failed += (r.failed || []).length;
+      }
+      closeModal();
+      toast(`Campagne klaar: ${sent} verstuurd${skipped ? `, ${skipped} overgeslagen` : ''}${failed ? `, ${failed} MISLUKT (zie logboek)` : ''}`);
+    } catch (err) { toast(err.message, true); btn.disabled = false; prog.textContent = ''; }
+  };
+}
+
 function openCustomerModal(c) {
   modal(`
-    <h2>${c ? 'Klant bewerken' : 'Nieuwe klant'}</h2> <label>Naam <input id="c-name" value="${esc(c?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="c-phone" value="${esc(c?.phone || '')}"></label> <label>E-mail <input id="c-email" value="${esc(c?.email || '')}"></label> </div> <label>Adres <input id="c-address" value="${esc(c?.address || '')}"></label> <label>Type <select id="c-type"> <option value="lead" ${c?.type==='lead'?'selected':''}>Lead</option> <option value="klant" ${c?.type==='klant'?'selected':''}>Klant</option> </select></label> <label>Notities <textarea id="c-notes" rows="2">${esc(c?.notes || '')}</textarea></label> <div class="modal-actions"> ${c ? '<button class="btn btn-danger" id="c-del">Verwijderen</button>' : '<span></span>'}
+    <h2>${c ? 'Klant bewerken' : 'Nieuwe klant'}</h2> <label>Naam <input id="c-name" value="${esc(c?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="c-phone" value="${esc(c?.phone || '')}"></label> <label>E-mail <input id="c-email" value="${esc(c?.email || '')}"></label> </div> <label>Adres <input id="c-address" value="${esc(c?.address || '')}"></label> <label>Type <select id="c-type"> <option value="lead" ${c?.type==='lead'?'selected':''}>Lead</option> <option value="klant" ${c?.type==='klant'?'selected':''}>Klant</option> </select></label> <label>Notities <textarea id="c-notes" rows="2">${esc(c?.notes || '')}</textarea></label> <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="c-optout" style="width:auto" ${c?.campaignOptOut ? 'checked' : ''}> Geen campagne-mails sturen (klant is afgemeld)</label> <div class="modal-actions"> ${c ? '<button class="btn btn-danger" id="c-del">Verwijderen</button>' : '<span></span>'}
       <div class="right"><button class="btn" id="c-cancel">Annuleren</button><button class="btn btn-primary" id="c-save">Opslaan</button></div> </div>`);
   $('#c-cancel').onclick = closeModal;
   $('#c-save').onclick = async () => {
-    const payload = { name: $('#c-name').value, phone: $('#c-phone').value, email: $('#c-email').value, address: $('#c-address').value, type: $('#c-type').value, notes: $('#c-notes').value };
+    const payload = { name: $('#c-name').value, phone: $('#c-phone').value, email: $('#c-email').value, address: $('#c-address').value, type: $('#c-type').value, notes: $('#c-notes').value, campaignOptOut: $('#c-optout').checked };
     if (!payload.name) return toast('Naam verplicht', true);
     try {
       if (c) await api(`/api/customers/${c.id}`, 'PATCH', payload);
@@ -2145,7 +2324,8 @@ function renderInvoices() {
   const open = all.filter((i) => i.type !== 'offerte' && i.status === 'verzonden').reduce((s, i) => s + (i.totalIncl || 0), 0);
   const paid = all.filter((i) => i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
   const overdueCount = all.filter(isOverdue).length;
-  let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong>${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}</div>`;
+  let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong>${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}</div>
+    <div id="invTodoWrap"></div>`;
   if (!items.length) html += '<div class="empty">Niets in deze weergave. Maak er één met de knoppen rechtsboven, of via de knop Factuur op een kaart.</div>';
   html += items.map((i) => {
     const quote = i.type === 'offerte';
@@ -2179,6 +2359,31 @@ function renderInvoices() {
     catch (err) { toast(err.message, true); }
   });
   quickStatus('.inv-mark', 'betaald', 'Betaald ✓');
+  // NOG TE FACTUREREN: afgeronde kaarten zonder factuur — nooit meer omzet vergeten.
+  (async () => {
+    try {
+      const todo = await api('/api/invoices/todo');
+      const box = $('#invTodoWrap');
+      if (!box || !todo.length) return;
+      box.innerHTML = `
+        <div class="info-card" style="margin-bottom:14px;border-left:4px solid var(--warn,#f59e0b)">
+          <h3 style="font-size:14px">${icon('tag', 14)} Nog te factureren (${todo.length})</h3>
+          <p class="muted small" style="margin:4px 0 8px">Afgeronde klussen waar nog géén factuur voor is gemaakt.</p>
+          ${todo.slice(0, 15).map((t) => `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line-soft,#e5e7eb)">
+              <span>${esc(t.title)}${t.customerName ? ` <span class="muted small">— ${esc(t.customerName)}</span>` : ''}<span class="muted small" style="display:block">afgerond ${fmtDateShort(t.completedAt)}${t.price ? ' · ' + esc(t.price) : ''}</span></span>
+              <button class="btn btn-sm btn-primary todo-inv" data-cust="${esc(t.customerId)}" data-order="${esc(t.id)}">Maak factuur</button>
+            </div>`).join('')}
+          ${todo.length > 15 ? `<div class="muted small" style="margin-top:6px">+ nog ${todo.length - 15} oudere…</div>` : ''}
+        </div>`;
+      $$('.todo-inv', box).forEach((b) => b.onclick = async () => {
+        try {
+          const r = await api('/api/invoices', 'POST', { customerId: b.dataset.cust, orderId: b.dataset.order, type: 'factuur' });
+          openStandaloneInvoice((r.invoice || r).id);
+        } catch (err) { toast(err.message, true); }
+      });
+    } catch { /* blok is optioneel */ }
+  })();
   quickStatus('.inv-ok', 'goedgekeurd', 'Offerte goedgekeurd ✓');
 }
 
@@ -2387,6 +2592,13 @@ async function loadSettings() {
       </div>
       <div id="backupList" class="muted small" style="margin-top:12px">Back-ups laden…</div>
       <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+      <h3 style="font-size:14px">Schijfruimte</h3>
+      <div id="diskUsage" class="muted small">Laden…</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn" id="pruneBackups">Back-ups opruimen (houd de 5 nieuwste)</button>
+      </div>
+      <p class="muted small" style="margin-top:8px">Loopt de schijf vol? De foto-opschoning staat bij "Opslag &amp; opschonen" (Systeem-pil). Blijft het krap, vergroot dan de schijf in het <strong>Render-dashboard → jouw service → Disks</strong> (± $0,25 per GB per maand) — dat is veiliger dan agressief opruimen. Onder de 150 MB vrij krijg je automatisch een alarm.</p>
+      <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
       <h3 style="font-size:14px">Dagelijkse off-site back-up per e-mail</h3>
       <p class="muted small">Stuurt elke dag automatisch een volledige kopie van alle gegevens als bijlage naar je e-mail. Zo heb je altijd een verse back-up <strong>buiten</strong> de server — gratis en zonder eraan te denken.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="bm-enabled" style="width:auto" ${s.backupMail?.enabled ? 'checked' : ''}> Dagelijkse back-up-mail aanzetten</label>
@@ -2442,7 +2654,14 @@ async function loadSettings() {
       <div class="row" style="align-items:center"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ac-enabled" style="width:auto" ${s.attachmentCleanup?.enabled !== false ? 'checked' : ''}>Aan</label>
       <label>Na hoeveel dagen <input id="ac-days" type="number" min="90" max="3650" value="${esc(String(s.attachmentCleanup?.days ?? 365))}" style="max-width:120px"></label></div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAttCleanup">Opslaan</button></div> </div>
-    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3> <p class="muted small">Komt automatisch onder elke mail die je vanuit het dashboard verstuurt. Strak en professioneel.</p> <textarea id="emailSignature" rows="4" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3>
+      <p class="muted small">Elke mail vanuit het dashboard krijgt automatisch een <strong>mooie HTML-handtekening</strong> in de huisstijl: logo, naam, functie en contactgegevens met de blauwe accentbalk. De platte tekst hieronder blijft als reserve voor mail-apps zonder opmaak. Check hoe het eruitziet via de testmail-knoppen hieronder.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="hs-enabled" style="width:auto" ${s.htmlSignature?.enabled !== false ? 'checked' : ''}> Mooie HTML-handtekening aanzetten</label>
+      <div class="row"> <label>Naam <input id="hs-name" value="${esc(s.htmlSignature?.name || '')}"></label> <label>Functie <input id="hs-role" value="${esc(s.htmlSignature?.role || '')}" placeholder="Eigenaar | Key Service 24/7"></label> </div>
+      <div class="row"> <label>Slogan <input id="hs-tagline" value="${esc(s.htmlSignature?.tagline || '')}" placeholder="Service is key"></label> <label>Tel / WhatsApp <input id="hs-phone" value="${esc(s.htmlSignature?.phone || '')}"></label> </div>
+      <div class="row"> <label>E-mail <input id="hs-email" value="${esc(s.htmlSignature?.email || '')}"></label> <label>Website <input id="hs-website" value="${esc(s.htmlSignature?.website || '')}"></label> </div>
+      <label style="margin-top:8px">Platte tekst-handtekening (reserve) <textarea id="emailSignature" rows="3" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
     <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Factuurgegevens (op elke factuur-PDF)</h3>
       <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een kaart verstuurt (knop <strong>Factuur</strong>). Het logo staat er automatisch op. Prijzen voer je <strong>excl. btw</strong> in.</p>
       <div class="row"> <label>Bedrijfsnaam <input id="is-name" value="${esc(s.invoiceSettings?.companyName || '')}"></label> <label>Telefoon <input id="is-phone" value="${esc(s.invoiceSettings?.phone || '')}"></label> </div>
@@ -2751,7 +2970,12 @@ async function loadSettings() {
     catch (err) { toast(err.message, true); }
   };
   $('#saveSignature').onclick = async () => {
-    try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value }); await refreshMeta(); toast('Handtekening opgeslagen'); }
+    const htmlSignature = {
+      enabled: $('#hs-enabled').checked,
+      name: $('#hs-name').value, role: $('#hs-role').value, tagline: $('#hs-tagline').value,
+      phone: $('#hs-phone').value, email: $('#hs-email').value, website: $('#hs-website').value,
+    };
+    try { await api('/api/settings', 'PATCH', { emailSignature: $('#emailSignature').value, htmlSignature }); await refreshMeta(); toast('Handtekening opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveInvoiceSettings').onclick = async () => {
@@ -2928,6 +3152,24 @@ async function loadSettings() {
   loadBackups();
   $('#backupNow').onclick = async () => {
     try { await api('/api/backups/now', 'POST'); toast('Back-up gemaakt'); loadBackups(); }
+    catch (err) { toast(err.message, true); }
+  };
+  // Schijfruimte-overzicht: wat neemt hoeveel in + hoeveel is vrij.
+  const loadDisk = async () => {
+    try {
+      const du = await api('/api/disk-usage');
+      const row = (label, val) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span>${label}</span><strong>${val}</strong></div>`;
+      $('#diskUsage').innerHTML =
+        row(`Foto's & bestanden (${du.uploads.count})`, `${du.uploads.mb} MB`) +
+        row(`Back-ups (${du.backups.count})`, `${du.backups.mb} MB`) +
+        row('Database (db.json)', `${du.dbMb} MB`) +
+        (du.freeMb != null ? row('Vrije ruimte op de schijf', `${du.freeMb >= 1024 ? (du.freeMb / 1024).toFixed(1) + ' GB' : du.freeMb + ' MB'}${du.freeMb < 300 ? ' ⚠' : ''}`) : '');
+    } catch { $('#diskUsage').textContent = 'Kon schijfruimte niet uitlezen.'; }
+  };
+  loadDisk();
+  $('#pruneBackups').onclick = async () => {
+    if (!confirm('Oude back-ups verwijderen en alleen de 5 nieuwste bewaren?')) return;
+    try { const r = await api('/api/backups/prune', 'POST', { keep: 5 }); toast(`${r.removed} back-up(s) opgeruimd`); loadBackups(); loadDisk(); }
     catch (err) { toast(err.message, true); }
   };
 
@@ -3471,6 +3713,8 @@ function bindButtons() {
   $('#newOrderBtn')?.addEventListener('click', () => openOrderModal());
   $('#phoneOrderBtn')?.addEventListener('click', openPhoneIntakeModal);
   $('#newCustomerBtn')?.addEventListener('click', () => openCustomerModal());
+  $('#importCustomersBtn')?.addEventListener('click', openImportModal);
+  $('#campaignBtn')?.addEventListener('click', openCampaignModal);
   $('#newMonteurBtn')?.addEventListener('click', () => openMonteurModal());
   $('#newUserBtn')?.addEventListener('click', () => openUserModal());
   $('#simulateBtn')?.addEventListener('click', () => openSimulateModal());

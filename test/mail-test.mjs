@@ -49,6 +49,12 @@ ok('waarschuwing in de gesprekshistorie van de kaart', (ordBt.thread || []).some
 ok('reden = volledige Diagnostic-Code (niet het korte fragment)', /User unknown/.test((ordBt.thread.find((t) => /NIET AANGEKOMEN/.test(t.body || '')) || {}).body || ''));
 ok('bounce geregistreerd als verwerkt bericht (nooit een lead)', d.messages.some((m) => m.externalId === '<bounce-1@transip>' && m.bounce === true));
 
+console.log('\n== HTML-handtekening (huisstijl-mail) ==');
+const { wrapHtmlMail } = await import('../server/connectors/email-smtp.js');
+const html = wrapHtmlMail('Beste klant,\n\nTot morgen!\n');
+ok('HTML-mail bevat naam + contactgegevens uit de handtekening', !!html && /Abdel Rafour/.test(html) && /085 060 2359/.test(html) && /keyservice247\.nl/.test(html));
+ok('tekst netjes omgezet naar paragrafen + logo-verwijzing', /<p style/.test(html) && /Tot morgen!/.test(html) && /cid:kslogo/.test(html));
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import qrcode from 'qrcode-terminal';
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, MessageMedia } = pkg;
 
 // --- eenvoudige .env-lader (geen extra dependency) ---
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -302,13 +302,14 @@ function startOutbox() {
       for (const it of items) {
         let ok = false;
         let detail = '';
+        let target = null; // chat-id waar de tekst heen ging (voor eventuele foto's erna)
         // Klant-DM's gaan altijd 1-op-1. Groeps-items (monteur-dispatch, terugkoppeling,
         // CRM-meldingen) proberen éérst de groep; het telefoonnummer daarop is een NOODPAD.
         const isKlantDm = it.kind === 'whatsapp_customer' || it.group === '__klant_dm__' || (!it.group && it.phone);
         try {
           if (isKlantDm) {
             const chatId = toChatId(it.phone);
-            if (chatId) { await client.sendMessage(chatId, it.text); ok = true; detail = '1-op-1'; console.log(`[outbox] -> verstuurd naar klant ${it.phone}`); }
+            if (chatId) { await client.sendMessage(chatId, it.text); ok = true; target = chatId; detail = '1-op-1'; console.log(`[outbox] -> verstuurd naar klant ${it.phone}`); }
             else { detail = `ongeldig telefoonnummer: "${it.phone}"`; console.error(`[outbox] ${detail}`); }
           } else {
             // GROEP versturen: 1) rechtstreeks op groeps-id — dat pad werkt óók tijdens
@@ -326,7 +327,7 @@ function startOutbox() {
             if (!gid) gid = await resolveGroupId(it.group);
             if (!gid) gid = await resolveGroupId(it.group, true); // cache verversen en opnieuw
             if (gid) {
-              try { await client.sendMessage(gid, it.text); ok = true; detail = 'groep'; console.log(`[outbox] -> verstuurd naar groep "${it.group}" (${gid})`); }
+              try { await client.sendMessage(gid, it.text); ok = true; target = gid; detail = 'groep'; console.log(`[outbox] -> verstuurd naar groep "${it.group}" (${gid})`); }
               catch (eSend) { detail = 'groep-verzending mislukt: ' + eSend.message; console.error(`[outbox] ${detail}`); }
             } else {
               detail = `groep niet gevonden: "${it.group}"`;
@@ -336,12 +337,28 @@ function startOutbox() {
               const chatId = toChatId(it.phone);
               if (chatId) {
                 await client.sendMessage(chatId, it.text);
-                ok = true; detail = '1-op-1 noodpad (groep niet bereikbaar)';
+                ok = true; target = chatId; detail = '1-op-1 noodpad (groep niet bereikbaar)';
                 console.log(`[outbox] -> NOODPAD: 1-op-1 verstuurd naar ${it.phone} omdat de groep niet lukte`);
               }
             }
           }
         } catch (e) { detail = detail || ('versturen mislukt: ' + e.message); console.error('[outbox] versturen mislukt:', e.message); }
+        // Foto's meesturen (door de assistente aangevinkt op de kaart). Tekst is al
+        // bezorgd; een foutje bij een foto maakt het item dus NIET mislukt.
+        if (ok && target && Array.isArray(it.media) && it.media.length) {
+          let nFoto = 0;
+          for (const m of it.media.slice(0, 6)) {
+            try {
+              const rMedia = await fetch(`${DASHBOARD_URL}${m.url}`, { headers: { 'x-ingest-token': INGEST_TOKEN } });
+              if (!rMedia.ok) { console.error(`[outbox] foto ophalen mislukt (${rMedia.status}): ${m.url}`); continue; }
+              const buf = Buffer.from(await rMedia.arrayBuffer());
+              const mm = new MessageMedia(m.mime || 'image/jpeg', buf.toString('base64'), m.name || 'foto.jpg');
+              await client.sendMessage(target, mm);
+              nFoto++;
+            } catch (eM) { console.error('[outbox] foto meesturen mislukt:', eM.message); }
+          }
+          if (nFoto) console.log(`[outbox] -> ${nFoto} foto('s) meegestuurd`);
+        }
         await fetch(`${DASHBOARD_URL}/api/outbox/${it.id}/done`, {
           method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
           body: JSON.stringify({ ok, detail }),

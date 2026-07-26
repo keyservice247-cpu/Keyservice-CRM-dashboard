@@ -10,9 +10,59 @@
 //   SMTP_FROM="Keyservice <info@jouwdomein.nl>"   (optioneel; standaard SMTP_USER)
 //
 // Valt SMTP weg, dan blijft "kopieer / open in e-mail" in het dashboard werken.
+import fs from 'node:fs';
+import path from 'node:path';
 import { db, now, logActivity, saveSoon } from '../db.js';
+import { getHtmlSignature, getEmailSignature } from '../settings.js';
 
 let transporter = null;
+
+// ---------- Nette HTML-opmaak + handtekening (zoals de eigenaar 'm wil) ----------
+const LOGO_PATH = path.join(process.cwd(), 'public', 'img', 'logo-factuur.png');
+const escHtml = (s) => String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function signatureHtml(sig) {
+  // Rol als "Eigenaar | Key Service 24/7": eerste deel grijs, bedrijfsnaam in goud.
+  const roleParts = String(sig.role || '').split('|').map((x) => x.trim());
+  const roleHtml = roleParts.length > 1
+    ? `${escHtml(roleParts[0])} | <span style="color:#d99a06;font-weight:600">${escHtml(roleParts.slice(1).join(' | '))}</span>`
+    : escHtml(sig.role || '');
+  const site = String(sig.website || '').replace(/^https?:\/\//, '');
+  return `
+  <table cellpadding="0" cellspacing="0" role="presentation" style="margin-top:22px;border-collapse:collapse">
+    <tr><td style="border-left:4px solid #1d4ed8;padding:6px 0 6px 18px">
+      <table cellpadding="0" cellspacing="0" role="presentation"><tr>
+        ${fs.existsSync(LOGO_PATH) ? '<td style="padding-right:18px;vertical-align:middle"><img src="cid:kslogo" alt="Key Service 24/7" width="112" style="display:block;max-width:112px;height:auto"></td>' : ''}
+        <td style="border-left:1px solid #d7dbe3;padding-left:18px;vertical-align:middle;font-family:Segoe UI,Arial,sans-serif;font-size:13.5px;color:#2b3442;line-height:1.55">
+          <div style="font-size:19px;font-weight:700;color:#1d4ed8">${escHtml(sig.name)}</div>
+          <div style="color:#5b6472">${roleHtml}</div>
+          ${sig.tagline ? `<div style="color:#8a93a3;font-style:italic;margin:1px 0 8px">${escHtml(sig.tagline)}</div>` : ''}
+          ${sig.phone ? `<div><b>Tel / WhatsApp:</b> ${escHtml(sig.phone)}</div>` : ''}
+          ${sig.email ? `<div><b>E-mail:</b> <a href="mailto:${escHtml(sig.email)}" style="color:#1d4ed8;text-decoration:none">${escHtml(sig.email)}</a></div>` : ''}
+          ${site ? `<div><b>Website:</b> <a href="https://${escHtml(site)}" style="color:#1d4ed8;text-decoration:none">${escHtml(site)}</a></div>` : ''}
+        </td>
+      </tr></table>
+    </td></tr>
+  </table>`;
+}
+
+// Maakt van de platte mailtekst een nette HTML-mail met de handtekening eronder.
+// De oude TEKST-handtekening (indien aanwezig aan het einde) wordt in de HTML-
+// versie vervangen door de mooie variant — in het platte-tekst-deel blijft hij
+// staan als fallback. Geeft null als de HTML-handtekening uitstaat.
+export function wrapHtmlMail(text) {
+  let sig;
+  try { sig = getHtmlSignature(); } catch { return null; }
+  if (!sig || !sig.enabled) return null;
+  let t = String(text || '');
+  try {
+    const plain = String(getEmailSignature() || '').trim();
+    if (plain && t.trim().endsWith(plain)) t = t.trim().slice(0, t.trim().length - plain.length).trim();
+  } catch { /* fallback: hele tekst tonen */ }
+  const paras = escHtml(t).split(/\n{2,}/)
+    .map((p) => `<p style="margin:0 0 14px">${p.replace(/\n/g, '<br>')}</p>`).join('');
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14.5px;color:#1f2530;line-height:1.6;max-width:640px">${paras}${signatureHtml(sig)}</div>`;
+}
 
 // ÉÉN centraal punt voor mislukte mails: elke sendMail-fout (waar dan ook vandaan:
 // snel antwoord, afspraakbevestiging, herinnering, review-verzoek, follow-up,
@@ -59,6 +109,14 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
   try {
     const mail = { from, to, subject: subject || 'Keyservice', text: text || '' };
     if (attachments && attachments.length) mail.attachments = attachments;
+    // Nette HTML-versie met de huisstijl-handtekening (tekst blijft als fallback).
+    const html = wrapHtmlMail(text || '');
+    if (html) {
+      mail.html = html;
+      if (fs.existsSync(LOGO_PATH)) {
+        mail.attachments = [...(mail.attachments || []), { filename: 'logo.png', path: LOGO_PATH, cid: 'kslogo', contentDisposition: 'inline' }];
+      }
+    }
     // Echte e-mail-threading: een antwoord verwijst naar het oorspronkelijke bericht,
     // zodat het bij de klant in dezelfde conversatie valt (en een bounce terug te
     // koppelen is aan het juiste gesprek).

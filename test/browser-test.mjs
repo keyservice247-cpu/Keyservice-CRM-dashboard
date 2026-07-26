@@ -89,7 +89,27 @@ ok('"Alles van deze klant"-knop aanwezig', await page.locator('#f-history').coun
 await page.click('#f-history');
 await page.waitForTimeout(900);
 ok('klanthistorie geladen (knop wisselt naar "Alleen deze kaart")', /Alleen deze kaart/i.test(await page.locator('#f-history').innerText().catch(() => '')));
+ok('zoekveld in de gesprekshistorie aanwezig', await page.locator('#f-chatsearch').count() > 0);
 noErr('Kaart + klanthistorie');
+
+// 9) Klanten-tools: dossier, import- en campagne-scherm openen zonder JS-fouten
+clear();
+await page.evaluate(() => closeModal());
+await page.evaluate(async () => { state._customers = await fetch('/api/customers').then((r) => r.json()); });
+const dosOk = await page.evaluate(async () => {
+  const c = state._customers.find((x) => x.name === 'Browsertest Klant');
+  await openCustomerDossier(c.id);
+  return !!document.querySelector('#dos-close');
+});
+ok('klantdossier opent (kaarten + facturen + totalen)', dosOk);
+await page.evaluate(() => closeModal());
+await page.evaluate(() => openImportModal());
+ok('import-scherm (CSV/Excel) opent', await page.locator('#imp-file').count() > 0);
+await page.evaluate(() => closeModal());
+await page.evaluate(() => openCampaignModal());
+ok('campagne-scherm opent', await page.locator('#cp-subject').count() > 0);
+await page.evaluate(() => closeModal());
+noErr('Klanten-tools (dossier/import/campagne)');
 
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();

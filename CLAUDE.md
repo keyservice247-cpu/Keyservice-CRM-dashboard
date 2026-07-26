@@ -144,6 +144,22 @@ de regressie meegroeit.
   sendMorningBriefing/runMorningBriefing in automations.js (dagvlag
   _lastMorningBriefDay, Europe/Amsterdam). Test: test/briefing-test.mjs (8 assertions,
   PORT=3119).
+- **Klantenbeheer-uitbreiding (26 jul):** KLANTDOSSIER (klik op klantnaam → alles
+  op één scherm: gegevens, kaarten incl. archief, facturen, betaald/openstaand,
+  snelknoppen; GET /api/customers/:id/dossier, monteur alleen eigen); KLANTIMPORT
+  CSV/Excel (xlsx-dependency; /api/customers/import-preview + /import: kolom-
+  heuristiek + handmatige mapping, dedupe op e-mail/telefoon, nooit overschrijven,
+  max 5000 rijen); E-MAILCAMPAGNE (/api/campaign/send, admin+assistent, {naam}-
+  placeholder, testmail, 400ms tussenpozen, campaignOptOut per klant, afmeld-voet,
+  db().campaigns-log); NOG TE FACTUREREN (/api/invoices/todo vóór de /:id-route!)
+  als blok op de Facturen-pagina; zoekveld in het kaart-chatblok; HTML-HANDTEKENING
+  (getHtmlSignature, default AAN met eigenaar-gegevens; wrapHtmlMail in email-smtp
+  maakt van elke tekstmail een nette HTML-mail met logo als cid-bijlage, platte
+  handtekening blijft fallback); FOTO-DISPATCH (dispatch-modal met foto-vinkjes →
+  outbox-item.media → bridge downloadt via /uploads met ingest-token en stuurt max 6
+  foto's na de tekst; VPS-update nodig voor het versturen); schijfruimte-overzicht
+  (/api/disk-usage) + back-ups-prune-knop in Instellingen → Systeem. Test:
+  test/klanten-test.mjs (16 assertions, PORT=3121).
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).
