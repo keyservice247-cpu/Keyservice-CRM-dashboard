@@ -56,6 +56,20 @@ const mCookie = (rL.headers.get('set-cookie') || '').split(';')[0];
 const rOv = await fetch(`${BASE}/api/day-overview`, { headers: { cookie: mCookie } });
 ok('monteur krijgt 403 op het dagoverzicht (AVG)', rOv.status === 403, `status=${rOv.status}`);
 
+console.log('\n== Dagoverzicht: geen nachtblokkade meer (werkt 24/7) ==');
+// De nachtrust-blokkade (00:00-05:00) is verwijderd: het overzicht moet op elk
+// moment van de dag een antwoord geven, nooit 'nachtrust'.
+const ovNight = await api('GET', '/api/day-overview');
+ok('dagoverzicht geeft nooit meer "nachtrust" terug', ovNight.json.error !== 'nachtrust', JSON.stringify(ovNight.json.error));
+ok('foutmelding is leesbaar (geen kale code)', !ovNight.json.error || ovNight.json.error === 'geen-ai' || ovNight.json.error.length > 12, ovNight.json.error);
+
+console.log('\n== AI-assistent: dashboard-brede scope ==');
+const ask1 = await api('POST', '/api/assistant/ask', { question: 'Hoeveel opdrachten heb ik?', scope: 'all', model: 'sonnet' });
+ok('assistent-route accepteert scope + model', [200, 500].includes(ask1.status), `status=${ask1.status}`);
+// Zonder AI-sleutel geeft hij de demo-melding terug (geen crash, geen 500 door onze code).
+if (ask1.status === 200) ok('antwoord bevat tekst (of nette demo-melding)', typeof ask1.json.text === 'string' && ask1.json.text.length > 5, JSON.stringify(ask1.json).slice(0, 120));
+else ok('nette foutmelding i.p.v. crash', !!ask1.json.error);
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

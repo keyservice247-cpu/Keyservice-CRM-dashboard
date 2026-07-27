@@ -340,7 +340,37 @@ app.get('/api/customers/:id/dossier', requireAuth, (req, res) => {
     .map((i) => ({ id: i.id, number: i.number, type: i.type, status: i.status, totalIncl: i.totalIncl || 0, createdAt: i.createdAt, sentAt: i.sentAt || null }));
   const paid = invoices.filter((i) => i.type !== 'offerte' && i.status === 'betaald').reduce((s, i) => s + i.totalIncl, 0);
   const open = invoices.filter((i) => i.type !== 'offerte' && i.status === 'verzonden').reduce((s, i) => s + i.totalIncl, 0);
-  res.json({ customer, orders, invoices, totals: { paid: Math.round(paid * 100) / 100, open: Math.round(open * 100) / 100, orders: orders.length } });
+  // Laatste gesprekken (WhatsApp/e-mail) uit alle kaarten van deze klant — zodat je
+  // in één oogopslag ziet wat er is besproken, zonder kaarten open te klikken.
+  const berichten = [];
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    if (o.customerId !== customer.id) continue;
+    for (const t of o.thread || []) {
+      if (t.channel === 'systeem') continue;
+      berichten.push({
+        at: t.at, channel: t.channel, outgoing: !!t.outgoing,
+        sender: t.sender || '', subject: t.subject || '',
+        body: String(t.body || '').replace(/\s+/g, ' ').slice(0, 180),
+        orderId: o.id, orderTitle: o.title || '',
+      });
+    }
+  }
+  berichten.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  const laatsteKlus = orders.find((o) => o.status === 'afgerond') || orders[0] || null;
+  res.json({
+    customer, orders, invoices,
+    berichten: berichten.slice(0, 12),
+    totals: {
+      paid: Math.round(paid * 100) / 100,
+      open: Math.round(open * 100) / 100,
+      orders: orders.length,
+      invoiceCount: invoices.filter((i) => i.type !== 'offerte').length,
+      quoteCount: invoices.filter((i) => i.type === 'offerte').length,
+      messageCount: berichten.length,
+      lastJobAt: laatsteKlus ? (laatsteKlus.createdAt || '') : '',
+      customerSince: customer.createdAt || '',
+    },
+  });
 });
 
 // ---------- KLANTIMPORT (CSV / Excel) ----------
@@ -3100,11 +3130,8 @@ app.get('/api/day-overview', requireRole('admin', 'assistent'), async (req, res)
   const refresh = req.query.refresh === '1';
   if (!refresh && cache && cache.day === today && cache.data) return res.json({ ...cache, cached: true });
   const factsData = morningBriefingData();
-  // 's Nachts (00:00-04:59 NL) niet automatisch scannen: dat zou het verkeer van
-  // gisteren de hele dag in de cache zetten. Handmatig verversen mag altijd.
-  const hourNL = Number(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hour12: false }));
-  if (!refresh && hourNL < 5) return res.json({ day: today, at: now(), data: null, engine: '', error: 'nachtrust', facts: factsData });
-  // Recente fout? Niet elke pulse opnieuw een (dure) AI-call doen.
+  // Recente fout? Niet elke pulse opnieuw een (dure) AI-call doen — maar wel
+  // korter dan een dag, zodat een tijdelijke storing zichzelf herstelt.
   if (!refresh && _dayOvErr && Date.now() - _dayOvErr.at < 15 * 60000) return res.json(_dayOvErr.payload);
   if (_dayOvPromise) { try { return res.json(await _dayOvPromise); } catch { /* val door naar nieuwe poging */ } }
   const facts = [
@@ -3131,7 +3158,13 @@ app.get('/api/day-overview', requireRole('admin', 'assistent'), async (req, res)
       const modelPref = db().settings.aiOverviewModel === 'opus' ? 'claude-opus-5' : '';
       out = await dayOverview({ corpus, facts, companyProfile: getCompanyProfile(), model: modelPref });
     } catch (e) {
-      out = { error: 'ai-fout: ' + String(e.message || '').slice(0, 120) };
+      out = { error: String(e.message || 'onbekende fout').slice(0, 200) };
+    }
+    // Fout ALTIJD vastleggen in het logboek — anders blijft "het lukte even niet"
+    // een raadsel en kunnen we niets gericht oplossen.
+    if (!out.data) {
+      try { logActivity('systeem', 'AI-dagoverzicht mislukt', String(out.error || '').slice(0, 180)); } catch { /* nooit blokkeren */ }
+      console.error('[dagoverzicht]', out.error);
     }
     const payload = { day: today, at: now(), data: out.data || null, engine: out.engine || '', error: out.data ? '' : (out.error || 'ai-fout'), facts: factsData };
     if (out.data) {
@@ -3383,14 +3416,72 @@ app.post('/api/assistant/ask', requireRole('admin', 'assistent'), async (req, re
   if (group) msgs = msgs.filter((m) => (m.group || '').toLowerCase().includes(group));
   // Neem de nieuwste tot 1500 en zet ze daarna chronologisch (oud->nieuw) voor de AI.
   msgs = msgs.sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt)).slice(0, 1500).reverse();
+  // DASHBOARD-CONTEXT: kaarten, facturen/offertes, klanten en cijfers meegeven, zodat
+  // de assistent ook vragen als "welke offertes staan open?" of "vergelijk juni met
+  // juli" kan beantwoorden — en die kan kruisen met wat er in de groepen is gezegd.
+  const includeDash = req.body?.scope !== 'messages';
+  const dashboard = includeDash ? buildDashboardContext() : '';
+  const modelPref = req.body?.model === 'opus' ? 'claude-opus-5'
+    : req.body?.model === 'sonnet' ? 'claude-sonnet-5' : '';
   try {
-    const out = await askAssistant({ question, messages: msgs, companyProfile: getCompanyProfile() });
+    const out = await askAssistant({ question, messages: msgs, companyProfile: getCompanyProfile(), dashboard, model: modelPref });
     logActivity(req.user.name, 'AI-vraagbaak', question.slice(0, 80));
-    res.json(out);
+    res.json({ ...out, dashboardIncluded: !!dashboard });
   } catch (err) {
     res.status(500).json({ error: 'Mislukt: ' + err.message });
   }
 });
+
+// Compacte tekstweergave van het hele dashboard voor de AI-assistent. Bewust
+// compact (alleen wat nodig is om vragen te beantwoorden) zodat er ruimte
+// overblijft voor het berichtenverkeer.
+function buildDashboardContext() {
+  const maps = buildMaps();
+  const labels = getStatusLabels();
+  const eur = (n) => '€' + Number(n || 0).toFixed(2);
+  const cName = (id) => (maps.customers.get(id) || {}).name || 'onbekend';
+  const mName = (id) => (maps.monteurs.get(id) || {}).name || '';
+  const orders = (db().orders || []).slice(-400);
+  const kaarten = orders.map((o) => {
+    const c = maps.customers.get(o.customerId) || {};
+    const it = o.intake || {};
+    return [
+      `#${o.id.slice(-6)}`,
+      `"${(o.title || '').slice(0, 60)}"`,
+      `status=${labels[o.status] || o.status}`,
+      `klant=${it.name || c.name || 'onbekend'}`,
+      (it.address || c.address) ? `plaats=${String(it.address || c.address).slice(0, 40)}` : '',
+      o.monteurId ? `monteur=${mName(o.monteurId)}` : '',
+      o.appointmentAt ? `afspraak=${String(o.appointmentAt).replace('T', ' ').slice(0, 16)}` : '',
+      o.price ? `prijs=${o.price}` : '',
+      o.originGroup ? `bron=${String(o.originGroup).slice(0, 24)}` : '',
+      `aangemaakt=${String(o.createdAt || '').slice(0, 10)}`,
+      o.status === 'afgerond' && o.completedAt ? `afgerond=${String(o.completedAt).slice(0, 10)}` : '',
+      (o.thread || []).length ? `berichten=${o.thread.length}` : '',
+    ].filter(Boolean).join(' ');
+  }).join('\n');
+  const invs = (db().invoices || []).slice(-300).map((i) => [
+    i.number || '(concept)',
+    i.type === 'offerte' ? 'OFFERTE' : 'FACTUUR',
+    `klant=${cName(i.customerId)}`,
+    `bedrag=${eur(i.totalIncl)} (excl ${eur(i.totalExcl)})`,
+    `status=${i.status}`,
+    i.sentAt ? `verstuurd=${String(i.sentAt).slice(0, 10)}` : '',
+    i.paidAt ? `betaald=${String(i.paidAt).slice(0, 10)}` : '',
+  ].filter(Boolean).join(' ')).join('\n');
+  // Cijfers van de lopende + vorige maand.
+  const nu = new Date().toISOString().slice(0, 7);
+  const vorige = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().slice(0, 7);
+  const rap = (m) => { try { const r = monthReport(m, db().monteurs || []); return `${m}: omzet ${eur(r.income)}, kosten ${eur(r.expense)}, winst ${eur(r.profit)}`; } catch { return `${m}: n.v.t.`; } };
+  const klanten = (db().customers || []).slice(-250)
+    .map((c) => `${c.name || 'onbekend'}${c.phone ? ` tel=${c.phone}` : ''}${c.email ? ` mail=${c.email}` : ''}${c.address ? ` adres=${String(c.address).slice(0, 40)}` : ''}`).join('\n');
+  return [
+    `OPDRACHTKAARTEN (${orders.length} van ${(db().orders || []).length}):\n${kaarten || '(geen)'}`,
+    `\nFACTUREN & OFFERTES (${(db().invoices || []).length}):\n${invs || '(geen)'}`,
+    `\nCIJFERS:\n${rap(nu)}\n${rap(vorige)}`,
+    `\nKLANTEN (${(db().customers || []).length} totaal, laatste ${Math.min(250, (db().customers || []).length)}):\n${klanten || '(geen)'}`,
+  ].join('\n').slice(0, 120000);
+}
 
 // Lijst van WhatsApp-groepen die we kennen (voor het filter in de vraagbaak).
 app.get('/api/assistant/groups', requireRole('admin', 'assistent'), (req, res) => {

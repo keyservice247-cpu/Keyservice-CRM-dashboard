@@ -44,6 +44,13 @@ const inv = await api('POST', '/api/invoices', { customerId: piet.id, type: 'fac
 const dossier = await api('GET', `/api/customers/${piet.id}/dossier`);
 ok('dossier: klant + kaarten + facturen + totalen', dossier.status === 200 && dossier.json.customer.id === piet.id && dossier.json.orders.length === 1 && dossier.json.invoices.length === 1 && dossier.json.totals.orders === 1, JSON.stringify(dossier.json.totals));
 
+console.log('\n== Klantdossier: gesprekken + kengetallen (Rompslomp-stijl) ==');
+ok('dossier bevat een berichten-lijst', Array.isArray(dossier.json.berichten), typeof dossier.json.berichten);
+ok('kengetallen compleet (facturen/offertes/berichten/klant-sinds)', dossier.json.totals
+  && typeof dossier.json.totals.invoiceCount === 'number'
+  && typeof dossier.json.totals.quoteCount === 'number'
+  && typeof dossier.json.totals.messageCount === 'number', JSON.stringify(dossier.json.totals));
+
 console.log('\n== Nog te factureren ==');
 const todo1 = (await api('GET', '/api/invoices/todo')).json || [];
 ok('afgeronde kaart zonder factuur staat in de lijst', todo1.some((t) => t.id === ord.json.id), JSON.stringify(todo1.map((t) => t.title)));

@@ -482,7 +482,9 @@ async function loadOverview() {
         f.unanswered ? `${f.unanswered} klantreactie(s) onbeantwoord` : '',
         f.overdueCount ? `${f.overdueCount} factuur/facturen verlopen` : '',
       ].filter(Boolean);
-      body.innerHTML = `${rows.map((r) => `<div style="padding:2px 0">• ${esc(r)}</div>`).join('')}<div class="muted small" style="margin-top:8px">${d.error === 'geen-ai' ? 'Zet de AI aan (ANTHROPIC_API_KEY) voor het volledige dagoverzicht met acties, kansen en risico’s.' : 'AI-scan lukte even niet — dit zijn de kale feiten. Probeer Ververs.'}</div>`;
+      body.innerHTML = `${rows.map((r) => `<div style="padding:2px 0">• ${esc(r)}</div>`).join('')}<div class="muted small" style="margin-top:8px">${d.error === 'geen-ai'
+        ? 'Zet de AI aan (ANTHROPIC_API_KEY) voor het volledige dagoverzicht met acties, kansen en risico’s.'
+        : `AI-scan lukte niet: <strong>${esc(d.error || 'onbekende fout')}</strong> — klik op Ververs om het opnieuw te proberen.`}</div>`;
     }
   };
   const loadDayOverview = async (refresh = false) => {
@@ -1375,27 +1377,77 @@ async function openCustomerDossier(custId) {
     const c = d.customer;
     const eurD = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
     const canWrite = state.me.role !== 'monteur';
+    // Status-badges in vaste kleurcodes (zoals een boekhoudpakket): in één oogopslag
+    // zie je of een factuur nog open staat, betaald is of een offerte nog loopt.
+    const badge = (txt, kleur) => `<span class="dos-badge" style="border:1px solid ${kleur};color:${kleur}">${esc(txt)}</span>`;
+    const invBadges = (i) => {
+      if (i.type === 'offerte') {
+        return { concept: badge('Concept', '#8a93a3'), verzonden: badge('Verzonden', '#1d4ed8'), goedgekeurd: badge('Akkoord', '#0d7a43'), afgekeurd: badge('Afgewezen', '#b42318') }[i.status] || '';
+      }
+      if (i.status === 'betaald') return badge('Betaald', '#0d7a43');
+      if (i.status === 'verzonden') return `${badge('Verzonden', '#0d7a43')}${badge('Nog niet betaald', '#b45309')}`;
+      return badge('Concept', '#8a93a3');
+    };
+    const facturen = d.invoices.filter((i) => i.type !== 'offerte');
+    const offertes = d.invoices.filter((i) => i.type === 'offerte');
+    const sectie = (titel, aantal, inhoud) => `
+      <div class="dos-card">
+        <div class="dos-card-head">${esc(titel)}${aantal ? `<span class="dos-count">${aantal}</span>` : ''}</div>
+        ${inhoud}
+      </div>`;
     modal(`
-      <h2>${icon('user', 16)} ${esc(c.name)}</h2>
-      <p class="muted small">${[c.phone, c.email, c.address].filter(Boolean).map(esc).join(' · ') || 'Geen contactgegevens bekend'}</p>
-      ${c.notes ? `<p class="muted small" style="margin-top:4px">${icon('file', 12)} ${esc(c.notes)}</p>` : ''}
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 6px">
-        <span class="chip">${d.totals.orders} opdracht(en)</span>
-        <span class="chip" style="background:#e8f7ef;color:#0d7a43">Betaald: ${eurD(d.totals.paid)}</span>
-        ${d.totals.open ? `<span class="chip" style="background:#fdf1e3;color:#a05a00">Openstaand: ${eurD(d.totals.open)}</span>` : ''}
+      <h2 style="margin-bottom:14px">${icon('user', 16)} ${esc(c.name)}</h2>
+      <div class="dos-top">
+        <div class="dos-card dos-contact">
+          <div style="font-size:17px;font-weight:600;color:var(--ink);margin-bottom:8px">${esc(c.name)}</div>
+          ${c.address ? `<div class="muted" style="line-height:1.5">${esc(c.address)}</div>` : ''}
+          <div style="margin-top:10px;display:flex;flex-direction:column;gap:5px">
+            ${c.email ? `<div>${icon('mail', 13)} <a href="mailto:${esc(c.email)}" style="color:var(--accent);text-decoration:none">${esc(c.email)}</a></div>` : ''}
+            ${c.phone ? `<div>${icon('phone', 13)} <a href="tel:${esc(c.phone)}" style="color:var(--accent);text-decoration:none">${esc(c.phone)}</a></div>` : ''}
+            ${c.address ? `<div>${icon('pin', 13)} <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">Google Maps</a></div>` : ''}
+          </div>
+          ${c.notes ? `<div class="muted small" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line-soft,#e5e7eb)">${esc(c.notes)}</div>` : ''}
+        </div>
+        <div class="dos-card dos-kpi">
+          <div class="dos-kpi-row"><span>Openstaand bedrag:</span><strong style="color:${d.totals.open ? '#b45309' : 'var(--ink)'}">${eurD(d.totals.open)}</strong></div>
+          <div class="dos-kpi-row"><span>Totale omzet:</span><strong style="color:#0d7a43">${eurD(d.totals.paid)}</strong></div>
+          <div class="dos-kpi-row"><span>Aantal facturen:</span><strong>${d.totals.invoiceCount}</strong></div>
+          <div class="dos-kpi-row"><span>Aantal opdrachten:</span><strong>${d.totals.orders}</strong></div>
+          ${d.totals.customerSince ? `<div class="dos-kpi-row"><span>Klant sinds:</span><strong>${fmtDateShort(d.totals.customerSince)}</strong></div>` : ''}
+        </div>
       </div>
-      <h3 style="font-size:14px;margin:14px 0 4px">Opdrachten</h3>
-      <div style="max-height:200px;overflow-y:auto">${d.orders.map((o) => `
-        <div class="dos-row" data-order="${esc(o.id)}" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--line-soft,#e5e7eb);cursor:pointer">
-          <span>${esc(o.title)}${o.archivedWeek ? ' <span class="muted small">(archief)</span>' : ''}<span class="muted small" style="display:block">${fmtDateShort(o.createdAt)}${o.appointmentAt ? ' · afspraak ' + esc(String(o.appointmentAt).replace('T', ' ')) : ''}</span></span>
-          <span class="chip status-pill" style="color:${esc(statusColor(o.status))};background:${esc(statusColor(o.status))}1f">${esc(statusLabel(o.status))}</span>
-        </div>`).join('') || '<div class="empty">Nog geen opdrachten</div>'}</div>
-      <h3 style="font-size:14px;margin:14px 0 4px">Facturen &amp; offertes</h3>
-      <div style="max-height:170px;overflow-y:auto">${d.invoices.map((i) => `
-        <div class="dos-row" data-inv="${esc(i.id)}" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--line-soft,#e5e7eb);cursor:pointer">
-          <span>${esc(i.number || '(concept)')} <span class="muted small">· ${i.type === 'offerte' ? 'offerte' : 'factuur'} · ${esc(i.status)}</span></span>
-          <strong>${eurD(i.totalIncl)}</strong>
-        </div>`).join('') || '<div class="empty">Nog geen facturen of offertes</div>'}</div>
+
+      ${sectie('Laatste facturen', facturen.length, facturen.length ? `
+        <table class="dos-table"><thead><tr><th style="width:110px">Datum</th><th>Omschrijving</th><th style="text-align:right">Bedrag</th></tr></thead><tbody>
+        ${facturen.slice(0, 8).map((i) => `<tr class="dos-row" data-inv="${esc(i.id)}">
+          <td class="muted small">${fmtDateShort(i.sentAt || i.createdAt)}<div>${esc(i.number || '')}</div></td>
+          <td>${esc(i.orderTitle || 'Factuur')}<div style="margin-top:3px">${invBadges(i)}</div></td>
+          <td style="text-align:right;white-space:nowrap"><strong>${eurD(i.totalIncl)}</strong></td>
+        </tr>`).join('')}</tbody></table>` : '<div class="dos-empty">Nog geen facturen</div>')}
+
+      ${sectie('Laatste offertes', offertes.length, offertes.length ? `
+        <table class="dos-table"><thead><tr><th style="width:110px">Datum</th><th>Omschrijving</th><th style="text-align:right">Bedrag</th></tr></thead><tbody>
+        ${offertes.slice(0, 6).map((i) => `<tr class="dos-row" data-inv="${esc(i.id)}">
+          <td class="muted small">${fmtDateShort(i.sentAt || i.createdAt)}<div>${esc(i.number || '')}</div></td>
+          <td>${esc(i.orderTitle || 'Offerte')}<div style="margin-top:3px">${invBadges(i)}</div></td>
+          <td style="text-align:right;white-space:nowrap"><strong>${eurD(i.totalIncl)}</strong></td>
+        </tr>`).join('')}</tbody></table>` : '<div class="dos-empty">Nog geen offertes</div>')}
+
+      ${sectie('Opdrachten', d.orders.length, d.orders.length ? `
+        <table class="dos-table"><thead><tr><th style="width:110px">Datum</th><th>Opdracht</th><th style="text-align:right">Status</th></tr></thead><tbody>
+        ${d.orders.slice(0, 10).map((o) => `<tr class="dos-row" data-order="${esc(o.id)}">
+          <td class="muted small">${fmtDateShort(o.createdAt)}</td>
+          <td>${esc(o.title)}${o.archivedWeek ? ' <span class="muted small">(archief)</span>' : ''}${o.appointmentAt ? `<div class="muted small">afspraak ${esc(String(o.appointmentAt).replace('T', ' ').slice(0, 16))}</div>` : ''}</td>
+          <td style="text-align:right"><span class="dos-badge" style="border:1px solid ${esc(statusColor(o.status))};color:${esc(statusColor(o.status))}">${esc(statusLabel(o.status))}</span></td>
+        </tr>`).join('')}</tbody></table>` : '<div class="dos-empty">Nog geen opdrachten</div>')}
+
+      ${sectie('Laatste gesprekken', d.totals.messageCount, (d.berichten || []).length ? `
+        <div style="max-height:220px;overflow-y:auto">${d.berichten.map((b) => `
+          <div class="dos-msg" data-order="${esc(b.orderId)}">
+            <div class="muted small">${b.outgoing ? icon('reply', 11) : sourceIcon(b.channel)} ${esc(b.outgoing ? 'Wij' : (b.sender || 'Klant'))} · ${fmtDate(b.at)} <span style="opacity:.7">· ${esc((b.orderTitle || '').slice(0, 28))}</span></div>
+            <div style="margin-top:2px">${esc(b.body)}${b.body.length >= 180 ? '…' : ''}</div>
+          </div>`).join('')}</div>` : '<div class="dos-empty">Nog geen gesprekken</div>')}
+
       <div class="modal-actions"><span></span><div class="right">
         <button class="btn" id="dos-invoice">+ Factuur</button>
         <button class="btn" id="dos-quote">+ Offerte</button>
@@ -1407,7 +1459,7 @@ async function openCustomerDossier(custId) {
     const ordBtn = $('#dos-order'); if (ordBtn) ordBtn.onclick = () => openNewOrderForCustomer(c);
     $('#dos-invoice').onclick = async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'factuur' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } };
     $('#dos-quote').onclick = async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'offerte' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } };
-    $$('.dos-row[data-order]').forEach((el) => el.onclick = async () => {
+    $$('.dos-row[data-order], .dos-msg[data-order]').forEach((el) => el.onclick = async () => {
       if (!state.orders.length || !state.orders.find((x) => x.id === el.dataset.order)) state.orders = await api('/api/orders?includeArchived=1');
       markSeen(el.dataset.order); openOrderModal(el.dataset.order);
     });
@@ -2131,18 +2183,33 @@ function openNewInvoiceFlow(type) {
 async function loadAssistant() {
   const groups = await api('/api/assistant/groups').catch(() => []);
   const examples = [
+    'Welke klanten hebben een offerte gekregen maar nog geen factuur?',
+    'Welke klussen zijn volgens de groepsberichten afgerond maar staan nog niet op Afgerond?',
+    'Welke facturen staan nog open en hoe lang al?',
     'Hoeveel omzet is er genoemd in de groep van Youssef de afgelopen 30 dagen?',
+    'Vergelijk deze maand met vorige maand: omzet, kosten en aantal klussen.',
+    'Welke klanten hebben meerdere klussen gehad? Wie is mijn beste klant?',
     'Wat is er besproken over de schuifpui-opdracht van mevrouw Jansen?',
-    'Welke klussen zijn deze week afgerond volgens de groepsberichten?',
-    'Welke afspraken zijn er genoemd voor komende week?',
+    'Welke afspraken staan er deze week en zijn ze allemaal bevestigd?',
   ];
   $('#assistantPanel').innerHTML = `
     <div class="info-card">
+      <p class="muted small" style="margin:-2px 0 10px">De assistent kijkt standaard naar <strong>álles</strong>: je opdrachtkaarten, facturen &amp; offertes, klanten en cijfers — plus het WhatsApp- en e-mailverkeer. Zo kan hij ook vergelijken ("welke klussen zijn volgens de groep afgerond maar staan nog op In behandeling?").</p>
+      <div class="row">
+        <label>Wat mag hij doorzoeken <select id="as-scope">
+          <option value="all" selected>Alles — dashboard + berichten</option>
+          <option value="messages">Alleen WhatsApp &amp; e-mail</option>
+        </select></label>
+        <label>AI-niveau <select id="as-model">
+          <option value="sonnet" selected>Standaard (Sonnet) — snel</option>
+          <option value="opus">Hoogste niveau (Opus) — scherper, duurder</option>
+        </select></label>
+      </div>
       <div class="row">
         <label>Zoeken in groep <select id="as-group"><option value="">Alle groepen + e-mail</option>${groups.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join('')}</select></label>
-        <label>Periode <select id="as-days"><option value="0">Alles</option><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label>
+        <label>Periode berichten <select id="as-days"><option value="0">Alles</option><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label>
       </div>
-      <label>Je vraag <textarea id="as-q" rows="3" placeholder="bv. Hoeveel omzet is er verstuurd in de groep van Youssef?"></textarea></label>
+      <label>Je vraag <textarea id="as-q" rows="3" placeholder="bv. Welke klanten hebben een offerte gekregen maar nog geen factuur?"></textarea></label>
       <div class="as-examples">${examples.map((e) => `<button type="button" class="chip as-ex">${esc(e)}</button>`).join('')}</div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="as-ask">${icon('sparkles', 14)} Vraag de AI</button></div>
       <div id="as-answer" style="margin-top:16px"></div>
@@ -2177,10 +2244,14 @@ async function loadAssistant() {
     const question = $('#as-q').value.trim();
     if (!question) return toast('Stel eerst een vraag', true);
     const btn = $('#as-ask'); btn.disabled = true; btn.innerHTML = 'Bezig met zoeken…';
-    $('#as-answer').innerHTML = '<div class="muted small">De AI doorzoekt de berichten… dit kan ~10-30 sec duren.</div>';
+    const scope = $('#as-scope')?.value || 'all';
+    $('#as-answer').innerHTML = `<div class="muted small">De AI doorzoekt ${scope === 'all' ? 'je dashboard én de berichten' : 'de berichten'}… dit kan ~10-40 sec duren.</div>`;
     try {
-      const out = await api('/api/assistant/ask', 'POST', { question, group: $('#as-group').value, days: Number($('#as-days').value) });
-      $('#as-answer').innerHTML = `<div class="analysis-box">${esc(out.text).replace(/\n/g, '<br>')}</div>${out.searched ? `<div class="muted small" style="margin-top:6px">Doorzocht: ${out.searched} berichten · ${esc(out.engine || '')}</div>` : ''}`;
+      const out = await api('/api/assistant/ask', 'POST', {
+        question, group: $('#as-group').value, days: Number($('#as-days').value),
+        scope, model: $('#as-model')?.value || 'sonnet',
+      });
+      $('#as-answer').innerHTML = `<div class="analysis-box">${esc(out.text).replace(/\n/g, '<br>')}</div><div class="muted small" style="margin-top:6px">Doorzocht: ${out.dashboardIncluded ? 'dashboard (kaarten, facturen, klanten, cijfers) + ' : ''}${out.searched || 0} berichten · ${esc(out.engine || '')}</div>`;
     } catch (err) { $('#as-answer').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
     btn.disabled = false; btn.innerHTML = `${icon('sparkles', 14)} Vraag de AI`;
   };

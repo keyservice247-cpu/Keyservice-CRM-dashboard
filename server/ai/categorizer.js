@@ -521,20 +521,40 @@ Antwoord UITSLUITEND met geldige JSON (geen tekst eromheen, geen markdown):
  "kansen":["..."],
  "risicos":["..."]}
 Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar = "inbox"|"opdrachten"|"facturen"|"agenda"|"klanten"). "beantwoorden" = jouw ADVISEURSROL: max 5 berichten/mails uit het verkeer die een antwoord verwachten of te belangrijk zijn om te missen (wachtende klanten, vragen zonder reactie, boze of dringende toon, zakelijke kansen; kanaal = "email"|"whatsapp"; urgent alleen bij echte haast) — sla over wat al beantwoord lijkt. Max 3 kansen (omzet/vervolgklussen die je in het verkeer ziet), max 3 risico's (dingen die stil dreigen mis te gaan). Wees CONCREET: gebruik namen, plaatsen en bedragen uit de gegevens. Nederlands, geen emoji, geen verzinsels — alleen wat je echt ziet.`;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: useModel, max_tokens: 2500, system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] }),
-  });
-  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
+  // Overbelasting/rate-limit (429/529) is tijdelijk: kort wachten en opnieuw,
+  // zodat één drukke minuut bij Anthropic niet je hele dagoverzicht kost.
+  const body = JSON.stringify({ model: useModel, max_tokens: 2500, system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] });
+  let resp = null; let lastErr = '';
+  for (let poging = 0; poging < 3; poging++) {
+    if (poging) await new Promise((r) => setTimeout(r, poging * 2500));
+    try {
+      resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body,
+      });
+    } catch (e) { lastErr = `netwerkfout: ${e.message}`; resp = null; continue; }
+    if (resp.ok) break;
+    // Foutdetails van de API meenemen — anders blijft het gissen.
+    const det = await resp.text().catch(() => '');
+    let uitleg = '';
+    try { uitleg = (JSON.parse(det).error || {}).message || ''; } catch { uitleg = det.slice(0, 160); }
+    lastErr = `Claude API status ${resp.status}${uitleg ? ` — ${uitleg}` : ''}`;
+    if (![429, 500, 502, 503, 529].includes(resp.status)) break; // niet-tijdelijk: stoppen
+    resp = null;
+  }
+  if (!resp || !resp.ok) throw new Error(lastErr || 'AI niet bereikbaar');
   const json = await resp.json();
   recordAIUsage(json.usage, useModel);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   // Afgekapt/omringd antwoord redden: pak het buitenste JSON-blok.
   const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return { error: 'ai-onleesbaar' };
+  if (!m) return { error: `AI gaf geen bruikbaar antwoord${json.stop_reason === 'max_tokens' ? ' (antwoord afgekapt)' : ''}` };
   let parsed;
-  try { parsed = JSON.parse(m[0]); } catch { return { error: 'ai-onleesbaar' }; }
+  try { parsed = JSON.parse(m[0]); } catch {
+    // Afgekapte JSON: probeer te repareren door open haakjes te sluiten.
+    try { parsed = JSON.parse(m[0].replace(/,\s*$/, '') + ']}'.repeat(0) + '}'); } catch { return { error: 'AI-antwoord was geen geldige JSON' }; }
+  }
   const arr = (x, n) => (Array.isArray(x) ? x.slice(0, n) : []);
   const data = {
     kop: String(parsed.kop || '').slice(0, 200),
@@ -559,12 +579,12 @@ Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar =
 // AI-vraagbaak: beantwoordt een vrije vraag op basis van de opgeslagen WhatsApp/
 // e-mail-berichten. Bv. "hoeveel omzet is in de groep van Youssef genoemd?" of
 // "wat is er met de opdracht van mevrouw Jansen gebeurd?".
-export async function askAssistant({ question, messages = [], companyProfile = '' }) {
+export async function askAssistant({ question, messages = [], companyProfile = '', dashboard = '', model: modelPref = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const model = modelPref || process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
   if (!apiKey) return { text: 'Zet eerst de AI aan (ANTHROPIC_API_KEY) om de vraagbaak te gebruiken.', engine: 'demo' };
   if (!question) return { text: 'Stel een vraag.', engine: 'n.v.t.' };
-  if (!messages.length) return { text: 'Er zijn nog geen berichten om in te zoeken.', engine: 'n.v.t.' };
+  if (!messages.length && !dashboard) return { text: 'Er zijn nog geen gegevens om in te zoeken.', engine: 'n.v.t.' };
 
   // Corpus: tot 1500 berichten (chronologisch, oud->nieuw), met datum, groep en afzender.
   // We laten de volledige berichttekst toe tot 600 tekens (rapportages met bedragen).
@@ -576,8 +596,16 @@ export async function askAssistant({ question, messages = [], companyProfile = '
 
   const system = `Je bent de interne data-assistent van Keyservice (sleutel-/slotenmaker).
 ${companyProfile ? `\nOver het bedrijf:\n${companyProfile}\n` : ''}
-Je krijgt WhatsApp- en e-mailberichten (chronologisch, met datum, groep en afzender).
-Beantwoord de vraag UITSLUITEND op basis van deze berichten. Verzin niets.
+Je krijgt twee soorten gegevens:
+(A) DASHBOARD-GEGEVENS: opdrachtkaarten (met status, klant, monteur, afspraak, prijs),
+    facturen en offertes (nummer, bedrag, status, betaald ja/nee), klanten en de
+    financiële cijfers. Gebruik deze voor vragen over kaarten, omzet, facturen,
+    klanten, monteurs, statussen en vergelijkingen.
+(B) BERICHTEN: WhatsApp- en e-mailverkeer (chronologisch, met datum, groep, afzender).
+    Gebruik deze voor wat er is BESPROKEN of AFGESPROKEN.
+Combineer beide waar dat de vraag beter beantwoordt (bv. "welke klussen zijn volgens de
+groep afgerond maar staan nog niet op Afgerond?" of "welke klanten hebben wel een offerte
+maar geen factuur?"). Beantwoord UITSLUITEND op basis van de gegeven data. Verzin niets.
 
 WERKWIJZE BIJ OMZET-/BEDRAG-VRAGEN (zeer belangrijk, wees exact en volledig):
 1. Ga ELK bericht in de gevraagde periode langs — sla geen enkele dagrapportage over.
@@ -596,12 +624,22 @@ ALGEMEEN:
 - Staat iets er niet in of twijfel je? Zeg dat eerlijk.
 - Antwoord helder in het Nederlands, met een nette tabel/opsomming waar dat past.`;
 
+  const inhoud = [
+    dashboard ? `=== (A) DASHBOARD-GEGEVENS ===\n${dashboard}` : '',
+    corpus ? `=== (B) BERICHTEN (chronologisch) ===\n${corpus}` : '',
+    `---\nVraag: ${question}`,
+  ].filter(Boolean).join('\n\n');
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 6000, system, messages: [{ role: 'user', content: `Berichten (chronologisch):\n${corpus}\n\n---\nVraag: ${question}` }] }),
+    body: JSON.stringify({ model, max_tokens: 6000, system, messages: [{ role: 'user', content: inhoud }] }),
   });
-  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
+  if (!resp.ok) {
+    const det = await resp.text().catch(() => '');
+    let uitleg = '';
+    try { uitleg = (JSON.parse(det).error || {}).message || ''; } catch { uitleg = det.slice(0, 160); }
+    throw new Error(`Claude API status ${resp.status}${uitleg ? ` — ${uitleg}` : ''}`);
+  }
   const json = await resp.json();
   recordAIUsage(json.usage, model);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
