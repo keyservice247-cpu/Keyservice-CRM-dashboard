@@ -767,6 +767,86 @@ app.get('/api/disk-usage', requireRole('admin'), (req, res) => {
   let freeMb = null; try { const st = fs.statfsSync(DATA); freeMb = Math.round((st.bavail * st.bsize) / 1048576); } catch { /* niet ondersteund */ }
   res.json({ uploads, backups, dbMb, freeMb, cleanup: getAttachmentCleanup() });
 });
+// ---------- Bijlagen beheren (foto's/video's makkelijk opruimen) ----------
+// Alle bijlages van kaarten (ook prullenbak) + losse inbox-berichten op één rij,
+// zodat je zelf kunt kiezen wat weg mag i.p.v. te wachten op de automatische
+// opschoning (die alleen afgeronde/geannuleerde klussen ouder dan X dagen pakt).
+// Werkbon-handtekeningen worden NOOIT getoond/verwijderbaar gemaakt.
+app.get('/api/attachments/browse', requireRole('admin', 'assistent'), (req, res) => {
+  const protectedIds = new Set();
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    const sigId = o.werkbon && o.werkbon.signatureAttachmentId;
+    if (sigId) protectedIds.add(sigId);
+  }
+  const items = [];
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    for (const a of o.attachments || []) {
+      if (protectedIds.has(a.id)) continue;
+      items.push({ id: a.id, url: a.url, filename: a.filename, mime: a.mime, kind: a.kind, size: a.size || 0, at: a.at || o.createdAt, orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', trashed: !!o.trashedAt, source: 'order' });
+    }
+    for (const t of o.thread || []) {
+      for (const a of t.attachments || []) {
+        if (protectedIds.has(a.id)) continue;
+        items.push({ id: a.id, url: a.url, filename: a.filename, mime: a.mime, kind: a.kind, size: a.size || 0, at: a.at || t.at, orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', trashed: !!o.trashedAt, source: 'thread', threadId: t.id });
+      }
+    }
+  }
+  for (const m of db().messages || []) {
+    for (const a of m.attachments || []) {
+      items.push({ id: a.id, url: a.url, filename: a.filename, mime: a.mime, kind: a.kind, size: a.size || 0, at: a.at || m.receivedAt, messageId: m.id, orderTitle: '(los bericht, geen kaart)', source: 'message' });
+    }
+  }
+  res.json({ items, totalBytes: items.reduce((s, x) => s + (x.size || 0), 0) });
+});
+
+// Bulk verwijderen: elk item is {id, orderId?, threadId?, messageId?} — precies
+// zoals teruggegeven door /browse. Best-effort per item (één kapotte referentie
+// mag de rest niet blokkeren); geeft terug hoeveel bytes zijn vrijgemaakt.
+app.post('/api/attachments/bulk-delete', requireRole('admin', 'assistent'), (req, res) => {
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 2000) : [];
+  // Zelfde bescherming als /browse: een werkbon-handtekening mag NOOIT weg, ook
+  // niet als een verkeerd/verouderd item-id wordt meegestuurd.
+  const protectedIds = new Set();
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    const sigId = o.werkbon && o.werkbon.signatureAttachmentId;
+    if (sigId) protectedIds.add(sigId);
+  }
+  let removed = 0; let freedBytes = 0;
+  const stripFrom = (list, attId) => {
+    if (!Array.isArray(list) || protectedIds.has(attId)) return list;
+    const idx = list.findIndex((a) => a.id === attId);
+    if (idx === -1) return list;
+    const [a] = list.splice(idx, 1);
+    try { deleteFile(a.file); } catch { /* bestand al weg */ }
+    freedBytes += a.size || 0;
+    removed++;
+    return list;
+  };
+  for (const it of items) {
+    try {
+      if (it.messageId) {
+        const m = db().messages.find((x) => x.id === it.messageId);
+        if (m) m.attachments = stripFrom(m.attachments, it.id);
+        continue;
+      }
+      if (!it.orderId) continue;
+      const o = db().orders.find((x) => x.id === it.orderId) || db().trash.find((x) => x.id === it.orderId);
+      if (!o) continue;
+      if (it.threadId) {
+        const t = (o.thread || []).find((x) => x.id === it.threadId);
+        if (t) t.attachments = stripFrom(t.attachments, it.id);
+      } else {
+        o.attachments = stripFrom(o.attachments, it.id);
+      }
+    } catch (e) { console.error('[bijlage-verwijderen]', e.message); }
+  }
+  if (removed) {
+    logActivity(req.user.name, 'bijlages opgeruimd', `${removed} bestand(en), ${(freedBytes / 1048576).toFixed(1)} MB vrijgemaakt`);
+    saveSoon();
+  }
+  res.json({ ok: true, removed, freedBytes });
+});
+
 // Extra back-ups opruimen (houd de N nieuwste). Handmatige noodrem als de schijf
 // vol raakt; de automatische prune (KEEP_BACKUPS) blijft gewoon bestaan.
 app.post('/api/backups/prune', requireRole('admin'), (req, res) => {

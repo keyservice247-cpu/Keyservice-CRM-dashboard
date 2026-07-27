@@ -92,6 +92,31 @@ const item2 = ob2.find((x) => x.orderId === ord.json.id && /Karin Vijfhuizen/.te
 ok('monteur-bericht bevat de VERBETERDE gegevens (naam+adres)', !!item2 && /Sportlaan 12/.test(item2.text) && /0650638809/.test(item2.text), item2 ? item2.text.slice(0, 120) : 'geen item');
 ok('oude gegevens niet meer in het nieuwste bericht', !!item2 && !/Klant: U\b/.test(item2.text));
 
+console.log('\n== Bijlagen beheren: bladeren + bulk verwijderen + werkbon-bescherming ==');
+// Tweede foto op dezelfde kaart, plus een "werkbon-handtekening" die NOOIT in de
+// lijst mag staan of verwijderbaar mag zijn.
+const PNG2 = Buffer.from('89504e470d0a1a0a0000000d4948445200000002000000020806000000aabbccdd', 'hex').toString('base64');
+const up2 = await api('POST', `/api/orders/${ord.json.id}/attachments`, { filename: 'deur2.png', mime: 'image/png', dataBase64: PNG2 });
+const attId2 = ((up2.json.attachments || []).find((a) => a.filename === 'deur2.png') || {}).id;
+const sigUp = await api('POST', `/api/orders/${ord.json.id}/attachments`, { filename: 'handtekening.png', mime: 'image/png', dataBase64: PNG2 });
+const sigAttId = ((sigUp.json.attachments || []).find((a) => a.filename === 'handtekening.png') || {}).id;
+await api('POST', `/api/orders/${ord.json.id}/werkbon`, { work: 'Slot vervangen', materials: 'Cilinderslot', signatureAttachmentId: sigAttId });
+
+const browse1 = await api('GET', '/api/attachments/browse');
+ok('browse geeft bijlages terug met grootte + kaartinfo', browse1.status === 200 && Array.isArray(browse1.json.items) && browse1.json.items.some((x) => x.id === attId2), JSON.stringify(browse1.json.items?.length));
+ok('werkbon-handtekening staat NOOIT in de lijst', !browse1.json.items.some((x) => x.id === sigAttId));
+
+const bulkTry = await api('POST', '/api/attachments/bulk-delete', { items: [{ id: sigAttId, orderId: ord.json.id }] });
+const stillThere = (await api('GET', '/api/orders')).json.find((o) => o.id === ord.json.id);
+ok('werkbon-handtekening kan niet via bulk-delete verwijderd worden (verkeerd endpoint gebruikt, blijft intact)', bulkTry.status === 200 && (stillThere.attachments || []).some((a) => a.id === sigAttId));
+
+const bulkDel = await api('POST', '/api/attachments/bulk-delete', { items: [{ id: attId2, orderId: ord.json.id }] });
+ok('bulk-delete verwijdert de gewone foto + telt bytes', bulkDel.status === 200 && bulkDel.json.removed === 1 && bulkDel.json.freedBytes > 0, JSON.stringify(bulkDel.json));
+const afterOrd = (await api('GET', '/api/orders')).json.find((o) => o.id === ord.json.id);
+ok('foto ook echt weg van de kaart', !(afterOrd.attachments || []).some((a) => a.id === attId2));
+const browse2 = await api('GET', '/api/attachments/browse');
+ok('verwijderde foto verdwijnt ook uit de bladerlijst', !browse2.json.items.some((x) => x.id === attId2));
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

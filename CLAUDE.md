@@ -174,8 +174,15 @@ de regressie meegroeit.
   handtekening blijft fallback); FOTO-DISPATCH (dispatch-modal met foto-vinkjes →
   outbox-item.media → bridge downloadt via /uploads met ingest-token en stuurt max 6
   foto's na de tekst; VPS-update nodig voor het versturen); schijfruimte-overzicht
-  (/api/disk-usage) + back-ups-prune-knop in Instellingen → Systeem. Test:
-  test/klanten-test.mjs (16 assertions, PORT=3121).
+  (/api/disk-usage) + back-ups-prune-knop in Instellingen → Systeem; BIJLAGEN
+  BEHEREN (27 jul, "makkelijk schijfruimte vrijmaken"): /api/attachments/browse
+  (alle bijlages van kaarten incl. prullenbak + losse inbox-berichten, groot→klein
+  gesorteerd) + /api/attachments/bulk-delete (multi-select + verwijderen, geeft
+  vrijgemaakte bytes terug); werkbon-handtekeningen NOOIT in de lijst én NOOIT
+  verwijderbaar (protectedIds-check zit in BEIDE endpoints, niet alleen de listing);
+  scherm in Instellingen → Systeem ("Foto's & video's beheren") met filters
+  (alles/afgerond+geannuleerd/ouder dan 90 dagen/alleen video's) en "alles
+  selecteren". Test: test/klanten-test.mjs (25 assertions, PORT=3121).
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).

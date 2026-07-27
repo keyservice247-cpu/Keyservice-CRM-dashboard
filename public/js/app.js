@@ -1440,6 +1440,100 @@ function openNewOrderForCustomer(c) {
 // Bestand kiezen -> voorbeeld + automatisch herkende kolommen -> zelf bijstellen ->
 // importeren. Dedupe op e-mail/telefoon; bestaande klanten worden nooit overschreven.
 const IMPORT_FIELD_LABELS = { skip: '— overslaan —', name: 'Naam', phone: 'Telefoon', email: 'E-mail', address: 'Adres', postcode: 'Postcode', city: 'Plaats', notes: 'Notities' };
+// ---------- Foto's & video's beheren (schijfruimte makkelijk vrijmaken) ----------
+// Toont ALLE bijlages (kaarten incl. prullenbak + losse inbox-berichten) op
+// grootte gesorteerd, met vinkjes en een bulk-verwijderknop. Werkbon-hand-
+// tekeningen worden door de server al buiten deze lijst gehouden.
+function fmtBytes(n) {
+  if (!n) return '0 KB';
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  return Math.round(n / 1024) + ' KB';
+}
+async function openAttachmentManager() {
+  modal(`
+    <h2>${icon('paperclip', 16)} Foto's &amp; video's beheren</h2>
+    <p class="muted small">Vink aan wat je wilt verwijderen en klik op Verwijderen. Werkbon-handtekeningen staan hier bewust niet bij — die blijven altijd bewaard.</p>
+    <div id="am-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
+      <label style="margin:0"><input type="checkbox" id="am-all" style="width:auto"> Alles selecteren</label>
+      <select id="am-filter" style="max-width:220px">
+        <option value="all">Alle bijlages</option>
+        <option value="done">Alleen afgeronde/geannuleerde klussen</option>
+        <option value="old">Ouder dan 90 dagen</option>
+        <option value="video">Alleen video's</option>
+      </select>
+      <span class="muted small" id="am-summary" style="margin-left:auto"></span>
+    </div>
+    <div id="am-grid" style="max-height:50vh;overflow-y:auto;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;padding:10px">Laden…</div>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="am-cancel">Sluiten</button><button class="btn btn-danger" id="am-delete" disabled>Verwijder geselecteerde</button></div></div>`);
+  $('#am-cancel').onclick = closeModal;
+  let items = [];
+  const selected = new Set();
+  const updateSummary = () => {
+    const sel = items.filter((x) => selected.has(x.id));
+    $('#am-summary').textContent = sel.length ? `${sel.length} geselecteerd — ${fmtBytes(sel.reduce((s, x) => s + (x.size || 0), 0))}` : `${items.length} bestand(en) — ${fmtBytes(items.reduce((s, x) => s + (x.size || 0), 0))}`;
+    $('#am-delete').disabled = sel.length === 0;
+    $('#am-delete').textContent = sel.length ? `Verwijder ${sel.length} geselecteerde` : 'Verwijder geselecteerde';
+  };
+  const renderGrid = () => {
+    const f = $('#am-filter').value;
+    const cutoff = Date.now() - 90 * 86400000;
+    const shown = items.filter((x) => {
+      if (f === 'done') return ['afgerond', 'geannuleerd'].includes(x.orderStatus);
+      if (f === 'old') return x.at && new Date(x.at).getTime() < cutoff;
+      if (f === 'video') return x.kind === 'video';
+      return true;
+    });
+    $('#am-grid').innerHTML = shown.length ? `<div class="attach-grid">${shown.map((x) => `
+      <label class="am-item" style="position:relative;cursor:pointer;display:block">
+        <input type="checkbox" class="am-pick" data-id="${esc(x.id)}" ${selected.has(x.id) ? 'checked' : ''} style="position:absolute;top:6px;left:6px;width:18px;height:18px;z-index:2;accent-color:var(--danger)">
+        ${x.kind === 'image' ? `<img src="${esc(x.url)}" loading="lazy" style="width:100%;height:90px;object-fit:cover;border-radius:8px;display:block;border:2px solid transparent">` : `<div style="width:100%;height:90px;border-radius:8px;background:var(--panel-2,#f6f8fb);display:flex;align-items:center;justify-content:center;border:2px solid transparent">${icon(x.kind === 'video' ? 'video' : 'file', 26)}</div>`}
+        <div class="muted small" style="margin-top:3px;line-height:1.3" title="${esc(x.orderTitle)}">${esc((x.orderTitle || '').slice(0, 22))}<br>${fmtBytes(x.size)} · ${fmtDateShort(x.at)}</div>
+      </label>`).join('')}</div>` : '<div class="empty">Niets gevonden voor dit filter.</div>';
+    $$('.am-pick', $('#am-grid')).forEach((c) => {
+      const box = c.closest('.am-item');
+      if (c.checked && box) box.querySelector('img,div').style.borderColor = 'var(--danger)';
+      c.addEventListener('change', () => {
+        if (c.checked) selected.add(c.dataset.id); else selected.delete(c.dataset.id);
+        const el = box.querySelector('img,div'); if (el) el.style.borderColor = c.checked ? 'var(--danger)' : 'transparent';
+        updateSummary();
+      });
+    });
+    updateSummary();
+  };
+  $('#am-filter').onchange = renderGrid;
+  $('#am-all').onchange = () => {
+    const f = $('#am-filter').value;
+    const cutoff = Date.now() - 90 * 86400000;
+    const visible = items.filter((x) => {
+      if (f === 'done') return ['afgerond', 'geannuleerd'].includes(x.orderStatus);
+      if (f === 'old') return x.at && new Date(x.at).getTime() < cutoff;
+      if (f === 'video') return x.kind === 'video';
+      return true;
+    });
+    if ($('#am-all').checked) visible.forEach((x) => selected.add(x.id));
+    else visible.forEach((x) => selected.delete(x.id));
+    renderGrid();
+  };
+  $('#am-delete').onclick = async () => {
+    const toDelete = items.filter((x) => selected.has(x.id));
+    if (!toDelete.length) return;
+    if (!confirm(`${toDelete.length} bestand(en) definitief verwijderen (${fmtBytes(toDelete.reduce((s, x) => s + (x.size || 0), 0))})? Dit kan niet ongedaan worden gemaakt.`)) return;
+    const btn = $('#am-delete'); btn.disabled = true; btn.textContent = 'Bezig…';
+    try {
+      const r = await api('/api/attachments/bulk-delete', 'POST', { items: toDelete.map((x) => ({ id: x.id, orderId: x.orderId, threadId: x.threadId, messageId: x.messageId })) });
+      toast(`${r.removed} bestand(en) verwijderd — ${fmtBytes(r.freedBytes)} vrijgemaakt`);
+      items = items.filter((x) => !selected.has(x.id));
+      selected.clear();
+      renderGrid();
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  };
+  try {
+    const r = await api('/api/attachments/browse');
+    items = (r.items || []).sort((a, b) => (b.size || 0) - (a.size || 0));
+    renderGrid();
+  } catch (err) { $('#am-grid').innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+}
+
 function openImportModal() {
   modal(`
     <h2>${icon('users', 16)} Klanten importeren</h2>
@@ -2722,7 +2816,12 @@ async function loadSettings() {
       <p class="muted small">Foto's en bestanden van <strong>afgeronde of geannuleerde</strong> klussen worden na de ingestelde periode van de schijf verwijderd, zodat die nooit volloopt. Klantgegevens, kaarten, facturen en <strong>werkbon-handtekeningen blijven altijd bewaard</strong> — alleen de losse bestanden verdwijnen. Tip: garantie op producten is 3 jaar; kies 1095 dagen als je foto's daarvoor wilt kunnen terugkijken.</p>
       <div class="row" style="align-items:center"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ac-enabled" style="width:auto" ${s.attachmentCleanup?.enabled !== false ? 'checked' : ''}>Aan</label>
       <label>Na hoeveel dagen <input id="ac-days" type="number" min="90" max="3650" value="${esc(String(s.attachmentCleanup?.days ?? 365))}" style="max-width:120px"></label></div>
-      <div style="margin-top:12px"><button class="btn btn-primary" id="saveAttCleanup">Opslaan</button></div> </div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveAttCleanup">Opslaan</button></div>
+      <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
+      <h3 style="font-size:14px">Foto's &amp; video's nu opruimen</h3>
+      <p class="muted small">Wil je niet wachten op de automatische opschoning? Blader hier door alle foto's/video's van al je kaarten, vink aan wat weg mag en verwijder in één keer — handig als de schijf snel vrij moet.</p>
+      <button class="btn" id="openAttMgr">${icon('paperclip', 14)} Foto's &amp; video's beheren</button>
+    </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3>
       <p class="muted small">Elke mail vanuit het dashboard krijgt automatisch een <strong>mooie HTML-handtekening</strong> in de huisstijl: logo, naam, functie en contactgegevens met de blauwe accentbalk. De platte tekst hieronder blijft als reserve voor mail-apps zonder opmaak. Check hoe het eruitziet via de testmail-knoppen hieronder.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="hs-enabled" style="width:auto" ${s.htmlSignature?.enabled !== false ? 'checked' : ''}> Mooie HTML-handtekening aanzetten</label>
@@ -3046,6 +3145,7 @@ async function loadSettings() {
     try { await api('/api/settings', 'PATCH', { attachmentCleanup: { enabled: $('#ac-enabled').checked, days: Number($('#ac-days').value) || 365 } }); toast('Bijlage-opschoning opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
+  $('#openAttMgr').onclick = openAttachmentManager;
   $('#saveSignature').onclick = async () => {
     const htmlSignature = {
       enabled: $('#hs-enabled').checked,

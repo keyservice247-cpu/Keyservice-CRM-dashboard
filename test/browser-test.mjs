@@ -109,7 +109,11 @@ await page.evaluate(() => closeModal());
 await page.evaluate(() => openCampaignModal());
 ok('campagne-scherm opent', await page.locator('#cp-subject').count() > 0);
 await page.evaluate(() => closeModal());
-noErr('Klanten-tools (dossier/import/campagne)');
+await page.evaluate(() => openAttachmentManager());
+await page.waitForTimeout(600);
+ok('bijlagen-beheren-scherm opent en laadt de lijst', await page.locator('#am-grid').count() > 0 && !/^Laden/.test((await page.locator('#am-summary').innerText().catch(() => '')) || 'x'));
+await page.evaluate(() => closeModal());
+noErr('Klanten-tools (dossier/import/campagne/bijlagen-beheren)');
 
 // 10) Start-pagina: AI-dagoverzicht rendert (feiten-fallback zonder AI-sleutel)
 clear();
