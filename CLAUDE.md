@@ -140,6 +140,13 @@ de regressie meegroeit.
   DRS/Schuifpui/Overig, monteur gekoppeld, sourceRef inv:<id>), afgeronde
   DRS-kaart → fee (default €42,50, drsFeePerJob, sourceRef drsfee:<id>);
   instelbaar via financeSettings.autoSync (default AAN), nooit dubbel;
+  TERUGWERKEND (28 jul): collectAutoSyncEntries/bookAutoSyncEntries gesplitst →
+  GET /api/finance/autosync/preview?since= toont wat er geboekt zou worden mét
+  possibleDuplicate-vlag (zelfde bedrag+maand als een handmatige boeking, die
+  staan vooraf UITgevinkt), POST /api/finance/autosync/apply boekt alleen de
+  aangevinkte sourceRefs; knop "Historie alsnog boeken" op Cijfers. Omzet-
+  suggesties uit monteursrapporten: totaal van de selectie + "Weiger
+  geselecteerde" (dismissedRefs, komen nooit meer terug);
   (3) AI-DAGOVERZICHT op Start (GET /api/day-overview, 1x/dag gecachet
   _dayOverview, Ververs-knop): dayOverview() scant WhatsApp ≤7d + e-mail ≤14d
   + dashboard-feiten → JSON (kop/acties met prio+doelpagina/kansen/risico's),

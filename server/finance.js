@@ -126,16 +126,11 @@ export function bookRecurringDue(actorName = 'systeem') {
 // Instelbaar (Cijfers -> Vaste kosten & rapport): autoSync aan/uit + fee-bedrag.
 // Draait elk uur mee met de automatiseringen; boekt nooit dubbel en verwijdert
 // nooit iets — handmatig corrigeren blijft altijd mogelijk.
-export function runFinanceAutoSync() {
+// VERZAMELEN (boekt zelf niets): welke automatische boekingen zouden er vanaf
+// `since` bijkomen? Gebruikt door zowel de uurlijkse run als het terugwerkende
+// voorbeeldscherm, zodat beide gegarandeerd dezelfde regels volgen.
+export function collectAutoSyncEntries(since) {
   const s = getFinanceSettings();
-  if (!s.autoSync) return { income: 0, fees: 0 };
-  // STARTDATUM: alleen gebeurtenissen vanaf het moment dat de autosync voor het
-  // eerst draaide worden geboekt. Anders zou de eerste run de hele historie
-  // opnieuw boeken — bovenop wat de eigenaar toen al HANDMATIG had geboekt
-  // (dubbele bedragen), en zouden afgesloten maanden achteraf veranderen.
-  const persisted = db().settings.financeSettings || (db().settings.financeSettings = {});
-  if (!persisted.autoSyncSince) { persisted.autoSyncSince = today(); saveSoon(); }
-  const since = persisted.autoSyncSince;
   const entries = fin().entries;
   // Dedup op sourceRef ÉN op de grafstenen: verwijdert een mens een automatische
   // boeking bewust, dan komt die er bij de volgende ronde NIET stiekem weer in.
@@ -143,12 +138,13 @@ export function runFinanceAutoSync() {
   // Alleen echte kaarten — een kaart in de prullenbak mag nooit een fee boeken.
   const orderById = new Map((db().orders || []).map((o) => [o.id, o]));
   const nlDay = (d) => new Date(d || Date.now()).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-  let income = 0; let fees = 0;
+  const out = [];
   for (const inv of db().invoices || []) {
     if (inv.type === 'offerte' || inv.status !== 'betaald') continue;
     const amount = r2(inv.totalExcl || 0);
     if (!(amount > 0)) continue;
-    if (String(inv.paidAt || '').slice(0, 10) < since) continue;
+    const date = nlDay(inv.paidAt);
+    if (since && date < since) continue;
     const ref = `inv:${inv.id}`;
     if (seen.has(ref)) continue;
     const order = inv.orderId ? orderById.get(inv.orderId) : null;
@@ -156,31 +152,67 @@ export function runFinanceAutoSync() {
     const category = (order && order.originGroup && isWhatsappOrderGroup(order.originGroup)) ? 'DRS opdracht'
       : /schuifpui|schuifdeur|schuifwand/i.test(hay) ? 'Schuifpui reparatie'
       : 'Overig';
-    entries.unshift({
-      id: id('fin'), kind: 'income', date: nlDay(inv.paidAt), amount, category,
-      monteurId: (order && order.monteurId) || null, source: null, orderId: (order && order.id) || null,
+    out.push({
+      kind: 'income', date, amount, category,
+      monteurId: (order && order.monteurId) || null, orderId: (order && order.id) || null,
       note: `Factuur ${inv.number || ''} betaald (excl. btw)${order ? ` — ${order.title}` : ''}`.trim(),
-      sourceRef: ref, auto: true, createdBy: 'systeem (facturen)', createdAt: now(),
+      sourceRef: ref, createdBy: 'systeem (facturen)',
     });
-    seen.add(ref); income++;
+    seen.add(ref);
   }
   if (s.drsFeePerJob > 0) {
     for (const o of orderById.values()) {
       if (o.status !== 'afgerond') continue;
       if (!o.originGroup || !isWhatsappOrderGroup(o.originGroup)) continue;
-      if (String(o.completedAt || o.updatedAt || '').slice(0, 10) < since) continue;
+      const date = nlDay(o.completedAt || o.updatedAt);
+      if (since && date < since) continue;
       const ref = `drsfee:${o.id}`;
       if (seen.has(ref)) continue;
-      entries.unshift({
-        id: id('fin'), kind: 'expense', date: nlDay(o.completedAt || o.updatedAt),
-        amount: s.drsFeePerJob, category: 'Fee per opdracht',
-        monteurId: o.monteurId || null, source: null, orderId: o.id,
+      out.push({
+        kind: 'expense', date, amount: s.drsFeePerJob, category: 'Fee per opdracht',
+        monteurId: o.monteurId || null, orderId: o.id,
         note: `Fee afgeronde DRS-opdracht — ${o.title}`.slice(0, 160),
-        sourceRef: ref, auto: true, createdBy: 'systeem (DRS-fee)', createdAt: now(),
+        sourceRef: ref, createdBy: 'systeem (DRS-fee)',
       });
-      seen.add(ref); fees++;
+      seen.add(ref);
     }
   }
+  out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  return out;
+}
+
+// BOEKEN van verzamelde regels (met sourceRef-dedup als laatste vangnet).
+export function bookAutoSyncEntries(list) {
+  const entries = fin().entries;
+  const seen = new Set([...entries.map((e) => e.sourceRef), ...(fin().removedRefs || [])].filter(Boolean));
+  let income = 0; let fees = 0;
+  for (const x of list || []) {
+    if (!x || !x.sourceRef || seen.has(x.sourceRef)) continue;
+    if (!(r2(x.amount) > 0)) continue;
+    entries.unshift({
+      id: id('fin'), kind: x.kind === 'expense' ? 'expense' : 'income',
+      date: x.date, amount: r2(x.amount), category: x.category,
+      monteurId: x.monteurId || null, source: null, orderId: x.orderId || null,
+      note: x.note, sourceRef: x.sourceRef, auto: true,
+      createdBy: x.createdBy || 'systeem', createdAt: now(),
+    });
+    seen.add(x.sourceRef);
+    if (x.kind === 'expense') fees++; else income++;
+  }
+  return { income, fees };
+}
+
+export function runFinanceAutoSync() {
+  const s = getFinanceSettings();
+  if (!s.autoSync) return { income: 0, fees: 0 };
+  // STARTDATUM: alleen gebeurtenissen vanaf het moment dat de autosync voor het
+  // eerst draaide worden automatisch geboekt. Anders zou de eerste run de hele
+  // historie boeken bovenop wat er al HANDMATIG stond (dubbele bedragen). De
+  // historie kan wél bewust worden bijgeboekt via het terugwerkende voorbeeld-
+  // scherm (Cijfers → Historie alsnog boeken), waar de mens zelf kiest.
+  const persisted = db().settings.financeSettings || (db().settings.financeSettings = {});
+  if (!persisted.autoSyncSince) { persisted.autoSyncSince = today(); saveSoon(); }
+  const { income, fees } = bookAutoSyncEntries(collectAutoSyncEntries(persisted.autoSyncSince));
   if (income || fees) {
     saveSoon();
     logActivity('systeem', 'cijfers automatisch bijgeboekt', `${income} factuur-omzet, ${fees} DRS-fee(s)`);
@@ -193,7 +225,12 @@ export function suggestIncomeFromReports(month, monteurs = []) {
   const m = /^\d{4}-\d{2}$/.test(month) ? month : new Date().toISOString().slice(0, 7);
   const groupToMonteur = new Map();
   for (const mo of monteurs) if (mo.waGroup) groupToMonteur.set(String(mo.waGroup).toLowerCase().trim(), mo);
-  const bookedRefs = new Set((fin().entries || []).map((e) => e.sourceRef).filter(Boolean));
+  // Al geboekt, bewust verwijderd, óf eerder geweigerd -> nooit meer voorstellen.
+  const bookedRefs = new Set([
+    ...(fin().entries || []).map((e) => e.sourceRef),
+    ...(fin().removedRefs || []),
+    ...(fin().dismissedRefs || []),
+  ].filter(Boolean));
   const out = [];
   const amountRe = /€\s?(\d{1,3}(?:[.\s]?\d{3})*(?:,\d{2})?|\d+(?:,\d{2})?)/g;
   for (const msg of db().messages || []) {
@@ -226,6 +263,19 @@ export function suggestIncomeFromReports(month, monteurs = []) {
   }
   out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   return out.slice(0, 100);
+}
+
+// Suggesties WEIGEREN: nooit meer voorstellen (bv. een bedrag dat geen omzet is).
+export function dismissIncomeSuggestions(refs = []) {
+  const list = Array.isArray(fin().dismissedRefs) ? fin().dismissedRefs : [];
+  let n = 0;
+  for (const r of refs) {
+    const ref = String(r || '');
+    if (ref && !list.includes(ref)) { list.push(ref); n++; }
+  }
+  fin().dismissedRefs = list.slice(-5000);
+  if (n) saveSoon();
+  return n;
 }
 
 // Boek geselecteerde omzet-suggesties (income) met bron 'monteursrapport'.

@@ -46,7 +46,7 @@ import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
 import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
-import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice } from './finance.js';
+import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries } from './storage.js';
@@ -3075,6 +3075,11 @@ app.post('/api/finance/settings', requirePerm('finance'), (req, res) => {
 app.get('/api/finance/suggest-income', requirePerm('finance'), (req, res) => {
   res.json({ suggestions: suggestIncomeFromReports(String(req.query.month || '').slice(0, 7), db().monteurs || []) });
 });
+app.post('/api/finance/dismiss-income', requirePerm('finance'), (req, res) => {
+  const n = dismissIncomeSuggestions(Array.isArray(req.body?.refs) ? req.body.refs : []);
+  if (n) logActivity(req.user.name, 'omzet-suggesties geweigerd', `${n} bedrag(en) niet meer voorstellen`);
+  res.json({ ok: true, dismissed: n });
+});
 app.post('/api/finance/import-income', requirePerm('finance'), (req, res) => {
   const n = importIncome(req.body?.items || [], req.user.name);
   logActivity(req.user.name, 'omzet geïmporteerd uit monteursrapporten', `${n} boeking(en)`);
@@ -3149,6 +3154,45 @@ app.get('/api/day-overview', requireRole('admin', 'assistent'), async (req, res)
 // run als het uurlijkse proces; idempotent (nooit dubbel boeken).
 app.post('/api/finance/autosync', requirePerm('finance'), (req, res) => {
   const r = runFinanceAutoSync();
+  res.json({ ok: true, ...r });
+});
+
+// TERUGWERKEND boeken: laat eerst zien WAT er zou worden geboekt vanaf een datum,
+// inclusief een waarschuwing per regel als er al een handmatige boeking staat met
+// (bijna) hetzelfde bedrag in dezelfde maand — dan kies je zelf wat je overneemt.
+app.get('/api/finance/autosync/preview', requirePerm('finance'), (req, res) => {
+  const since = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since || '')) ? String(req.query.since) : '2000-01-01';
+  const list = collectAutoSyncEntries(since);
+  // Handmatige (niet-automatische) boekingen om mee te vergelijken.
+  const manual = ((db().finance || {}).entries || []).filter((e) => !e.auto);
+  const items = list.map((x) => {
+    const month = String(x.date).slice(0, 7);
+    const dup = manual.find((e) => e.kind === x.kind && String(e.date).slice(0, 7) === month
+      && Math.abs((e.amount || 0) - x.amount) < 0.01);
+    return { ...x, possibleDuplicate: dup ? { date: dup.date, note: dup.note || '', category: dup.category || '' } : null };
+  });
+  const monteurName = new Map((db().monteurs || []).map((m) => [m.id, m.name]));
+  res.json({
+    since,
+    items: items.map((x) => ({ ...x, monteurName: x.monteurId ? (monteurName.get(x.monteurId) || '') : '' })),
+    totals: {
+      income: Math.round(items.filter((x) => x.kind === 'income').reduce((s, x) => s + x.amount, 0) * 100) / 100,
+      expense: Math.round(items.filter((x) => x.kind === 'expense').reduce((s, x) => s + x.amount, 0) * 100) / 100,
+      duplicates: items.filter((x) => x.possibleDuplicate).length,
+    },
+  });
+});
+
+// Alleen de AANGEVINKTE regels alsnog boeken (op sourceRef).
+app.post('/api/finance/autosync/apply', requirePerm('finance'), (req, res) => {
+  const refs = new Set(Array.isArray(req.body?.refs) ? req.body.refs.map(String) : []);
+  if (!refs.size) return res.status(400).json({ error: 'Niets geselecteerd.' });
+  const list = collectAutoSyncEntries('2000-01-01').filter((x) => refs.has(x.sourceRef));
+  const r = bookAutoSyncEntries(list);
+  if (r.income || r.fees) {
+    saveSoon();
+    logActivity(req.user.name, 'historie alsnog geboekt', `${r.income} omzet-boeking(en), ${r.fees} fee-boeking(en)`);
+  }
   res.json({ ok: true, ...r });
 });
 app.post('/api/finance/weekly-report/test', requirePerm('finance'), async (req, res) => {

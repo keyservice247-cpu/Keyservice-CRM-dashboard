@@ -115,6 +115,20 @@ ok('bijlagen-beheren-scherm opent en laadt de lijst', await page.locator('#am-gr
 await page.evaluate(() => closeModal());
 noErr('Klanten-tools (dossier/import/campagne/bijlagen-beheren)');
 
+// 9b) Cijfers: historie-boeken en omzet-suggesties openen zonder JS-fout
+clear();
+await page.evaluate(() => goView('finance'));
+await page.waitForTimeout(1200);
+await page.evaluate(() => openBackfillModal());
+await page.waitForTimeout(900);
+ok('historie-boeken-scherm opent met datumveld', await page.locator('#bf-since').count() > 0 && await page.locator('#bf-book').count() > 0);
+await page.evaluate(() => closeModal());
+await page.evaluate(() => openImportIncome());
+await page.waitForTimeout(900);
+ok('omzet-uit-rapporten-scherm opent', await page.locator('#imp-cancel').count() > 0);
+await page.evaluate(() => closeModal());
+noErr('Cijfers (historie boeken / omzet-suggesties)');
+
 // 10) Start-pagina: AI-dagoverzicht rendert (feiten-fallback zonder AI-sleutel)
 clear();
 await page.evaluate(() => goView('overview'));

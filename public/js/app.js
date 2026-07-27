@@ -2623,6 +2623,71 @@ function openFinanceEntry(kind) {
 }
 
 
+// TERUGWERKEND boeken: alle betaalde facturen + afgeronde DRS-klussen uit het
+// verleden alsnog in de cijfers zetten. Je ziet eerst wát er geboekt wordt, met
+// een waarschuwing als je datzelfde bedrag die maand al handmatig hebt geboekt.
+function openBackfillModal() {
+  const defSince = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+  modal(`
+    <h2>${icon('tag', 16)} Historie alsnog boeken</h2>
+    <p class="muted small">Het systeem boekt normaal alleen vanaf het moment dat automatisch boeken aanstond. Hiermee haal je het verleden alsnog op: elke <strong>betaalde factuur</strong> als omzet (excl. btw) en elke <strong>afgeronde DRS-klus</strong> als fee. Niets wordt geboekt tot jij op de knop drukt.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin:10px 0">
+      <label style="margin:0">Vanaf datum <input id="bf-since" type="date" value="${esc(defSince)}"></label>
+      <button class="btn" id="bf-load">Bekijken</button>
+      <span class="muted small" id="bf-summary" style="margin-left:auto"></span>
+    </div>
+    <div id="bf-list" style="max-height:44vh;overflow-y:auto"></div>
+    <div class="modal-actions"><label style="margin:0;font-weight:400"><input type="checkbox" id="bf-all" style="width:auto"> Alles selecteren</label><div class="right"><button class="btn" id="bf-cancel">Sluiten</button><button class="btn btn-primary" id="bf-book" disabled>Boek geselecteerde</button></div></div>`);
+  $('#bf-cancel').onclick = closeModal;
+  let items = [];
+  const upd = () => {
+    const sel = $$('.bf-c:checked').map((c) => items[Number(c.dataset.i)]);
+    const inc = sel.filter((x) => x.kind === 'income').reduce((s, x) => s + x.amount, 0);
+    const exp = sel.filter((x) => x.kind === 'expense').reduce((s, x) => s + x.amount, 0);
+    $('#bf-summary').innerHTML = sel.length
+      ? `${sel.length} geselecteerd · omzet <strong style="color:var(--ok)">${eurF(inc)}</strong> · kosten <strong style="color:var(--danger)">${eurF(exp)}</strong>`
+      : `${items.length} gevonden`;
+    $('#bf-book').disabled = !sel.length;
+    $('#bf-book').textContent = sel.length ? `Boek ${sel.length} regel(s)` : 'Boek geselecteerde';
+  };
+  const load = async () => {
+    $('#bf-list').innerHTML = '<div class="muted small">Zoeken…</div>';
+    try {
+      const r = await api(`/api/finance/autosync/preview?since=${encodeURIComponent($('#bf-since').value)}`);
+      items = r.items || [];
+      if (!items.length) { $('#bf-list').innerHTML = '<div class="empty">Niets te boeken — alles uit deze periode staat al in de cijfers.</div>'; $('#bf-summary').textContent = ''; $('#bf-book').disabled = true; return; }
+      $('#bf-list').innerHTML = `
+        ${r.totals.duplicates ? `<div class="sug-banner sug-warn" style="margin-bottom:8px">${icon('user', 13)} <strong>${r.totals.duplicates} regel(s) lijken al handmatig geboekt</strong> (zelfde bedrag in dezelfde maand). Die staan hieronder <strong>uitgevinkt</strong> — check ze zelf voordat je boekt.</div>` : ''}
+        ${items.map((x, i) => `
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line-soft,#e5e7eb);border-radius:8px;margin-bottom:5px;font-weight:400">
+          <input type="checkbox" class="bf-c" data-i="${i}" style="width:auto;margin-top:3px" ${x.possibleDuplicate ? '' : 'checked'}>
+          <span style="flex:1">
+            <strong style="color:${x.kind === 'income' ? 'var(--ok)' : 'var(--danger)'}">${x.kind === 'income' ? '+' : '−'}${eurF(x.amount)}</strong>
+            <span class="muted small">· ${esc(x.date)} · ${esc(x.category)}${x.monteurName ? ' · ' + esc(x.monteurName) : ''}</span>
+            <div class="muted small">${esc((x.note || '').slice(0, 90))}</div>
+            ${x.possibleDuplicate ? `<div class="small" style="color:#b45309">⚠ Mogelijk al geboekt: ${esc(x.possibleDuplicate.date)} — ${esc((x.possibleDuplicate.note || x.possibleDuplicate.category || '').slice(0, 60))}</div>` : ''}
+          </span>
+        </label>`).join('')}`;
+      $$('.bf-c').forEach((c) => c.onchange = upd);
+      upd();
+    } catch (err) { $('#bf-list').innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+  };
+  $('#bf-load').onclick = load;
+  $('#bf-all').onchange = () => { $$('.bf-c').forEach((c) => { c.checked = $('#bf-all').checked; }); upd(); };
+  $('#bf-book').onclick = async () => {
+    const refs = $$('.bf-c:checked').map((c) => items[Number(c.dataset.i)].sourceRef);
+    if (!refs.length) return;
+    if (!confirm(`${refs.length} regel(s) definitief in de cijfers boeken?`)) return;
+    const btn = $('#bf-book'); btn.disabled = true; btn.textContent = 'Boeken…';
+    try {
+      const r = await api('/api/finance/autosync/apply', 'POST', { refs });
+      toast(`Geboekt: ${r.income} omzet-regel(s), ${r.fees} fee-regel(s)`);
+      closeModal(); loadFinance();
+    } catch (err) { toast(err.message, true); btn.disabled = false; upd(); }
+  };
+  load();
+}
+
 // Omzet importeren uit monteursrapporten (WhatsApp): kies de bedragen en boek ze.
 function openImportIncome() {
   const month = $('#finMonth').value || new Date().toISOString().slice(0, 7);
@@ -2635,11 +2700,25 @@ function openImportIncome() {
           <input type="checkbox" class="imp-c" data-i="${i}" style="width:auto" ${s.guess === 'income' ? 'checked' : ''}>
           <span style="flex:1"><strong>${eurF(s.amount)}</strong> <span class="muted small">· ${esc(s.monteurName || '')} · ${esc(s.date)}</span><div class="muted small">…${esc(s.context)}…</div></span>
         </label>`).join('')}</div>
-        <div class="modal-actions"><span class="muted small" id="imp-count"></span><div class="right"><button class="btn" id="imp-cancel">Annuleren</button><button class="btn btn-primary" id="imp-save">Geselecteerde boeken</button></div></div>`
+        <div style="display:flex;gap:8px;align-items:center;margin:6px 0"><label style="margin:0;font-weight:400"><input type="checkbox" id="imp-all" style="width:auto"> Alles selecteren</label></div>
+        <div class="modal-actions"><span class="muted small" id="imp-count"></span><div class="right"><button class="btn" id="imp-cancel">Annuleren</button><button class="btn" id="imp-dismiss" title="Deze bedragen zijn geen omzet — niet meer voorstellen">Weiger geselecteerde</button><button class="btn btn-primary" id="imp-save">Boek geselecteerde</button></div></div>`
         : '<div class="empty" style="margin:16px 0">Geen (nieuwe) bedragen gevonden in de monteursrapporten van deze maand.</div><div class="modal-actions"><span></span><div class="right"><button class="btn" id="imp-cancel">Sluiten</button></div></div>'}`);
-    const upd = () => { const n = $$('.imp-c:checked').length; if ($('#imp-count')) $('#imp-count').textContent = `${n} geselecteerd`; };
+    const upd = () => {
+      const sel = $$('.imp-c:checked').map((c) => suggestions[Number(c.dataset.i)]);
+      const tot = sel.reduce((s, x) => s + (x.amount || 0), 0);
+      if ($('#imp-count')) $('#imp-count').innerHTML = sel.length ? `${sel.length} geselecteerd · totaal <strong>${eurF(tot)}</strong>` : `${suggestions.length} gevonden`;
+      if ($('#imp-save')) { $('#imp-save').disabled = !sel.length; $('#imp-dismiss').disabled = !sel.length; }
+    };
     $$('.imp-c').forEach((c) => c.onchange = upd); upd();
+    if ($('#imp-all')) $('#imp-all').onchange = () => { $$('.imp-c').forEach((c) => { c.checked = $('#imp-all').checked; }); upd(); };
     $('#imp-cancel').onclick = closeModal;
+    if ($('#imp-dismiss')) $('#imp-dismiss').onclick = async () => {
+      const refs = $$('.imp-c:checked').map((c) => suggestions[Number(c.dataset.i)].ref);
+      if (!refs.length) { toast('Vink eerst bedragen aan', true); return; }
+      if (!confirm(`${refs.length} bedrag(en) weigeren? Ze worden nooit meer voorgesteld.`)) return;
+      try { const r = await api('/api/finance/dismiss-income', 'POST', { refs }); toast(`${r.dismissed} bedrag(en) geweigerd`); closeModal(); }
+      catch (err) { toast(err.message, true); }
+    };
     if ($('#imp-save')) $('#imp-save').onclick = async () => {
       const items = $$('.imp-c:checked').map((c) => suggestions[Number(c.dataset.i)]);
       if (!items.length) { toast('Vink minstens één bedrag aan', true); return; }
@@ -3911,6 +3990,7 @@ function bindButtons() {
   $('#finAddIncome')?.addEventListener('click', () => openFinanceEntry('income'));
   $('#finAddExpense')?.addEventListener('click', () => openFinanceEntry('expense'));
   $('#finImport')?.addEventListener('click', openImportIncome);
+  $('#finBackfill')?.addEventListener('click', openBackfillModal);
   $('#finSettings')?.addEventListener('click', openFinanceSettings);
   $('#inboxFilter')?.addEventListener('change', loadInbox);
   $('#selectAll')?.addEventListener('change', (e) => {
