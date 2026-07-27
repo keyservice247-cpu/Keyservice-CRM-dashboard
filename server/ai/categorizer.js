@@ -504,6 +504,51 @@ export async function morningInsight({ facts, companyProfile = '', tone = 'coach
   } catch { return ''; }
 }
 
+// Repareert een AFGEKAPTE JSON (het antwoord stopte middenin). Gooit de laatste,
+// onvolledige waarde weg en sluit alle nog open haakjes/accolades netjes af, zodat
+// een half antwoord tóch bruikbaar is in plaats van helemaal verloren te gaan.
+export function repairTruncatedJson(raw) {
+  let s = String(raw || '').trim();
+  if (!s.startsWith('{')) return null;
+  // 1. Loop door de tekst en houd bij: zitten we in een string, en welke haakjes
+  //    staan er nog open? Onthoud de laatste positie waar de JSON "heel" was.
+  const stack = [];
+  let inStr = false; let esc = false; let veiligTot = -1;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\') { if (inStr) esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; if (!inStr) veiligTot = i; continue; }
+    if (inStr) continue;
+    if (ch === '{' || ch === '[') stack.push(ch === '{' ? '}' : ']');
+    else if (ch === '}' || ch === ']') { stack.pop(); veiligTot = i; }
+    else if (ch === ',' || /\d/.test(ch) || ch === 'e' || ch === 'l') veiligTot = i; // cijfers/true/null
+  }
+  if (!stack.length) { try { return JSON.parse(s); } catch { /* verderop repareren */ } }
+  // 2. Knip af tot het laatste punt waarop de JSON heel was, haal een losse komma
+  //    of half sleutelwoord weg, en sluit daarna alles wat nog openstaat.
+  if (veiligTot > 0) s = s.slice(0, veiligTot + 1);
+  s = s.replace(/,\s*$/, '')
+    .replace(/[,{[]\s*"[^"]*$/, '')          // halve string ("wacht al…)
+    .replace(/[,{]\s*"[^"]*"\s*:?\s*$/, '')  // sleutel zonder waarde ("waarom":)
+    .replace(/,\s*$/, '');
+  // Opnieuw tellen na het knippen (er kunnen haakjes zijn weggevallen).
+  const stack2 = [];
+  let inStr2 = false; let esc2 = false;
+  for (const ch of s) {
+    if (esc2) { esc2 = false; continue; }
+    if (ch === '\\') { if (inStr2) esc2 = true; continue; }
+    if (ch === '"') { inStr2 = !inStr2; continue; }
+    if (inStr2) continue;
+    if (ch === '{' || ch === '[') stack2.push(ch === '{' ? '}' : ']');
+    else if (ch === '}' || ch === ']') stack2.pop();
+  }
+  if (inStr2) s += '"';
+  s = s.replace(/,\s*$/, '');
+  while (stack2.length) s += stack2.pop();
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 // AI-DAGOVERZICHT (Start-pagina): leest de dashboard-feiten + het échte verkeer
 // (WhatsApp ≤7 dagen, e-mail ≤14 dagen) en geeft een gestructureerd overzicht
 // terug als JSON — kop, acties (met prioriteit + waar te klikken), kansen en
@@ -523,7 +568,9 @@ Antwoord UITSLUITEND met geldige JSON (geen tekst eromheen, geen markdown):
 Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar = "inbox"|"opdrachten"|"facturen"|"agenda"|"klanten"). "beantwoorden" = jouw ADVISEURSROL: max 5 berichten/mails uit het verkeer die een antwoord verwachten of te belangrijk zijn om te missen (wachtende klanten, vragen zonder reactie, boze of dringende toon, zakelijke kansen; kanaal = "email"|"whatsapp"; urgent alleen bij echte haast) — sla over wat al beantwoord lijkt. Max 3 kansen (omzet/vervolgklussen die je in het verkeer ziet), max 3 risico's (dingen die stil dreigen mis te gaan). Wees CONCREET: gebruik namen, plaatsen en bedragen uit de gegevens. Nederlands, geen emoji, geen verzinsels — alleen wat je echt ziet.`;
   // Overbelasting/rate-limit (429/529) is tijdelijk: kort wachten en opnieuw,
   // zodat één drukke minuut bij Anthropic niet je hele dagoverzicht kost.
-  const body = JSON.stringify({ model: useModel, max_tokens: 2500, system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] });
+  // Ruime antwoordlimiet: met 2500 werd de JSON regelmatig middenin afgekapt
+  // (stop_reason max_tokens) en was het hele dagoverzicht onbruikbaar.
+  const body = JSON.stringify({ model: useModel, max_tokens: 8000, system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] });
   let resp = null; let lastErr = '';
   for (let poging = 0; poging < 3; poging++) {
     if (poging) await new Promise((r) => setTimeout(r, poging * 2500));
@@ -548,13 +595,14 @@ Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar =
   recordAIUsage(json.usage, useModel);
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   // Afgekapt/omringd antwoord redden: pak het buitenste JSON-blok.
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return { error: `AI gaf geen bruikbaar antwoord${json.stop_reason === 'max_tokens' ? ' (antwoord afgekapt)' : ''}` };
+  // Pak het JSON-blok; is het antwoord afgekapt, dan staat er geen sluit-accolade
+  // meer — daarom vanaf de EERSTE accolade tot het eind knippen en repareren.
+  const start = text.indexOf('{');
+  if (start === -1) return { error: `AI gaf geen bruikbaar antwoord${json.stop_reason === 'max_tokens' ? ' (antwoord afgekapt)' : ''}` };
+  const blok = text.slice(start).replace(/```\s*$/, '').trim();
   let parsed;
-  try { parsed = JSON.parse(m[0]); } catch {
-    // Afgekapte JSON: probeer te repareren door open haakjes te sluiten.
-    try { parsed = JSON.parse(m[0].replace(/,\s*$/, '') + ']}'.repeat(0) + '}'); } catch { return { error: 'AI-antwoord was geen geldige JSON' }; }
-  }
+  try { parsed = JSON.parse(blok); } catch { parsed = repairTruncatedJson(blok); }
+  if (!parsed) return { error: `AI-antwoord kon niet worden gelezen${json.stop_reason === 'max_tokens' ? ' (antwoord afgekapt)' : ''}` };
   const arr = (x, n) => (Array.isArray(x) ? x.slice(0, n) : []);
   const data = {
     kop: String(parsed.kop || '').slice(0, 200),

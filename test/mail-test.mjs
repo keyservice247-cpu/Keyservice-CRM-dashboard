@@ -49,6 +49,23 @@ ok('waarschuwing in de gesprekshistorie van de kaart', (ordBt.thread || []).some
 ok('reden = volledige Diagnostic-Code (niet het korte fragment)', /User unknown/.test((ordBt.thread.find((t) => /NIET AANGEKOMEN/.test(t.body || '')) || {}).body || ''));
 ok('bounce geregistreerd als verwerkt bericht (nooit een lead)', d.messages.some((m) => m.externalId === '<bounce-1@transip>' && m.bounce === true));
 
+console.log('\n== AI-antwoord dat halverwege afbreekt wordt gered (dagoverzicht) ==');
+// Het dagoverzicht faalde omdat de AI-JSON werd afgekapt (te lage antwoordlimiet)
+// en er geen werkende reparatie was. Deze test bewaakt beide kanten.
+const { repairTruncatedJson } = await import('../server/ai/categorizer.js');
+const afgekaptGevallen = [
+  ['midden in een zin', '{"kop":"Drukke dag","acties":[{"prio":"hoog","titel":"Bel Corrie","waarom":"wacht al'],
+  ['na een compleet item', '{"kop":"Test","acties":[{"prio":"hoog","titel":"A","waarom":"B","waar":"inbox"},{"prio":"laag"'],
+  ['na een komma in een lijst', '{"kop":"X","kansen":["een","twee",'],
+  ['diep genest', '{"kop":"Y","beantwoorden":[{"wie":"Jan","kanaal":"email","waarover":"offerte","urgent":true},{"wie":"Piet","kanaal":'],
+];
+let gered = 0;
+for (const [naam, json] of afgekaptGevallen) { if (repairTruncatedJson(json)) gered++; else console.log('    (niet gered:', naam + ')'); }
+ok('alle 4 afgekapte AI-antwoorden gerepareerd', gered === 4, `${gered}/4`);
+const heel = repairTruncatedJson('{"kop":"Alles goed","acties":[],"kansen":["a"],"risicos":[]}');
+ok('een compleet antwoord blijft ongewijzigd', heel && heel.kop === 'Alles goed' && heel.kansen.length === 1);
+ok('onzin-invoer geeft netjes null (nooit een crash)', repairTruncatedJson('geen json hier') === null && repairTruncatedJson('') === null);
+
 console.log('\n== FormSubmit-parser: kopcellen en veldnamen lekken nooit in de waarden ==');
 const { parseFormSubmit } = await import('../server/connectors/email-imap.js');
 const pfsAll = parseFormSubmit('Naam Value\nNaam Johan Goslinga\nTelefoon 0646471096\nType_schuifpui Houten\nWoonplaats Garmerwolde\nBericht schuifpui loopt zwaar en gaat slecht op slot', 'Offerte-aanvraag schuifpui (schuifpuiservice.com)');
