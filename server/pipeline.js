@@ -494,16 +494,42 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const WEBSITE_LEAD_RE = /(nieuwe aanvraag via de website|submitted your form on|offerte-?aanvraag (schuifpui|via)|nieuwe (offerte|contact)aanvraag via|aanvraag via de website)/i;
   const looksWebsiteLead = !isEmailReply && (forceRelevant || WEBSITE_LEAD_RE.test(`${subject || ''}\n${body || ''}`));
   if (looksWebsiteLead) {
-    const win = Date.now() - 180 * 60000;
+    // FormSubmit levert de mail-kopie soms ÚREN later af (bewezen: 3u01m — één
+    // minuut buiten het oude 3-uursvenster, en dan stond dezelfde aanvraag alsnog
+    // los in de inbox). Daarom: 72 uur terugkijken. Vangrail tegen het opslokken
+    // van een ÉCHTE nieuwe aanvraag dagen later: buiten de eerste 3 uur is zelfde
+    // telefoon/e-mail niet genoeg — dan moet ook de BERICHTTEKST overeenkomen
+    // (de FormSubmit-kopie bevat letterlijk dezelfde klanttekst).
+    const now2 = Date.now();
+    const winKort = now2 - 180 * 60000;        // 3 uur: zelfde contact volstaat
+    const winLang = now2 - 72 * 3600000;       // 72 uur: contact + zelfde tekst
     const mailOf = (t) => ((String(t || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])
       .map((e) => e.toLowerCase()).find((e) => !/keyservice247\.nl|keyservice-crm|formsubmit/.test(e)) || '');
     const myMail = mailOf(body);
+    // Kern van de klanttekst: de langste regel (>25 tekens) die geen veldlabel is.
+    const coreLine = (t) => {
+      // Veldlabel vóór de regel (mét of zónder dubbele punt — de ruwe FormSubmit-
+      // staart heeft "Bericht Mijn schuifpui...") strippen, dan de langste
+      // overgebleven regel nemen. Zo vergelijken beide routes dezelfde klanttekst.
+      const regels = String(t || '').split('\n')
+        .map((r) => r.replace(/\s+/g, ' ').trim()
+          .replace(/^(naam|name|telefoon(?:nummer)?|phone|e-?mail(?:adres)?|adres|address|woonplaats|plaats|onderwerp|subject|bericht|message|comment|toelichting|probleem|type)\b\s*[:|-]?\s*/i, ''))
+        .filter((r) => r.length > 25 && !WEBSITE_LEAD_RE.test(r));
+      return regels.sort((a, b) => b.length - a.length)[0] || '';
+    };
+    const myCore = normalizeForDedup(coreLine(body));
     const twin = db().messages.find((m) => {
-      if (!m.receivedAt || new Date(m.receivedAt).getTime() < win) return false;
+      if (!m.receivedAt) return false;
+      const t = new Date(m.receivedAt).getTime();
+      if (t < winLang) return false;
       if (!WEBSITE_LEAD_RE.test(`${m.subject || ''}\n${m.body || ''}`)) return false;
       const tp = phoneOf(m.body);
       const tm = mailOf(m.body);
-      return (myPhone && tp && tp === myPhone) || (myMail && tm && tm === myMail);
+      const zelfdeContact = (myPhone && tp && tp === myPhone) || (myMail && tm && tm === myMail);
+      if (!zelfdeContact) return false;
+      if (t >= winKort) return true; // vers: contact volstaat (zoals altijd)
+      // Ouder dan 3 uur: alleen dedupen als de klanttekst zelf overeenkomt.
+      return !!myCore && normalizeForDedup(m.body).includes(myCore);
     });
     if (twin) {
       if (attachments && attachments.length) {

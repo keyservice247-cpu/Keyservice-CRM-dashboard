@@ -262,8 +262,12 @@ server/pipeline.js — er bestaat geen pad eromheen.
    IMAP_INGEST_ACCOUNTS="user:wachtwoord,user2:ww2" (zelfde IMAP-host);
    FormSubmit-mails worden geparsed naar een genormaliseerde aanvraag (kop-rij
    "Name/Value" wordt overgeslagen; HTML-tabel wordt gelezen; ruwe tekst als
-   vangnet); dezelfde aanvraag via site én mail wordt binnen 3 UUR ontdubbeld op
-   tel/e-mail (bijlages hangen aan de bestaande lead). Bron per lead:
+   vangnet); dezelfde aanvraag via site én mail wordt ontdubbeld op
+   tel/e-mail: binnen 3 uur volstaat zelfde contact; tot 72 UUR terug alléén als
+   óók de klanttekst overeenkomt (coreLine, langste vrije regel >25 tekens —
+   FormSubmit bezorgde de mailkopie bewezen 3u01m later, Misa-casus 28 jul; een
+   échte nieuwe aanvraag met andere tekst wordt dus nooit opgeslokt). Bijlages
+   hangen aan de bestaande lead. Bron per lead:
    message.mailbox. BIJLAGE-ONTDUBBELING: elke opgeslagen bijlage krijgt een
    inhoud-hash (storage.js); identieke foto's worden nooit dubbel aan een kaart
    gehangen (mergeAttachments/dedupeAttachments), binnen één upload/mail én bij

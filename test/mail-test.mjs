@@ -79,6 +79,38 @@ const html = wrapHtmlMail('Beste klant,\n\nTot morgen!\n');
 ok('HTML-mail bevat naam + contactgegevens uit de handtekening', !!html && /Abdel Rafour/.test(html) && /085 060 2359/.test(html) && /keyservice247\.nl/.test(html));
 ok('tekst netjes omgezet naar paragrafen + logo-verwijzing', /<p style/.test(html) && /Tot morgen!/.test(html) && /cid:kslogo/.test(html));
 
+console.log('\n== Website-dedup: FormSubmit-kopie die ÚREN later binnenkomt (Misa-casus) ==');
+// Bewezen geval (27/28 jul): directe site-lead 23:20, FormSubmit-mailkopie 02:21
+// = 3u01m later — één minuut buiten het oude 3-uursvenster, dus stond dezelfde
+// aanvraag alsnog los in de inbox. Het venster is nu 72 uur, met als vangrail dat
+// buiten de eerste 3 uur ook de KLANTTEKST moet overeenkomen (zodat een échte
+// nieuwe aanvraag van dezelfde klant nooit wordt opgeslokt).
+const { ingestMessage } = await import('../server/pipeline.js');
+const klantTekst = 'Mijn hefschuifpui loopt heel zwaar en klemt bij het sluiten';
+const r1 = await ingestMessage({
+  channel: 'email', sender: 'Misa Test <misa.dedup@example.com>',
+  subject: 'Contactaanvraag via keyservice247.nl',
+  body: `Nieuwe aanvraag via de website keyservice247.nl (contact).\n\nNaam: Misa Test\nTelefoon: 0612399887\nE-mail: misa.dedup@example.com\n\n${klantTekst}`,
+  forceRelevant: true, externalId: 'site-dedup-1',
+});
+ok('eerste site-lead komt gewoon binnen (geen duplicaat)', !!r1.message && !r1.duplicate);
+// Simuleer de late bezorging: de eerste lead is 4 uur oud (buiten het oude venster).
+r1.message.receivedAt = new Date(Date.now() - 4 * 3600000).toISOString();
+const r2 = await ingestMessage({
+  channel: 'email', sender: 'FormSubmit <noreply@formsubmit.co>',
+  subject: 'Contactaanvraag via keyservice247.nl',
+  body: `Nieuwe aanvraag via de website keyservice247.nl (FormSubmit-mail).\nNaam: Misa Test\nTelefoon: 0612399887\nE-mail: misa.dedup@example.com\n\n${klantTekst}\n\n— Originele mail —\nNaam Misa Test\nTelefoon 0612399887\nBericht ${klantTekst}`,
+  externalId: 'fs-dedup-1',
+});
+ok('FormSubmit-kopie 4 uur later = duplicaat (hangt aan de eerste lead)', r2.duplicate === true && r2.message && r2.message.id === r1.message.id, JSON.stringify({ dup: r2.duplicate, zelfde: r2.message?.id === r1.message?.id }));
+const r3 = await ingestMessage({
+  channel: 'email', sender: 'Misa Test <misa.dedup@example.com>',
+  subject: 'Contactaanvraag via keyservice247.nl',
+  body: 'Nieuwe aanvraag via de website keyservice247.nl (contact).\n\nNaam: Misa Test\nTelefoon: 0612399887\nE-mail: misa.dedup@example.com\n\nNu is ook de cilinder van mijn achterdeur kapot gegaan vandaag',
+  forceRelevant: true, externalId: 'site-dedup-2',
+});
+ok('échte NIEUWE aanvraag zelfde klant (andere tekst, >3u later) = géén duplicaat', !r3.duplicate && r3.message && r3.message.id !== r1.message.id);
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);
