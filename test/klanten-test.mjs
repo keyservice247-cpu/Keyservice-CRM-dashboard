@@ -136,6 +136,24 @@ ok('zoeken op +31-nummer vindt de klant met 06-notatie', (s3.json.customers || [
 const s4 = await api('GET', '/api/search?q=z');
 ok('1 teken zoekt niet (geen zware query per toetsaanslag)', s4.status === 200 && !(s4.json.customers || []).length && !(s4.json.orders || []).length);
 
+console.log('\n== Zoeken op PLAATS en POSTCODE ==');
+const pc = await api('POST', '/api/customers', { name: 'Postcode Testklant', phone: '0655443322', address: 'Molenweg 12, 3911 AB Rhenen' });
+const s5 = await api('GET', '/api/search?q=Rhenen');
+ok('zoeken op plaatsnaam vindt de klant', (s5.json.customers || []).some((c) => c.id === pc.json.id), JSON.stringify(s5.json.customers));
+const s6 = await api('GET', '/api/search?q=3911%20AB');
+ok('zoeken op postcode MET spatie vindt de klant', (s6.json.customers || []).some((c) => c.id === pc.json.id));
+const s7 = await api('GET', '/api/search?q=3911AB');
+ok('zoeken op postcode ZONDER spatie vindt de klant ook', (s7.json.customers || []).some((c) => c.id === pc.json.id), JSON.stringify(s7.json.customers));
+// Klant zonder adres op het klantrecord, adres staat alleen op de KAART (WhatsApp-lead).
+const kaartKlant = await api('POST', '/api/customers', { name: 'Kaartadres Klant', phone: '0655443311' });
+const kaartOrd = await api('POST', '/api/orders', { customerId: kaartKlant.json.id, title: 'Slot vervangen kaartadres' });
+await api('PATCH', `/api/orders/${kaartOrd.json.id}`, { intake: { address: 'Dorpsstraat 5, 4041 CD Kesteren' } });
+const s8 = await api('GET', '/api/search?q=Kesteren');
+ok('klant zonder eigen adres is vindbaar op de plaats van zijn KAART', (s8.json.customers || []).some((c) => c.id === kaartKlant.json.id), JSON.stringify(s8.json.customers));
+const clist = await api('GET', '/api/customers');
+const kk = (clist.json || []).find((c) => c.id === kaartKlant.json.id);
+ok('klantenlijst geeft kaart-adressen mee voor het zoekveld (searchPlaces)', !!kk && /Kesteren/.test(kk.searchPlaces || ''), JSON.stringify(kk?.searchPlaces));
+
 console.log('\n== AI-klantsamenvatting: nette fout zonder AI-sleutel ==');
 const sum1 = await api('POST', `/api/customers/${zc.json.id}/summary`, {});
 ok('zonder AI-sleutel: nette 400 met uitleg (geen crash)', sum1.status === 400 && /AI/i.test(sum1.json.error || ''), JSON.stringify(sum1.json));

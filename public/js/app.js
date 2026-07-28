@@ -1416,9 +1416,21 @@ async function loadCustomers() {
   state._customers = await api('/api/customers');
   renderCustomers();
 }
+// Tekstvergelijking voor zoekvelden: gewoon "bevat", plus een variant zonder spaties
+// zodat een postcode als "3911AB" ook "3911 AB" vindt (en andersom).
+function txtHit(hay, q) {
+  const h = String(hay || '').toLowerCase();
+  if (h.includes(q)) return true;
+  const strip = (s) => s.replace(/\s+/g, '');
+  return strip(h).includes(strip(q));
+}
+
 function renderCustomers() {
-  const q = ($('#customerSearch').value || '').toLowerCase();
-  const list = (state._customers || []).filter((c) => !q || `${c.name} ${c.phone} ${c.email} ${c.address || ''}`.toLowerCase().includes(q));
+  const q = ($('#customerSearch').value || '').toLowerCase().trim();
+  // Zoekt op naam, telefoon, e-mail, notities én adres — inclusief PLAATS en POSTCODE,
+  // ook als die alleen op de opdrachtkaarten staan (searchPlaces van de server).
+  const list = (state._customers || []).filter((c) => !q
+    || txtHit(`${c.name} ${c.phone} ${c.email} ${c.address || ''} ${c.notes || ''} ${c.searchPlaces || ''}`, q));
   const canWrite = state.me.role !== 'monteur';
   const lastCell = (c) => {
     if (!c.lastOrder) return '<span class="muted small">—</span>';

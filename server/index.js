@@ -250,8 +250,13 @@ app.get('/api/customers', requireAuth, (req, res) => {
     const last = mine.slice().sort((a, b) =>
       (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''))[0] || null;
     const activeCount = mine.filter((o) => !['afgerond', 'geannuleerd'].includes(o.status) && !o.archivedWeek).length;
+    // Adressen die op de KAARTEN staan (intake per aanvraag) meegeven, zodat zoeken op
+    // plaatsnaam/postcode óók werkt als het klantrecord zelf (nog) geen adres heeft —
+    // heel gewoon bij WhatsApp/DRS-leads. Alleen voor het zoeken, niet voor weergave.
+    const plaatsen = [...new Set(mine.map((o) => (o.intake && o.intake.address) || '').filter(Boolean))].join(' | ').slice(0, 300);
     return {
       ...c,
+      searchPlaces: plaatsen,
       orderCount: mine.length,
       activeCount,
       invoicedTotal: Math.round(inv.total * 100) / 100,
@@ -418,7 +423,12 @@ app.get('/api/search', requireAuth, (req, res) => {
   if (q.length < 2) return res.json({ customers: [], orders: [], invoices: [], messages: [] });
   const qDigits = q.replace(/[^\d]/g, '');
   const zoekTel = qDigits.length >= 6 ? qDigits.replace(/^(\+?31|0031)/, '0') : '';
-  const hit = (...velden) => velden.some((v) => String(v || '').toLowerCase().includes(q));
+  // Zonder-spaties-variant erbij, zodat een postcode als "3911AB" ook "3911 AB" vindt.
+  const qStrip = q.replace(/\s+/g, '');
+  const hit = (...velden) => velden.some((v) => {
+    const h = String(v || '').toLowerCase();
+    return h.includes(q) || h.replace(/\s+/g, '').includes(qStrip);
+  });
   const telHit = (v) => !!zoekTel && String(v || '').replace(/[^\d]/g, '').replace(/^(31|0031)/, '0').includes(zoekTel);
   const monteur = req.user.role === 'monteur';
   const mijnKaart = (o) => !monteur || (o.monteurId && o.monteurId === req.user.monteurId);
@@ -427,8 +437,17 @@ app.get('/api/search', requireAuth, (req, res) => {
 
   const mijnKlantIds = monteur
     ? new Set(db().orders.filter((o) => mijnKaart(o)).map((o) => o.customerId)) : null;
+  // Adressen van de kaarten per klant: zoeken op plaats/postcode werkt ook als het
+  // klantrecord zelf geen adres heeft (WhatsApp/DRS-leads).
+  const adresPerKlant = new Map();
+  for (const o of db().orders || []) {
+    const a = (o.intake || {}).address;
+    if (!o.customerId || !a) continue;
+    adresPerKlant.set(o.customerId, `${adresPerKlant.get(o.customerId) || ''} ${a}`);
+  }
   const customers = (db().customers || [])
-    .filter((c) => (!mijnKlantIds || mijnKlantIds.has(c.id)) && (hit(c.name, c.email, c.address) || telHit(c.phone)))
+    .filter((c) => (!mijnKlantIds || mijnKlantIds.has(c.id))
+      && (hit(c.name, c.email, c.address, c.notes, adresPerKlant.get(c.id)) || telHit(c.phone)))
     .slice(0, 8).map((c) => ({ id: c.id, name: c.name || 'Onbekende klant', phone: c.phone || '', address: c.address || '' }));
 
   const orders = (db().orders || [])
