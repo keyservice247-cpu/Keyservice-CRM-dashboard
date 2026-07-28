@@ -27,7 +27,17 @@ draaien): `test/scenarios.mjs` (50 backend-assertions), `test/factuur-test.mjs`,
 de regressie meegroeit.
 
 ## Stack & hosting
-- **Backend:** Node.js + Express (`server/`), opslag = JSON-bestand `data/db.json` (geen DB).
+- **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,
+  better-sqlite3) sinds 28 jul. Alles blijft in het geheugen — `db()` geeft gewoon een
+  JS-object, geen enkel endpoint gebruikt SQL — maar wegschrijven gaat PER RECORD i.p.v.
+  het hele bestand herschrijven (was 172 ms bij 20 MB; server stond zolang stil).
+  `db()` levert een proxy die bijhoudt wélke lijst is aangeraakt, zodat alleen die
+  vergeleken wordt; elke minuut draait een volledige controleronde als vangnet.
+  **Noodrem:** env `STORAGE=json` → terug naar het oude JSON-model; `db.json` wordt
+  daarvoor elke 10 min + bij back-up/afsluiten als volledige momentopname bijgewerkt.
+  Werkt SQLite niet (module ontbreekt), dan valt de opslag automatisch terug op JSON.
+  Back-ups blijven JSON (leesbaar/draagbaar); migratie telt na afloop elk record na en
+  breekt af bij het kleinste verschil. Test: `test/opslag-test.mjs` (22 assertions).
 - **Frontend:** vanilla HTML/CSS/JS (`public/`), geen buildstap. Design: rustige SaaS-stijl
   (MailerLite/Render), Keyservice blauw/geel, outline-iconen, geen emoji in UI.
 - **Hosting:** Render (auto-deploy "On Commit" vanaf `main`). URL: keyservice-crm.onrender.com

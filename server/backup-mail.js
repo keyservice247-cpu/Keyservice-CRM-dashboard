@@ -1,7 +1,7 @@
 // Dagelijkse off-site back-up: e-mailt een kopie van de database als bijlage naar
 // een ingesteld adres, zodat er altijd een verse kopie buiten Render staat.
 import fs from 'node:fs';
-import { db, dbFilePath, save, now, logActivity } from './db.js';
+import { db, dbFilePath, save, snapshotJson, now, logActivity } from './db.js';
 import { getBackupMail } from './settings.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 
@@ -20,7 +20,8 @@ export async function sendBackupMail(toOverride) {
   const to = (toOverride || backupTarget() || '').trim();
   if (!to) throw new Error('Geen e-mailadres voor de back-up ingesteld (en geen beheerder met e-mail)');
   if (!smtpConfigured()) throw new Error('SMTP niet geconfigureerd — versturen kan niet');
-  save(); // zorg dat het bestand actueel is
+  save();
+  snapshotJson(); // volledige, actuele JSON-kopie op schijf (ook met SQLite-opslag)
   const file = dbFilePath();
   const content = fs.readFileSync(file);
   const stamp = new Date().toISOString().slice(0, 10);

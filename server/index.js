@@ -11,7 +11,7 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Onafgehandelde fout (genegeerd, app blijft draaien):', err?.message || err);
 });
-import { db, id, now, save, saveSoon, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup } from './db.js';
+import { db, id, now, save, saveSoon, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup, snapshotJson, storageEngine } from './db.js';
 
 // Nette afsluiting: bij een deploy/herstart stuurt Render (of Ctrl+C lokaal) een
 // signaal. Flush dan de laatste, nog niet weggeschreven wijzigingen naar schijf
@@ -22,6 +22,8 @@ function gracefulShutdown(sig) {
   _shuttingDown = true;
   console.log(`[afsluiten] ${sig} ontvangen — laatste opslag flushen…`);
   try { save(); } catch (e) { console.error('[afsluiten] opslaan mislukt:', e.message); }
+  // Terugvalpunt bijwerken: na een herstart/deploy is de JSON-kopie dus actueel.
+  try { snapshotJson(); } catch (e) { console.error('[afsluiten] momentopname mislukt:', e.message); }
   process.exit(0);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -889,8 +891,9 @@ app.get('/api/disk-usage', requireRole('admin'), (req, res) => {
   const uploads = dirSize(path.join(DATA, 'uploads'));
   const backups = dirSize(path.join(DATA, 'backups'));
   let dbMb = 0; try { dbMb = Math.round(fs.statSync(path.join(DATA, 'db.json')).size / 1048576 * 10) / 10; } catch { /* leeg */ }
+  let sqliteMb = 0; try { sqliteMb = Math.round(fs.statSync(path.join(DATA, 'db.sqlite')).size / 1048576 * 10) / 10; } catch { /* nog geen sqlite */ }
   let freeMb = null; try { const st = fs.statfsSync(DATA); freeMb = Math.round((st.bavail * st.bsize) / 1048576); } catch { /* niet ondersteund */ }
-  res.json({ uploads, backups, dbMb, freeMb, cleanup: getAttachmentCleanup() });
+  res.json({ uploads, backups, dbMb, sqliteMb, storage: storageEngine(), freeMb, cleanup: getAttachmentCleanup() });
 });
 // ---------- Bijlagen beheren (foto's/video's makkelijk opruimen) ----------
 // Alle bijlages van kaarten (ook prullenbak) + losse inbox-berichten op één rij,
@@ -997,6 +1000,7 @@ app.post('/api/backups/now', requireRole('admin'), (req, res) => {
 // De volledige database downloaden (voor een veilige kopie buiten de server).
 app.get('/api/backup/download', requireRole('admin'), (req, res) => {
   save();
+  snapshotJson(); // verse, volledige JSON-kopie (ook wanneer de opslag SQLite is)
   const stamp = new Date().toISOString().slice(0, 10);
   res.download(dbFilePath(), `keyservice-backup-${stamp}.json`);
 });

@@ -3687,7 +3687,9 @@ async function loadSettings() {
       $('#diskUsage').innerHTML =
         row(`Foto's & bestanden (${du.uploads.count})`, `${du.uploads.mb} MB`) +
         row(`Back-ups (${du.backups.count})`, `${du.backups.mb} MB`) +
-        row('Database (db.json)', `${du.dbMb} MB`) +
+        (du.storage === 'sqlite'
+          ? row('Database (SQLite — snel, per record)', `${du.sqliteMb} MB`) + row('Terugvalkopie (db.json)', `${du.dbMb} MB`)
+          : row('Database (db.json)', `${du.dbMb} MB`)) +
         (du.freeMb != null ? row('Vrije ruimte op de schijf', `${du.freeMb >= 1024 ? (du.freeMb / 1024).toFixed(1) + ' GB' : du.freeMb + ' MB'}${du.freeMb < 300 ? ' ⚠' : ''}`) : '');
     } catch { $('#diskUsage').textContent = 'Kon schijfruimte niet uitlezen.'; }
   };

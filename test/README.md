@@ -14,6 +14,7 @@ node test/klanten-test.mjs   # klantimport (CSV), dossier, nog-te-factureren, ca
 node test/cijfers-test.mjs   # automatische boekingen: factuur-omzet + DRS-fee, idempotent (PORT=3123)
 node test/google-test.mjs    # Google Agenda: sync-filter, koppeling-alarm, no-op zonder verbinding (GEEN server nodig)
 node test/mail-test.mjs      # Bounce-detectie + FormSubmit-dedup 72u (Misa-casus) (GEEN server nodig)
+node test/opslag-test.mjs    # SQLite-opslag: migratie, volgorde, verwijderen, terugvalpunt, herstel (GEEN server nodig)
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 
