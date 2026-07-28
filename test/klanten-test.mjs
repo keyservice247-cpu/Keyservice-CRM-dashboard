@@ -124,6 +124,22 @@ ok('foto ook echt weg van de kaart', !(afterOrd.attachments || []).some((a) => a
 const browse2 = await api('GET', '/api/attachments/browse');
 ok('verwijderde foto verdwijnt ook uit de bladerlijst', !browse2.json.items.some((x) => x.id === attId2));
 
+console.log('\n== Slimme zoekbalk: klanten, kaarten en telefoonnummers in één zoekveld ==');
+const zc = await api('POST', '/api/customers', { name: 'Zoekbalk Testklant', phone: '0699887766', address: 'Zoekstraat 9, Rhenen' });
+await api('POST', '/api/orders', { customerId: zc.json.id, title: 'Hefschuifpui zoektest', status: 'nieuw' });
+const s1 = await api('GET', '/api/search?q=zoekbalk');
+ok('zoeken op naam vindt de klant', s1.status === 200 && (s1.json.customers || []).some((c) => c.name === 'Zoekbalk Testklant'), JSON.stringify(s1.json.customers));
+const s2 = await api('GET', '/api/search?q=zoektest');
+ok('zoeken op kaarttitel vindt de opdracht', (s2.json.orders || []).some((o) => o.title === 'Hefschuifpui zoektest'));
+const s3 = await api('GET', '/api/search?q=%2B31699887766');
+ok('zoeken op +31-nummer vindt de klant met 06-notatie', (s3.json.customers || []).some((c) => c.id === zc.json.id), JSON.stringify(s3.json.customers));
+const s4 = await api('GET', '/api/search?q=z');
+ok('1 teken zoekt niet (geen zware query per toetsaanslag)', s4.status === 200 && !(s4.json.customers || []).length && !(s4.json.orders || []).length);
+
+console.log('\n== AI-klantsamenvatting: nette fout zonder AI-sleutel ==');
+const sum1 = await api('POST', `/api/customers/${zc.json.id}/summary`, {});
+ok('zonder AI-sleutel: nette 400 met uitleg (geen crash)', sum1.status === 400 && /AI/i.test(sum1.json.error || ''), JSON.stringify(sum1.json));
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

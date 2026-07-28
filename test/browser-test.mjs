@@ -137,6 +137,15 @@ ok('dagoverzicht-blok aanwezig op Start', await page.locator('#dayov').count() >
 ok('dagoverzicht toont inhoud (geen leeg blok)', ((await page.locator('#dayov-body').innerText().catch(() => '')) || '').length > 10);
 noErr('Start + AI-dagoverzicht');
 
+// 11) Slimme zoekbalk op Start: typen -> resultaten verschijnen, klik crasht niet
+clear();
+ok('zoekbalk aanwezig op Start', await page.locator('#globalSearch').count() > 0);
+await page.fill('#globalSearch', 'Browser');
+await page.waitForTimeout(900); // debounce (300ms) + zoek-rondje
+const gsText = (await page.locator('#gsResults').innerText().catch(() => '')) || '';
+ok('zoekresultaten verschijnen onder het veld', gsText.length > 3, gsText.slice(0, 60));
+noErr('Slimme zoekbalk');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

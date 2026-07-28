@@ -70,6 +70,25 @@ ok('assistent-route accepteert scope + model', [200, 500].includes(ask1.status),
 if (ask1.status === 200) ok('antwoord bevat tekst (of nette demo-melding)', typeof ask1.json.text === 'string' && ask1.json.text.length > 5, JSON.stringify(ask1.json).slice(0, 120));
 else ok('nette foutmelding i.p.v. crash', !!ask1.json.error);
 
+console.log('\n== Wekelijkse AI-controle: instellingen + testverzending + bevindingen ==');
+// Kanaal terug naar WhatsApp (de vorige sectie zette hem op e-mail zonder adres).
+await api('PATCH', '/api/settings', { morningBriefing: { enabled: false, hour: 7, channel: 'whatsapp', email: '', tone: 'zakelijk' } });
+const wcSave = await api('PATCH', '/api/settings', { weeklyAiCheck: { enabled: true, hour: 8 } });
+const wcSt = await api('GET', '/api/settings');
+ok('wekelijkse controle instelbaar (aan + uur)', wcSave.status === 200 && wcSt.json.weeklyAiCheck?.enabled === true && wcSt.json.weeklyAiCheck?.hour === 8, JSON.stringify(wcSt.json.weeklyAiCheck));
+// Een scheef geval klaarzetten: afgeronde kaart zonder factuur -> moet als bevinding verschijnen.
+const wcCust = await api('POST', '/api/customers', { name: 'Weekcheck Klant', phone: '0611119999' });
+await api('POST', '/api/orders', { customerId: wcCust.json.id, title: 'Afgerond zonder factuur test', status: 'afgerond' });
+const wcList = await api('GET', '/api/weekly-check');
+ok('bevindingen-endpoint ziet de afgeronde kaart zonder factuur', wcList.status === 200 && (wcList.json.findings || []).some((f) => /geen factuur/i.test(f.kop) && f.items.some((i) => /Afgerond zonder factuur test/.test(i))), JSON.stringify(wcList.json.findings?.map((f) => f.kop)));
+const wcT = await api('POST', '/api/weekly-check/test', {});
+ok('test-controle verstuurd via WhatsApp', wcT.status === 200 && wcT.json.ok && (wcT.json.via || []).includes('whatsapp'), JSON.stringify(wcT.json));
+ok('bericht bevat de kop + de bevinding', /Wekelijkse controle/.test(wcT.json.text || '') && /Afgerond zonder factuur test/.test(wcT.json.text || ''));
+
+console.log('\n== AI-assistent: gespreksgeheugen (history) wordt geaccepteerd ==');
+const askH = await api('POST', '/api/assistant/ask', { question: 'En hoeveel daarvan zijn afgerond?', scope: 'all', model: 'sonnet', history: [{ q: 'Hoeveel opdrachten heb ik?', a: 'Je hebt 2 opdrachten.' }] });
+ok('vraag mét gespreksgeschiedenis crasht nooit', [200, 500].includes(askH.status), `status=${askH.status}`);
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

@@ -547,6 +547,16 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 .as-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .as-examples .as-ex { cursor: pointer; text-align: left; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink-soft); transition: border-color .12s, color .12s; }
 .as-examples .as-ex:hover { border-color: var(--accent); color: var(--accent-ink); }
+/* Assistent-gesprek (geheugen): vraag van de gebruiker + antwoordblok per beurt */
+.as-turn { margin-bottom: 16px; }
+.as-q { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; font-size: 14.5px; }
+.as-cardref { cursor: pointer; border: 1px solid var(--accent); color: var(--accent-ink); background: transparent; font-weight: 600; }
+.as-cardref:hover { background: var(--accent); color: #fff; }
+/* Slimme zoekbalk (Start): gegroepeerde resultaten onder het zoekveld */
+#gsResults { margin-top: 10px; border-top: 1px solid var(--line-soft); max-height: 420px; overflow-y: auto; }
+.gs-sec { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); margin: 10px 0 4px; }
+.gs-row { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; background: none; border: 0; padding: 8px 6px; border-radius: 8px; cursor: pointer; font: inherit; color: inherit; }
+.gs-row:hover { background: var(--panel-2); }
 /* Monteur-overzicht regels */
 .mont-line { padding: 5px 0; border-top: 1px solid var(--line-soft); cursor: pointer; font-size: 13px; }
 .mont-line:hover { color: var(--accent-ink); }

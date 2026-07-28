@@ -6,8 +6,9 @@ import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
   getAttachmentCleanup, getMorningBriefing, getCrmAlerts, getCompanyProfile,
+  getWeeklyAiCheck,
 } from './settings.js';
-import { morningInsight } from './ai/categorizer.js';
+import { morningInsight, askAssistant } from './ai/categorizer.js';
 import { syncOrderToGoogle, isConnected as googleIsConnected, calendarAlarmDecision } from './google.js';
 import { deleteFile } from './storage.js';
 import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup } from './invoices.js';
@@ -569,6 +570,109 @@ async function runMorningBriefing() {
   } catch (e) { console.error('[ochtendbriefing]', e.message); }
 }
 
+// ---------- 6d. Wekelijkse AI-controle: scheve dingen opsporen ----------
+// Deterministische checks (werken ALTIJD, ook zonder AI) + optionele AI-duiding.
+// Vindt wat in de dagelijkse drukte blijft liggen: afgeronde klussen zonder
+// factuur, verlopen afspraken die nog open staan, vergeten inbox-leads,
+// stilgevallen offertes en kaarten zonder klantgegevens.
+export function weeklyCheckData() {
+  const nowMs = Date.now();
+  const labels = getStatusLabels();
+  const open = (db().orders || []).filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
+  const invoices = db().invoices || [];
+  const heeftFactuur = new Set(invoices.filter((i) => i.type !== 'offerte' && i.orderId).map((i) => i.orderId));
+  const kaartRegel = (o) => `${o.title || 'Zonder titel'} (${(custOf(o).name || 'onbekende klant')})`;
+  const bevindingen = [];
+  const voegToe = (kop, items) => { if (items.length) bevindingen.push({ kop, items: items.slice(0, 10), meer: Math.max(0, items.length - 10) }); };
+
+  voegToe('Afgerond maar nog GEEN factuur', (db().orders || [])
+    .filter((o) => o.status === 'afgerond' && !heeftFactuur.has(o.id) && !o.archivedWeek)
+    .map(kaartRegel));
+  voegToe('Afspraak was al, kaart staat nog open', open
+    .filter((o) => o.appointmentAt && new Date(o.appointmentAt).getTime() < nowMs - 86400000)
+    .map((o) => `${kaartRegel(o)} — afspraak ${String(o.appointmentAt).slice(0, 16).replace('T', ' ')}, status ${labels[o.status] || o.status}`));
+  voegToe('Inbox-leads die al 2+ dagen wachten', (db().reviews || [])
+    .filter((r) => r.status === 'pending' && r.createdAt && nowMs - new Date(r.createdAt).getTime() > 2 * 86400000)
+    .map((r) => { const m = (db().messages || []).find((x) => x.id === r.messageId) || {}; return `${(m.sender || 'onbekend')} — ${String(m.body || '').replace(/\s+/g, ' ').slice(0, 60)}`; }));
+  voegToe('Offertes 7+ dagen zonder reactie', invoices
+    .filter((i) => i.type === 'offerte' && i.status === 'verzonden' && i.sentAt && nowMs - new Date(i.sentAt).getTime() > 7 * 86400000)
+    .map((i) => `${i.number} — €${Number(i.totalIncl || 0).toFixed(2)}`));
+  voegToe('Facturen voorbij de betaaltermijn', invoices
+    .filter((i) => i.type !== 'offerte' && i.status === 'verzonden' && i.sentAt && nowMs > new Date(i.sentAt).getTime() + (getInvoiceSettings().paymentDays || 7) * 86400000)
+    .map((i) => `${i.number} — €${Number(i.totalIncl || 0).toFixed(2)}, verzonden ${String(i.sentAt).slice(0, 10)}`));
+  voegToe('Open kaarten 14+ dagen niet aangeraakt', open
+    .filter((o) => o.updatedAt && nowMs - new Date(o.updatedAt).getTime() > 14 * 86400000)
+    .map((o) => `${kaartRegel(o)} — laatst ${String(o.updatedAt).slice(0, 10)}`));
+  voegToe('Kaart zonder klantgegevens (aanvullen)', open
+    .filter((o) => o.customerIncomplete)
+    .map(kaartRegel));
+  return bevindingen;
+}
+
+export async function sendWeeklyAiCheck({ isTest = false } = {}) {
+  const bevindingen = weeklyCheckData();
+  const lines = [`${isTest ? '[TEST] ' : ''}🔎 Wekelijkse controle — wat is er scheef of blijven liggen?`, ''];
+  if (!bevindingen.length) lines.push('Niets gevonden — alles loopt netjes. 👍');
+  for (const b of bevindingen) {
+    lines.push(`${b.kop.toUpperCase()} (${b.items.length + b.meer})`);
+    for (const it of b.items) lines.push(`• ${it}`);
+    if (b.meer) lines.push(`• … en nog ${b.meer} meer (zie dashboard)`);
+    lines.push('');
+  }
+  // AI-duiding: wat pak je het eerst op en waarom. Faalt stil — feiten gaan altijd uit.
+  if (bevindingen.length) {
+    try {
+      const out = await askAssistant({
+        question: 'Dit is de wekelijkse controlelijst van het CRM. Geef in maximaal 4 zinnen: wat pak je deze week het EERST op en waarom (geld en klantbehoud eerst). Geen opsomming herhalen.',
+        messages: [], companyProfile: getCompanyProfile(), dashboard: lines.join('\n'),
+      });
+      if (out.text && out.engine !== 'demo') lines.push('ADVIES', out.text.trim(), '');
+    } catch { /* zonder duiding verder */ }
+  }
+  lines.push('Dashboard: https://keyservice-crm.onrender.com');
+  const text = lines.join('\n');
+  const cfg = getMorningBriefing(); // zelfde kanaal-keuze als de ochtendbriefing
+  const sentVia = [];
+  if (cfg.channel === 'whatsapp' || cfg.channel === 'beide') {
+    const target = getCrmAlerts();
+    const item = { id: id('out'), text, status: 'queued', createdAt: now(), by: 'weekcontrole' };
+    if (target.phone) { item.kind = 'whatsapp_customer'; item.phone = target.phone; item.group = '__klant_dm__'; }
+    else {
+      item.group = target.group;
+      const gid = groupIdForName(target.group);
+      if (gid) item.groupId = gid;
+    }
+    db().outbox.unshift(item);
+    sentVia.push('whatsapp');
+  }
+  if (cfg.channel === 'email' || cfg.channel === 'beide') {
+    const to = cfg.email || getBackupMail().email || '';
+    if (to && smtpConfigured()) {
+      try { await sendMail({ to, subject: `${isTest ? '[TEST] ' : ''}Wekelijkse CRM-controle`, text }); sentVia.push('email'); }
+      catch (e) { console.error('[weekcontrole] mail mislukt:', e.message); }
+    }
+  }
+  if (!sentVia.length) return { error: 'Geen kanaal beschikbaar: stel bij Instellingen → AI het briefing-kanaal in (WhatsApp-meldingen of e-mail).' };
+  if (!isTest) db().settings._lastWeeklyAiCheck = todayNL();
+  saveSoon();
+  logActivity('systeem', `wekelijkse AI-controle ${isTest ? '(test) ' : ''}verstuurd`, `${bevindingen.length} bevinding(en) · ${sentVia.join(' + ')}`);
+  return { ok: true, via: sentVia, text, findings: bevindingen.length };
+}
+
+async function runWeeklyAiCheck() {
+  const cfg = getWeeklyAiCheck();
+  if (!cfg.enabled) return;
+  const wd = new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', weekday: 'short' });
+  if (!/^Mon/.test(wd)) return;
+  const hour = Number(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hour12: false }));
+  if (hour !== cfg.hour) return;
+  if (db().settings._lastWeeklyAiCheck === todayNL()) return;
+  try {
+    const r = await sendWeeklyAiCheck();
+    if (r.error) console.error('[weekcontrole]', r.error);
+  } catch (e) { console.error('[weekcontrole]', e.message); }
+}
+
 // ---------- 7. Nachtelijke statusscan ----------
 let _runStatusScan = null;
 async function runNightlyScan() {
@@ -768,6 +872,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runInvoiceAutoReminders(); } catch (e) { console.error('[auto-herinnering]', e.message); }
     try { await runQuoteFollowups(); } catch (e) { console.error('[offerte-opvolging]', e.message); }
     try { await runMorningBriefing(); } catch (e) { console.error('[ochtendbriefing]', e.message); }
+    try { await runWeeklyAiCheck(); } catch (e) { console.error('[weekcontrole]', e.message); }
     try { await runGoogleCalendarSweep(); } catch (e) { console.error('[google-vangnet]', e.message); }
   };
   const fast = async () => {

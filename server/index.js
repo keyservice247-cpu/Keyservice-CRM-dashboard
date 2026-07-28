@@ -44,7 +44,7 @@ import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData } from './automations.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -66,7 +66,7 @@ import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
-  getHtmlSignature,
+  getHtmlSignature, getWeeklyAiCheck,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -371,6 +371,82 @@ app.get('/api/customers/:id/dossier', requireAuth, (req, res) => {
       customerSince: customer.createdAt || '',
     },
   });
+});
+
+// AI-KLANTSAMENVATTING: vat alle kaarten, facturen en gesprekken van één klant samen
+// in een paar zinnen (wie is dit, wat is er gedaan, wat staat er open, waar op letten).
+// Resultaat wordt op het klantrecord gecachet (aiSummary) en gaat mee in het dossier.
+app.post('/api/customers/:id/summary', requireAuth, async (req, res) => {
+  const customer = db().customers.find((c) => c.id === req.params.id);
+  if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
+  if (req.user.role === 'monteur') {
+    const mine = db().orders.some((o) => o.customerId === customer.id && o.monteurId && o.monteurId === req.user.monteurId);
+    if (!mine) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
+  }
+  const labels = getStatusLabels();
+  const regels = [`KLANT: ${customer.name || 'onbekend'} · tel ${customer.phone || '-'} · ${customer.email || '-'} · ${customer.address || '-'} · klant sinds ${(customer.createdAt || '').slice(0, 10) || 'onbekend'}`];
+  const orders = (db().orders || []).filter((o) => o.customerId === customer.id)
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+  for (const o of orders) {
+    regels.push(`KAART #${o.id.slice(-6)} "${(o.title || '').slice(0, 70)}" status=${labels[o.status] || o.status} aangemaakt=${(o.createdAt || '').slice(0, 10)}${o.appointmentAt ? ` afspraak=${o.appointmentAt}` : ''}${o.price ? ` prijs=${o.price}` : ''}`);
+    if (o.description) regels.push(`  omschrijving: ${String(o.description).replace(/\s+/g, ' ').slice(0, 220)}`);
+    for (const t of (o.thread || []).slice(-15)) {
+      if (t.channel === 'systeem') continue;
+      regels.push(`  ${(t.at || '').slice(0, 16)} ${t.outgoing ? 'WIJ' : (t.sender || 'klant')}: ${String(t.body || '').replace(/\s+/g, ' ').slice(0, 220)}`);
+    }
+  }
+  for (const i of (db().invoices || []).filter((i) => i.customerId === customer.id)) {
+    regels.push(`${i.type === 'offerte' ? 'OFFERTE' : 'FACTUUR'} ${i.number} status=${i.status} bedrag=€${Number(i.totalIncl || 0).toFixed(2)} ${(i.createdAt || '').slice(0, 10)}`);
+  }
+  try {
+    const out = await askAssistant({
+      question: 'Vat deze klant samen in maximaal 6 korte zinnen voor een collega die de klant zo aan de telefoon krijgt: wie is het, wat hebben we gedaan (met welke afloop), wat staat er nu nog open (onbeantwoorde vragen, openstaande facturen/offertes, geplande afspraken) en waar moet je op letten. Geen opsomming van alle data — alleen de kern. Sluit af met één regel "Actie:" als er iets moet gebeuren, anders "Actie: geen".',
+      messages: [], companyProfile: getCompanyProfile(), dashboard: regels.join('\n').slice(0, 60000),
+    });
+    if (out.engine === 'demo') return res.status(400).json({ error: 'AI staat niet aan (ANTHROPIC_API_KEY ontbreekt)' });
+    customer.aiSummary = { text: out.text, at: now(), by: req.user.name };
+    saveSoon();
+    logActivity(req.user.name, 'AI-klantsamenvatting', customer.name || customer.id);
+    res.json({ ok: true, summary: customer.aiSummary });
+  } catch (err) { res.status(500).json({ error: 'Samenvatting mislukt: ' + err.message }); }
+});
+
+// SLIMME ZOEKBALK: één zoekveld over klanten, kaarten, facturen/offertes en berichten.
+// Monteur ziet alleen eigen kaarten/klanten/facturen en géén losse inbox-berichten.
+app.get('/api/search', requireAuth, (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (q.length < 2) return res.json({ customers: [], orders: [], invoices: [], messages: [] });
+  const qDigits = q.replace(/[^\d]/g, '');
+  const zoekTel = qDigits.length >= 6 ? qDigits.replace(/^(\+?31|0031)/, '0') : '';
+  const hit = (...velden) => velden.some((v) => String(v || '').toLowerCase().includes(q));
+  const telHit = (v) => !!zoekTel && String(v || '').replace(/[^\d]/g, '').replace(/^(31|0031)/, '0').includes(zoekTel);
+  const monteur = req.user.role === 'monteur';
+  const mijnKaart = (o) => !monteur || (o.monteurId && o.monteurId === req.user.monteurId);
+  const maps = buildMaps();
+  const labels = getStatusLabels();
+
+  const mijnKlantIds = monteur
+    ? new Set(db().orders.filter((o) => mijnKaart(o)).map((o) => o.customerId)) : null;
+  const customers = (db().customers || [])
+    .filter((c) => (!mijnKlantIds || mijnKlantIds.has(c.id)) && (hit(c.name, c.email, c.address) || telHit(c.phone)))
+    .slice(0, 8).map((c) => ({ id: c.id, name: c.name || 'Onbekende klant', phone: c.phone || '', address: c.address || '' }));
+
+  const orders = (db().orders || [])
+    .filter((o) => mijnKaart(o) && (hit(o.title, o.description, (o.intake || {}).address, (maps.customers.get(o.customerId) || {}).name) || telHit((o.intake || {}).phone) || o.id.toLowerCase().endsWith(q)))
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    .slice(0, 10).map((o) => ({ id: o.id, title: o.title || '', status: labels[o.status] || o.status, customer: (maps.customers.get(o.customerId) || {}).name || '', archived: !!o.archivedWeek, updatedAt: o.updatedAt || o.createdAt || '' }));
+
+  const invoices = (db().invoices || [])
+    .filter((i) => (!monteur || canTouchInvoice(req, i)) && (hit(i.number, (maps.customers.get(i.customerId) || {}).name)))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, 8).map((i) => ({ id: i.id, number: i.number, type: i.type || 'factuur', status: i.status, totalIncl: i.totalIncl || 0, customer: (maps.customers.get(i.customerId) || {}).name || '' }));
+
+  const messages = monteur ? [] : (db().messages || [])
+    .filter((m) => !m.bounce && (hit(m.body, m.sender, m.subject, m.group) || telHit(m.body)))
+    .sort((a, b) => String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')))
+    .slice(0, 8).map((m) => ({ id: m.id, at: m.receivedAt, sender: m.sender || '', group: m.group || '', channel: m.channel || '', snippet: String(m.body || '').replace(/\s+/g, ' ').slice(0, 110), full: String(m.body || '').slice(0, 2000) }));
+
+  res.json({ customers, orders, invoices, messages });
 });
 
 // ---------- KLANTIMPORT (CSV / Excel) ----------
@@ -2047,6 +2123,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     crmAlerts: getCrmAlerts(),
     morningBriefing: getMorningBriefing(),
+    weeklyAiCheck: getWeeklyAiCheck(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
     htmlSignature: getHtmlSignature(),
     aiOverviewModel: db().settings.aiOverviewModel === 'opus' ? 'opus' : 'standaard',
@@ -2252,6 +2329,13 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       channel: ['whatsapp', 'email', 'beide'].includes(m.channel) ? m.channel : 'whatsapp',
       email: String(m.email || '').slice(0, 200).trim(),
       tone: m.tone === 'zakelijk' ? 'zakelijk' : 'coachend',
+    };
+  }
+  if ('weeklyAiCheck' in b) {
+    const w = b.weeklyAiCheck || {};
+    db().settings.weeklyAiCheck = {
+      enabled: !!w.enabled,
+      hour: Math.max(0, Math.min(23, Number(w.hour) >= 0 ? Number(w.hour) : 8)),
     };
   }
   if ('reviewRequest' in b) {
@@ -3235,6 +3319,19 @@ app.post('/api/finance/weekly-report/test', requirePerm('finance'), async (req, 
   try { await sendWeeklyCeoReport(to, true); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Wekelijkse AI-controle: nu een test versturen (zelfde kanalen als de briefing).
+app.post('/api/weekly-check/test', requirePerm('settings'), async (req, res) => {
+  try {
+    const r = await sendWeeklyAiCheck({ isTest: true });
+    if (r.error) return res.status(400).json({ error: r.error });
+    logActivity(req.user.name, 'wekelijkse controle test verstuurd', r.via.join(' + '));
+    res.json({ ok: true, via: r.via, text: r.text, findings: r.findings });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// De bevindingen ook los opvraagbaar (voor het scherm, zonder te versturen).
+app.get('/api/weekly-check', requireRole('admin', 'assistent'), (req, res) => {
+  res.json({ findings: weeklyCheckData() });
+});
 // AI-ochtendbriefing: nu een test versturen via de ingestelde kanalen.
 app.post('/api/morning-briefing/test', requirePerm('settings'), async (req, res) => {
   try {
@@ -3423,8 +3520,10 @@ app.post('/api/assistant/ask', requireRole('admin', 'assistent'), async (req, re
   const dashboard = includeDash ? buildDashboardContext() : '';
   const modelPref = req.body?.model === 'opus' ? 'claude-opus-5'
     : req.body?.model === 'sonnet' ? 'claude-sonnet-5' : '';
+  // Gespreksgeheugen: de browser stuurt de vorige vragen+antwoorden van dit gesprek mee.
+  const history = Array.isArray(req.body?.history) ? req.body.history.slice(-6) : [];
   try {
-    const out = await askAssistant({ question, messages: msgs, companyProfile: getCompanyProfile(), dashboard, model: modelPref });
+    const out = await askAssistant({ question, messages: msgs, companyProfile: getCompanyProfile(), dashboard, model: modelPref, history });
     logActivity(req.user.name, 'AI-vraagbaak', question.slice(0, 80));
     res.json({ ...out, dashboardIncluded: !!dashboard });
   } catch (err) {

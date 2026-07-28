@@ -190,6 +190,23 @@ de regressie meegroeit.
   scherm in Instellingen → Systeem ("Foto's & video's beheren") met filters
   (alles/afgerond+geannuleerd/ouder dan 90 dagen/alleen video's) en "alles
   selecteren". Test: test/klanten-test.mjs (25 assertions, PORT=3121).
+- **Ideeën 1-5 (28 jul):** (1) AI-ASSISTENT MET GEHEUGEN: /api/assistant/ask
+  accepteert history (max 6 beurten, alleen bij de nieuwste vraag gaat de zware
+  data mee); frontend is een doorlopend gesprek (_asChat) met "Nieuw gesprek"-
+  knop, doorvragen werkt; (2) KAART-ACTIES: kaartnummers #xxxxxx in AI-antwoorden
+  zijn klikbaar (linkifyCardRefs → openOrderModal, ook archief); systeemprompt
+  vraagt de AI die nummers te gebruiken; (3) WEKELIJKSE AI-CONTROLE
+  (automations.js weeklyCheckData/sendWeeklyAiCheck, maandag, settings.
+  weeklyAiCheck default UIT, Instellingen → AI): deterministische checks
+  (afgerond zonder factuur, verlopen afspraak nog open, inbox-leads 2+ dagen,
+  offertes 7+ dagen stil, verlopen facturen, kaarten 14+ dagen stil, klant
+  onvolledig) + AI-advies (faalt stil); zelfde kanaal als de ochtendbriefing;
+  test-knop POST /api/weekly-check/test + GET /api/weekly-check; (4) AI-KLANT-
+  SAMENVATTING in het dossier (POST /api/customers/:id/summary, cache op
+  customer.aiSummary, monteur alleen eigen klanten); (5) SLIMME ZOEKBALK op
+  Start (GET /api/search?q=, min 2 tekens): klanten/kaarten/facturen/berichten
+  in één veld, telefoon genormaliseerd (+31↔06), klik opent dossier/kaart/
+  factuur/bericht-modal; monteur alleen eigen data en géén berichten.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).

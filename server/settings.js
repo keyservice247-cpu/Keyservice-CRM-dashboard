@@ -271,6 +271,18 @@ export function getMorningBriefing() {
   };
 }
 
+// Wekelijkse AI-controle: elke maandag een lijst "scheve dingen" (afgeronde klussen
+// zonder factuur, verlopen afspraken die nog open staan, vergeten leads, stilgevallen
+// offertes) via hetzelfde kanaal als de ochtendbriefing. Standaard UIT.
+export const DEFAULT_WEEKLY_AI_CHECK = { enabled: false, hour: 8 };
+export function getWeeklyAiCheck() {
+  const c = db().settings.weeklyAiCheck || {};
+  return {
+    enabled: !!c.enabled,
+    hour: Math.max(0, Math.min(23, Number(c.hour) >= 0 ? Number(c.hour) : DEFAULT_WEEKLY_AI_CHECK.hour)),
+  };
+}
+
 // Afspraakbevestiging naar de klant (+ herinnering X uur vooraf).
 // "Monteur onderweg"-bericht: met één knop op de kaart krijgt de klant een mail
 // én een appje dat de monteur er nu aankomt. Teksten aanpasbaar in Instellingen.

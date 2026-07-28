@@ -387,6 +387,48 @@ async function openDailyCheck() {
   } catch (err) { $('#dc-result').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
 }
 
+// ---------- Slimme zoekbalk (Start): klanten, kaarten, facturen én berichten ----------
+let _gsTimer = null;
+function initGlobalSearch() {
+  const inp = $('#globalSearch'); const box = $('#gsResults');
+  if (!inp || !box) return;
+  const doSearch = async () => {
+    const q = inp.value.trim();
+    if (q.length < 2) { box.hidden = true; box.innerHTML = ''; return; }
+    let r;
+    try { r = await api('/api/search?q=' + encodeURIComponent(q)); }
+    catch { return; }
+    if (inp.value.trim() !== q) return; // verouderd antwoord (er is doorgetypt)
+    const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+    const sec = (titel, items) => items.length ? `<div class="gs-sec">${titel}</div>${items.join('')}` : '';
+    const html = [
+      sec('Klanten', r.customers.map((c) => `<button class="gs-row" data-t="cust" data-id="${esc(c.id)}"><strong>${esc(c.name)}</strong><span class="muted small">${esc([c.phone, c.address].filter(Boolean).join(' · '))}</span></button>`)),
+      sec('Opdrachten', r.orders.map((o) => `<button class="gs-row" data-t="order" data-id="${esc(o.id)}"><strong>${esc(o.title || 'Zonder titel')}</strong><span class="muted small">${esc([o.customer, o.status, o.archived ? 'archief' : ''].filter(Boolean).join(' · '))}</span></button>`)),
+      sec('Facturen & offertes', r.invoices.map((i) => `<button class="gs-row" data-t="inv" data-id="${esc(i.id)}"><strong>${esc(i.number)}</strong><span class="muted small">${esc([i.type === 'offerte' ? 'offerte' : 'factuur', i.customer, i.status].filter(Boolean).join(' · '))} · ${eur(i.totalIncl)}</span></button>`)),
+      sec('Berichten', (r.messages || []).map((m, ix) => `<button class="gs-row" data-t="msg" data-ix="${ix}"><strong>${esc(m.sender || m.group || m.channel)}</strong><span class="muted small">${esc(fmtDate(m.at))} · ${esc(m.snippet)}</span></button>`)),
+    ].join('');
+    box.innerHTML = html || '<div class="muted small" style="padding:8px">Niets gevonden.</div>';
+    box.hidden = false;
+    $$('.gs-row', box).forEach((b) => b.onclick = async () => {
+      const t = b.dataset.t;
+      if (t === 'cust') return openCustomerDossier(b.dataset.id);
+      if (t === 'order') {
+        state.orders = await api('/api/orders?includeArchived=1');
+        markSeen(b.dataset.id); return openOrderModal(b.dataset.id);
+      }
+      if (t === 'inv') return openStandaloneInvoice(b.dataset.id);
+      if (t === 'msg') {
+        const m = (r.messages || [])[Number(b.dataset.ix)]; if (!m) return;
+        modal(`<h2>Bericht</h2><div class="muted small" style="margin-bottom:8px">${esc(m.sender || '')}${m.group ? ' · groep ' + esc(m.group) : ''} · ${esc(fmtDate(m.at))} · ${esc(m.channel)}</div><div class="analysis-box" style="white-space:pre-wrap">${esc(m.full || m.snippet)}</div><div class="modal-actions"><span></span><div class="right"><button class="btn" id="gs-inbox">Naar de inbox</button><button class="btn btn-primary" id="gs-close">Sluiten</button></div></div>`);
+        $('#gs-close').onclick = closeModal;
+        $('#gs-inbox').onclick = () => { closeModal(); goView('inbox'); };
+      }
+    });
+  };
+  inp.oninput = () => { clearTimeout(_gsTimer); _gsTimer = setTimeout(doSearch, 300); };
+  inp.onkeydown = (e) => { if (e.key === 'Escape') { inp.value = ''; box.hidden = true; } };
+}
+
 // ---------- Overzicht / Home ----------
 async function loadOverview() {
   const d = await api('/api/overview');
@@ -400,6 +442,10 @@ async function loadOverview() {
     ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
     : `<div class="muted small">${empty}</div>`;
   $('#overviewPanel').innerHTML = `
+    <div class="info-card" style="margin-bottom:18px;position:relative">
+      <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${state.me.role === 'monteur' ? '' : ', bericht'}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
+      <div id="gsResults" hidden></div>
+    </div>
     ${state.me.role === 'monteur' ? '' : `
     <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -493,6 +539,7 @@ async function loadOverview() {
     catch (err) { const b = $('#dayov-body'); if (b) b.textContent = 'Dagoverzicht niet beschikbaar: ' + err.message; }
   };
   loadDayOverview();
+  initGlobalSearch();
   const rf = $('#dayov-refresh');
   if (rf) rf.onclick = async () => { rf.disabled = true; rf.textContent = 'Scannen…'; await loadDayOverview(true); rf.disabled = false; rf.innerHTML = `${icon('refresh', 13)} Ververs`; };
   $$('#overviewPanel [data-open]').forEach((el) => el.onclick = async () => { if (!state.orders.length) state.orders = await api('/api/orders'); markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
@@ -1417,6 +1464,13 @@ async function openCustomerDossier(custId) {
         </div>
       </div>
 
+      <div class="dos-card" id="dos-ai" style="margin-bottom:12px">
+        <div class="dos-card-head" style="display:flex;align-items:center;gap:8px">${icon('sparkles', 14)} AI-samenvatting
+          <button class="btn btn-sm" id="dos-ai-btn" style="margin-left:auto">${c.aiSummary ? 'Vernieuwen' : 'Maak samenvatting'}</button>
+        </div>
+        <div id="dos-ai-body">${c.aiSummary ? `<div style="white-space:pre-wrap">${esc(c.aiSummary.text)}</div><div class="muted small" style="margin-top:6px">Gemaakt ${fmtDate(c.aiSummary.at)}</div>` : '<div class="muted small">Nog geen samenvatting — één klik en de AI vat alle klussen, facturen en gesprekken van deze klant samen.</div>'}</div>
+      </div>
+
       ${sectie('Laatste facturen', facturen.length, facturen.length ? `
         <table class="dos-table"><thead><tr><th style="width:110px">Datum</th><th>Omschrijving</th><th style="text-align:right">Bedrag</th></tr></thead><tbody>
         ${facturen.slice(0, 8).map((i) => `<tr class="dos-row" data-inv="${esc(i.id)}">
@@ -1455,6 +1509,17 @@ async function openCustomerDossier(custId) {
         <button class="btn btn-primary" id="dos-close">Sluiten</button>
       </div></div>`);
     $('#dos-close').onclick = closeModal;
+    // AI-samenvatting: één klik en de AI vat de hele klant samen (blijft bewaard).
+    const aiBtn = $('#dos-ai-btn');
+    if (aiBtn) aiBtn.onclick = async () => {
+      aiBtn.disabled = true; aiBtn.textContent = 'AI leest alles…';
+      try {
+        const r = await api(`/api/customers/${custId}/summary`, 'POST', {});
+        $('#dos-ai-body').innerHTML = `<div style="white-space:pre-wrap">${esc(r.summary.text)}</div><div class="muted small" style="margin-top:6px">Gemaakt ${fmtDate(r.summary.at)}</div>`;
+        aiBtn.textContent = 'Vernieuwen';
+      } catch (err) { toast(err.message, true); aiBtn.textContent = 'Opnieuw proberen'; }
+      aiBtn.disabled = false;
+    };
     const editBtn = $('#dos-edit'); if (editBtn) editBtn.onclick = () => openCustomerModal((state._customers || []).find((x) => x.id === custId) || c);
     const ordBtn = $('#dos-order'); if (ordBtn) ordBtn.onclick = () => openNewOrderForCustomer(c);
     $('#dos-invoice').onclick = async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'factuur' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } };
@@ -2211,7 +2276,8 @@ async function loadAssistant() {
       </div>
       <label>Je vraag <textarea id="as-q" rows="3" placeholder="bv. Welke klanten hebben een offerte gekregen maar nog geen factuur?"></textarea></label>
       <div class="as-examples">${examples.map((e) => `<button type="button" class="chip as-ex">${esc(e)}</button>`).join('')}</div>
-      <div style="margin-top:12px"><button class="btn btn-primary" id="as-ask">${icon('sparkles', 14)} Vraag de AI</button></div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" id="as-ask">${icon('sparkles', 14)} Vraag de AI</button><button class="btn" id="as-new" title="Geheugen wissen en met een schone lei beginnen">Nieuw gesprek</button></div>
+      <p class="muted small" style="margin:8px 0 0">De assistent onthoudt dit gesprek: je kunt gewoon <strong>doorvragen</strong> ("en van die drie, wie heeft nog niet betaald?"). Kaartnummers in het antwoord zijn <strong>klikbaar</strong> — die openen direct de kaart.</p>
       <div id="as-answer" style="margin-top:16px"></div>
     </div>
     <div class="info-card" style="margin-top:18px">
@@ -2240,21 +2306,59 @@ async function loadAssistant() {
   };
   // Bij openen: laatste resultaat tonen + verder pollen als er nog een scan loopt.
   ssPollActive = true; pollStatusScan();
+  renderAsChat();
+  $('#as-new').onclick = () => { _asChat = []; renderAsChat(); toast('Nieuw gesprek gestart — geheugen gewist'); };
   $('#as-ask').onclick = async () => {
     const question = $('#as-q').value.trim();
     if (!question) return toast('Stel eerst een vraag', true);
     const btn = $('#as-ask'); btn.disabled = true; btn.innerHTML = 'Bezig met zoeken…';
     const scope = $('#as-scope')?.value || 'all';
-    $('#as-answer').innerHTML = `<div class="muted small">De AI doorzoekt ${scope === 'all' ? 'je dashboard én de berichten' : 'de berichten'}… dit kan ~10-40 sec duren.</div>`;
+    renderAsChat(`De AI doorzoekt ${scope === 'all' ? 'je dashboard én de berichten' : 'de berichten'}${_asChat.length ? ' (mét het gesprek tot nu toe)' : ''}… dit kan ~10-40 sec duren.`);
     try {
       const out = await api('/api/assistant/ask', 'POST', {
         question, group: $('#as-group').value, days: Number($('#as-days').value),
         scope, model: $('#as-model')?.value || 'sonnet',
+        history: _asChat.map((t) => ({ q: t.q, a: t.a })),
       });
-      $('#as-answer').innerHTML = `<div class="analysis-box">${esc(out.text).replace(/\n/g, '<br>')}</div><div class="muted small" style="margin-top:6px">Doorzocht: ${out.dashboardIncluded ? 'dashboard (kaarten, facturen, klanten, cijfers) + ' : ''}${out.searched || 0} berichten · ${esc(out.engine || '')}</div>`;
-    } catch (err) { $('#as-answer').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
+      _asChat.push({ q: question, a: out.text, meta: `Doorzocht: ${out.dashboardIncluded ? 'dashboard + ' : ''}${out.searched || 0} berichten · ${out.engine || ''}` });
+      $('#as-q').value = '';
+      renderAsChat();
+    } catch (err) { renderAsChat('', err.message); }
     btn.disabled = false; btn.innerHTML = `${icon('sparkles', 14)} Vraag de AI`;
   };
+}
+
+// Gesprek met de assistent (blijft staan zolang je niet op "Nieuw gesprek" klikt of herlaadt).
+let _asChat = [];
+// Kaartnummers (#a1b2c3) in een AI-antwoord klikbaar maken: klik = kaart openen.
+function linkifyCardRefs(escapedText) {
+  return escapedText.replace(/#([a-z0-9]{6})\b/gi, '<button type="button" class="chip as-cardref" data-ref="$1">#$1</button>');
+}
+function renderAsChat(busyText = '', errText = '') {
+  const box = $('#as-answer'); if (!box) return;
+  let html = _asChat.map((t) => `
+    <div class="as-turn">
+      <div class="as-q"><strong>Jij:</strong> ${esc(t.q)}</div>
+      <div class="analysis-box">${linkifyCardRefs(esc(t.a)).replace(/\n/g, '<br>')}</div>
+      ${t.meta ? `<div class="muted small" style="margin-top:4px">${esc(t.meta)}</div>` : ''}
+    </div>`).join('');
+  if (busyText) html += `<div class="muted small">${esc(busyText)}</div>`;
+  if (errText) html += `<div class="error small">${esc(errText)}</div>`;
+  box.innerHTML = html;
+  $$('#as-answer .as-cardref').forEach((b) => b.onclick = async () => {
+    const ref = (b.dataset.ref || '').toLowerCase();
+    if (!state.orders.length) state.orders = await api('/api/orders').catch(() => []);
+    let ord = state.orders.find((o) => o.id.toLowerCase().endsWith(ref));
+    if (!ord) { // ook het archief doorzoeken
+      const all = await api('/api/orders?includeArchived=1').catch(() => []);
+      ord = (all || []).find((o) => o.id.toLowerCase().endsWith(ref));
+      if (ord) { openOrderModal(ord.id, all); return; }
+    }
+    if (!ord) return toast('Kaart niet gevonden (misschien verwijderd)', true);
+    markSeen(ord.id); openOrderModal(ord.id);
+  });
+  const last = box.querySelector('.as-turn:last-of-type, .muted.small:last-child, .error');
+  if (last) last.scrollIntoView({ block: 'nearest' });
 }
 
 // Achtergrond-statusscan: pollt de server (scan loopt door ook als je wegswipet)
@@ -3137,6 +3241,15 @@ async function loadSettings() {
         <button class="btn" id="testMorningBrief">Stuur nu een test</button>
       </div>
     </div>
+    <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('activity', 15)} Wekelijkse AI-controle — wat blijft er liggen?</h3>
+      <p class="muted small">Elke <strong>maandagochtend</strong> één bericht met alles wat scheef staat of blijven liggen is: afgeronde klussen <strong>zonder factuur</strong>, afspraken die al geweest zijn maar waarvan de kaart nog open staat, <strong>vergeten inbox-leads</strong> (2+ dagen), offertes 7+ dagen stil, verlopen facturen en kaarten die 14+ dagen niet zijn aangeraakt — met kort AI-advies wat je het eerst oppakt. Gaat via hetzelfde kanaal als de ochtendbriefing (WhatsApp-meldingen en/of e-mail).</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wc-enabled" style="width:auto" ${s.weeklyAiCheck?.enabled ? 'checked' : ''}> Wekelijkse controle aanzetten</label>
+      <div class="row"><label>Tijdstip maandag (uur) <input id="wc-hour" type="number" min="0" max="23" value="${esc(String(s.weeklyAiCheck?.hour ?? 8))}" style="max-width:110px"></label></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn btn-primary" id="saveWeeklyCheck">Opslaan</button>
+        <button class="btn" id="testWeeklyCheck">Stuur nu een test</button>
+      </div>
+    </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('sparkles', 15)} AI-dagoverzicht (Start-pagina)</h3>
       <p class="muted small">Het blok "Jouw dag in één oogopslag" bovenaan Start scant elke dag het échte verkeer (<strong>WhatsApp tot 7 dagen</strong>, <strong>e-mail tot 14 dagen</strong> terug) plus alle kaarten, afspraken en facturen — en zet daar de belangrijkste acties, kansen en risico's uit op een rij. Wordt 1x per dag gemaakt; met de Ververs-knop op Start forceer je een nieuwe scan.</p>
       <label>AI-niveau <select id="ov-model">
@@ -3385,6 +3498,20 @@ async function loadSettings() {
       await api('/api/settings', 'PATCH', { morningBriefing });
       const r = await api('/api/morning-briefing/test', 'POST', {});
       toast(`Test-briefing verstuurd via ${(r.via || []).map((v) => v === 'whatsapp' ? 'WhatsApp' : 'e-mail').join(' + ')}`);
+    } catch (err) { toast(err.message, true); }
+    finally { btn.disabled = false; btn.textContent = old; }
+  };
+  $('#saveWeeklyCheck').onclick = async () => {
+    const weeklyAiCheck = { enabled: $('#wc-enabled').checked, hour: Number($('#wc-hour').value) };
+    try { await api('/api/settings', 'PATCH', { weeklyAiCheck }); toast('Wekelijkse controle opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#testWeeklyCheck').onclick = async () => {
+    const btn = $('#testWeeklyCheck');
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Controleren…';
+    try {
+      const r = await api('/api/weekly-check/test', 'POST', {});
+      toast(`Test-controle (${r.findings ?? 0} bevinding(en)) verstuurd via ${(r.via || []).map((v) => v === 'whatsapp' ? 'WhatsApp' : 'e-mail').join(' + ')}`);
     } catch (err) { toast(err.message, true); }
     finally { btn.disabled = false; btn.textContent = old; }
   };

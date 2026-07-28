@@ -627,7 +627,7 @@ Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar =
 // AI-vraagbaak: beantwoordt een vrije vraag op basis van de opgeslagen WhatsApp/
 // e-mail-berichten. Bv. "hoeveel omzet is in de groep van Youssef genoemd?" of
 // "wat is er met de opdracht van mevrouw Jansen gebeurd?".
-export async function askAssistant({ question, messages = [], companyProfile = '', dashboard = '', model: modelPref = '' }) {
+export async function askAssistant({ question, messages = [], companyProfile = '', dashboard = '', model: modelPref = '', history = [] }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const model = modelPref || process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
   if (!apiKey) return { text: 'Zet eerst de AI aan (ANTHROPIC_API_KEY) om de vraagbaak te gebruiken.', engine: 'demo' };
@@ -670,17 +670,30 @@ WERKWIJZE BIJ OMZET-/BEDRAG-VRAGEN (zeer belangrijk, wees exact en volledig):
 ALGEMEEN:
 - Noem concrete berichten/data waar je je op baseert.
 - Staat iets er niet in of twijfel je? Zeg dat eerlijk.
-- Antwoord helder in het Nederlands, met een nette tabel/opsomming waar dat past.`;
+- Antwoord helder in het Nederlands, met een nette tabel/opsomming waar dat past.
+- Dit is een DOORLOPEND GESPREK: eerdere vragen en antwoorden krijg je mee — verwijs
+  ernaar en bouw erop voort ("die drie facturen van net"). Is een vraag te vaag om
+  goed te beantwoorden, stel dan ÉÉN korte verduidelijkingsvraag in plaats van gokken.
+- Verwijs je naar een opdrachtkaart, gebruik dan altijd het kaartnummer zoals het in
+  de dashboard-gegevens staat (bv. #a1b2c3) — daar kan de gebruiker op klikken.`;
 
   const inhoud = [
     dashboard ? `=== (A) DASHBOARD-GEGEVENS ===\n${dashboard}` : '',
     corpus ? `=== (B) BERICHTEN (chronologisch) ===\n${corpus}` : '',
     `---\nVraag: ${question}`,
   ].filter(Boolean).join('\n\n');
+  // Gespreksgeheugen: eerdere beurten gaan als losse user/assistant-berichten mee
+  // (zonder de zware data — die zit alleen bij de nieuwste vraag). Max 6 beurten.
+  const turns = [];
+  for (const h of (Array.isArray(history) ? history : []).slice(-6)) {
+    const q = String(h?.q || '').slice(0, 2000).trim();
+    const a = String(h?.a || '').slice(0, 6000).trim();
+    if (q && a) { turns.push({ role: 'user', content: q }, { role: 'assistant', content: a }); }
+  }
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 6000, system, messages: [{ role: 'user', content: inhoud }] }),
+    body: JSON.stringify({ model, max_tokens: 6000, system, messages: [...turns, { role: 'user', content: inhoud }] }),
   });
   if (!resp.ok) {
     const det = await resp.text().catch(() => '');
