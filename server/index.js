@@ -4060,6 +4060,22 @@ app.listen(PORT, () => {
       save();
     }
   } catch (e) { console.error('[feedback-opschoning]', e.message); }
+  // Eenmalige heling: in de herinnering-sjabloon stond het woord "morgen" hard
+  // ingetypt — klopte alleen als de herinnering precies een dag vooraf ging. Bij een
+  // zelfde-dag-afspraak kreeg de klant dus "morgen" terwijl het vandaag was
+  // (Scheepers-casus 28 jul). Het woord wordt vervangen door de variabele {dag},
+  // die per bericht "vandaag"/"morgen"/"overmorgen"/dagnaam invult.
+  try {
+    if (!db().settings._apptDagV1) {
+      const a = db().settings.appointmentMsg;
+      if (a && a.reminderBody && /\b(morgen|vandaag)\b/i.test(a.reminderBody) && !a.reminderBody.includes('{dag}')) {
+        a.reminderBody = a.reminderBody.replace(/\b(?:morgen|vandaag)\b/gi, '{dag}');
+        logActivity('systeem', 'herinnering-sjabloon geheeld', '"morgen" vervangen door {dag} (klopt nu op elke dag)');
+      }
+      db().settings._apptDagV1 = true;
+      save();
+    }
+  } catch (e) { console.error('[sjabloon-heling]', e.message); }
   // Storing-herstel in vaste volgorde: eerst "groep <id>" → echte naam helen (bron-chip
   // klopt weer, ook op bestaande kaarten), dan mislukte groeps-berichten opnieuw in de
   // wachtrij, dan gemiste opdrachten alsnog automatisch naar de monteur.

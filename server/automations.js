@@ -27,7 +27,7 @@ const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (_, k) => (v
 const blockHours = () => getAppointmentMsg().blockHours || 3;
 function apptVars(order, customer) {
   const m = String(order.appointmentAt || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-  let datum = '', start = '', eind = '';
+  let datum = '', start = '', eind = '', dag = '';
   if (m) {
     const d = new Date(+m[1], +m[2] - 1, +m[3]);
     datum = d.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -35,12 +35,21 @@ function apptVars(order, customer) {
     const em = String(order.appointmentEndAt || '').match(/T(\d{2}):(\d{2})/);
     if (em) eind = `${em[1]}:${em[2]}`;
     else eind = `${String((Number(m[4]) + blockHours()) % 24).padStart(2, '0')}:${m[5]}`;
+    // {dag}: "vandaag"/"morgen"/"overmorgen" of de dagnaam — ALTIJD berekend tegen de
+    // Nederlandse datum van dit moment (niet de serverklok-datum), zodat een
+    // herinnering voor een afspraak van vanavond nooit "morgen" zegt.
+    const vandaagNL = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+    const [jv, mv, dv] = vandaagNL.split('-').map(Number);
+    const diff = Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(jv, mv - 1, dv)) / 86400000);
+    dag = diff === 0 ? 'vandaag' : diff === 1 ? 'morgen' : diff === 2 ? 'overmorgen'
+      : d.toLocaleDateString('nl-NL', { weekday: 'long' });
   }
   const tijdblok = start ? `tussen ${start} en ${eind}` : '';
   // {tijd} toont voortaan het hele blok (bv. "15:00 - 18:00") zodat bestaande sjablonen
   // met {tijd} meteen het tijdsblok tonen. {tijdblok} = "tussen 15:00 en 18:00".
-  return { naam: customer.name || 'klant', datum, tijd: start ? `${start} - ${eind}` : '', tijdblok, start, eind };
+  return { naam: customer.name || 'klant', datum, tijd: start ? `${start} - ${eind}` : '', tijdblok, start, eind, dag };
 }
+export { apptVars }; // los testbaar (de "morgen terwijl het vandaag is"-bug)
 
 // ---------- 1. Terugkoppeling via de controle-groep (bv. Abdel) ----------
 // DRS-opdracht krijgt een uitkomst-status -> WhatsApp-bericht naar de groep van de

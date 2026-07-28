@@ -314,7 +314,7 @@ Onze monteur komt in dit tijdsblok bij u langs. Mocht de afspraak onverhoopt nie
   reminderEnabled: false,
   reminderHours: 24,
   reminderEmailSubject: 'Herinnering: uw afspraak — Keyservice',
-  reminderBody: `Hallo {naam}, een korte herinnering: {datum} {tijdblok} komt onze monteur bij u langs. Tot dan! — Keyservice`,
+  reminderBody: `Hallo {naam}, een korte herinnering: {dag} ({datum}) {tijdblok} komt onze monteur bij u langs. Tot dan! — Keyservice`,
 };
 export function getAppointmentMsg() {
   const a = db().settings.appointmentMsg || {};

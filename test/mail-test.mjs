@@ -79,6 +79,20 @@ const html = wrapHtmlMail('Beste klant,\n\nTot morgen!\n');
 ok('HTML-mail bevat naam + contactgegevens uit de handtekening', !!html && /Abdel Rafour/.test(html) && /085 060 2359/.test(html) && /keyservice247\.nl/.test(html));
 ok('tekst netjes omgezet naar paragrafen + logo-verwijzing', /<p style/.test(html) && /Tot morgen!/.test(html) && /cid:kslogo/.test(html));
 
+console.log('\n== Afspraak-berichten: {dag} klopt op elke dag (Scheepers-casus) ==');
+// De herinnering zei "morgen" terwijl de afspraak diezelfde avond was (28 jul,
+// 17:56 -> afspraak 19:00). {dag} rekent tegen de NEDERLANDSE datum van nu.
+const { apptVars } = await import('../server/automations.js');
+const { getAppointmentMsg } = await import('../server/settings.js');
+const nlVandaag = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+const plusDagen = (n) => { const [y, mo, da] = nlVandaag.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, da + n)).toISOString().slice(0, 10); };
+const dagVan = (iso) => apptVars({ appointmentAt: `${iso}T19:00` }, { name: 'Scheepers' }).dag;
+ok('afspraak vanavond -> "vandaag" (nooit meer "morgen")', dagVan(plusDagen(0)) === 'vandaag', dagVan(plusDagen(0)));
+ok('afspraak volgende dag -> "morgen"', dagVan(plusDagen(1)) === 'morgen', dagVan(plusDagen(1)));
+ok('afspraak over 2 dagen -> "overmorgen"', dagVan(plusDagen(2)) === 'overmorgen', dagVan(plusDagen(2)));
+ok('verder weg -> gewoon de dagnaam', /^(maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag|zondag)$/.test(dagVan(plusDagen(5))), dagVan(plusDagen(5)));
+ok('standaard herinnering-sjabloon gebruikt {dag}', getAppointmentMsg().reminderBody.includes('{dag}'));
+
 console.log('\n== Website-dedup: FormSubmit-kopie die ÚREN later binnenkomt (Misa-casus) ==');
 // Bewezen geval (27/28 jul): directe site-lead 23:20, FormSubmit-mailkopie 02:21
 // = 3u01m later — één minuut buiten het oude 3-uursvenster, dus stond dezelfde
