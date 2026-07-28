@@ -557,6 +557,9 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 .gs-sec { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); margin: 10px 0 4px; }
 .gs-row { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; background: none; border: 0; padding: 8px 6px; border-radius: 8px; cursor: pointer; font: inherit; color: inherit; }
 .gs-row:hover { background: var(--panel-2); }
+/* Periode-filter op het bord: balk die uitlegt wat je nu ziet */
+.board-period-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--panel-2); border: 1px solid var(--accent); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 14px; }
+.board-period-bar .chip { cursor: pointer; margin-left: auto; }
 /* Monteur-overzicht regels */
 .mont-line { padding: 5px 0; border-top: 1px solid var(--line-soft); cursor: pointer; font-size: 13px; }
 .mont-line:hover { color: var(--accent-ink); }

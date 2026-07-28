@@ -146,6 +146,19 @@ const gsText = (await page.locator('#gsResults').innerText().catch(() => '')) ||
 ok('zoekresultaten verschijnen onder het veld', gsText.length > 3, gsText.slice(0, 60));
 noErr('Slimme zoekbalk');
 
+// 12) Bord: periode-filter "vandaag binnengekomen" toont de vandaag aangemaakte kaart
+clear();
+await page.evaluate(() => goView('board'));
+await page.waitForTimeout(1200);
+await page.selectOption('#boardPeriodFilter', 'vandaag');
+await page.waitForTimeout(1200); // her-laden mét ingeklapte kaarten
+const bpText = (await page.locator('#board').innerText().catch(() => '')) || '';
+ok('periode-balk verschijnt bij filter "vandaag"', await page.locator('.board-period-bar').count() > 0);
+ok('vandaag aangemaakte kaart blijft zichtbaar in het filter', /historietest/i.test(bpText), bpText.slice(0, 80));
+await page.selectOption('#boardPeriodFilter', '');
+await page.waitForTimeout(800);
+noErr('Bord periode-filter');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

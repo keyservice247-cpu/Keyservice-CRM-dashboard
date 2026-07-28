@@ -70,6 +70,14 @@
           <div><h2>Opdrachten</h2><div id="boardStats" class="muted small"></div></div>
           <div class="view-actions">
             <input id="boardSearch" type="search" placeholder="Zoek opdracht of klant…" />
+            <select id="boardPeriodFilter" title="Toon alleen aanvragen die in deze periode zijn binnengekomen — in álle kolommen, ook al verwerkt (afgerond/geannuleerd/offerte)">
+              <option value="">Binnengekomen: alles</option>
+              <option value="vandaag">Vandaag binnengekomen</option>
+              <option value="gisteren">Gisteren binnengekomen</option>
+              <option value="week">Deze week</option>
+              <option value="vorigeweek">Vorige week</option>
+              <option value="maand">Deze maand</option>
+            </select>
             <select id="boardMonteurFilter"><option value="">Alle monteurs</option></select>
             <button id="digestBtn" class="btn">Status-scan</button>
             <button id="collapseBtn" class="btn perm-write">Inklappen</button>

@@ -604,7 +604,11 @@ function fillMonteurFilter() {
 }
 
 async function loadBoard() {
-  state.orders = await api('/api/orders');
+  // Periode-filter actief? Dan óók de ingeklapte (gearchiveerde) kaarten ophalen,
+  // zodat een vandaag/deze-week binnengekomen aanvraag ALTIJD zichtbaar is — ook
+  // als hij al is verwerkt naar Afgerond/Geannuleerd en de week is ingeklapt.
+  const periode = $('#boardPeriodFilter')?.value || '';
+  state.orders = await api(periode ? '/api/orders?includeArchived=1' : '/api/orders');
   state.archives = await api('/api/archives');
   renderBoard();
   renderArchives();
@@ -657,13 +661,31 @@ function renderArchives() {
   });
 }
 
+// Periode-grenzen (lokale tijd) voor het "binnengekomen in…"-filter op het bord.
+function boardPeriodRange(keuze) {
+  const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+  const dag = 86400000;
+  const maandagVan = (ref) => { const m = new Date(ref); const wd = (m.getDay() + 6) % 7; m.setTime(m.getTime() - wd * dag); return m.getTime(); };
+  if (keuze === 'vandaag') return [d0.getTime(), d0.getTime() + dag];
+  if (keuze === 'gisteren') return [d0.getTime() - dag, d0.getTime()];
+  if (keuze === 'week') return [maandagVan(d0), d0.getTime() + dag];
+  if (keuze === 'vorigeweek') { const ma = maandagVan(d0); return [ma - 7 * dag, ma]; }
+  if (keuze === 'maand') { const m = new Date(d0); m.setDate(1); return [m.getTime(), d0.getTime() + dag]; }
+  return null;
+}
+
 function filteredOrders() {
   const q = ($('#boardSearch').value || '').toLowerCase();
   const mont = $('#boardMonteurFilter').value;
+  const bereik = boardPeriodRange($('#boardPeriodFilter')?.value || '');
   return state.orders.filter((o) => {
     if (state.channel === 'email' && orderChannel(o) !== 'email') return false;
     if (state.channel === 'whatsapp' && orderChannel(o) !== 'whatsapp') return false;
     if (mont && o.monteurId !== mont) return false;
+    if (bereik) {
+      const t = new Date(o.createdAt || 0).getTime();
+      if (!(t >= bereik[0] && t < bereik[1])) return false;
+    }
     if (q) {
       const threadTxt = (o.thread || []).map((t) => t.body || '').join(' ');
       const hay = `${o.title} ${o.description || ''} ${o.customer?.name || ''} ${o.customer?.phone || ''} ${o.customer?.email || ''} ${o.customer?.address || ''} ${o.notes || ''} ${o.source || ''} ${threadTxt}`.toLowerCase();
@@ -689,9 +711,15 @@ function renderBoard() {
   };
   const primary = statuses.filter((s) => !s.secondary);
   const secondary = statuses.filter((s) => s.secondary);
-  board.innerHTML =
+  // Periode-filter actief? Toon een duidelijke balk met wat je nu ziet.
+  const perKeuze = $('#boardPeriodFilter')?.value || '';
+  const perLabels = { vandaag: 'vandaag', gisteren: 'gisteren', week: 'deze week', vorigeweek: 'vorige week', maand: 'deze maand' };
+  const perBar = perKeuze ? `<div class="board-period-bar">${icon('clock', 13)} Je ziet alleen aanvragen die <strong>${perLabels[perKeuze] || perKeuze}</strong> zijn binnengekomen — over alle kolommen, ook al verwerkt (${orders.length}). <button type="button" class="chip" id="bp-clear">Filter uit</button></div>` : '';
+  board.innerHTML = perBar +
     `<div class="board-row board-primary">${primary.map(colHTML).join('')}</div>` +
     (secondary.length ? `<div class="board-row board-secondary"><div class="board-sec-label">Afgehandeld</div><div class="board-sec-cols">${secondary.map(colHTML).join('')}</div></div>` : '');
+  const bpc = $('#bp-clear');
+  if (bpc) bpc.onclick = () => { $('#boardPeriodFilter').value = ''; loadBoard(); };
 
   $$('.card').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -4177,6 +4205,8 @@ function bindButtons() {
   $('#newUserBtn')?.addEventListener('click', () => openUserModal());
   $('#simulateBtn')?.addEventListener('click', () => openSimulateModal());
   $('#boardSearch')?.addEventListener('input', renderBoard);
+  // Periode wisselen = opnieuw laden (mét of zonder ingeklapte kaarten), niet alleen filteren.
+  $('#boardPeriodFilter')?.addEventListener('change', loadBoard);
   $('#boardMonteurFilter')?.addEventListener('change', renderBoard);
   $('#customerSearch')?.addEventListener('input', renderCustomers);
   $('#trashSearch')?.addEventListener('input', renderTrash);

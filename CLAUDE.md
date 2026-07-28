@@ -207,6 +207,12 @@ de regressie meegroeit.
   Start (GET /api/search?q=, min 2 tekens): klanten/kaarten/facturen/berichten
   in één veld, telefoon genormaliseerd (+31↔06), klik opent dossier/kaart/
   factuur/bericht-modal; monteur alleen eigen data en géén berichten.
+- **Bord periode-filter (28 jul):** keuzelijst op Opdrachten/E-mail/WhatsApp-bord
+  ("Vandaag/Gisteren/Deze week/Vorige week/Deze maand binnengekomen"): filtert op
+  order.createdAt over ÁLLE kolommen (ook afgerond/geannuleerd/offerte); bij actieve
+  periode haalt loadBoard includeArchived=1 op zodat ingeklapte kaarten meetellen;
+  balk (.board-period-bar) legt uit wat je ziet + "Filter uit"-knop
+  (boardPeriodRange/filteredOrders in app.js).
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).
