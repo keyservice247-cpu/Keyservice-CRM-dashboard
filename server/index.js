@@ -66,7 +66,7 @@ import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
-  getHtmlSignature, getWeeklyAiCheck,
+  getHtmlSignature, getWeeklyAiCheck, syncBundlesToPriceList,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2153,8 +2153,10 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
   });
 });
 
+let _lastPriceSync = null; // laatste "pakketten meegewijzigd"-melding voor het antwoord
 app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   const b = req.body || {};
+  _lastPriceSync = null;
   if ('aiAutoApproveThreshold' in b) {
     const v = Number(b.aiAutoApproveThreshold);
     db().settings.aiAutoApproveThreshold = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
@@ -2306,6 +2308,12 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       .map((p) => ({ description: String(p.description || '').slice(0, 200), priceExcl: Math.max(0, Math.min(999999, Number(p.priceExcl) || 0)) }))
       .filter((p) => p.description)
       .slice(0, 150);
+    // Pakketten met dezelfde omschrijving gaan mee (prijslijst is de baas).
+    const sync = syncBundlesToPriceList(db().settings.priceList);
+    if (sync.changed) {
+      _lastPriceSync = sync;
+      logActivity(req.user.name, 'prijzen in pakketten meegewijzigd', `${sync.changed} regel(s) — ${sync.bundles.join(', ')}`);
+    } else _lastPriceSync = null;
   }
   // Pakketten (bundels): één knop = meerdere regels.
   if ('priceBundles' in b) {
@@ -2394,6 +2402,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   }
   save();
   res.json({
+    priceSync: _lastPriceSync, // {changed, bundles} als pakketten zijn meegewijzigd
     aiAutoApproveThreshold: autoApproveThreshold(),
     statuses: getStatuses(),
     sources: getSources(),
@@ -2944,9 +2953,12 @@ app.post('/api/pricelist/add', requirePerm('settings'), (req, res) => {
     else { cur.push(it); added++; }
   }
   db().settings.priceList = cur.slice(0, 150);
+  // Pakketten met dezelfde omschrijving krijgen meteen de nieuwe prijs.
+  const sync = syncBundlesToPriceList(db().settings.priceList);
+  if (sync.changed) logActivity(req.user.name, 'prijzen in pakketten meegewijzigd', `${sync.changed} regel(s) — ${sync.bundles.join(', ')}`);
   saveSoon();
   logActivity(req.user.name, 'regels opgeslagen in prijslijst', `${items.length} regel(s)`);
-  res.json({ ok: true, added, priceList: db().settings.priceList });
+  res.json({ ok: true, added, priceList: db().settings.priceList, priceSync: sync.changed ? sync : null });
 });
 
 // Regels uit een factuur opslaan als PAKKET (bundel): één knop die deze regels later

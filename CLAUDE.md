@@ -115,6 +115,14 @@ de regressie meegroeit.
   wagens + hefsluiting + arbeid i.p.v. één regel van 740). Endpoints
   /api/pricelist/add en /api/bundles/add; pakketten ook bewerkbaar in Instellingen →
   Facturen. Editor-endpoints geven bundles mee.
+- **Prijzen doorwerken (28 jul):** de PRIJSLIJST is de baas. Wijzig je daar een prijs
+  (Instellingen → Facturen of via "Regels → prijslijst"), dan gaan PAKKET-regels met
+  exact dezelfde omschrijving automatisch mee (syncBundlesToPriceList in settings.js;
+  antwoord bevat priceSync {changed, bundles} → zichtbare melding + logboek). Vóór
+  deze fix hield elk pakket zijn eigen prijskopie en kwamen wijzigingen dus niet in
+  nieuwe facturen/offertes. Bestaande documenten veranderen NOOIT vanzelf: in de
+  editor zit knop "Prijzen bijwerken" die regels op omschrijving matcht, eerst laat
+  zien wat er wijzigt (oud → nieuw) en pas na bevestiging aanpast.
 - **Offerte-automatisering (20 jul):** offerte op "Goedgekeurd" → automatisch een
   factuur-CONCEPT klaargezet (kopie, nieuw nummer, niet verzonden; idempotent via
   inv.convertedInvoiceId; koppelt de kaart aan de nieuwe factuur; instelbaar

@@ -209,6 +209,25 @@ export function sanitizeBundles(input) {
     .slice(0, 60);
 }
 
+// DE PRIJSLIJST IS DE BAAS: wijzig je daar een prijs, dan gaan PAKKETTEN met exact
+// dezelfde omschrijving automatisch mee. Anders bleef een pakket stilletjes de oude
+// prijs in facturen/offertes zetten (bewezen klacht 28 jul: "prijzen gewijzigd maar
+// komen niet door"). Geeft terug hoeveel pakket-regels zijn bijgewerkt, zodat het
+// scherm dat kan melden — nooit een stille wijziging.
+export function syncBundlesToPriceList(priceList) {
+  const norm = (d) => String(d || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const prijs = new Map((Array.isArray(priceList) ? priceList : []).map((p) => [norm(p.description), Number(p.priceExcl) || 0]));
+  let changed = 0;
+  const namen = new Set();
+  for (const b of db().settings.priceBundles || []) {
+    for (const l of b.lines || []) {
+      const p = prijs.get(norm(l.description));
+      if (p !== undefined && Number(l.priceExcl) !== p) { l.priceExcl = p; changed++; namen.add(b.name); }
+    }
+  }
+  return { changed, bundles: [...namen] };
+}
+
 // WhatsApp-meldingen voor het team: seintje in een groep (of 1-op-1) bij elke
 // nieuwe te-controleren aanvraag en bij klantreacties. Groep aanbevolen: maak een
 // WhatsApp-groep (bv. "CRM meldingen") met het wegwerp-nummer + de assistente erin.

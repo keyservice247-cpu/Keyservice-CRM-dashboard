@@ -74,6 +74,28 @@ await api('POST', `/api/invoices/${off2.id}/status`, { status: 'verzonden' });
 const fu2 = await api('POST', `/api/invoices/${off2.id}/quote-followup`, {});
 ok('zonder e-mail en 06: nette foutmelding', fu2.status === 400 && /telefoonnummer/.test(fu2.json.error || ''), JSON.stringify(fu2.json));
 
+console.log('\n== Prijswijziging werkt door in prijslijst ÉN pakketten ==');
+// Klacht 28 jul: "ik had prijzen gewijzigd maar die komen niet door in facturen en
+// offertes". Oorzaak: pakketten (bundels) hadden hun eigen kopie van de prijs.
+await api('POST', '/api/bundles/add', { name: 'Prijstest pakket', lines: [{ description: 'Voorrijkosten prijstest', qty: 1, priceExcl: 50 }, { description: 'Arbeid prijstest', qty: 2, priceExcl: 80 }] });
+const pSave = await api('PATCH', '/api/settings', { priceList: [{ description: 'Voorrijkosten prijstest', priceExcl: 65 }, { description: 'Los product', priceExcl: 10 }] });
+ok('prijslijst opgeslagen + melding dat pakketten meegingen', pSave.status === 200 && pSave.json.priceSync?.changed === 1 && (pSave.json.priceSync.bundles || []).includes('Prijstest pakket'), JSON.stringify(pSave.json.priceSync));
+const stP = await api('GET', '/api/settings');
+const bnd = (stP.json.priceBundles || []).find((b) => b.name === 'Prijstest pakket');
+ok('pakket-regel heeft de NIEUWE prijs (65)', (bnd?.lines || []).some((l) => l.description === 'Voorrijkosten prijstest' && l.priceExcl === 65), JSON.stringify(bnd?.lines));
+ok('regel die NIET in de prijslijst staat blijft ongemoeid (80)', (bnd?.lines || []).some((l) => l.description === 'Arbeid prijstest' && l.priceExcl === 80));
+const custP = await api('POST', '/api/customers', { name: 'Prijs Doorwerk Klant', phone: '0644332211' });
+let invP = (await api('POST', '/api/invoices', { customerId: custP.json.id, type: 'offerte' })).json; invP = invP.invoice || invP;
+const edP = await api('GET', `/api/invoices/${invP.id}`);
+ok('offerte-editor krijgt de nieuwe prijs mee', (edP.json.priceList || []).some((p) => p.description === 'Voorrijkosten prijstest' && p.priceExcl === 65));
+ok('offerte-editor krijgt het bijgewerkte pakket mee', ((edP.json.bundles || []).find((b) => b.name === 'Prijstest pakket')?.lines || []).some((l) => l.priceExcl === 65));
+// "Regels -> prijslijst" met een gewijzigde prijs werkt eveneens door in pakketten.
+const addP = await api('POST', '/api/pricelist/add', { items: [{ description: 'Voorrijkosten prijstest', qty: 1, priceExcl: 72 }] });
+const stP2 = await api('GET', '/api/settings');
+ok('prijs uit een factuurregel werkt door in prijslijst én pakket', addP.status === 200
+  && (stP2.json.priceList || []).some((p) => p.description === 'Voorrijkosten prijstest' && p.priceExcl === 72)
+  && ((stP2.json.priceBundles || []).find((b) => b.name === 'Prijstest pakket')?.lines || []).some((l) => l.description === 'Voorrijkosten prijstest' && l.priceExcl === 72), JSON.stringify(addP.json.priceSync));
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

@@ -2070,7 +2070,8 @@ function renderInvoiceEditor(ctx) {
     ${locked ? '' : `<button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
     ${ctx.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}
     <button type="button" class="btn btn-sm" id="il-to-pricelist" title="Alle regels hierboven toevoegen aan je vaste prijzenlijst">${icon('tag', 12)} Regels → prijslijst</button>
-    <button type="button" class="btn btn-sm" id="il-to-bundle" title="Deze regels bewaren als pakket, om ze later met één klik toe te voegen">${icon('tag', 12)} Regels → pakket</button>`}
+    <button type="button" class="btn btn-sm" id="il-to-bundle" title="Deze regels bewaren als pakket, om ze later met één klik toe te voegen">${icon('tag', 12)} Regels → pakket</button>
+    <button type="button" class="btn btn-sm" id="il-refresh-prices" title="Regels bijwerken naar de huidige prijzen uit je prijslijst (op omschrijving)">${icon('refresh', 12)} Prijzen bijwerken</button>`}
     <div class="row" style="margin-top:10px"> <label>Btw-tarief <select id="inv-btw" ${locked ? 'disabled' : ''}><option value="21" ${Number(inv.btwPct) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(inv.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(inv.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label>
       <label>Opmerking op de ${esc(woord.toLowerCase())} <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel" ${locked ? 'disabled' : ''}></label> </div>
     <div class="row"> <label>Korting <select id="inv-disc-type" ${locked ? 'disabled' : ''}><option value="" ${!inv.discount ? 'selected' : ''}>Geen korting</option><option value="pct" ${inv.discount?.type === 'pct' ? 'selected' : ''}>Percentage (%)</option><option value="bedrag" ${inv.discount?.type === 'bedrag' ? 'selected' : ''}>Vast bedrag (excl. btw)</option></select></label>
@@ -2150,6 +2151,28 @@ function renderInvoiceEditor(ctx) {
     if (!name || !name.trim()) return;
     try { await api('/api/bundles/add', 'POST', { name: name.trim(), lines: items }); toast(`Pakket "${name.trim()}" opgeslagen — voortaan één klik`); }
     catch (err) { toast(err.message, true); }
+  };
+  // PRIJZEN BIJWERKEN: regels die al op dit concept staan krijgen de HUIDIGE prijs uit
+  // de prijslijst (match op omschrijving). Een bestaand document verandert nooit vanzelf
+  // — je ziet eerst wat er wijzigt en bevestigt zelf.
+  if ($('#il-refresh-prices')) $('#il-refresh-prices').onclick = () => {
+    const norm = (d) => String(d || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const prijs = new Map((priceList || []).map((p) => [norm(p.description), Number(p.priceExcl) || 0]));
+    const wijzigingen = [];
+    for (const row of $$('#inv-lines .inv-line')) {
+      const d = norm($('.il-desc', row).value);
+      const nieuw = prijs.get(d);
+      if (nieuw === undefined) continue;
+      const oud = Number($('.il-price', row).value) || 0;
+      if (oud !== nieuw) wijzigingen.push({ row, oud, nieuw, desc: $('.il-desc', row).value });
+    }
+    if (!wijzigingen.length) return toast('Alle regels staan al op de huidige prijslijst-prijzen');
+    const eur = (n) => '€ ' + Number(n).toFixed(2).replace('.', ',');
+    const lijst = wijzigingen.slice(0, 8).map((w) => `• ${w.desc}: ${eur(w.oud)} → ${eur(w.nieuw)}`).join('\n');
+    if (!confirm(`${wijzigingen.length} regel(s) bijwerken naar de huidige prijslijst?\n\n${lijst}${wijzigingen.length > 8 ? `\n… en nog ${wijzigingen.length - 8}` : ''}`)) return;
+    for (const w of wijzigingen) $('.il-price', w.row).value = w.nieuw;
+    bindRows(); renderTotals();
+    toast(`${wijzigingen.length} regel(s) bijgewerkt — vergeet niet op te slaan`);
   };
   if ($('#il-werkbon')) $('#il-werkbon').onclick = () => { $('#inv-lines').insertAdjacentHTML('beforeend', lineRow({ description: (ctx.werkbon.work || '').replace(/\s+/g, ' ').slice(0, 200), qty: 1, priceExcl: 0 }, 99)); bindRows(); renderTotals(); };
   // Handtekening-canvas: teken direct op de factuur/offerte (los van een werkbon).
@@ -3152,7 +3175,7 @@ async function loadSettings() {
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveInvoiceSettings">Factuurgegevens opslaan</button></div>
     </div>
     <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Prijslijst — vaste producten &amp; werkzaamheden</h3>
-      <p class="muted small">Vul hier je vaste producten en werkzaamheden in mét prijs (<strong>excl. btw</strong>). De monteur klikt ze in de factuur met één tik aan — geen getyp meer. Bijvoorbeeld: "Voorrijkosten", "Afstellen sluitingen", "ROTO sluitingsmechanisme".</p>
+      <p class="muted small">Vul hier je vaste producten en werkzaamheden in mét prijs (<strong>excl. btw</strong>). De monteur klikt ze in de factuur met één tik aan — geen getyp meer. Bijvoorbeeld: "Voorrijkosten", "Afstellen sluitingen", "ROTO sluitingsmechanisme". <strong>Deze lijst is de baas:</strong> wijzig je hier een prijs, dan gaan pakketten met exact dezelfde omschrijving automatisch mee. Facturen en offertes die al bestaan blijven staan zoals ze zijn — die werk je bij met de knop <strong>"Prijzen bijwerken"</strong> in de editor.</p>
       <div id="plRows">${(s.priceList || []).map((p) => `
         <div class="pl-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
           <input class="pl-desc" value="${esc(p.description)}" placeholder="Omschrijving" style="flex:3">
@@ -3483,7 +3506,11 @@ async function loadSettings() {
   $('#plAdd').onclick = () => { $('#plRows').insertAdjacentHTML('beforeend', `<div class="pl-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center"><input class="pl-desc" placeholder="Omschrijving" style="flex:3"><input class="pl-price" type="number" min="0" step="0.01" value="0" style="width:110px" title="Prijs excl. btw"><button type="button" class="btn btn-sm pl-del">${icon('x', 12)}</button></div>`); bindPl(); };
   $('#savePriceList').onclick = async () => {
     const priceList = $$('#plRows .pl-row').map((r) => ({ description: $('.pl-desc', r).value, priceExcl: Number($('.pl-price', r).value) || 0 })).filter((p) => p.description);
-    try { await api('/api/settings', 'PATCH', { priceList }); toast('Prijslijst opgeslagen'); }
+    try {
+      const r = await api('/api/settings', 'PATCH', { priceList });
+      const sy = r?.priceSync;
+      toast(sy ? `Prijslijst opgeslagen — ${sy.changed} regel(s) in pakketten meegewijzigd (${sy.bundles.join(', ')})` : 'Prijslijst opgeslagen');
+    }
     catch (err) { toast(err.message, true); }
   };
   // Pakketten (bundels) beheren in Instellingen.
