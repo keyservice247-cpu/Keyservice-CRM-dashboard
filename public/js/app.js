@@ -259,6 +259,9 @@ async function startLiveUpdates() {
       }
       // Alleen de inhoud verversen als er écht iets veranderd is.
       if (_lastPulse !== null && p.v !== _lastPulse) {
+        // Bezig met een bulk-selectie? Dan het bord met rust laten tot je klaar bent —
+        // anders schuift alles onder je vingers weg terwijl je aan het aanvinken bent.
+        if (state.view === 'board' && boardSel.size) return;
         if (state.view === 'overview') loadOverview();
         else if (state.view === 'board') loadBoard();
         else if (state.view === 'inbox') loadInbox();
@@ -321,6 +324,7 @@ function bindNav() {
 }
 
 function showView(view, tab) {
+  const anderView = state.view !== view;
   state.view = view;
   if (view !== 'assistant') ssPollActive = false; // statusscan-pollen stoppen buiten de AI-pagina
   // De drie board-menu's (Opdrachten/E-mail/WhatsApp) delen dezelfde weergave maar filteren op kanaal.
@@ -331,6 +335,10 @@ function showView(view, tab) {
   // Onderbalk (mobiel) active-markering synchroniseren.
   $$('.bn-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
+  // Bij een ANDER scherm bovenaan beginnen. Zonder dit hield de pagina de scrollpositie
+  // van het vorige scherm vast; is het nieuwe scherm korter, dan klemt de browser die
+  // positie en zie je alles verspringen (voelt als een balk die beweegt).
+  if (anderView) window.scrollTo(0, 0);
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
   const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance };
@@ -441,7 +449,7 @@ async function loadOverview() {
   const list = (arr, empty) => arr.length
     ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
     : `<div class="muted small">${empty}</div>`;
-  $('#overviewPanel').innerHTML = `
+  const ovHtml = `
     <div class="info-card" style="margin-bottom:18px;position:relative">
       <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${state.me.role === 'monteur' ? '' : ', bericht'}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
       <div id="gsResults" hidden></div>
@@ -484,6 +492,12 @@ async function loadOverview() {
       </div>
       <div id="wr-body" class="muted small" style="margin-top:10px">Laden…</div>
     </div>` : ''}`;
+  // Alleen opnieuw tekenen als er echt iets veranderd is. Anders werd bij élke
+  // achtergrondwijziging je zoekbalk leeggegooid, het dagoverzicht opnieuw opgehaald
+  // en sprong de pagina — precies het "geknipper" op Start.
+  if (ovHtml === _lastOvHtml && $('#overviewPanel').children.length) return;
+  _lastOvHtml = ovHtml;
+  $('#overviewPanel').innerHTML = ovHtml;
   $$('#overviewPanel [data-go]').forEach((el) => el.onclick = () => {
     const col = el.dataset.col;
     if (col) { state.boardTab = col; state._focusCol = col; } // open meteen de juiste kolom
@@ -630,7 +644,12 @@ function renderArchives() {
     $('#view-board').appendChild(wrap);
   }
   const archives = state.archives || [];
-  if (!archives.length) { wrap.innerHTML = ''; return; }
+  if (!archives.length) { wrap.innerHTML = ''; _lastArchHtml = ''; return; }
+  // Ook hier: alleen hertekenen als er echt iets veranderd is — anders klapte elke
+  // opengeklapte week-agenda bij iedere achtergrondwijziging weer dicht.
+  const archVinger = JSON.stringify(archives.map((a) => [a.key, a.label, a.count]));
+  if (archVinger === _lastArchHtml && wrap.children.length) return;
+  _lastArchHtml = archVinger;
   wrap.innerHTML = `<h3 class="archive-title">${icon('box', 14)} Ingeklapte agenda's</h3>` +
     archives.map((a) => `
       <details class="archive"> <summary> ${esc(a.label)} <span class="count">${a.count}</span></summary> <div class="archive-body" data-week="${esc(a.key)}">Laden…</div> </details>`).join('');
@@ -715,9 +734,26 @@ function renderBoard() {
   const perKeuze = $('#boardPeriodFilter')?.value || '';
   const perLabels = { vandaag: 'vandaag', gisteren: 'gisteren', week: 'deze week', vorigeweek: 'vorige week', maand: 'deze maand' };
   const perBar = perKeuze ? `<div class="board-period-bar">${icon('clock', 13)} Je ziet alleen aanvragen die <strong>${perLabels[perKeuze] || perKeuze}</strong> zijn binnengekomen — over alle kolommen, ook al verwerkt (${orders.length}). <button type="button" class="chip" id="bp-clear">Filter uit</button></div>` : '';
-  board.innerHTML = perBar +
+  const nieuweHtml = perBar +
     `<div class="board-row board-primary">${primary.map(colHTML).join('')}</div>` +
     (secondary.length ? `<div class="board-row board-secondary"><div class="board-sec-label">Afgehandeld</div><div class="board-sec-cols">${secondary.map(colHTML).join('')}</div></div>` : '');
+  // NIET OPNIEUW TEKENEN als er letterlijk niets veranderd is. Het bord werd tot nu toe
+  // elke keer volledig herbouwd zodra de server ook maar íets opsloeg (ook een
+  // achtergrondtaak). Dat gaf het "knipperen", liet de pagina verspringen onder de
+  // onderbalk, en wiste je selectie. Zelfde HTML = scherm met rust laten.
+  if (nieuweHtml === _lastBoardHtml && board.children.length) return;
+  _lastBoardHtml = nieuweHtml;
+  // Scrollposities onthouden (pagina + horizontaal gescrolde kolommenrij), zodat het
+  // beeld niet wegspringt terwijl je aan het kijken of tikken bent.
+  const paginaY = window.scrollY;
+  const rijX = [...board.querySelectorAll('.board-row')].map((r) => r.scrollLeft);
+  const kolomY = [...board.querySelectorAll('.column-cards')].map((c) => c.scrollTop);
+  board.innerHTML = nieuweHtml;
+  const rijen = [...board.querySelectorAll('.board-row')];
+  rijX.forEach((x, i) => { if (rijen[i] && x) rijen[i].scrollLeft = x; });
+  const kolommen = [...board.querySelectorAll('.column-cards')];
+  kolomY.forEach((y, i) => { if (kolommen[i] && y) kolommen[i].scrollTop = y; });
+  if (window.scrollY !== paginaY) window.scrollTo(0, paginaY);
   const bpc = $('#bp-clear');
   if (bpc) bpc.onclick = () => { $('#boardPeriodFilter').value = ''; loadBoard(); };
 
@@ -738,8 +774,14 @@ function renderBoard() {
     try { await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo('Naar prullenbak', () => restoreOrders([id])); }
     catch (err) { toast(err.message, true); }
   }));
-  // Selectievakjes -> toon/verberg de bord-bulkbalk
-  $$('.card-check').forEach((c) => c.addEventListener('change', updateBoardBulk));
+  // Selectievakjes -> onthouden in het geheugen, zodat een verversing ze niet wist.
+  $$('.card-check').forEach((c) => c.addEventListener('change', () => {
+    if (c.checked) boardSel.add(c.dataset.id); else boardSel.delete(c.dataset.id);
+    updateBoardBulk();
+  }));
+  // Kaarten die niet meer op het bord staan (verwerkt/verwijderd) uit de selectie halen.
+  const zichtbaar = new Set($$('.card-check').map((c) => c.dataset.id));
+  for (const sid of [...boardSel]) if (!zichtbaar.has(sid)) boardSel.delete(sid);
   updateBoardBulk();
 
   $$('.column-cards').forEach((col) => {
@@ -858,7 +900,16 @@ function bindCardSwipe() {
   });
 }
 
-function selectedCardIds() { return $$('.card-check:checked').map((c) => c.dataset.id); }
+// SELECTIE LEEFT IN HET GEHEUGEN, niet alleen in de vinkjes op het scherm. Anders
+// was je selectie weg zodra het bord opnieuw werd opgebouwd (dat gebeurt automatisch
+// zodra er ergens iets verandert) — precies de klacht "na een halve minuut is mijn
+// selectie verdwenen en kan ik niets meer toepassen".
+const boardSel = new Set();
+let _lastBoardHtml = '';   // laatst getekende bord, om nutteloos hertekenen te herkennen
+let _lastArchHtml = '';    // idem voor de ingeklapte week-agenda's
+let _lastOvHtml = '';      // idem voor de Start-pagina
+function selectedCardIds() { return [...boardSel]; }
+function clearBoardSel() { boardSel.clear(); $$('.card-check').forEach((c) => (c.checked = false)); updateBoardBulk(); }
 function updateBoardBulk() {
   const bar = $('#boardBulkBar'); if (!bar) return;
   const ids = selectedCardIds();
@@ -895,7 +946,7 @@ function cardHTML(o) {
   const canDel = state.me.role !== 'monteur';
   return `
     <div class="card ${o.urgent ? 'urgent' : ''} ${st.c === 'new' ? 'is-new' : ''} ${o.customerReplied ? 'replied-alert' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
-      ${canDel ? `<label class="card-select" title="Selecteren"><input type="checkbox" class="card-check" data-id="${o.id}"></label>` : ''}
+      ${canDel ? `<label class="card-select" title="Selecteren"><input type="checkbox" class="card-check" data-id="${o.id}"${boardSel.has(o.id) ? ' checked' : ''}></label>` : ''}
       ${canDel ? `<button class="card-trash" data-del="${o.id}" title="Naar prullenbak">${icon('trash', 14)}</button>` : ''}
       ${o.customerReplied ? `<div class="reply-banner">${icon('message', 12)} ${replyLabel}</div>` : ''}
       <div class="card-title"><span class="state-dot ${st.c}" title="${st.t}"></span><span class="card-title-txt">${esc(o.title)}</span>${replyCount ? `<span class="title-count" title="${replyLabel}">${replyCount}</span>` : ''}</div>
@@ -1308,6 +1359,7 @@ async function refreshInboxBadge() {
 }
 
 const INBOX_PAGE = 60; // aantal berichten per keer renderen (voorkomt vastlopen)
+let _lastInboxHtml = '';   // laatst getekende inbox, om nutteloos hertekenen te herkennen
 async function loadInbox(append = false) {
   const filter = $('#inboxFilter')?.value || 'pending';
   if (!append) state._inboxOffset = 0;
@@ -1336,7 +1388,13 @@ async function loadInbox(append = false) {
     return;
   }
   const rowsHTML = reviews.map(reviewHTML).join('');
-  if (append) { $('#inboxMoreWrap')?.remove(); list.insertAdjacentHTML('beforeend', rowsHTML); }
+  // Niets veranderd? Dan de lijst met rust laten. Anders werd de inbox bij élke
+  // achtergrondwijziging opnieuw opgebouwd: half ingetypte klantcorrecties weg,
+  // "Toon meer" weer dichtgeklapt en het scherm dat zichtbaar verspringt.
+  const inboxVinger = `${filter}\n${rowsHTML}`;
+  if (!append && inboxVinger === _lastInboxHtml && list.children.length) return;
+  if (!append) _lastInboxHtml = inboxVinger;
+  if (append) { $('#inboxMoreWrap')?.remove(); list.insertAdjacentHTML('beforeend', rowsHTML); _lastInboxHtml = ''; }
   else list.innerHTML = rowsHTML;
   reviews.forEach((r) => bindReview(r));
   $$('.r-select').forEach((c) => c.addEventListener('change', updateBulkCount));
@@ -4319,7 +4377,7 @@ function bindButtons() {
     const ids = selectedCardIds();
     if (!ids.length) return;
     if (!confirm(`${ids.length} kaart(en) naar de prullenbak verplaatsen?`)) return;
-    try { for (const id of ids) await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo(`${ids.length} naar prullenbak`, () => restoreOrders(ids)); }
+    try { for (const id of ids) await api(`/api/orders/${id}`, 'DELETE'); clearBoardSel(); loadBoard(); toastUndo(`${ids.length} naar prullenbak`, () => restoreOrders(ids)); }
     catch (err) { toast(err.message, true); }
   });
   // Status-kiezer vullen + bulk-status toepassen op alle geselecteerde kaarten.
@@ -4334,9 +4392,10 @@ function bindButtons() {
     let ok = 0;
     for (const id of ids) { try { await api(`/api/orders/${id}`, 'PATCH', { status }); ok++; } catch { /* skip */ } }
     toast(`${ok} kaart(en) → ${label}`);
+    clearBoardSel();
     loadBoard();
   });
-  $('#boardBulkClear')?.addEventListener('click', () => { $$('.card-check').forEach((c) => (c.checked = false)); updateBoardBulk(); });
+  $('#boardBulkClear')?.addEventListener('click', clearBoardSel);
   $('#dupBtn')?.addEventListener('click', openDuplicatesModal);
   $('#emptyTrashBtn')?.addEventListener('click', async () => {
     if (!confirm('De hele prullenbak definitief legen?')) return;

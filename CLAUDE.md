@@ -231,6 +231,17 @@ de regressie meegroeit.
   periode haalt loadBoard includeArchived=1 op zodat ingeklapte kaarten meetellen;
   balk (.board-period-bar) legt uit wat je ziet + "Filter uit"-knop
   (boardPeriodRange/filteredOrders in app.js).
+- **Rustig scherm / geen geknipper (29 jul):** het bord, de inbox, Start en de
+  ingeklapte agenda's werden bij ELKE serverwijziging (ook achtergrondtaken) volledig
+  opnieuw opgebouwd via innerHTML. Gevolg: bulk-selectie verdween (`selectedCardIds`
+  las alleen de DOM), scrollposities sprongen, half ingetypte inbox-correcties weg,
+  zoekbalk op Start leeg, open week-agenda's dicht. Nu: elke render bouwt eerst de HTML
+  als string en slaat het hertekenen OVER als die identiek is (_lastBoardHtml/
+  _lastInboxHtml/_lastOvHtml/_lastArchHtml); selectie leeft in `boardSel` (Set) en wordt
+  in cardHTML als `checked` teruggezet; scrollpositie van pagina/kolommen wordt bewaard;
+  de pulse slaat het bord over zolang er een selectie openstaat; showView scrollt naar
+  boven bij een ander scherm; toast staat boven de onderbalk (safe-area). Regressie:
+  browser-test 41 assertions.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).

@@ -159,6 +159,32 @@ await page.selectOption('#boardPeriodFilter', '');
 await page.waitForTimeout(800);
 noErr('Bord periode-filter');
 
+// 13) Bulk-selectie blijft staan als het bord opnieuw wordt opgebouwd (klacht 29 jul:
+// "als ik opdrachten selecteer gaat die na 30 seconden weg alsof het scherm refresht").
+clear();
+await page.evaluate(() => goView('board'));
+await page.waitForTimeout(1200);
+const aantalVinkjes = await page.locator('.card-check').count();
+if (aantalVinkjes >= 2) {
+  await page.locator('.card-check').nth(0).check();
+  await page.locator('.card-check').nth(1).check();
+  const balkZichtbaar = async () => !(await page.locator('#boardBulkBar').isHidden());
+  ok('bulkbalk verschijnt bij 2 selecties', await balkZichtbaar() && /2 geselecteerd/.test(await page.locator('#boardBulkCount').innerText()));
+  // Forceer precies wat de automatische verversing doet.
+  await page.evaluate(async () => { await loadBoard(); });
+  await page.waitForTimeout(600);
+  ok('selectie OVERLEEFT een volledige verversing van het bord', await page.locator('.card-check:checked').count() === 2, String(await page.locator('.card-check:checked').count()));
+  ok('bulkbalk staat er dan nog steeds', await balkZichtbaar());
+  // Nogmaals renderen zonder datawijziging: het bord mag niet opnieuw getekend worden.
+  const zelfdeHtml = await page.evaluate(() => { const voor = document.querySelector('#board').firstElementChild; renderBoard(); return document.querySelector('#board').firstElementChild === voor; });
+  ok('bord wordt NIET opnieuw getekend als er niets veranderd is (geen geknipper)', zelfdeHtml);
+  await page.evaluate(() => clearBoardSel());
+  ok('selectie wissen leegt de balk', await page.locator('#boardBulkBar').isHidden());
+} else {
+  ok('bulk-selectietest overgeslagen (te weinig kaarten)', true);
+}
+noErr('Bulk-selectie & verversing');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
