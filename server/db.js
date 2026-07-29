@@ -434,8 +434,13 @@ export function saveFailure() {
 }
 
 export function save() {
-  if (!data) return true;
   changeCounter++;
+  return writeNow();
+}
+
+// Het daadwerkelijke wegschrijven, zonder de wijzigingsteller aan te raken.
+function writeNow() {
+  if (!data) return true;
   ensureDir();
   if (engine === 'sqlite') {
     try {
@@ -478,6 +483,19 @@ export function saveSoon() {
     saveTimer = null;
     if (engine === 'sqlite') persistChunked();
     else save();
+  }, 200);
+}
+
+// STIL OPSLAAN: wel bewaren, maar de "er is iets veranderd"-teller NIET ophogen.
+// Voor huishoudelijke velden die de gebruiker nooit ziet — de WhatsApp-hartslag
+// (elke 60 s!), de mailbox-vulgraad en de systeemcheck-teller. Die lieten elk
+// scherm van elke ingelogde gebruiker onnodig herladen, de klok rond.
+export function saveSoonQuiet() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    if (engine === 'sqlite') persistChunked();
+    else writeNow();
   }, 200);
 }
 

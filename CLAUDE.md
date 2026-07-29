@@ -240,8 +240,13 @@ de regressie meegroeit.
   _lastInboxHtml/_lastOvHtml/_lastArchHtml); selectie leeft in `boardSel` (Set) en wordt
   in cardHTML als `checked` teruggezet; scrollpositie van pagina/kolommen wordt bewaard;
   de pulse slaat het bord over zolang er een selectie openstaat; showView scrollt naar
-  boven bij een ander scherm; toast staat boven de onderbalk (safe-area). Regressie:
-  browser-test 41 assertions.
+  boven bij een ander scherm; toast staat boven de onderbalk (safe-area). BRON
+  aangepakt: huishoudelijke schrijfacties gebruiken `saveSoonQuiet()` (db.js) — die
+  bewaart wel maar hoogt de wijzigingsteller NIET op. Toegepast op de WhatsApp-
+  hartslag (elke 60 s!) en de mailbox-vulgraad; die lieten voorheen élk geopend
+  scherm de klok rond herladen. Veeg-beweging op mobiel zet nu `window._dragging`
+  (incl. touchcancel), zodat een verversing nooit midden in een swipe de kaart
+  vervangt. Regressie: browser-test 41 + scenarios 72 assertions.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).

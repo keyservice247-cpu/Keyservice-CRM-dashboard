@@ -11,7 +11,7 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Onafgehandelde fout (genegeerd, app blijft draaien):', err?.message || err);
 });
-import { db, id, now, save, saveSoon, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup, snapshotJson, storageEngine } from './db.js';
+import { db, id, now, save, saveSoon, saveSoonQuiet, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup, snapshotJson, storageEngine } from './db.js';
 
 // Nette afsluiting: bij een deploy/herstart stuurt Render (of Ctrl+C lokaal) een
 // signaal. Flush dan de laatste, nog niet weggeschreven wijzigingen naar schijf
@@ -1618,7 +1618,10 @@ app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
   // Bridge-versie: zo zien we in het dashboard of de VPS al de nieuwe bridge draait
   // (v2 = kan groepen per id versturen + leert groeps-koppelingen automatisch).
   if (b.version) db().settings.whatsappBridgeVersion = Number(b.version) || 0;
-  saveSoon();
+  // STIL opslaan: de hartslag komt elke 60 seconden binnen en verandert niets wat je
+  // op het scherm ziet. Met een gewone saveSoon() herlaadde elk geopend scherm van
+  // elke gebruiker daardoor de klok rond — dat was de bron van het "geknipper".
+  saveSoonQuiet();
   res.json({ ok: true });
 });
 

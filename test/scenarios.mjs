@@ -401,6 +401,20 @@ await api('POST', '/api/ingest/whatsapp', { group: 'Youssef Keyservice247', name
 const ackCount2 = (await outboxQ()).filter((x) => x.by === 'monteur-bevestiging').length;
 ok('"oke" op een dagrapport -> GEEN onterechte bevestiging naar de opdrachtgroep', ackCount2 === ackCount1, `count=${ackCount2}`);
 
+// ---------- Rustig scherm: huishoudelijke opslag mag geen verversing uitlokken ----------
+// De WhatsApp-hartslag komt elke 60 seconden binnen. Bumpte die de wijzigingsteller,
+// dan herlaadde elk geopend scherm zich de klok rond (klacht 29 jul: "het scherm
+// refresht en mijn selectie is weg").
+console.log('\n== Hartslag verandert niets zichtbaars -> geen schermverversing ==');
+const pulse1 = (await api('GET', '/api/pulse')).json;
+await api('POST', '/api/whatsapp/heartbeat', { state: 'CONNECTED', version: 2 }, true);
+await new Promise((r) => setTimeout(r, 350));
+const pulse2 = (await api('GET', '/api/pulse')).json;
+ok('WhatsApp-hartslag hoogt de wijzigingsteller NIET op', pulse2.v === pulse1.v, `${pulse1.v} -> ${pulse2.v}`);
+const nieuweKaart = await api('POST', '/api/orders', { title: 'Pulse-test kaart', customerName: 'Pulse Klant', customerPhone: '0612340000' });
+const pulse3 = (await api('GET', '/api/pulse')).json;
+ok('een ECHTE wijziging hoogt de teller wel op (scherm ververst nog steeds)', pulse3.v !== pulse2.v && nieuweKaart.status === 200, `${pulse2.v} -> ${pulse3.v}`);
+
 // ---------- Samenvatting ----------
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

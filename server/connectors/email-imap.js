@@ -7,7 +7,7 @@
 // BELANGRIJK: we halen mails op op basis van DATUM (laatste X dagen) en
 // ontdubbelen op messageId — NIET op de "ongelezen"-vlag. Zo verdwijnt een
 // binnengekomen opdracht niet als iemand de mail eerst in webmail/Outlook opent.
-import { db, id, now, saveSoon, logActivity } from '../db.js';
+import { db, id, now, saveSoon, logActivity, saveSoonQuiet } from '../db.js';
 import { ingestMessage, findCustomer, queueCrmWhatsappAlert } from '../pipeline.js';
 import { saveBuffer, dedupeAttachments } from '../storage.js';
 import { maybeSendAutoReply } from '../autoreply.js';
@@ -534,6 +534,6 @@ export async function checkMailboxQuota() {
   };
   if (db()._mailboxQuota && db()._mailboxQuota.alertedOn) rec.alertedOn = db()._mailboxQuota.alertedOn;
   db()._mailboxQuota = rec;
-  saveSoon();
+  saveSoonQuiet(); // huishoudelijk: mag geen schermverversing veroorzaken
   return rec;
 }

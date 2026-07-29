@@ -879,6 +879,7 @@ function bindCardSwipe() {
     let x0 = 0, y0 = 0, dx = 0, dragging = false, decided = false, horiz = false;
     card.addEventListener('touchstart', (e) => {
       const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; dx = 0; dragging = true; decided = false; horiz = false;
+      window._dragging = true;   // bord niet verversen midden in een veegbeweging
       card.style.transition = '';
     }, { passive: true });
     card.addEventListener('touchmove', (e) => {
@@ -887,7 +888,10 @@ function bindCardSwipe() {
       if (!decided && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) { decided = true; horiz = Math.abs(dx) > Math.abs(dy); }
       if (horiz) { e.preventDefault(); card.style.transform = `translateX(${dx}px)`; card.style.opacity = String(Math.max(0.55, 1 - Math.abs(dx) / 360)); }
     }, { passive: false });
+    // Vinger van het scherm zonder net touchend (bv. inkomend telefoontje): rem eraf.
+    card.addEventListener('touchcancel', () => { window._dragging = false; dragging = false; card.style.transform = ''; card.style.opacity = ''; });
     card.addEventListener('touchend', () => {
+      window._dragging = false;
       if (!dragging) return; dragging = false;
       card.style.transition = 'transform .16s ease, opacity .16s ease';
       card.style.transform = ''; card.style.opacity = '';
