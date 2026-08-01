@@ -3002,7 +3002,14 @@ function openFinanceEntry(kind) {
     const payload = { kind, amount: Number($('#fe-amount').value), date: $('#fe-date').value, category: $('#fe-cat').value, monteurId: $('#fe-monteur').value || null, note: $('#fe-note').value };
     if (income) payload.source = $('#fe-source')?.value || '';
     if (!(payload.amount > 0)) { toast('Vul een bedrag in', true); return; }
-    try { await api('/api/finance', 'POST', payload); toast(income ? 'Inkomst geboekt' : 'Uitgave geboekt'); closeModal(); loadFinance(); }
+    try {
+      const r = await api('/api/finance', 'POST', payload);
+      // Lijkt dit dezelfde boeking als eentje die er al staat (bv. de DRS-fee die de
+      // automatische ronde al had geboekt)? Dan wél boeken, maar het wel even zeggen.
+      if (r && r.duplicateWarning) toast(`Geboekt — LET OP: ${r.duplicateWarning}`, true);
+      else toast(income ? 'Inkomst geboekt' : 'Uitgave geboekt');
+      closeModal(); loadFinance();
+    }
     catch (err) { toast(err.message, true); }
   };
 }
@@ -3079,22 +3086,32 @@ function openImportIncome() {
   api(`/api/finance/suggest-income?month=${month}`).then(({ suggestions }) => {
     modal(`
       <h2>${icon('whatsapp', 16)} Omzet uit monteursrapporten — ${esc(month)}</h2>
-      <p class="muted small">Bedragen gevonden in de monteursgroepen. Vink aan wat als <strong>omzet</strong> geboekt moet worden (bedragen bij "pin/contant/betaald" staan al aangevinkt; kosten zoals "lips kosten" niet). Al geboekte bedragen verschijnen hier niet meer.</p>
+      <p class="muted small">Bedragen uit de monteursrapporten van deze maand. Vink aan wat je wilt boeken en kies per regel of het <strong>omzet</strong> of <strong>kosten</strong> zijn — de eerste gok komt uit het woord achter het bedrag ("pin" = omzet, "lips kosten" = kosten), maar jij beslist.</p>
       ${suggestions.length ? `<div style="max-height:340px;overflow:auto;margin:8px 0">${suggestions.map((s, i) => `
         <label style="display:flex;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:5px;font-weight:400">
-          <input type="checkbox" class="imp-c" data-i="${i}" style="width:auto" ${s.guess === 'income' ? 'checked' : ''}>
-          <span style="flex:1"><strong>${eurF(s.amount)}</strong> <span class="muted small">· ${esc(s.monteurName || '')} · ${esc(s.date)}</span><div class="muted small">…${esc(s.context)}…</div></span>
+          <input type="checkbox" class="imp-c" data-i="${i}" style="width:auto" checked>
+          <span style="flex:1"><strong>${eurF(s.amount)}</strong> <span class="muted small">· ${esc(s.monteurName || '')} · ${esc(s.date)}</span><div class="muted small">${esc((s.context || '').slice(0, 90))}</div></span>
+          <select class="imp-kind" data-i="${i}" style="width:auto;max-width:120px;font-size:13px">
+            <option value="income" ${s.guess === 'income' ? 'selected' : ''}>Omzet</option>
+            <option value="expense" ${s.guess === 'cost' ? 'selected' : ''}>Kosten</option>
+          </select>
         </label>`).join('')}</div>
         <div style="display:flex;gap:8px;align-items:center;margin:6px 0"><label style="margin:0;font-weight:400"><input type="checkbox" id="imp-all" style="width:auto"> Alles selecteren</label></div>
         <div class="modal-actions"><span class="muted small" id="imp-count"></span><div class="right"><button class="btn" id="imp-cancel">Annuleren</button><button class="btn" id="imp-dismiss" title="Deze bedragen zijn geen omzet — niet meer voorstellen">Weiger geselecteerde</button><button class="btn btn-primary" id="imp-save">Boek geselecteerde</button></div></div>`
         : '<div class="empty" style="margin:16px 0">Geen (nieuwe) bedragen gevonden in de monteursrapporten van deze maand.</div><div class="modal-actions"><span></span><div class="right"><button class="btn" id="imp-cancel">Sluiten</button></div></div>'}`);
     const upd = () => {
-      const sel = $$('.imp-c:checked').map((c) => suggestions[Number(c.dataset.i)]);
-      const tot = sel.reduce((s, x) => s + (x.amount || 0), 0);
-      if ($('#imp-count')) $('#imp-count').innerHTML = sel.length ? `${sel.length} geselecteerd · totaal <strong>${eurF(tot)}</strong>` : `${suggestions.length} gevonden`;
+      const gekozen = $$('.imp-c:checked').map((c) => ({ s: suggestions[Number(c.dataset.i)], kind: ($(`.imp-kind[data-i="${c.dataset.i}"]`) || {}).value || 'income' }));
+      const omzet = gekozen.filter((x) => x.kind === 'income').reduce((t, x) => t + (x.s.amount || 0), 0);
+      const kosten = gekozen.filter((x) => x.kind === 'expense').reduce((t, x) => t + (x.s.amount || 0), 0);
+      const sel = gekozen;
+      if ($('#imp-count')) $('#imp-count').innerHTML = sel.length
+        ? `${sel.length} geselecteerd · omzet <strong>${eurF(omzet)}</strong>${kosten ? ` · kosten <strong>${eurF(kosten)}</strong>` : ''}`
+        : `${suggestions.length} gevonden`;
       if ($('#imp-save')) { $('#imp-save').disabled = !sel.length; $('#imp-dismiss').disabled = !sel.length; }
     };
-    $$('.imp-c').forEach((c) => c.onchange = upd); upd();
+    $$('.imp-c').forEach((c) => c.onchange = upd);
+    $$('.imp-kind').forEach((c) => c.onchange = upd);
+    upd();
     if ($('#imp-all')) $('#imp-all').onchange = () => { $$('.imp-c').forEach((c) => { c.checked = $('#imp-all').checked; }); upd(); };
     $('#imp-cancel').onclick = closeModal;
     if ($('#imp-dismiss')) $('#imp-dismiss').onclick = async () => {
@@ -3105,9 +3122,18 @@ function openImportIncome() {
       catch (err) { toast(err.message, true); }
     };
     if ($('#imp-save')) $('#imp-save').onclick = async () => {
-      const items = $$('.imp-c:checked').map((c) => suggestions[Number(c.dataset.i)]);
+      // De keuze omzet/kosten gaat MEE naar de server; die respecteert 'kind' boven de
+      // automatische gok, zodat een verkeerde gok altijd te overrulen is.
+      const items = $$('.imp-c:checked').map((c) => ({ ...suggestions[Number(c.dataset.i)], kind: ($(`.imp-kind[data-i="${c.dataset.i}"]`) || {}).value || 'income' }));
       if (!items.length) { toast('Vink minstens één bedrag aan', true); return; }
-      try { const r = await api('/api/finance/import-income', 'POST', { items }); toast(`${r.booked} omzet-boeking(en) toegevoegd`); closeModal(); loadFinance(); }
+      const nOmzet = items.filter((x) => x.kind === 'income').length;
+      const nKosten = items.length - nOmzet;
+      try {
+        const r = await api('/api/finance/import-income', 'POST', { items });
+        const delen = [nOmzet ? `${nOmzet} omzet` : '', nKosten ? `${nKosten} kosten` : ''].filter(Boolean).join(' + ');
+        toast(`${r.booked} boeking(en) toegevoegd (${delen})${r.skipped ? ` · ${r.skipped} overgeslagen (stond er al in)` : ''}`);
+        closeModal(); loadFinance();
+      }
       catch (err) { toast(err.message, true); }
     };
   }).catch((err) => toast(err.message, true));

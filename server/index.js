@@ -3319,9 +3319,9 @@ app.post('/api/finance/dismiss-income', requirePerm('finance'), (req, res) => {
   res.json({ ok: true, dismissed: n });
 });
 app.post('/api/finance/import-income', requirePerm('finance'), (req, res) => {
-  const n = importIncome(req.body?.items || [], req.user.name);
-  logActivity(req.user.name, 'omzet geïmporteerd uit monteursrapporten', `${n} boeking(en)`);
-  res.json({ ok: true, booked: n });
+  const { added, skipped } = importIncome(req.body?.items || [], req.user.name);
+  logActivity(req.user.name, 'bedragen geboekt uit monteursrapporten', `${added} geboekt${skipped ? `, ${skipped} overgeslagen (al aanwezig)` : ''}`);
+  res.json({ ok: true, booked: added, skipped });
 });
 // ---------- AI-DAGOVERZICHT (Start-pagina) ----------
 // Eén keer per dag gegenereerd en gecachet; Ververs-knop forceert een nieuwe scan.
@@ -3468,8 +3468,11 @@ app.post('/api/morning-briefing/test', requirePerm('settings'), async (req, res)
 app.post('/api/finance', requirePerm('finance'), (req, res) => {
   const out = addEntry(req.body || {}, req.user.name);
   if (out.error) return res.status(400).json({ error: out.error });
-  logActivity(req.user.name, `${out.entry.kind === 'income' ? 'inkomst' : 'uitgave'} geboekt`, `${out.entry.category} € ${out.entry.amount}`);
-  res.json(out.entry);
+  logActivity(req.user.name, `${out.entry.kind === 'income' ? 'inkomst' : 'uitgave'} geboekt`, `${out.entry.category} € ${out.entry.amount}${out.duplicateOf ? ' (LIJKT DUBBEL)' : ''}`);
+  // Lijkt dit een dubbele boeking (zelfde soort, categorie, bedrag en maand)? Dan gaat
+  // hij wél door — soms zijn er echt twee dezelfde kosten — maar de gebruiker krijgt
+  // het te zien. Zo kan de DRS-fee van €42,50 niet meer ongemerkt dubbel in de kosten.
+  res.json({ ...out.entry, duplicateOf: out.duplicateOf, duplicateWarning: out.duplicateWarning });
 });
 app.patch('/api/finance/:id', requirePerm('finance'), (req, res) => {
   const out = updateEntry(req.params.id, req.body || {});

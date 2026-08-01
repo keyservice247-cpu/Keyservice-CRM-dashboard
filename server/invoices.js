@@ -150,6 +150,14 @@ export function saveInvoiceFields(inv, body) {
   return { invoice: inv };
 }
 
+// Eén definitie van "ziet eruit als een e-mailadres": de KEUZE van de ontvanger en de
+// CONTROLE erop mogen nooit uit elkaar lopen, anders kiezen we een adres dat er daarna
+// alsnog uitvliegt. eersteGeldigeMail pakt het eerste adres uit de rij dat de toets
+// doorstaat — staat er in het klantrecord onzin ("n.v.t.", een halve typefout), dan is
+// het laatst gebruikte adres nog altijd beter dan helemaal niets versturen.
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const eersteGeldigeMail = (...kandidaten) => kandidaten.map((x) => String(x || '').trim()).find((x) => EMAIL_RE.test(x)) || '';
+
 // Betaalherinnering — gedeeld door de handmatige knop én de automatische ronde:
 // zelfde nette mail met de PDF opnieuw als bijlage; teller en tijdstip worden
 // bijgehouden zodat er nooit te vaak herinnerd wordt.
@@ -161,8 +169,10 @@ export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'syst
   // gebruikte adres — is de factuur ooit als kopie naar bv. de boekhouder gemaild,
   // dan gingen alle herinneringen daarheen en hoorde de klant niets. Alleen als de
   // klant zelf geen e-mailadres (meer) heeft, vallen we terug op dat laatste adres.
-  const to = (toOverride || customer.email || inv.sentTo || '').trim();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
+  // Een handmatig opgegeven adres blijft leidend zoals het is ingetypt (typefout →
+  // nette foutmelding, nooit stilletjes naar een ander adres).
+  const to = String(toOverride || '').trim() || eersteGeldigeMail(customer.email, inv.sentTo);
+  if (!EMAIL_RE.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
   if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
   const cfg = getInvoiceSettings();
   const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
@@ -218,8 +228,8 @@ export async function sendQuoteFollowup(inv, { by = 'systeem' } = {}) {
   // Zelfde volgorde als bij de betaalherinnering: het huidige klantadres wint van
   // inv.sentTo (dat is alleen het laatst gebruikte adres, bv. een kopie naar de
   // boekhouder). inv.sentTo blijft de vangnet-optie als de klant geen adres heeft.
-  const to = (customer.email || inv.sentTo || '').trim();
-  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to) && smtpConfigured()) {
+  const to = eersteGeldigeMail(customer.email, inv.sentTo);
+  if (EMAIL_RE.test(to) && smtpConfigured()) {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
     const sig = getEmailSignature();
     const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (${bedrag} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!`;
