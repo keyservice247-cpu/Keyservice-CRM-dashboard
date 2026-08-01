@@ -247,12 +247,21 @@ de regressie meegroeit.
   scherm de klok rond herladen. Veeg-beweging op mobiel zet nu `window._dragging`
   (incl. touchcancel), zodat een verversing nooit midden in een swipe de kaart
   vervangt. Regressie: browser-test 41 + scenarios 72 assertions.
+- **Factuur/offerte via WhatsApp (1 aug):** knop "Via WhatsApp" in de editor →
+  POST /api/invoices/:id/send-whatsapp bouwt de PDF, zet hem met saveBuffer in uploads
+  (inv.waPdfFile; vorige wordt opgeruimd) en plaatst een outbox-item kind
+  whatsapp_customer met media=[{pdf}]. De bridge haalt het bestand met het ingest-token
+  op en stuurt het als document — GEEN bridge-update nodig, dat mediapad bestond al.
+  sentAt alleen bij de EERSTE verzending (betaaltermijn schuift niet op), lastSentAt
+  apart. Nummer: order.intake vóór klantrecord.
 - **Reviews (1 aug):** knop "Review" op elke VERZONDEN factuur die aan een kaart hangt
   (POST /api/invoices/:id/review-request, force=1 om nogmaals te sturen; vinkje ✓ +
   inv.reviewRequestedAt als het al gebeurd is). De automatische review-ronde is nu PER
   MONTEUR uit te zetten (monteur.reviewAuto, default true; reviewAutoAllowed in
   automations.js) — vinkje in het monteur-scherm. sendReviewRequest is de gedeelde
-  verzendfunctie voor beide paden.
+  verzendfunctie voor beide paden. Het verzoek gaat via E-MAIL ÉN WHATSAPP TEGELIJK
+  (klant met alleen een 06 krijgt 'm nu ook); de automatische ronde gebruikt exact
+  dezelfde functie.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).

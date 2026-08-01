@@ -222,42 +222,55 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
     return { error: `Er is al een review gevraagd op ${String(order.reviewRequested).slice(0, 10)}.`, already: true };
   }
   const c = custOf(order);
-  if (!c.email) return { error: 'Deze klant heeft geen e-mailadres.' };
+  // Het telefoonnummer van DEZE aanvraag gaat voor op het klantrecord (Regel 3).
+  const tel = ((order.intake && order.intake.phone) || c.phone || '').trim();
+  if (!c.email && !tel) return { error: 'Deze klant heeft geen e-mailadres én geen telefoonnummer.' };
   const vars = { naam: c.name || 'klant', link: cfg.link };
-  const sig = getEmailSignature();
   const body = fill(cfg.body, vars);
-  await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body });
   order.thread = order.thread || [];
-  order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (review-verzoek)', subject: fill(cfg.subject, vars), body, at: now() });
+  const via = [];
+
+  // 1) E-mail
+  if (c.email) {
+    try {
+      const sig = getEmailSignature();
+      await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body });
+      order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (review-verzoek)', subject: fill(cfg.subject, vars), body, at: now() });
+      via.push('e-mail');
+    } catch (e) { console.error('[review-verzoek] mail mislukt:', e.message); }
+  }
+
+  // 2) WhatsApp — TEGELIJK met de mail, want daar reageren klanten het snelst op.
+  if (tel) {
+    db().outbox.unshift({
+      id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
+      text: body, orderId: order.id, status: 'queued', createdAt: now(), by: 'review-verzoek',
+    });
+    order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (review-verzoek)', body, at: now() });
+    via.push('WhatsApp');
+  }
+
+  if (!via.length) return { error: 'Versturen lukte niet — controleer de e-mailinstellingen.' };
   order.reviewRequested = now();
   order.updatedAt = now();
-  logActivity(actorName, 'review-verzoek verstuurd', `${order.title} -> ${c.email}`);
+  logActivity(actorName, 'review-verzoek verstuurd', `${order.title} -> ${via.join(' + ')}`);
   saveSoon();
-  return { ok: true, to: c.email };
+  return { ok: true, to: [c.email, tel].filter(Boolean).join(' + '), via };
 }
 
 async function runReviewRequests() {
   const cfg = getReviewRequest();
-  if (!cfg.enabled || !cfg.link || !smtpConfigured()) return;
+  if (!cfg.enabled || !cfg.link) return;
   const cutoff = Date.now() - cfg.delayHours * 3600000;
   for (const o of db().orders) {
     if (o.status !== 'afgerond' || o.reviewRequested) continue;
     if (!reviewAutoAllowed(o)) continue; // automatische review staat uit voor deze monteur
     const doneAt = o.completedAt || o.updatedAt;
     if (!doneAt || new Date(doneAt).getTime() > cutoff) continue;
-    const c = custOf(o);
-    if (!c.email) { o.reviewRequested = 'geen-email'; continue; } // niet elke keer opnieuw checken
-    const vars = { naam: c.name || 'klant', link: cfg.link };
+    // Zelfde verzendweg als de handmatige knop: e-mail ÉN WhatsApp tegelijk.
     try {
-      const sig = getEmailSignature();
-      const body = fill(cfg.body, vars);
-      await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body });
-      o.thread = o.thread || [];
-      o.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (review-verzoek)', subject: fill(cfg.subject, vars), body, at: now() });
-      o.reviewRequested = now();
-      o.updatedAt = now();
-      logActivity('systeem', 'review-verzoek verstuurd', `${o.title} -> ${c.email}`);
-      saveSoon();
+      const r = await sendReviewRequest(o, { actorName: 'systeem' });
+      if (r.error && /geen e-mailadres|geen telefoonnummer/i.test(r.error)) o.reviewRequested = 'geen-contact';
     } catch (e) { console.error('[review-verzoek] mislukt:', e.message); }
   }
 }

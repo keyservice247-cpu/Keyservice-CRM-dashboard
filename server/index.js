@@ -3103,6 +3103,54 @@ app.get('/api/invoices/:id/pdf', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'PDF maken mislukt: ' + e.message }); }
 });
 
+// VERSTUREN VIA WHATSAPP (factuur óf offerte) met de PDF als bijlage. De bridge haalt
+// het bestand op met het ingest-token en stuurt het als document naar de klant —
+// dezelfde weg die ook de foto's naar de monteur gebruikt.
+app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
+  const inv = findInv(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  if (!inv.lines || !inv.lines.length) return res.status(400).json({ error: 'Er staan nog geen regels op.' });
+  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+  const customer = db().customers.find((c) => c.id === inv.customerId) || {};
+  // Nummer van DEZE aanvraag gaat voor op het klantrecord (Regel 3).
+  const tel = String(req.body?.phone || (order && order.intake && order.intake.phone) || customer.phone || '').trim();
+  if (tel.replace(/[^\d]/g, '').length < 6) return res.status(400).json({ error: 'Geen geldig telefoonnummer van de klant. Vul het telefoonveld in.' });
+  const isQuote = inv.type === 'offerte';
+  try {
+    const pdf = await buildInvoicePdf(inv, order || {}, customer);
+    // Vorige WhatsApp-PDF van deze factuur opruimen, zodat er per factuur maar één
+    // bestand op de schijf blijft staan.
+    if (inv.waPdfFile) { try { deleteFile(inv.waPdfFile); } catch { /* al weg */ } }
+    const saved = saveBuffer(pdf, { mime: 'application/pdf', filename: `${isQuote ? 'Offerte' : 'Factuur'}-${inv.number}.pdf` });
+    if (!saved) return res.status(500).json({ error: 'PDF klaarzetten mislukt.' });
+    inv.waPdfFile = saved.file;
+    const cfg = getInvoiceSettings();
+    const tekst = String(req.body?.text || '').trim()
+      || `Beste ${customer.name || 'klant'},\n\nHierbij ${isQuote ? 'de offerte' : 'de factuur'} ${inv.number} van ${cfg.companyName || 'Keyservice'}.\n\nMet vriendelijke groet,\n${cfg.companyName || 'Keyservice'}`;
+    db().outbox.unshift({
+      id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
+      text: tekst, orderId: inv.orderId || undefined, status: 'queued', createdAt: now(),
+      by: isQuote ? 'offerte-whatsapp' : 'factuur-whatsapp',
+      media: [{ url: saved.url, name: saved.filename, mime: 'application/pdf' }],
+    });
+    // Factuurdatum alleen bij de EERSTE verzending zetten (anders schuift de
+    // betaaltermijn op); wel bijhouden wanneer er voor het laatst iets uitging.
+    if (!inv.sentAt) inv.sentAt = now();
+    inv.lastSentAt = now();
+    inv.sentToPhone = tel;
+    if (inv.status === 'concept') inv.status = 'verzonden';
+    if (order) {
+      order.thread = order.thread || [];
+      order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: `Keyservice (${isQuote ? 'offerte' : 'factuur'} ${inv.number})`, body: tekst, at: now() });
+      order.updatedAt = now();
+    }
+    logActivity(req.user.name, `${isQuote ? 'offerte' : 'factuur'} via WhatsApp verstuurd`, `${inv.number} -> ${tel}`);
+    saveSoon();
+    res.json({ ok: true, phone: tel, status: inv.status });
+  } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
+});
+
 // Versturen per e-mail (factuur óf offerte) met PDF-bijlage.
 app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
   const inv = findInv(req.params.id);

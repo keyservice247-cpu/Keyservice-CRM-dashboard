@@ -2159,7 +2159,8 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && locked ? `<button class="btn" id="inv-resend">${icon('mail', 14)} Verstuur opnieuw</button>` : ''}
         <button class="btn" id="inv-cancel">Sluiten</button>
         ${locked ? '' : `<button class="btn" id="inv-save">Concept opslaan</button>
-        <button class="btn btn-primary" id="inv-send">${inv.status === 'verzonden' ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>`}
+        <button class="btn btn-primary" id="inv-send">${inv.status === 'verzonden' ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
+        <button class="btn" id="inv-send-wa" title="Stuur de PDF als WhatsApp-bericht naar de klant">${icon('whatsapp', 14)} Via WhatsApp</button>`}
       </div>
     </div>`);
   const readLines = () => $$('#inv-lines .inv-line').map((row) => ({
@@ -2294,6 +2295,17 @@ function renderInvoiceEditor(ctx) {
       const saved = await saveConcept();
       await api(`/api/invoices/${saved.id}/send`, 'POST', {});
       done(`${woord} verstuurd naar de klant`);
+    } catch (err) { toast(err.message, true); }
+  };
+  // Versturen via WhatsApp: de PDF gaat als bijlage mee naar het 06 van de klant.
+  if ($('#inv-send-wa')) $('#inv-send-wa').onclick = async () => {
+    const tel = (ctx.order && ctx.order.intake && ctx.order.intake.phone) || customer.phone || '';
+    if (!tel) { toast('Deze klant heeft nog geen telefoonnummer — vul dat eerst in.', true); return; }
+    if (!confirm(`${woord} als PDF via WhatsApp sturen naar ${tel}?`)) return;
+    try {
+      const saved = await saveConcept();
+      await api(`/api/invoices/${saved.id}/send-whatsapp`, 'POST', {});
+      done(`${woord} via WhatsApp verstuurd naar ${tel}`);
     } catch (err) { toast(err.message, true); }
   };
   const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = async () => { try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }; };

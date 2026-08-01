@@ -115,6 +115,30 @@ ok('automatische review per monteur uit te zetten', montUit.status === 200 && mo
 const montLijst = await api('GET', '/api/monteurs');
 ok('keuze blijft bewaard', (montLijst.json || []).find((m) => m.id === montR.json.id)?.reviewAuto === false);
 
+console.log('\n== Factuur via WhatsApp versturen (PDF als bijlage) ==');
+const custWA = await api('POST', '/api/customers', { name: 'Wa Factuur Klant', phone: '0612347788' });
+const ordWA = await api('POST', '/api/orders', { customerId: custWA.json.id, title: 'Slot vervangen wa-test' });
+let invWA = (await api('POST', '/api/invoices', { customerId: custWA.json.id, orderId: ordWA.json.id, type: 'factuur' })).json; invWA = invWA.invoice || invWA;
+const leeg = await api('POST', `/api/invoices/${invWA.id}/send-whatsapp`, {});
+ok('lege factuur kan niet verstuurd worden', leeg.status === 400 && /regels/i.test(leeg.json.error || ''), JSON.stringify(leeg.json));
+await api('PATCH', `/api/invoices/${invWA.id}`, { lines: [{ description: 'Cilinderslot', qty: 1, priceExcl: 120 }], btwPct: 21, note: 'Let op: garantie 2 jaar' });
+const waSend = await api('POST', `/api/invoices/${invWA.id}/send-whatsapp`, {});
+ok('factuur via WhatsApp verstuurd', waSend.status === 200 && waSend.json.ok && waSend.json.phone === '0612347788', JSON.stringify(waSend.json));
+const obWA = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+const item = obWA.find((x) => x.by === 'factuur-whatsapp' && x.phone === '0612347788');
+ok('appje staat in de wachtrij met de PDF als bijlage', !!item && Array.isArray(item.media) && item.media.length === 1 && item.media[0].mime === 'application/pdf', JSON.stringify(item?.media));
+ok('factuur staat nu op verzonden', waSend.json.status === 'verzonden');
+const invNa = (await api('GET', `/api/invoices/${invWA.id}`)).json.invoice || {};
+const eersteDatum = invNa.sentAt;
+await api('POST', `/api/invoices/${invWA.id}/send-whatsapp`, {});
+const invNa2 = (await api('GET', `/api/invoices/${invWA.id}`)).json.invoice || {};
+ok('opnieuw sturen verzet de factuurdatum NIET (betaaltermijn blijft staan)', invNa2.sentAt === eersteDatum, `${eersteDatum} vs ${invNa2.sentAt}`);
+const custGeen = await api('POST', '/api/customers', { name: 'Geen Nummer' });
+let invGeen = (await api('POST', '/api/invoices', { customerId: custGeen.json.id, type: 'factuur' })).json; invGeen = invGeen.invoice || invGeen;
+await api('PATCH', `/api/invoices/${invGeen.id}`, { lines: [{ description: 'X', qty: 1, priceExcl: 10 }], btwPct: 21, note: '' });
+const geenTel = await api('POST', `/api/invoices/${invGeen.id}/send-whatsapp`, {});
+ok('zonder telefoonnummer: nette melding', geenTel.status === 400 && /telefoonnummer/i.test(geenTel.json.error || ''), JSON.stringify(geenTel.json));
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);
