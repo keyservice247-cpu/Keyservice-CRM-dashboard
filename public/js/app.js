@@ -1037,16 +1037,11 @@ function attachmentsHTML(atts) {
   return atts.map((a) => {
     const naam = a.filename || '';
     if (isKind(a, 'image')) return `<a class="att att-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(naam)}"><img src="${esc(a.url)}" loading="lazy"></a>`;
-    if (isKind(a, 'video')) return `
-      <div class="att-video" style="flex:1 1 100%;max-width:380px;min-width:0">
-        <video controls preload="metadata" playsinline style="width:100%;max-height:240px;border-radius:10px;background:#000;display:block"><source src="${esc(a.url)}"${a.mime ? ` type="${esc(a.mime)}"` : ''}></video>
-        <div class="muted small" style="display:flex;align-items:center;gap:6px;margin-top:3px">${icon('video', 13)} <a href="${esc(a.url)}" target="_blank" rel="noopener" style="color:inherit">${esc((naam || 'video').slice(0, 40))}</a></div>
-      </div>`;
-    if (isKind(a, 'audio')) return `
-      <div class="att-audio" style="flex:1 1 100%;max-width:380px;min-width:0">
-        <div class="muted small" style="display:flex;align-items:center;gap:6px;margin-bottom:3px">${icon('mic', 13)} ${esc((naam || 'spraakbericht').slice(0, 40))}</div>
-        <audio controls preload="metadata" style="width:100%;display:block" src="${esc(a.url)}"></audio>
-      </div>`;
+    // GEEN witruimte/regeleinden tussen deze tags: in de gesprekshistorie staat de
+    // strook in een chat-bubbel met white-space:pre-wrap, en dan wordt elke regel
+    // afbreking als lege regel getekend (gemeten: 527px i.p.v. 257px per bericht).
+    if (isKind(a, 'video')) return `<div class="att-video" style="flex:1 1 100%;max-width:380px;min-width:0;white-space:normal"><video controls preload="metadata" playsinline style="width:100%;max-height:240px;border-radius:10px;background:#000;display:block"><source src="${esc(a.url)}"${a.mime ? ` type="${esc(a.mime)}"` : ''}></video><div class="muted small" style="display:flex;align-items:center;gap:6px;margin-top:3px">${icon('video', 13)}<a href="${esc(a.url)}" target="_blank" rel="noopener" style="color:inherit">${esc((naam || 'video').slice(0, 40))}</a></div></div>`;
+    if (isKind(a, 'audio')) return `<div class="att-audio" style="flex:1 1 100%;max-width:380px;min-width:0;white-space:normal"><div class="muted small" style="display:flex;align-items:center;gap:6px;margin-bottom:3px">${icon('mic', 13)}${esc((naam || 'spraakbericht').slice(0, 40))}</div><audio controls preload="metadata" style="width:100%;display:block" src="${esc(a.url)}"></audio></div>`;
     return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(naam)}">${icon('file', 22)}<span>${esc((naam || 'bestand').slice(0, 14))}</span></a>`;
   }).join('');
 }
@@ -4386,7 +4381,13 @@ async function openDigestModal() {
   // Hier zet de gebruiker het automatisch openen aan of uit (standaard uit).
   const dgAuto = $('#dg-auto');
   if (dgAuto) dgAuto.onchange = () => {
-    try { localStorage.setItem('ks_digestAuto', dgAuto.checked ? '1' : '0'); } catch {}
+    try {
+      localStorage.setItem('ks_digestAuto', dgAuto.checked ? '1' : '0');
+      // Vandaag is de scan al bekeken (je staat er nu in te kijken), dus zetten we
+      // de dagvlag meteen. Anders sprong het venster bij de eerstvolgende verversing
+      // dezelfde dag alsnog open — precies het gedrag waar de klacht over ging.
+      if (dgAuto.checked) localStorage.setItem('ks_lastDigest', new Date().toISOString().slice(0, 10));
+    } catch {}
     toast(dgAuto.checked ? 'Status-scan opent voortaan elke ochtend automatisch' : 'Automatisch openen staat uit');
   };
   $$('[data-open]').forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
