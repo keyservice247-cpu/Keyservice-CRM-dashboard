@@ -262,14 +262,26 @@ async function runReviewRequests() {
   const cfg = getReviewRequest();
   if (!cfg.enabled || !cfg.link) return;
   const cutoff = Date.now() - cfg.delayHours * 3600000;
+  // VANGRAIL TEGEN EEN STORTVLOED. Zonder deze grenzen zou het aanzetten van de
+  // automatische review in één klap naar ELKE oude afgeronde klus gaan — inmiddels
+  // ook via WhatsApp. Drie remmen: (1) nooit klussen van vóór het moment waarop de
+  // functie is aangezet, (2) nooit ouder dan 14 dagen, (3) maximaal 5 per ronde.
+  const aanVanaf = db().settings.reviewRequest?.enabledAt ? new Date(db().settings.reviewRequest.enabledAt).getTime() : 0;
+  const teOud = Date.now() - 14 * 86400000;
+  let verstuurd = 0;
   for (const o of db().orders) {
+    if (verstuurd >= 5) break; // rem: nooit een stortvloed in één ronde
     if (o.status !== 'afgerond' || o.reviewRequested) continue;
     if (!reviewAutoAllowed(o)) continue; // automatische review staat uit voor deze monteur
     const doneAt = o.completedAt || o.updatedAt;
     if (!doneAt || new Date(doneAt).getTime() > cutoff) continue;
+    const doneMs = new Date(doneAt).getTime();
+    if (doneMs < teOud) { o.reviewRequested = 'te-oud'; continue; }        // ouder dan 14 dagen
+    if (aanVanaf && doneMs < aanVanaf) { o.reviewRequested = 'voor-aanzetten'; continue; }
     // Zelfde verzendweg als de handmatige knop: e-mail ÉN WhatsApp tegelijk.
     try {
       const r = await sendReviewRequest(o, { actorName: 'systeem' });
+      if (r.ok) verstuurd++;
       if (r.error && /geen e-mailadres|geen telefoonnummer/i.test(r.error)) o.reviewRequested = 'geen-contact';
     } catch (e) { console.error('[review-verzoek] mislukt:', e.message); }
   }
@@ -566,6 +578,15 @@ export async function sendMorningBriefing({ isTest = false } = {}) {
     lines.push('AFSPRAKEN VANDAAG: geen');
   }
   const acts = [];
+  // Uitkomst van de nachtelijke statusscan: die lag tot nu toe te wachten op een tabblad
+  // dat niemand opende, waardoor kaarten van gisteren 's ochtends nog "in behandeling"
+  // stonden. Nu staat het gewoon in de briefing.
+  const scan = db().settings._lastStatusScan;
+  if (scan) {
+    const open = (scan.suggestions || []).filter((x) => !(scan.appliedIds || []).includes(String(x.orderId))).length;
+    if (scan.error) acts.push(`statusscan van vannacht MISLUKT (${String(scan.error).slice(0, 60)}) — draai 'm handmatig`);
+    else if (open) acts.push(`${open} statusvoorstel(len) uit het dagrapport klaar (AI Assistent → Statusscan)`);
+  }
   if (d.unanswered) acts.push(`${d.unanswered} klantreactie(s) nog onbeantwoord`);
   if (d.pendingLeads) acts.push(`${d.pendingLeads} nieuwe lead(s) te controleren in de inbox`);
   if (d.quoteStale) acts.push(`${d.quoteStale} verzonden offerte(s) al 4+ dagen zonder reactie`);
@@ -739,9 +760,17 @@ async function runNightlyScan() {
   const today = new Date().toISOString().slice(0, 10);
   if (hour !== (Number(cfg.hour) >= 0 ? Number(cfg.hour) : 5)) return;
   if (db().settings._lastAutoScanDay === today) return;
-  db().settings._lastAutoScanDay = today; save();
   console.log('[auto-scan] nachtelijke statusscan gestart');
-  await _runStatusScan(30);
+  try {
+    await _runStatusScan(30);
+    // Dagvlag PAS zetten als de scan echt is gedraaid. Stond hij ervóór, dan werd een
+    // mislukte of overgeslagen scan als "gedaan vandaag" afgevinkt en wist niemand ervan.
+    db().settings._lastAutoScanDay = today; save();
+  } catch (e) {
+    console.error('[auto-scan] mislukt:', e.message);
+    logActivity('systeem', 'nachtelijke statusscan MISLUKT', e.message.slice(0, 200));
+    save();
+  }
 }
 
 // ---------- Mailbox-quotum bewaken ----------

@@ -50,9 +50,12 @@ function signatureHtml(sig) {
 // De oude TEKST-handtekening (indien aanwezig aan het einde) wordt in de HTML-
 // versie vervangen door de mooie variant — in het platte-tekst-deel blijft hij
 // staan als fallback. Geeft null als de HTML-handtekening uitstaat.
-export function wrapHtmlMail(text) {
+export function wrapHtmlMail(text, afzender = null) {
   let sig;
   try { sig = getHtmlSignature(); } catch { return null; }
+  // Wie stuurt deze mail? Verstuurt Youssef of de assistente een factuur of antwoord,
+  // dan hoort daar HÚN naam en functie onder — niet die van de eigenaar.
+  if (afzender && afzender.name) sig = { ...sig, name: afzender.name, role: afzender.role || sig.role };
   if (!sig || !sig.enabled) return null;
   let t = String(text || '');
   try {
@@ -97,7 +100,7 @@ async function getTransporter() {
   return transporter;
 }
 
-export async function sendMail({ to, subject, text, attachments, inReplyTo, references }) {
+export async function sendMail({ to, subject, text, attachments, inReplyTo, references, afzender = null }) {
   const tx = await getTransporter();
   if (!tx) throw new Error('SMTP niet geconfigureerd op de server');
   if (!to) throw new Error('Geen ontvanger (e-mailadres) opgegeven');
@@ -110,7 +113,7 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
     const mail = { from, to, subject: subject || 'Keyservice', text: text || '' };
     if (attachments && attachments.length) mail.attachments = attachments;
     // Nette HTML-versie met de huisstijl-handtekening (tekst blijft als fallback).
-    const html = wrapHtmlMail(text || '');
+    const html = wrapHtmlMail(text || '', afzender);
     if (html) {
       mail.html = html;
       if (fs.existsSync(LOGO_PATH)) {

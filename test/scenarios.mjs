@@ -415,6 +415,34 @@ const nieuweKaart = await api('POST', '/api/orders', { title: 'Pulse-test kaart'
 const pulse3 = (await api('GET', '/api/pulse')).json;
 ok('een ECHTE wijziging hoogt de teller wel op (scherm ververst nog steeds)', pulse3.v !== pulse2.v && nieuweKaart.status === 200, `${pulse2.v} -> ${pulse3.v}`);
 
+// ---------- Audit-reparaties 1 aug ----------
+console.log('\n== Ons EIGEN dagrapport in de DRS-groep is geen aanvraag ==');
+await api('PATCH', '/api/settings', { whatsappOrderGroups: 'Raf Breda' });
+const eigenRapport = 'Vrijdag 03-07\nAfgerond\n5056AC Berkel-Enschot 556 pin\nOfferte\n4631 TB Hoogerheide offerte afgegeven\nAfspraken\n5171AE Kaatsheuvel maandag';
+const rRap = await api('POST', '/api/ingest/whatsapp', { group: 'Raf Breda', name: 'Abdel Rafour', body: eigenRapport, externalId: 'auditrap-1' }, true);
+ok('eigen terugkoppeling wordt NOOIT een aanvraag', rRap.json.status === 'overige', JSON.stringify(rRap.json.status));
+const echteAanvraag = 'Goedemiddag, ik ben buitengesloten. Kunt u komen?\nNaam: Els de Wit\nTelefoon: 0612345678\nAdres: Dorpsstraat 5, 4051 AB Ochten';
+const rEcht = await api('POST', '/api/ingest/whatsapp', { group: 'Raf Breda', name: 'DRS', body: echteAanvraag, externalId: 'auditrap-2' }, true);
+ok('een ECHTE aanvraag uit dezelfde groep komt gewoon door', ['pending', 'auto_approved'].includes(rEcht.json.status), JSON.stringify(rEcht.json.status));
+
+console.log('\n== Antwoord op onze eigen factuurmail komt bij de kaart ==');
+const cF = await api('POST', '/api/customers', { name: 'Factuur Reply Klant', email: 'freply@example.nl', phone: '0611220099' });
+const oF = await api('POST', '/api/orders', { customerId: cF.json.id, title: 'Slot vervangen factuurreply' });
+await api('POST', '/api/simulate', { channel: 'email', sender: 'Factuur Reply Klant <freply@example.nl>', subject: 'Re: Factuur 2026-0001 — Key Service 24/7', body: 'Ik heb de factuur betaald maar de deur klemt nog steeds.' });
+const naF = (await api('GET', '/api/orders')).json.find((o) => o.id === oF.json.id);
+ok('bericht met "Factuur" in het onderwerp verdwijnt niet meer in Overige', (naF.thread || []).length >= 1, `thread=${(naF.thread || []).length}`);
+ok('de kaart krijgt de "nieuw bericht"-markering', (naF.unreadReplies || 0) >= 1);
+
+console.log('\n== Reactie landt op de NIEUWSTE open kaart, niet de oudste ==');
+const cN = await api('POST', '/api/customers', { name: 'Twee Kaarten Klant', phone: '0611330044' });
+const oud = await api('POST', '/api/orders', { customerId: cN.json.id, title: 'Oude klus' });
+await new Promise((r) => setTimeout(r, 20));
+const nieuw = await api('POST', '/api/orders', { customerId: cN.json.id, title: 'Nieuwe klus' });
+await api('POST', '/api/ingest/whatsapp', { name: 'Twee Kaarten Klant', body: 'Ja prima, morgen 10 uur is goed\nTelefoon: +31611330044', externalId: 'twee-1' }, true);
+const alle = (await api('GET', '/api/orders')).json;
+const oudNa = alle.find((o) => o.id === oud.json.id); const nieuwNa = alle.find((o) => o.id === nieuw.json.id);
+ok('antwoord gaat naar de nieuwste kaart', (nieuwNa.thread || []).length > (oudNa.thread || []).length, `nieuw=${(nieuwNa.thread || []).length} oud=${(oudNa.thread || []).length}`);
+
 // ---------- Samenvatting ----------
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

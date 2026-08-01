@@ -28,9 +28,13 @@ const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/;
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 // Nederlands adres: straat + huisnummer (bv. "Hoofdstraat 12" of "Kerklaan 3A")
 const ADDRESS_RE = /([A-Z][a-zà-ÿ'.-]+(?:\s[A-Z]?[a-zà-ÿ'.-]+){0,3}(?:straat|laan|weg|plein|kade|dijk|gracht|hof|pad|dreef|singel|park|baan|steeg|markt|plantsoen)\s?\d{1,4}\s?[a-zA-Z]?)/;
-// Postcode + plaats (bv. "1234 AB Amsterdam"). Vereist spatie tussen cijfers en
-// letters, en geen cijfer ervoor (zodat telefoonnummers niet meetellen).
-const POSTCODE_RE = /(?<!\d)(\d{4}[ \t][A-Za-z]{2})\b(?:[ \t]+([A-Z][a-zà-ÿ-]+))?/;
+// Postcode + plaats (bv. "1234 AB Amsterdam" of "5056AC Berkel-Enschot"). De spatie
+// tussen cijfers en letters is OPTIONEEL: monteurs en DRS schrijven de postcode in het
+// dagrapport meestal aaneen ("5056AC"), en die viel er voorheen volledig af — waardoor
+// een rapportregel niet meer aan een kaart te koppelen was. Geen cijfer ervoor, zodat
+// telefoonnummers niet meetellen. De plaatsnaam mag uit meerdere woorden bestaan
+// ("Berkel-Enschot", "Den Bosch", "'s-Hertogenbosch").
+const POSTCODE_RE = /(?<!\d)(\d{4}[ \t]?[A-Za-z]{2})\b(?:[ \t]+((?:'?[A-Za-zà-ÿ][a-zà-ÿ'.-]*)(?:[ \t]+(?:van|de|den|der|het|aan|op|'?[A-Z][a-zà-ÿ'.-]*))*))?/;
 
 function pick(text, re) {
   const m = (text || '').match(re);
@@ -91,10 +95,14 @@ function cleanName(sender) {
 // De waarde stopt bij een zin-einde, nieuwe regel of een volgend labelwoord,
 // zodat we niet de hele zin meepakken.
 const STOP_WORDS = 'telefoon|telefoonnummer|tel|mobiel|gsm|nummer|adres|straat|woonplaats|plaats|locatie|postcode|email|e-mail|naam';
-function pickLabeled(text, labels) {
+function pickLabeled(text, labels, { keepComma = false } = {}) {
   for (const label of labels) {
-    // sta "naam is X", "naam: X", "naam X" toe; stop bij . , \n of volgend label
-    const re = new RegExp(`\\b${label}\\b\\s*(?:is|:|=|-)?\\s*([^\\n.,;]{2,80})`, 'i');
+    // sta "naam is X", "naam: X", "naam X" toe; stop bij . , \n of volgend label.
+    // BIJ EEN ADRES stoppen we NIET op de komma: "Kerkstraat 12, 5056 AC Berkel-Enschot"
+    // bleef anders steken op "Kerkstraat 12" — zonder postcode is een rapportregel
+    // niet meer aan de kaart te koppelen.
+    const stop = keepComma ? '[^\\n;]' : '[^\\n.,;]';
+    const re = new RegExp(`\\b${label}\\b\\s*(?:is|:|=|-)?\\s*(${stop}{2,80})`, 'i');
     const m = (text || '').match(re);
     if (m && m[1]) {
       let v = m[1].trim();
@@ -160,7 +168,7 @@ export function extractDetails(text) {
   if (!name) name = pickName(t);
 
   // Adres: eerst gelabeld, anders straat + huisnummer / postcode + plaats.
-  let address = pickLabeled(t, ['adres', 'woonplaats', 'volledig adres']);
+  let address = pickLabeled(t, ['adres', 'woonplaats', 'volledig adres'], { keepComma: true });
   if (!address) {
     const street = pick(t, ADDRESS_RE);
     const pc = t.match(POSTCODE_RE);
@@ -711,6 +719,39 @@ ALGEMEEN:
 // stelt statuswijzigingen voor (bv. monteur meldt "klaar" -> Afgerond; "offerte gestuurd"
 // -> Offerte verzonden; "klant wil niet" -> Geannuleerd). Geeft voorstellen terug die
 // een mens nog moet goedkeuren — past zelf NIETS aan.
+// De invoer die de AI te zien krijgt, los opgebouwd zodat een test kan controleren dat
+// het dagrapport MET regeleindes en met datums wordt aangeleverd (test/rapport-test.mjs).
+export function buildStatusScanPrompt({ orders = [], messages = [], monteurGroups = [] }) {
+  const orderList = orders.slice(0, 300).map((o, i) => {
+    let line = `#${i + 1} | ${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | herkomst: ${o.isDrs ? 'DRS/Raf Breda-groep' : 'overig'} | nu: ${o.status}`;
+    if (o.createdAt) line += ` | binnen: ${o.createdAt}`;
+    if (o.updatedAt) line += ` | laatst gewijzigd: ${o.updatedAt}`;
+    if (o.appointmentAt) line += ` | afspraak: ${o.appointmentAt}`;
+    if (o.price) line += ` | prijs: ${o.price}`;
+    if (o.notes) line += ` | notitie: ${o.notes}`;
+    if (o.thread && o.thread.length) line += `\n   gesprek: ${o.thread.join(' || ')}`;
+    return line;
+  }).join('\n');
+  const mg = monteurGroups.map((g) => String(g || '').toLowerCase().trim()).filter(Boolean);
+  const isMonteurGroup = (name) => { const n = String(name || '').toLowerCase().trim(); return mg.some((g) => n === g || n.includes(g) || g.includes(n)); };
+  const msgList = messages.slice(0, 600).map((m) => {
+    const when = m.receivedAt ? new Date(m.receivedAt).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    let src; const isGroup = !!m.group;
+    if (m.group) src = isMonteurGroup(m.group) ? `monteursgroep "${m.group}"` : (isWhatsappOrderGroup(m.group) ? `DRS-groep "${m.group}"` : `monteursgroep "${m.group}"`);
+    else src = m.channel === 'email' ? 'e-mail' : (m.channel || 'overig');
+    const limit = isGroup ? 4000 : 220;
+    let tekst = String(m.body || '');
+    if (isGroup) {
+      // REGELEINDES BEWAREN — zie de uitleg bij de originele opbouw hieronder.
+      tekst = tekst.replace(/\r/g, '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+      if (tekst.length > limit) tekst = `${tekst.slice(0, limit)}\n[AFGEKAPT — nog ${tekst.length - limit} tekens]`;
+      return `${when} [${src}] ${m.sender || ''}:\n${tekst.split('\n').map((r) => `    ${r}`).join('\n')}`;
+    }
+    return `${when} [${src}] ${m.sender || ''}: ${tekst.replace(/\s+/g, ' ').slice(0, limit)}`;
+  }).join('\n');
+  return `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}`;
+}
+
 export async function suggestStatusChanges({ orders = [], messages = [], statuses = [], companyProfile = '', monteurGroups = [] }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   // De statusscan draait ALTIJD minimaal op Sonnet 5 — dit is het denkwerk dat de
@@ -723,6 +764,8 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
 
   const orderList = orders.slice(0, 300).map((o, i) => {
     let line = `#${i + 1} | ${o.id} | "${o.title}" | klant: ${o.customer || '?'} | tel: ${o.phone || '-'} | adres: ${o.address || '-'} | herkomst: ${o.isDrs ? 'DRS/Raf Breda-groep' : 'overig'} | nu: ${o.status}`;
+    if (o.createdAt) line += ` | binnen: ${o.createdAt}`;
+    if (o.updatedAt) line += ` | laatst gewijzigd: ${o.updatedAt}`;
     if (o.appointmentAt) line += ` | afspraak: ${o.appointmentAt}`;
     if (o.price) line += ` | prijs: ${o.price}`;
     if (o.notes) line += ` | notitie: ${o.notes}`;
@@ -746,8 +789,20 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
       if (isMonteurGroup(m.group)) src = `monteursgroep "${m.group}"`;
       else src = isWhatsappOrderGroup(m.group) ? `DRS-groep "${m.group}"` : `monteursgroep "${m.group}"`;
     } else src = m.channel === 'email' ? 'e-mail' : (m.channel || 'overig');
-    const limit = isGroup ? 2500 : 220; // dagrapport volledig; geklets kort
-    return `${when} [${src}] ${m.sender || ''}: ${(m.body || '').replace(/\s+/g, ' ').slice(0, limit)}`;
+    const limit = isGroup ? 4000 : 220; // dagrapport volledig; geklets kort
+    let tekst = String(m.body || '');
+    if (isGroup) {
+      // REGELEINDES BEWAREN. Dit is het dagrapport van de monteur: een KOPJE
+      // ("Afgerond") met daaronder regels met postcode + plaats. Werd dat platgeslagen
+      // tot één lange zin, dan moest het model raden of "Offerte" een kopje was of een
+      // detail bij de vorige klus — precies de fout die de eigenaar zag. Alleen spaties
+      // en tabs inklappen; \n blijft staan. Het blok wordt ingesprongen zodat de AI ziet
+      // waar het rapport begint en eindigt.
+      tekst = tekst.replace(/\r/g, '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+      if (tekst.length > limit) tekst = `${tekst.slice(0, limit)}\n[AFGEKAPT — nog ${tekst.length - limit} tekens]`;
+      return `${when} [${src}] ${m.sender || ''}:\n${tekst.split('\n').map((r) => `    ${r}`).join('\n')}`;
+    }
+    return `${when} [${src}] ${m.sender || ''}: ${tekst.replace(/\s+/g, ' ').slice(0, limit)}`;
   }).join('\n');
   const statusKeys = statuses.map((s) => `${s.key} (${s.label})`).join(', ');
 

@@ -527,9 +527,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
       const tm = mailOf(m.body);
       const zelfdeContact = (myPhone && tp && tp === myPhone) || (myMail && tm && tm === myMail);
       if (!zelfdeContact) return false;
-      if (t >= winKort) return true; // vers: contact volstaat (zoals altijd)
-      // Ouder dan 3 uur: alleen dedupen als de klanttekst zelf overeenkomt.
-      return !!myCore && normalizeForDedup(m.body).includes(myCore);
+      // ALTIJD de klanttekst vergelijken — ook binnen 3 uur. Anders werd een tweede,
+      // ECHTE aanvraag van dezelfde klant (andere klus, of vergeten informatie) als
+      // duplicaat weggegooid en nergens bewaard. Heeft het bericht geen bruikbare
+      // vrije tekst (alleen velden), dan blijft binnen 3 uur het contact volstaan.
+      if (myCore) return normalizeForDedup(m.body).includes(myCore);
+      return t >= winKort;
     });
     if (twin) {
       if (attachments && attachments.length) {
@@ -540,6 +543,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
           const ord = db().orders.find((o) => o.id === rev0.orderId);
           if (ord) { ord.attachments = mergeAttachments(ord.attachments || [], attachments); ord.updatedAt = now(); }
         }
+      }
+      // De tekst van de tweede inzending nooit verliezen: als notitie onder de
+      // bestaande aanvraag zetten, zodat een mens 'm alsnog ziet.
+      const extra = String(body || '').replace(/\s+/g, ' ').trim();
+      if (extra && !normalizeForDedup(twin.body).includes(normalizeForDedup(extra))) {
+        twin.body = `${twin.body}\n\n— Zelfde klant stuurde dit ook (${new Date().toLocaleString('nl-NL')}):\n${extra.slice(0, 1500)}`;
       }
       saveSoon();
       logActivity('systeem', 'dubbele websitelead samengevoegd (site+mail)', `${sender || ''} ${myPhone || myMail}`.trim());
@@ -676,6 +685,18 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const looksReport = REPORT_RE.test(`${subject || ''} ${body || ''}`)
     && (!hasCustomerData || postcodeCount >= 2 || isGenericName(suggestion.customerName));
 
+  // ONS EIGEN DAGRAPPORT / DE TERUGKOPPELING NAAR DRS. Elk bericht in de opdracht-groep
+  // telde als mogelijke nieuwe aanvraag — óók de terugkoppeling die wij daar zelf elke dag
+  // in zetten ("Afgerond / 5056AC Berkel-Enschot / Afspraken / 5171AE Kaatsheuvel"). Wat
+  // daarmee gebeurde hing af van wat de AI er die keer van vond; vandaar "soms slaat hij
+  // de plank mis". Dit is nu een VASTE regel, geen AI-oordeel: een bericht met minstens
+  // één statuskopje op een eigen regel én twee of meer postcode-regels is een RAPPORT.
+  // Zo'n bericht is nooit een aanvraag — het is bewijsmateriaal voor de statusscan.
+  const RAPPORT_KOP_RE = /^\s*(afgerond|gereden|klaar|offerte[s]?|afspra(?:ak|ken)|geannuleerd|geen gehoor|niet gedaan|open(?:staand)?)\s*:?\s*$/im;
+  const POSTCODE_REGEL_RE = /^\s*\d{4}\s?[A-Za-z]{2}\b/gm;
+  const postcodeRegels = (String(body || '').match(POSTCODE_REGEL_RE) || []).length;
+  const isEigenRapport = RAPPORT_KOP_RE.test(String(body || '')) && postcodeRegels >= 2;
+
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
   const rel = scoreRelevance({ subject, body, hasAttachments: (attachments || []).length > 0 });
@@ -707,9 +728,22 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // Volgorde is bewust: leveranciersfilter wint van intake-herkenning (een order-
   // bevestiging van een webshop bevat ook een adres + telefoonnummer!), maar het
   // website-formulier (isFormLead, verderop) wint van alles.
-  suggestion.relevant = looksSupplier ? false
+  // ANTWOORD OP ONZE EIGEN MAIL. Het leveranciersfilter kijkt onder andere naar het woord
+  // "factuur" in het onderwerp — en onze eigen facturen heten letterlijk
+  // "Factuur 2026-0001 — Key Service 24/7". Een klant die daarop antwoordt ("ik heb
+  // betaald maar de deur klemt nog steeds") verdween daardoor stil in Overige, terwijl de
+  // herinneringsmail juist uitnodigt om te reageren. Is het aantoonbaar ONS verkeer — een
+  // antwoord op een mail die wij zelf verstuurden (messageId staat op een kaart), of een
+  // Re: van een bekend klantadres — dan geldt het leveranciersfilter niet.
+  const antwoordOpOnzeMail = !!(inReplyTo && db().orders.some((o) =>
+    (o.thread || []).some((t) => t.messageId && (String(inReplyTo).includes(t.messageId) || t.messageId === inReplyTo))));
+  const afzenderMail = channel === 'email'
+    ? ((String(sender || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [''])[0]) : '';
+  const eigenKlantReply = isEmailReply && !!(afzenderMail && findCustomerStrong({ email: afzenderMail }));
+  const onsVerkeer = antwoordOpOnzeMail || eigenKlantReply;
+  suggestion.relevant = (looksSupplier && !onsVerkeer) ? false
     : emailIntake ? true
-    : (aiSaysNotOrder || looksMarketing || looksReport) ? false
+    : (aiSaysNotOrder || looksMarketing || looksReport || isEigenRapport) ? false
     : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
   // Website-formulieren (offerte/contact), ook als ze via FormSubmit worden doorgestuurd
   // vanaf een noreply-adres, zijn ALTIJD een echte aanvraag. Herken de kenmerkende
@@ -729,7 +763,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     suggestion.relevant = true;
     suggestion.aiNotOrder = false;
   }
-  if ((looksMarketing || looksReport || looksSupplier) && !isFormLead && !emailIntake) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
+  if ((looksMarketing || looksReport || looksSupplier || isEigenRapport) && !isFormLead && !emailIntake && !onsVerkeer) { suggestion.aiNotOrder = true; suggestion.confidence = Math.min(suggestion.confidence ?? 0.1, 0.1); }
   suggestion.relevanceReason = isFormLead
     ? 'Website-formulier (offerte/contactaanvraag) — als opdracht voorgesteld.'
     : looksSupplier
@@ -768,16 +802,19 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   // boven alles gaan, en aanvraag-verkeer blijft een nieuwe kaart (Regel 1).
   const hardSender = (isEmailReply && fromEmail ? findCustomerStrong({ email: fromEmail }) : null)
     || (waFrom ? findCustomerStrong({ phone: waFrom }) : null);
-  const existingCustomer = (isNewAanvraag || (looksSupplier && !isFormLead)) ? null
+  const existingCustomer = (isNewAanvraag || (looksSupplier && !isFormLead && !onsVerkeer)) ? null
     : (hardSender
-      || ((looksMarketing && !isFormLead) ? null
+      || ((looksMarketing && !isFormLead && !onsVerkeer) ? null
         : findCustomerStrong({ phone: suggestion.customerPhone, email: suggestion.customerEmail })));
   if (existingCustomer) {
     // zoek een nog lopende (niet-afgeronde/geannuleerde/ingeklapte) opdracht
-    const openOrder = db().orders.find((o) =>
-      o.customerId === existingCustomer.id &&
-      !o.archivedWeek &&
-      !['afgerond', 'geannuleerd'].includes(o.status));
+    // De MEEST RECENTE open kaart, niet de oudste. db().orders staat oudste-eerst, dus
+    // .find() pakte altijd de eerste open kaart van die klant — een antwoord over de
+    // nieuwe klus belandde daardoor bij een oude opdracht en de nieuwe kaart leek
+    // onbeantwoord. Ook het 6-uurs-samenvoegvenster keek daardoor naar de verkeerde kaart.
+    const openOrder = db().orders
+      .filter((o) => o.customerId === existingCustomer.id && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0];
     if (openOrder) {
       openOrder.thread = openOrder.thread || [];
       openOrder.thread.push({
@@ -863,7 +900,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const formAutoOk = forceRelevant && !isEmailReply
     && !!(suggestion.customerPhone || suggestion.customerEmail)
     && !isGenericName(suggestion.customerName);
-  if ((isOrderGroupMsg || formAutoOk) && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  if ((isOrderGroupMsg || formAutoOk) && !isEigenRapport && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 

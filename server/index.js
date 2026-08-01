@@ -192,6 +192,9 @@ app.patch('/api/users/:id', requireRole('admin'), (req, res) => {
   if (!u) return res.status(404).json({ error: 'Niet gevonden' });
   const b = req.body || {};
   if (b.name) u.name = String(b.name).slice(0, 80);
+  // FUNCTIE onder de e-mailhandtekening. Verstuurt deze gebruiker een factuur of
+  // antwoord, dan staat HIER zijn naam en functie onder — niet die van de eigenaar.
+  if ('functie' in b) u.functie = String(b.functie || '').slice(0, 60);
   if (b.role) {
     if (!['admin', 'assistent', 'monteur'].includes(b.role)) return res.status(400).json({ error: 'Ongeldige rol' });
     if (u.id === req.user.id && b.role !== 'admin') return res.status(400).json({ error: 'Je kunt je eigen beheerdersrol niet afnemen' });
@@ -1141,6 +1144,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
   const prevAppt = order.appointmentAt; // om wijziging/annulering van de afspraak te herkennen
   let changedStatus = false;
+  const vorigeStatus = order.status;   // voor de terugdraai-knop bij AI-voorstellen
   for (const k of allowed) {
     if (k in b) {
       if (k === 'status' && b[k] !== order.status) changedStatus = true;
@@ -1163,8 +1167,16 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   if ('snoozeAt' in b) order.snoozeDue = false;
   order.updatedAt = now();
   if (changedStatus) {
-    logActivity(req.user.name, 'status gewijzigd', `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
+    logActivity(req.user.name, `status gewijzigd${b.aiSuggested ? ' (AI-voorstel)' : ''}`, `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
     if (order.status === 'afgerond' && !order.completedAt) order.completedAt = now();
+    // Kwam deze status uit een AI-STATUSVOORSTEL? Leg dat vast met de vorige status,
+    // zodat er een weg terug is ("Toch niet"-knop op de kaart). Zonder dit was een
+    // verkeerd toegepast voorstel onomkeerbaar én onzichtbaar.
+    if (b.aiSuggested) {
+      order.aiStatusChange = { from: vorigeStatus, to: order.status, at: now(), by: req.user.name, evidence: String(b.aiEvidence || '').slice(0, 300) };
+    } else if (order.aiStatusChange) {
+      delete order.aiStatusChange; // een mens heeft de status daarna zelf gekozen
+    }
     // Terugkoppeling voor DRS-opdrachten via de controle-groep (bv. Abdel).
     maybeSendTerugkoppeling(order);
   }
@@ -1510,6 +1522,11 @@ app.post('/api/reviews/bulk-approve', requirePerm('inbox'), (req, res) => {
     try {
       const order = applyReview(r, { actorName: `${req.user.name} (bulk >=${minPct}%)` }); count++;
       maybeSendConfirmationOnApprove(order, r).catch(() => {}); // vangnet-bevestiging
+      // ZELFDE BEHANDELING ALS LOS GOEDKEUREN: ook bij bulk moet de opdracht naar de
+      // WhatsApp-groep van de monteur. Dat ontbrak, waardoor kaarten wel op het bord
+      // stonden maar de monteur ze nooit kreeg (pas hersteld bij een serverherstart).
+      // De guard order.sentToMonteur voorkomt dubbel versturen.
+      maybeAutoSendToMonteur(order, 'approved');
     } catch { /* skip */ }
   }
   logActivity(req.user.name, 'bulk goedgekeurd', `${count} berichten met AI-zekerheid >= ${minPct}%`);
@@ -2024,8 +2041,10 @@ function maybeRelayMonteurConfirmation({ group, body }) {
   saveSoon();
 }
 
-// --- Officiële WhatsApp Cloud API (Meta) ---
-// Verificatie van de webhook (Meta doet eerst een GET-aanroep).
+// --- Officiële WhatsApp Cloud API (Meta) — NIET IN GEBRUIK ---
+// Alleen de verificatie-GET blijft staan (die controleert wél netjes een token en kan
+// niets aanmaken). Het ontvangst-adres is op 1 aug 2026 verwijderd: dat accepteerde
+// berichten van iedereen. Al het WhatsApp-verkeer loopt via de eigen bridge.
 app.get('/api/ingest/whatsapp/cloud', (req, res) => {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
   const mode = req.query['hub.mode'];
@@ -2058,57 +2077,13 @@ async function downloadWhatsappMedia(mediaId, mime, filename) {
   }
 }
 
-// Inkomende berichten van de WhatsApp Cloud API. Meta's formaat wordt hier
-// vertaald naar ons standaardformaat (incl. foto's/video's als bijlage).
-app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
-  try {
-    const entries = req.body?.entry || [];
-    for (const entry of entries) {
-      for (const change of entry.changes || []) {
-        const value = change.value || {};
-        const contacts = value.contacts || [];
-        for (const msg of value.messages || []) {
-          const contact = contacts.find((c) => c.wa_id === msg.from) || contacts[0];
-          const name = contact?.profile?.name || msg.from;
-          const phone = msg.from ? `+${String(msg.from).replace(/[^\d]/g, '')}` : '';
-
-          let text = '';
-          const attachments = [];
-          const media = msg.image || msg.video || msg.document || msg.audio || msg.voice;
-          if (msg.type === 'text') text = msg.text?.body || '';
-          else if (msg.type === 'image') text = `[foto] ${msg.image?.caption || ''}`.trim();
-          else if (msg.type === 'video') text = `[video] ${msg.video?.caption || ''}`.trim();
-          else if (msg.type === 'document') text = `[document] ${msg.document?.caption || msg.document?.filename || ''}`.trim();
-          else if (msg.type === 'audio' || msg.type === 'voice') text = '[spraakbericht ontvangen]';
-          else if (msg.type === 'location') text = `[locatie] ${msg.location?.name || ''} ${msg.location?.address || ''}`.trim();
-          else if (msg.button) text = msg.button.text || '';
-          else if (msg.interactive) text = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '';
-          else text = `[${msg.type}-bericht ontvangen]`;
-
-          // Media downloaden en als bijlage opslaan (indien token aanwezig).
-          if (media && media.id) {
-            const saved = await downloadWhatsappMedia(media.id, media.mime_type, media.filename);
-            if (saved) attachments.push(saved);
-          }
-
-          const body = `${text}\nTelefoon: ${phone}`;
-          await ingestMessage({
-            channel: 'whatsapp',
-            sender: name,
-            subject: '',
-            body,
-            externalId: msg.id, // ontdubbelen via Meta's bericht-id
-            attachments,
-            fromPhone: phone, // échte afzendernummer als harde identificator (Regel 2)
-          });
-        }
-      }
-    }
-  } catch (err) {
-    console.error('WhatsApp Cloud webhook fout:', err.message);
-  }
-  res.sendStatus(200); // Meta verwacht altijd 200
-});
+// WEGGEHAALD (1 aug 2026, na de audit): de webhook voor de officiële WhatsApp Cloud API.
+// Die route had GEEN enkele controle — geen token, geen handtekening — waardoor iedereen
+// die het adres kende een aanvraag in de controlewachtrij kon zetten (in de test bewezen).
+// Keyservice gebruikt de Cloud API niet: al het WhatsApp-verkeer loopt via de eigen bridge
+// op de VPS (POST /api/ingest/whatsapp, beveiligd met het ingest-token). Zou de Cloud API
+// ooit tóch nodig zijn, dan hoort daar een handtekening-controle (x-hub-signature-256 over
+// de RUWE body met het Meta App Secret) bij — niet deze open deur.
 
 // Handmatig een bericht doorzetten/simuleren vanuit het dashboard.
 app.post('/api/simulate', requireRole('admin', 'assistent'), async (req, res) => {
@@ -2161,6 +2136,16 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     monteurDispatch: db().settings.monteurDispatch || { autoEnabled: false, days: [], autoMonteurId: '', trigger: 'approved', onlyDrs: true, keywordRoutes: [] },
   });
 });
+
+// Wie verstuurt deze mail? Naam + functie van de INGELOGDE gebruiker, zodat een mail
+// van Youssef of de assistente hun eigen naam onder de handtekening krijgt in plaats
+// van die van de eigenaar. Zonder ingelogde gebruiker (automatische taken) blijft de
+// standaard-handtekening staan.
+function afzenderVan(req) {
+  const u = req && req.user;
+  if (!u || !u.name) return null;
+  return { name: u.name, role: u.functie || '' };
+}
 
 let _lastPriceSync = null; // laatste "pakketten meegewijzigd"-melding voor het antwoord
 app.patch('/api/settings', requirePerm('settings'), (req, res) => {
@@ -2384,8 +2369,14 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   }
   if ('reviewRequest' in b) {
     const r = b.reviewRequest || {};
+    // Moment van AANZETTEN onthouden: klussen van vóór dat moment krijgen nooit
+    // met terugwerkende kracht een review (anders krijgt je hele klantenbestand
+    // in één keer een appje).
+    const stondAan = !!db().settings.reviewRequest?.enabled;
+    const eerderAan = db().settings.reviewRequest?.enabledAt || '';
     db().settings.reviewRequest = {
       enabled: !!r.enabled,
+      enabledAt: r.enabled ? (stondAan && eerderAan ? eerderAan : now()) : eerderAan,
       delayHours: Math.max(1, Math.min(240, Number(r.delayHours) || 24)),
       link: String(r.link || '').slice(0, 500).trim(),
       subject: String(r.subject || '').slice(0, 200),
@@ -2843,7 +2834,7 @@ app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {
   // 1) E-mail (indien adres + SMTP)
   const email = (customer.email || '').trim();
   if (email && /@/.test(email) && smtpConfigured()) {
-    const sig = getEmailSignature();
+    const sig = getEmailSignature(afzenderVan(req));
     const body = fill(cfg.emailBody);
     try {
       await sendMail({ to: email, subject: fill(cfg.emailSubject), text: sig ? `${body}\n\n${sig}` : body });
@@ -3160,11 +3151,17 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   const to = (req.body?.to || customer.email || '').trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Geen geldig e-mailadres van de klant. Vul het e-mailveld in.' });
-  // Corrigeerde de gebruiker een verkeerd e-mailadres bij het opnieuw versturen?
-  // Sla het dan meteen op bij de klant, zodat het overal klopt (niet alleen deze mail).
+  // AFWIJKEND ADRES WORDT NOOIT STIL HET KLANTADRES (bindende regel 3). Stuur je een
+  // kopie naar de boekhouder of naar jezelf, dan mag dat adres niet het e-mailadres van
+  // de klant worden — dan gaan alle latere facturen, herinneringen en campagnes fout.
+  // In plaats daarvan komt het als SUGGESTIE op de kaart, die je met één klik overneemt.
   if (req.body?.to && customer.id && to.toLowerCase() !== String(customer.email || '').toLowerCase()) {
-    customer.email = to;
-    logActivity(req.user.name, 'klant-e-mail gecorrigeerd (bij versturen)', `${customer.name || ''} → ${to}`);
+    if (order) {
+      order.dataSuggestions = (order.dataSuggestions || []).filter((d) => d.field !== 'email' || d.value !== to);
+      order.dataSuggestions.push({ id: id('sug'), field: 'email', value: to, current: customer.email || '', at: now(), reason: 'gebruikt bij het versturen van een factuur/offerte' });
+      order.updatedAt = now();
+    }
+    logActivity(req.user.name, 'factuur naar afwijkend adres', `${customer.name || ''} → ${to} (klantrecord ongewijzigd)`);
   }
   if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
   if (!inv.lines || !inv.lines.length) return res.status(400).json({ error: 'Er staan nog geen regels op.' });
@@ -3172,12 +3169,13 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
   const isQuote = inv.type === 'offerte';
   try {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
-    const sig = getEmailSignature();
+    const sig = getEmailSignature(afzenderVan(req));
     const bedrag = `€ ${inv.totalIncl.toFixed(2).replace('.', ',')}`;
     const body = isQuote
       ? `Beste ${customer.name || 'klant'},\n\nBedankt voor uw aanvraag. In de bijlage vindt u onze offerte ${inv.number}${order ? ` voor: ${order.title}` : ''}.\nTotaalbedrag: ${bedrag} incl. btw. Deze offerte is ${cfg.quoteValidDays || 30} dagen geldig.\n\nGaat u akkoord? Reageer op deze e-mail of bel ons — dan plannen we de werkzaamheden direct in.`
       : `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ` voor de uitgevoerde werkzaamheden (${order.title})` : ''}.\nTotaalbedrag: ${bedrag} — graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`;
     await sendMail({
+      afzender: afzenderVan(req),
       to, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number} — ${cfg.companyName}`,
       text: sig ? `${body}\n\n${sig}` : body,
       attachments: [{ filename: `${isQuote ? 'offerte' : 'factuur'}-${inv.number}.pdf`, content: pdf }],
@@ -3186,7 +3184,19 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
     // verlaag de status NOOIT: een betaalde factuur of goedgekeurde offerte blijft
     // dat. Alleen een concept promoveert naar 'verzonden'.
     if (inv.status === 'concept') inv.status = 'verzonden';
-    inv.sentAt = now();
+    // Factuurdatum + betaaltermijn worden ALLEEN bij de eerste verzending gezet.
+    // Anders zette "Opnieuw versturen" de betaalklok van een openstaande factuur op nul.
+    if (!inv.sentAt) inv.sentAt = now();
+    inv.lastSentAt = now();
+    inv.sendCount = (inv.sendCount || 0) + 1;
+    // DE KAART BEWEEGT MEE. Bleef die op Nieuw/In behandeling staan, dan klopte
+    // "open offertes" niet en liep de opvolging mis. Alleen vooruit, nooit terug: een
+    // kaart die al op afspraak/afgerond staat laten we met rust.
+    if (order && isQuote && ['nieuw', 'open'].includes(order.status)) {
+      order.status = 'offerte_verzonden';
+      order.updatedAt = now();
+      logActivity(req.user.name, 'kaart naar Offerte verzonden', `${order.title} (offerte ${inv.number})`);
+    }
     inv.sentTo = to;
     inv.sendCount = (inv.sendCount || 0) + 1;
     if (order) {
@@ -3488,12 +3498,12 @@ app.post('/api/test-mail', requireRole('admin'), async (req, res) => {
   else if (type === 'review') { const c = getReviewRequest(); subject = c.subject; body = c.body; }
   else if (type === 'annulering') { subject = 'Uw afspraak is geannuleerd'; body = `Beste ${sample.naam},\n\nUw geplande afspraak van ${sample.datum} ${sample.tijdblok} is geannuleerd. Wilt u een nieuwe afspraak inplannen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nKeyservice`; }
   else return res.status(400).json({ error: 'Onbekend maildtype' });
-  const sig = getEmailSignature();
+  const sig = getEmailSignature(afzenderVan(req));
   let text = fill(body || '');
   text += '\n\n———\n(Dit is een TESTMAIL vanuit je eigen CRM, met voorbeeldgegevens. De echte klant krijgt exact deze opmaak, zonder deze regel.)';
   if (sig) text = `${text}\n\n${sig}`;
   try {
-    await sendMail({ to, subject: '[TEST] ' + fill(subject || 'Keyservice'), text });
+    await sendMail({ to, subject: '[TEST] ' + fill(subject || 'Keyservice'), text , afzender: afzenderVan(req) });
     logActivity(req.user.name, 'testmail verstuurd', `${type} -> ${to}`);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -3519,7 +3529,7 @@ app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) 
       const em = ((String(m.sender || '').match(EMAIL_RE_SENDER) || [''])[0]).toLowerCase();
       if (em && em === toAddr) { lastIn = m; break; }
     }
-    const sent = await sendMail({ to, subject, text, inReplyTo: lastIn ? lastIn.externalId : undefined });
+    const sent = await sendMail({ to, subject, text, inReplyTo: lastIn ? lastIn.externalId : undefined , afzender: afzenderVan(req) });
     // Zet de mail ook in je IMAP Verzonden-map (best-effort, niet blokkerend), zodat
     // je 'm in TransIP/Outlook terugziet bij "Verzonden".
     appendSentMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER || '', to, subject, text }).catch(() => {});
@@ -3731,8 +3741,20 @@ let _statusScan = { running: false, startedAt: null };
 
 async function computeStatusScan(days) {
   const since = Date.now() - days * 86400000;
+  // Welke kaarten legt de AI naast het dagrapport? Lopende kaarten, PLUS kaarten die
+  // recent (7 dagen) op afgerond/geannuleerd zijn gezet — anders kan een verkeerd
+  // toegepast voorstel nooit meer gecorrigeerd worden, want zo'n kaart viel uit beeld.
+  const recentKlaar = Date.now() - 7 * 86400000;
   const active = db().orders
-    .filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
+    .filter((o) => {
+      if (o.archivedWeek) return false;
+      if (!['afgerond', 'geannuleerd'].includes(o.status)) return true;
+      const t = new Date(o.completedAt || o.updatedAt || 0).getTime();
+      return t >= recentKlaar;
+    })
+    // NIEUWSTE EERST. Zonder sortering stond de lijst oudste-eerst en sneed de grens van
+    // 300 precies de kaarten weg waar het rapport van gisteren over gaat.
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
     .map((o) => {
       const c = db().customers.find((x) => x.id === o.customerId) || {};
       const src = (o.source || '').toLowerCase();
@@ -3740,11 +3762,21 @@ async function computeStatusScan(days) {
         || (!o.originGroup && /whatsapp|groep|app/.test(src));
       // Het eigen verhaal van de kaart meegeven (gesprekshistorie + notities), want
       // het bewijs van de juiste status staat vaak ÓP de kaart, niet in losse berichten.
-      const thread = (o.thread || []).slice(-4).map((t) =>
-        `${t.outgoing ? 'wij' : 'klant'}: ${(t.body || '').replace(/\s+/g, ' ').slice(0, 160)}`);
+      // De EERSTE regel is de oorspronkelijke aanvraag (met adres en postcode) en gaat
+      // ALTIJD mee — die schoof er bij lopende kaarten uit, waardoor er niets meer was
+      // om een rapportregel op te matchen. Systeemnotities laten we weg: pure ruis.
+      const echte = (o.thread || []).filter((t) => t.channel !== 'systeem');
+      const gekozen = echte.length > 4 ? [echte[0], ...echte.slice(-3)] : echte;
+      const thread = gekozen.map((t, i) =>
+        `${i === 0 && echte.length > 4 ? 'AANVRAAG ' : ''}${t.outgoing ? 'wij' : 'klant'}: ${(t.body || '').replace(/\s+/g, ' ').slice(0, 200)}`);
       return {
         id: o.id, title: o.title, status: o.status, customer: c.name, phone: c.phone || '',
-        address: c.address || '', isDrs,
+        // Het adres van DEZE aanvraag gaat vóór op het klantrecord: dat laatste bewaart
+        // het eerste adres en klopt bij een tweede klus op een ander adres niet meer.
+        address: (o.intake && o.intake.address) || c.address || '', isDrs,
+        // Datums meesturen zodat de AI een rapportregel in de tijd kan plaatsen.
+        createdAt: (o.createdAt || '').slice(0, 10),
+        updatedAt: (o.updatedAt || '').slice(0, 10),
         appointmentAt: o.appointmentAt || '', price: o.price || '',
         notes: (o.notes || '').replace(/\s+/g, ' ').slice(0, 200),
         thread,
@@ -4032,7 +4064,7 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
   const none = { id: '', name: 'Geen monteur', afgerond: 0, omzet: 0, afspraken: 0, actief: 0 };
 
   let newOrders = 0, doneCount = 0, cancelCount = 0, omzet = 0, apptCount = 0;
-  for (const o of db().orders.concat(db().trash || [])) {
+  for (const o of db().orders.concat((db().trash || []).filter((o) => !o.deletedAt))) {
     const row = monteurMap.get(o.monteurId) || none;
     if (inWeek(o.createdAt)) newOrders++;
     if (o.appointmentAt && inWeek(o.appointmentAt)) { apptCount++; row.afspraken++; }

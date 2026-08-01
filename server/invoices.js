@@ -80,18 +80,26 @@ export function lineExcl(l, btwPct) {
 // Korting: één korting per factuur/offerte — een percentage óf een vast bedrag
 // (EXCL. btw). De korting gaat van het subtotaal EXCL btw af; de btw wordt daarna
 // over het verlaagde bedrag gerekend (fiscaal juist).
+// AFRONDEN GEBEURT IN ÉÉN KETEN: elk bedrag wordt op 2 decimalen gezet en het
+// volgende bedrag rekent verder met dát afgeronde getal. Eerder werd er op het
+// eind pas afgerond en werd totalIncl apart uit de ONafgeronde bedragen berekend;
+// bij sommige combinaties van korting en btw stond er dan een cent verschil op de
+// factuur (getoond excl + getoonde btw ≠ getoond totaal). Nu klopt de optelling
+// die de klant ziet altijd: subtotaal - korting = totaal excl, en totaal excl +
+// btw = totaal incl.
 export function computeTotals(lines, btwPct, discount) {
   const pct = Number(btwPct) || 0;
-  const subtotalExcl = (lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * lineExcl(l, pct), 0);
+  const subtotalExcl = r2((lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * lineExcl(l, pct), 0));
   let discountExcl = 0;
   if (discount && Number(discount.value) > 0) {
     discountExcl = discount.type === 'pct'
-      ? subtotalExcl * (Math.min(100, Number(discount.value)) / 100)
-      : Math.min(Number(discount.value), subtotalExcl);
+      ? r2(subtotalExcl * (Math.min(100, Number(discount.value)) / 100))
+      : Math.min(r2(Number(discount.value)), subtotalExcl);
   }
-  const totalExcl = subtotalExcl - discountExcl;
-  const btw = totalExcl * (pct / 100);
-  return { subtotalExcl: r2(subtotalExcl), discountExcl: r2(discountExcl), totalExcl: r2(totalExcl), btw: r2(btw), totalIncl: r2(totalExcl + btw) };
+  const totalExcl = r2(subtotalExcl - discountExcl);
+  const btw = r2(totalExcl * (pct / 100));
+  const totalIncl = r2(totalExcl + btw); // nooit apart uitrekenen: excl + btw is de waarheid
+  return { subtotalExcl, discountExcl, totalExcl, btw, totalIncl };
 }
 
 function sanitizeLines(lines, btwPct) {
@@ -149,7 +157,11 @@ export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'syst
   if (inv.type === 'offerte') return { error: 'Herinnering is voor facturen. Verstuur de offerte desnoods opnieuw.' };
   if (inv.status !== 'verzonden') return { error: 'Alleen voor verzonden (nog niet betaalde) facturen.' };
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
-  const to = (toOverride || inv.sentTo || customer.email || '').trim();
+  // Ontvanger: het HUIDIGE klantadres is leidend. inv.sentTo is slechts het LAATST
+  // gebruikte adres — is de factuur ooit als kopie naar bv. de boekhouder gemaild,
+  // dan gingen alle herinneringen daarheen en hoorde de klant niets. Alleen als de
+  // klant zelf geen e-mailadres (meer) heeft, vallen we terug op dat laatste adres.
+  const to = (toOverride || customer.email || inv.sentTo || '').trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
   if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
   const cfg = getInvoiceSettings();
@@ -203,7 +215,10 @@ export async function sendQuoteFollowup(inv, { by = 'systeem' } = {}) {
   };
 
   // 1) E-mail (voorkeur: nette mail mét de offerte-PDF opnieuw).
-  const to = (inv.sentTo || customer.email || '').trim();
+  // Zelfde volgorde als bij de betaalherinnering: het huidige klantadres wint van
+  // inv.sentTo (dat is alleen het laatst gebruikte adres, bv. een kopie naar de
+  // boekhouder). inv.sentTo blijft de vangnet-optie als de klant geen adres heeft.
+  const to = (customer.email || inv.sentTo || '').trim();
   if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to) && smtpConfigured()) {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
     const sig = getEmailSignature();
@@ -338,6 +353,7 @@ export function buildInvoicePdf(inv, order, customer) {
     doc.on('error', reject);
 
     const blue = '#2b4b9b'; const ink = '#1b2430'; const muted = '#6b7280';
+    const FOOTER_TOP = 760; // vaste y van de voetregel; content moet daarboven blijven
     const invDate = inv.sentAt || inv.updatedAt || inv.createdAt || new Date();
     const dueDate = new Date(new Date(invDate).getTime() + (cfg.paymentDays || 7) * 86400000);
 
@@ -437,7 +453,18 @@ export function buildInvoicePdf(inv, order, customer) {
     }
     if (cfg.warranty) { doc.font('Helvetica-Bold').fillColor(ink).text(cfg.warranty, 50, y, { width: 495 }); y += doc.heightOfString(cfg.warranty, { width: 495 }) + 10; }
     if (inv.note) { doc.font('Helvetica').fillColor(ink).text(inv.note, 50, y, { width: 495 }); y += doc.heightOfString(inv.note, { width: 495 }) + 10; }
-    if (cfg.legal) { doc.font('Helvetica').fontSize(7.5).fillColor(muted).text(cfg.legal, 50, y, { width: 495, lineGap: 1 }); y += doc.heightOfString(cfg.legal, { width: 495 }) + 12; doc.fontSize(10); }
+    if (cfg.legal) {
+      // De voetregel staat VAST onderaan de pagina (y = 760/774). Bij ongeveer 8 tot
+      // 11 factuurregels kwam de juridische tekst daar dwars overheen. Daarom eerst
+      // meten hoe hoog de tekst wordt en pas plaatsen als het écht past; anders een
+      // nieuwe pagina beginnen. Opmaak blijft verder identiek.
+      doc.font('Helvetica').fontSize(7.5).fillColor(muted);
+      const legalH = doc.heightOfString(cfg.legal, { width: 495, lineGap: 1 });
+      if (y + legalH > FOOTER_TOP - 10) { doc.addPage(); y = 60; }
+      doc.text(cfg.legal, 50, y, { width: 495, lineGap: 1 });
+      y += legalH + 12;
+      doc.fontSize(10);
+    }
 
     // Offerte: "Voor akkoord"-blok (naam/datum/plaats/handtekening) zoals het oude pakket.
     if (isQuote) {
@@ -479,8 +506,8 @@ export function buildInvoicePdf(inv, order, customer) {
 
     // Voetregel: btw/kvk + slogan.
     doc.fontSize(8.5).fillColor(muted)
-      .text(`Btw-nummer: ${cfg.btwNr}   ·   KVK-nummer: ${cfg.kvk}`, 50, 760, { width: 495, align: 'center' });
-    if (cfg.footer) doc.text(cfg.footer, 50, 774, { width: 495, align: 'center' });
+      .text(`Btw-nummer: ${cfg.btwNr}   ·   KVK-nummer: ${cfg.kvk}`, 50, FOOTER_TOP, { width: 495, align: 'center' });
+    if (cfg.footer) doc.text(cfg.footer, 50, FOOTER_TOP + 14, { width: 495, align: 'center' });
 
     doc.end();
   });

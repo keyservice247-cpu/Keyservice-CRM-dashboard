@@ -126,12 +126,15 @@ export function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
 }
 
-export function createUser({ name, email, password, role, monteurId }) {
+export function createUser({ name, email, password, role, monteurId, functie }) {
   const user = {
     id: id('user'),
     name,
     email: (email || '').toLowerCase(),
     role: role || 'assistent',
+    // Functie zoals die onder uitgaande mail komt te staan (bv. "Monteur",
+    // "Kantoor & planning"). Leeg = de standaardfunctie uit de handtekening.
+    functie: String(functie || '').slice(0, 60),
     monteurId: monteurId || null, // koppeling naar een monteur-record (alleen voor rol 'monteur')
     passwordHash: hashPassword(password),
     createdAt: now(),

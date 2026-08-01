@@ -278,22 +278,54 @@ export function dismissIncomeSuggestions(refs = []) {
   return n;
 }
 
-// Boek geselecteerde omzet-suggesties (income) met bron 'monteursrapport'.
+// Antwoord van importIncome. Nieuwe code leest .added / .skipped; bestaande
+// aanroepers (POST /api/finance/import-income logt `${n} boeking(en)` en stuurt
+// `booked: n` naar het scherm) verwachten nog een GETAL — daarom gedraagt dit
+// antwoord zich in tekst/JSON als het aantal TOEGEVOEGDE boekingen. Zo verandert
+// er niets aan de bestaande melding terwijl het scherm later de overgeslagen
+// regels kan tonen.
+function importResult(added, skipped) {
+  const out = { added, skipped };
+  Object.defineProperties(out, {
+    valueOf: { value: () => added },
+    toString: { value: () => String(added) },
+    toJSON: { value: () => added },
+  });
+  return out;
+}
+
+// Boek geselecteerde suggesties uit de monteursrapporten.
+// 1) De suggestie draagt zelf de gok mee (guess 'cost' of 'income'); die wordt hier
+//    GEVOLGD. Anders belandde een materiaalregel ("€90 lips kosten") als omzet in de
+//    cijfers — één klik op "Alles selecteren" blies de omzet dan kunstmatig op en de
+//    winst klopte niet meer. Kosten krijgen een echte kostencategorie en GEEN bron
+//    'DRS' (bron hoort bij omzet).
+// 2) Dedup op sourceRef: twee keer op de knop (dubbeltik op mobiel) mag nooit twee
+//    identieke boekingen opleveren — zelfde vangnet als bookAutoSyncEntries.
 export function importIncome(items, actorName = '') {
-  let n = 0;
+  const entries = fin().entries;
+  const seen = new Set(entries.map((e) => e.sourceRef).filter(Boolean));
+  let added = 0; let skipped = 0;
   for (const it of (items || [])) {
     const amount = r2(it.amount);
     if (!(amount > 0)) continue;
-    fin().entries.unshift({
-      id: id('fin'), kind: 'income', date: /^\d{4}-\d{2}-\d{2}$/.test(it.date) ? it.date : today(),
-      amount, category: 'DRS opdracht', source: 'DRS', monteurId: it.monteurId || null, orderId: null,
-      note: `Uit monteursrapport${it.context ? ': ' + String(it.context).slice(0, 120) : ''}`,
-      sourceRef: it.ref || null, createdBy: actorName, createdAt: now(),
+    const ref = it.ref || null;
+    if (ref && seen.has(ref)) { skipped++; continue; }
+    // Expliciete keuze van het scherm (it.kind) gaat vóór de AI/regel-gok (it.guess).
+    const isCost = it.kind === 'expense' || it.guess === 'cost';
+    entries.unshift({
+      id: id('fin'), kind: isCost ? 'expense' : 'income',
+      date: /^\d{4}-\d{2}-\d{2}$/.test(it.date) ? it.date : today(),
+      amount, category: isCost ? 'Producten / materiaal' : 'DRS opdracht',
+      source: isCost ? null : 'DRS', monteurId: it.monteurId || null, orderId: null,
+      note: `Uit monteursrapport${isCost ? ' (kosten)' : ''}${it.context ? ': ' + String(it.context).slice(0, 120) : ''}`,
+      sourceRef: ref, createdBy: actorName, createdAt: now(),
     });
-    n++;
+    if (ref) seen.add(ref);
+    added++;
   }
-  if (n) saveSoon();
-  return n;
+  if (added) saveSoon();
+  return importResult(added, skipped);
 }
 
 // Data voor het wekelijkse CEO-rapport (deze week + vorige week + openstaand).
@@ -332,6 +364,27 @@ function fin() {
   return d.finance;
 }
 
+// Zoek een DUIDELIJK duplicaat van een nieuwe boeking. Aanleiding: de DRS-fee van
+// €42,50 kwam er twee keer in — één keer automatisch via de autosync (sourceRef
+// drsfee:<orderId>) en nog eens doordat iemand de snelknop gebruikte (die maakt een
+// boeking zonder sourceRef, dus de bestaande dedup greep niet).
+// Regel: zelfde soort + zelfde categorie + zelfde bedrag + zelfde maand + (als de
+// nieuwe boeking een monteur heeft) dezelfde monteur, binnen dezelfde dag. "Binnen
+// dezelfde dag" = zelfde boekdatum, óf de bestaande boeking is minder dan 24 uur
+// geleden ingevoerd (de autosync boekt op de afrondingsdag, de mens op vandaag).
+// Dit is bewust alleen een SIGNAAL: twee identieke kosten op één dag komen echt
+// voor (twee keer benzine, twee fees), dus we blokkeren niet.
+function findDuplicateEntry(entry) {
+  const dayAgo = Date.now() - 86400000;
+  return fin().entries.find((e) => e.id !== entry.id
+    && e.kind === entry.kind
+    && e.category === entry.category
+    && r2(e.amount) === entry.amount
+    && (!entry.monteurId || e.monteurId === entry.monteurId)
+    && monthOf(e.date) === monthOf(entry.date)
+    && (e.date === entry.date || new Date(e.createdAt || 0).getTime() >= dayAgo)) || null;
+}
+
 export function addEntry(b, actorName) {
   const kind = b.kind === 'income' ? 'income' : 'expense';
   const amount = r2(b.amount);
@@ -351,9 +404,18 @@ export function addEntry(b, actorName) {
     createdBy: actorName || '',
     createdAt: now(),
   };
+  // Eerst kijken of dit een duplicaat is (entry staat er dan nog niet in), daarna pas
+  // boeken. De boeking gaat altijd door; het scherm kan met duplicateOf een
+  // waarschuwing tonen ("staat er misschien al in").
+  const dup = findDuplicateEntry(entry);
   fin().entries.unshift(entry);
   saveSoon();
-  return { entry };
+  if (!dup) return { entry };
+  return {
+    entry,
+    duplicateOf: dup.id,
+    duplicateWarning: `Let op: er staat al een ${entry.kind === 'income' ? 'inkomst' : 'uitgave'} van € ${entry.amount} in dezelfde categorie (${entry.category}) op ${dup.date}. Mogelijk dubbel geboekt.`,
+  };
 }
 
 export function updateEntry(id2, b) {

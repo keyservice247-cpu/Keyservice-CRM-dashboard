@@ -508,9 +508,16 @@ export const DEFAULT_EMAIL_SIGNATURE = `Met vriendelijke groet,
 Team Key Service 24/7
 085 060 2359`;
 
-export function getEmailSignature() {
+export function getEmailSignature(afzender = null) {
   const s = db().settings;
-  return (s.emailSignature !== undefined ? s.emailSignature : DEFAULT_EMAIL_SIGNATURE);
+  const basis = (s.emailSignature !== undefined ? s.emailSignature : DEFAULT_EMAIL_SIGNATURE);
+  // Verstuurt Youssef of de assistente de mail, dan komt HÚN naam en functie erboven —
+  // niet die van de eigenaar. De bedrijfsgegevens eronder blijven ongewijzigd.
+  if (!afzender || !afzender.name) return basis;
+  const sig = getHtmlSignature();
+  const oudeKop = `${sig.name}${sig.role ? `\n${sig.role}` : ''}`;
+  const nieuweKop = `${afzender.name}${afzender.role ? `\n${afzender.role}` : ''}`;
+  return basis.includes(sig.name) ? basis.replace(oudeKop, nieuweKop).replace(sig.name, afzender.name) : `${nieuweKop}\n${basis}`;
 }
 
 // Lijst met groepsnamen (stukjes) waaruit we WhatsApp-opdrachten oppakken.
