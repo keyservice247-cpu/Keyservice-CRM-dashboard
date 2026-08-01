@@ -215,10 +215,19 @@ function hasPerm(key) {
   maybeMorningDigest();
 })();
 
+// Voorkeur: opent de status-scan elke ochtend vanzelf? STANDAARD UIT. Het venster
+// popte vroeger elke dag ongevraagd open en was nergens uit te zetten; nu kiest de
+// gebruiker dat zelf (vinkje in de status-scan zelf, opgeslagen in de browser).
+function digestAutoOn() {
+  try { return localStorage.getItem('ks_digestAuto') === '1'; } catch { return false; }
+}
+
 // Toont de status-scan één keer per dag automatisch (ochtend-samenvatting) voor
-// admin/assistent. Daarna pas weer de volgende dag.
+// admin/assistent — alleen als de gebruiker dat expliciet heeft aangezet. De knop
+// "Status-scan" blijft altijd gewoon werken.
 function maybeMorningDigest() {
   if (state.me.role === 'monteur') return;
+  if (!digestAutoOn()) return;
   const today = new Date().toISOString().slice(0, 10);
   try {
     if (localStorage.getItem('ks_lastDigest') === today) return;
@@ -858,6 +867,9 @@ function setupBoardTabs() {
 window.addEventListener('resize', () => { if (state.view === 'board' && state.orders) setupBoardTabs(); });
 
 // Verzet een opdracht naar de volgende kolom (voor swipe-rechts op mobiel).
+// BEWUST GEEN bevestigingsvraag vooraf (dat vertraagt het werken op de telefoon):
+// we onthouden de vorige kolom en bieden achteraf "Ongedaan maken" aan — hetzelfde
+// patroon als de prullenbak. Zo is een per ongeluk geveegde kaart nooit een probleem.
 function advanceStatus(id, dir = 1) {
   const o = state.orders.find((x) => x.id === id); if (!o) return;
   const keys = (state.meta.statuses || []).map((s) => s.key);
@@ -865,9 +877,17 @@ function advanceStatus(id, dir = 1) {
   const j = i + dir;
   if (i < 0 || j < 0 || j >= keys.length) { toast(dir > 0 ? 'Al in de laatste kolom' : 'Al in de eerste kolom', true); loadBoard(); return; }
   const next = keys[j];
+  const vorige = o.status;   // vóór de wijziging vastleggen — hier zet de undo-knop 'm op terug
   o.status = next;
   api(`/api/orders/${id}`, 'PATCH', { status: next })
-    .then(() => { toast('Verzet naar ' + statusLabel(next)); loadBoard(); })
+    .then(() => {
+      loadBoard();
+      toastUndo('Verzet naar ' + statusLabel(next), async () => {
+        await api(`/api/orders/${id}`, 'PATCH', { status: vorige });
+        toast('Teruggezet naar ' + statusLabel(vorige));
+        loadBoard();
+      });
+    })
     .catch((e) => { toast(e.message, true); loadBoard(); });
 }
 
@@ -1005,14 +1025,29 @@ function splitQuoted(body) {
   return { text, quoted };
 }
 
-// Toont bijlagen als thumbnails (foto/video) of bestand-tegels.
+// Toont bijlagen als thumbnails (foto) of speler/bestand-tegels.
+// LET OP video + audio: die kregen de klasse .att mee, en die is hard 76x76 px —
+// een spraakbericht of filmpje was daardoor een onbruikbaar blokje (afspeelknop
+// half afgesneden). Ze staan nu op een eigen regel over de volle breedte van de
+// strook, met bestandsnaam erbij, zodat je ze gewoon kunt afspelen.
+// Sommige oudere bijlages hebben alleen een mime en geen kind — daarom beide checken.
 function attachmentsHTML(atts) {
   if (!atts || !atts.length) return '<div class="muted small">Nog geen foto’s of bestanden.</div>';
+  const isKind = (a, soort) => a.kind === soort || new RegExp('^' + soort + '/').test(a.mime || '');
   return atts.map((a) => {
-    if (a.kind === 'image') return `<a class="att att-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.url)}" loading="lazy"></a>`;
-    if (a.kind === 'video') return `<video class="att att-video" controls preload="metadata" playsinline title="${esc(a.filename)}" style="max-width:100%;border-radius:10px;background:#000"><source src="${esc(a.url)}"></video>`;
-    if (a.kind === 'audio') return `<audio class="att att-audio" controls preload="metadata" title="${esc(a.filename)}" style="max-width:100%" src="${esc(a.url)}"></audio>`;
-    return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">${icon('file', 22)}<span>${esc((a.filename || 'bestand').slice(0, 14))}</span></a>`;
+    const naam = a.filename || '';
+    if (isKind(a, 'image')) return `<a class="att att-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(naam)}"><img src="${esc(a.url)}" loading="lazy"></a>`;
+    if (isKind(a, 'video')) return `
+      <div class="att-video" style="flex:1 1 100%;max-width:380px;min-width:0">
+        <video controls preload="metadata" playsinline style="width:100%;max-height:240px;border-radius:10px;background:#000;display:block"><source src="${esc(a.url)}"${a.mime ? ` type="${esc(a.mime)}"` : ''}></video>
+        <div class="muted small" style="display:flex;align-items:center;gap:6px;margin-top:3px">${icon('video', 13)} <a href="${esc(a.url)}" target="_blank" rel="noopener" style="color:inherit">${esc((naam || 'video').slice(0, 40))}</a></div>
+      </div>`;
+    if (isKind(a, 'audio')) return `
+      <div class="att-audio" style="flex:1 1 100%;max-width:380px;min-width:0">
+        <div class="muted small" style="display:flex;align-items:center;gap:6px;margin-bottom:3px">${icon('mic', 13)} ${esc((naam || 'spraakbericht').slice(0, 40))}</div>
+        <audio controls preload="metadata" style="width:100%;display:block" src="${esc(a.url)}"></audio>
+      </div>`;
+    return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(naam)}">${icon('file', 22)}<span>${esc((naam || 'bestand').slice(0, 14))}</span></a>`;
   }).join('');
 }
 
@@ -1279,6 +1314,7 @@ function openOrderModal(id, pool) {
       const files = [...fileInput.files];
       if (!files.length) return;
       toast(`${files.length} bestand(en) uploaden…`);
+      let gelukt = 0; let mislukt = 0; let laatsteFout = '';
       for (const file of files) {
         try {
           const dataBase64 = await new Promise((resolve, reject) => {
@@ -1289,11 +1325,15 @@ function openOrderModal(id, pool) {
           });
           const updated = await api(`/api/orders/${o.id}/attachments`, 'POST', { filename: file.name, mime: file.type, dataBase64 });
           o.attachments = updated.attachments || [];
-        } catch (err) { toast(err.message, true); }
+          gelukt++;
+        } catch (err) { mislukt++; laatsteFout = err.message || 'uploaden mislukt'; }
       }
       $('#f-attachgrid').innerHTML = attachmentsHTML(o.attachments);
       flash('#f-attachgrid');
-      toast('Toegevoegd ');
+      // Eerlijke melding: hier stond altijd "Toegevoegd", óók als élke upload faalde
+      // (die foutmelding werd meteen overschreven).
+      if (mislukt) toast(gelukt ? `${gelukt} toegevoegd, ${mislukt} mislukt: ${laatsteFout}` : `Uploaden mislukt: ${laatsteFout}`, true);
+      else toast(gelukt === 1 ? 'Toegevoegd' : `${gelukt} bestanden toegevoegd`);
       loadBoard();
     };
   }
@@ -1320,6 +1360,7 @@ function openOrderModal(id, pool) {
       payload.source = $('#modal [data-source]')?.value || 'Handmatig';
       payload.urgent = $('#f-urgent')?.checked || false;
     }
+    let klantFout = '';   // mislukte klant-update onthouden: nooit "Opgeslagen" liegen
     try {
       if (o) {
         // Klantgegevens op de kaart bewerkt? Dan gaan die naar het klantrecord ÉN
@@ -1328,7 +1369,12 @@ function openOrderModal(id, pool) {
         if (canWrite && o.customer) {
           const cp = { name: $('#f-ccname')?.value, phone: $('#f-ccphone')?.value, email: $('#f-ccemail')?.value, address: $('#f-ccaddress')?.value };
           payload.intake = { name: cp.name, phone: cp.phone, email: cp.email, address: cp.address };
-          await api(`/api/customers/${o.customer.id}`, 'PATCH', cp).catch(() => {});
+          // Het klantrecord kan apart mislukken (bv. geen recht op Klanten, of een
+          // serverfout). Die fout werd hier stil weggegooid en het scherm zei tóch
+          // "Opgeslagen" — de gebruiker dacht dat de gegevens klopten terwijl ze weg
+          // waren. De kaart zelf slaan we wél gewoon op, maar we melden het eerlijk.
+          try { await api(`/api/customers/${o.customer.id}`, 'PATCH', cp); }
+          catch (err) { klantFout = err.message || 'klantgegevens niet opgeslagen'; }
         }
         await api(`/api/orders/${o.id}`, 'PATCH', payload);
       } else {
@@ -1340,6 +1386,9 @@ function openOrderModal(id, pool) {
         if (!payload.customerName && !payload.customerPhone) return toast('Klantnaam of telefoon verplicht', true);
         await api('/api/orders', 'POST', payload);
       }
+      // Ging de klant-update mis? Dan blijft het scherm open (je typwerk blijft staan)
+      // en zie je de échte foutmelding van de server i.p.v. "Opgeslagen".
+      if (klantFout) { toast('Kaart opgeslagen, maar de klantgegevens NIET: ' + klantFout, true); loadBoard(); return; }
       closeModal(); toast('Opgeslagen'); loadBoard();
     } catch (err) { toast(err.message, true); }
   };
@@ -2542,7 +2591,7 @@ function renderStatusScan(out) {
         <div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong></div>
         <div class="muted small">${esc(s.reason)}</div>
         ${s.evidence ? `<div class="muted small" style="font-style:italic">"${esc(s.evidence.slice(0, 160))}"</div>` : ''}
-        <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}">Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
+        <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}" data-ev="${esc((s.evidence || '').slice(0, 200))}">Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
       </div>`).join('');
   }
   if (doneSugg.length) {
@@ -2564,7 +2613,7 @@ function renderStatusScan(out) {
   box.innerHTML = html;
   $$('.ss-apply').forEach((b) => b.onclick = async () => {
     try {
-      await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to });
+      await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to, aiSuggested: true, aiEvidence: b.dataset.ev || '' });
       await api('/api/assistant/status-scan/applied', 'POST', { orderId: b.dataset.id }).catch(() => {});
       toast('Status bijgewerkt'); pollStatusScan(); loadBoard();
     } catch (err) { toast(err.message, true); }
@@ -4331,8 +4380,15 @@ async function openDigestModal() {
     <div class="digest-block"><h3>Offerte blijft liggen — 3+ dagen geen reactie (${d.staleQuotes?.length || 0})</h3>${list(d.staleQuotes || [], 'Geen offertes blijven liggen.')}</div>
     <div class="digest-block"><h3>Nog niet bekeken (${d.neverOpened.length})</h3>${list(d.neverOpened, 'Alles is bekeken.')}</div>
     <div class="digest-block"><h3>Lang stil (5+ dagen) (${d.stale.length})</h3>${list(d.stale, 'Niets blijft liggen.')}</div>
+    <label class="muted small" style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:12px"><input type="checkbox" id="dg-auto" style="width:auto"${digestAutoOn() ? ' checked' : ''}> Dit scherm elke ochtend automatisch openen</label>
     <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="dg-close">Sluiten</button></div></div> `);
   $('#dg-close').onclick = closeModal;
+  // Hier zet de gebruiker het automatisch openen aan of uit (standaard uit).
+  const dgAuto = $('#dg-auto');
+  if (dgAuto) dgAuto.onchange = () => {
+    try { localStorage.setItem('ks_digestAuto', dgAuto.checked ? '1' : '0'); } catch {}
+    toast(dgAuto.checked ? 'Status-scan opent voortaan elke ochtend automatisch' : 'Automatisch openen staat uit');
+  };
   $$('[data-open]').forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
 }
 

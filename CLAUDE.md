@@ -262,6 +262,24 @@ de regressie meegroeit.
   verzendfunctie voor beide paden. Het verzoek gaat via E-MAIL ÉN WHATSAPP TEGELIJK
   (klant met alleen een 06 krijgt 'm nu ook); de automatische ronde gebruikt exact
   dezelfde functie.
+- **Audit-reparaties (1 aug):** Cloud-API-webhook VERWIJDERD (accepteerde berichten van
+  iedereen); review-stortvloed-vangrail (enabledAt + max 14 dagen oud + max 5/ronde);
+  dagrapport houdt REGELEINDES (categorizer msgList, limiet 4000 + zichtbare afkap-
+  markering), postcode zonder spatie + adres niet meer afgekapt op de komma, scan sorteert
+  NIEUWSTE eerst en krijgt intake-adres, eerste threadregel en datums; recent afgeronde
+  kaarten blijven zichtbaar voor de scan; via AI toegepaste status wordt vastgelegd
+  (order.aiStatusChange, PATCH-veld aiSuggested); nachtscan meldt mislukking en zet de
+  dagvlag pas ná succes; scanresultaat staat in de ochtendbriefing. EIGEN RAPPORT in een
+  opdracht-groep wordt deterministisch herkend (statuskopje + 2+ postcoderegels →
+  isEigenRapport) en is nooit een aanvraag. Factuur: sentAt alleen bij eerste verzending
+  (lastSentAt/sendCount apart), afwijkend verzendadres wordt dataSuggestion i.p.v. stille
+  overschrijving, verzonden offerte zet de kaart op offerte_verzonden. Pipeline: eigen
+  verkeer (antwoord op onze messageId of Re: van bekende klant) omzeilt het
+  leveranciersfilter; website-dedup vergelijkt ALTIJD de tekst en bewaart de tweede
+  inzending als notitie; reacties gaan naar de NIEUWSTE open kaart; bulk-goedkeuren
+  dispatcht naar de monteur. E-mailafzender: naam + functie van de INGELOGDE gebruiker
+  (user.functie, afzenderVan(req) → getEmailSignature/wrapHtmlMail). Test:
+  `test/rapport-test.mjs` (11) bewaakt het lezen van dagrapporten.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).
