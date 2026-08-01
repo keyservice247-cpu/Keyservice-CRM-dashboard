@@ -46,7 +46,7 @@ import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData } from './automations.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -809,7 +809,7 @@ app.get('/api/monteurs/:id/orders', requireAuth, (req, res) => {
 app.post('/api/monteurs', requirePerm('customers'), (req, res) => {
   const { name, phone, email, waGroup } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Naam verplicht' });
-  const m = { id: id('mont'), name, phone: phone || '', email: email || '', waGroup: waGroup || '', calendarId: '', createdAt: now() };
+  const m = { id: id('mont'), name, phone: phone || '', email: email || '', waGroup: waGroup || '', calendarId: '', reviewAuto: true, createdAt: now() };
   db().monteurs.push(m);
   logActivity(req.user.name, 'monteur toegevoegd', name);
   saveSoon();
@@ -820,6 +820,7 @@ app.patch('/api/monteurs/:id', requirePerm('customers'), (req, res) => {
   const m = db().monteurs.find((x) => x.id === req.params.id);
   if (!m) return res.status(404).json({ error: 'Niet gevonden' });
   for (const k of ['name', 'phone', 'email', 'waGroup', 'calendarId']) if (k in (req.body || {})) m[k] = req.body[k];
+  if ('reviewAuto' in (req.body || {})) m.reviewAuto = !!req.body.reviewAuto; // automatische review per monteur
   saveSoon();
   res.json(m);
 });
@@ -2951,6 +2952,24 @@ app.post('/api/invoices', requireAuth, (req, res) => {
   }
   logActivity(req.user.name, `${type} aangemaakt (los)`, `${inv.number} — ${customer.name}`);
   res.json({ invoice: inv, customer });
+});
+
+// REVIEW VRAGEN vanaf een verzonden factuur. De klus is af en betaald/gefactureerd —
+// dit is het natuurlijke moment. Werkt los van de automatische ronde, zodat je 'm ook
+// kunt sturen als die uit staat (of uit staat voor deze monteur).
+app.post('/api/invoices/:id/review-request', requirePerm('invoices'), async (req, res) => {
+  const inv = (db().invoices || []).find((i) => i.id === req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Factuur niet gevonden' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+  if (!order) return res.status(400).json({ error: 'Deze factuur hangt niet aan een opdrachtkaart — vraag de review vanaf de kaart.' });
+  try {
+    const r = await sendReviewRequest(order, { actorName: req.user.name, force: !!req.body?.force });
+    if (r.error) return res.status(400).json(r);
+    inv.reviewRequestedAt = now();
+    saveSoon();
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
 
 // Regels uit een factuur opslaan in de vaste PRIJSLIJST (losse producten/

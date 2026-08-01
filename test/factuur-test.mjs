@@ -96,6 +96,25 @@ ok('prijs uit een factuurregel werkt door in prijslijst én pakket', addP.status
   && (stP2.json.priceList || []).some((p) => p.description === 'Voorrijkosten prijstest' && p.priceExcl === 72)
   && ((stP2.json.priceBundles || []).find((b) => b.name === 'Prijstest pakket')?.lines || []).some((l) => l.description === 'Voorrijkosten prijstest' && l.priceExcl === 72), JSON.stringify(addP.json.priceSync));
 
+console.log('\n== Review vragen vanaf een verzonden factuur + per monteur aan/uit ==');
+// Losstaande factuur (zonder kaart) kan geen review sturen — nette melding.
+const custR = await api('POST', '/api/customers', { name: 'Review Klant', email: 'review@example.nl', phone: '0612349999' });
+let invLos = (await api('POST', '/api/invoices', { customerId: custR.json.id, type: 'factuur' })).json; invLos = invLos.invoice || invLos;
+const rLos = await api('POST', `/api/invoices/${invLos.id}/review-request`, {});
+ok('losse factuur zonder kaart: nette uitleg', rLos.status === 400 && /opdrachtkaart/i.test(rLos.json.error || ''), JSON.stringify(rLos.json));
+// Factuur die wél aan een kaart hangt.
+const ordR = await api('POST', '/api/orders', { customerId: custR.json.id, title: 'Review testklus', status: 'afgerond' });
+let invR = (await api('POST', '/api/invoices', { customerId: custR.json.id, orderId: ordR.json.id, type: 'factuur' })).json; invR = invR.invoice || invR;
+const rGeenLink = await api('POST', `/api/invoices/${invR.id}/review-request`, {});
+ok('zonder review-link: nette melding i.p.v. een lege mail', rGeenLink.status === 400 && /review-link|SMTP/i.test(rGeenLink.json.error || ''), JSON.stringify(rGeenLink.json));
+// Per monteur aan/uit bewaren.
+const montR = await api('POST', '/api/monteurs', { name: 'Review Monteur', phone: '0611112222' });
+ok('nieuwe monteur staat standaard AAN voor automatische reviews', montR.json.reviewAuto === true);
+const montUit = await api('PATCH', `/api/monteurs/${montR.json.id}`, { reviewAuto: false });
+ok('automatische review per monteur uit te zetten', montUit.status === 200 && montUit.json.reviewAuto === false);
+const montLijst = await api('GET', '/api/monteurs');
+ok('keuze blijft bewaard', (montLijst.json || []).find((m) => m.id === montR.json.id)?.reviewAuto === false);
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

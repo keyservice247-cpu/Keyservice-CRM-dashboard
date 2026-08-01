@@ -247,6 +247,12 @@ de regressie meegroeit.
   scherm de klok rond herladen. Veeg-beweging op mobiel zet nu `window._dragging`
   (incl. touchcancel), zodat een verversing nooit midden in een swipe de kaart
   vervangt. Regressie: browser-test 41 + scenarios 72 assertions.
+- **Reviews (1 aug):** knop "Review" op elke VERZONDEN factuur die aan een kaart hangt
+  (POST /api/invoices/:id/review-request, force=1 om nogmaals te sturen; vinkje ✓ +
+  inv.reviewRequestedAt als het al gebeurd is). De automatische review-ronde is nu PER
+  MONTEUR uit te zetten (monteur.reviewAuto, default true; reviewAutoAllowed in
+  automations.js) — vinkje in het monteur-scherm. sendReviewRequest is de gedeelde
+  verzendfunctie voor beide paden.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).

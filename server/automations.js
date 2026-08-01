@@ -202,12 +202,47 @@ async function runAppointmentReminders() {
 }
 
 // ---------- 4. Review-verzoek na afronding ----------
+// Staat de automatische review UIT voor de monteur die de klus deed? Dan overslaan.
+// Per monteur instelbaar (monteur.reviewAuto === false), zodat je 'm bijvoorbeeld
+// alleen voor eigen werk aan hebt staan.
+export function reviewAutoAllowed(order) {
+  if (!order || !order.monteurId) return true;
+  const m = (db().monteurs || []).find((x) => x.id === order.monteurId);
+  return !m || m.reviewAuto !== false;
+}
+
+// Eén review-verzoek versturen naar de klant van deze kaart. Gebruikt door zowel de
+// automatische ronde als de handmatige knop bij een verzonden factuur.
+export async function sendReviewRequest(order, { actorName = 'systeem', force = false } = {}) {
+  const cfg = getReviewRequest();
+  if (!cfg.link) return { error: 'Er staat nog geen review-link ingesteld (Instellingen → Automatische berichten).' };
+  if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
+  if (!order) return { error: 'Geen opdracht gevonden bij deze factuur.' };
+  if (order.reviewRequested && order.reviewRequested !== 'geen-email' && !force) {
+    return { error: `Er is al een review gevraagd op ${String(order.reviewRequested).slice(0, 10)}.`, already: true };
+  }
+  const c = custOf(order);
+  if (!c.email) return { error: 'Deze klant heeft geen e-mailadres.' };
+  const vars = { naam: c.name || 'klant', link: cfg.link };
+  const sig = getEmailSignature();
+  const body = fill(cfg.body, vars);
+  await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body });
+  order.thread = order.thread || [];
+  order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (review-verzoek)', subject: fill(cfg.subject, vars), body, at: now() });
+  order.reviewRequested = now();
+  order.updatedAt = now();
+  logActivity(actorName, 'review-verzoek verstuurd', `${order.title} -> ${c.email}`);
+  saveSoon();
+  return { ok: true, to: c.email };
+}
+
 async function runReviewRequests() {
   const cfg = getReviewRequest();
   if (!cfg.enabled || !cfg.link || !smtpConfigured()) return;
   const cutoff = Date.now() - cfg.delayHours * 3600000;
   for (const o of db().orders) {
     if (o.status !== 'afgerond' || o.reviewRequested) continue;
+    if (!reviewAutoAllowed(o)) continue; // automatische review staat uit voor deze monteur
     const doneAt = o.completedAt || o.updatedAt;
     if (!doneAt || new Date(doneAt).getTime() > cutoff) continue;
     const c = custOf(o);

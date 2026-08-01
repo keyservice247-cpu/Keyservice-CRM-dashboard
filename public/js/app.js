@@ -2672,9 +2672,15 @@ async function openMonteurModal(m) {
   } catch { /* google-status optioneel */ }
   modal(`
     <h2>${m ? 'Monteur bewerken' : 'Nieuwe monteur'}</h2> <label>Naam <input id="m-name" value="${esc(m?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="m-phone" value="${esc(m?.phone || '')}"></label> <label>E-mail <input id="m-email" value="${esc(m?.email || '')}"></label> </div> <label>WhatsApp-groep (voor opdrachten) <input id="m-wagroup" value="${esc(m?.waGroup || '')}" placeholder="exacte naam van de WhatsApp-groep"></label> ${calField} <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="m-cancel">Annuleren</button><button class="btn btn-primary" id="m-save">Opslaan</button> </div></div>`);
+  // Automatische review per monteur aan/uit — los van de algemene instelling.
+  const revWrap = document.createElement('label');
+  revWrap.style.cssText = 'display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:4px';
+  revWrap.innerHTML = `<input type="checkbox" id="m-reviewauto" style="width:auto"${m?.reviewAuto === false ? '' : ' checked'}> Automatisch review vragen na een afgeronde klus van deze monteur`;
+  const acties = $('#modal .modal-actions');
+  if (acties) acties.parentNode.insertBefore(revWrap, acties);
   $('#m-cancel').onclick = closeModal;
   $('#m-save').onclick = async () => {
-    const payload = { name: $('#m-name').value, phone: $('#m-phone').value, email: $('#m-email').value, waGroup: $('#m-wagroup').value };
+    const payload = { name: $('#m-name').value, phone: $('#m-phone').value, email: $('#m-email').value, waGroup: $('#m-wagroup').value, reviewAuto: !!$('#m-reviewauto')?.checked };
     if ($('#m-cal')) payload.calendarId = $('#m-cal').value;
     if (!payload.name) return toast('Naam verplicht', true);
     try {
@@ -2800,6 +2806,7 @@ function renderInvoices() {
         <button class="btn btn-sm inv-share" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + '-' + i.number + (i.customerName ? ' ' + i.customerName : ''))}">${icon('paperclip', 13)} Deel</button>
         ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Kaart</button>` : ''}
+        ${!quote && i.sentAt && i.orderId ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
         ${!quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
       </div>
@@ -2810,6 +2817,17 @@ function renderInvoices() {
   $$('.inv-share').forEach((b) => b.onclick = (e) => shareInvoicePdf(b.dataset.id, b.dataset.label, e.currentTarget));
   $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices()));
   $$('.inv-open').forEach((b) => b.onclick = async () => { const orders = await api('/api/orders?includeArchived=1'); state.orders = orders; openOrderModal(b.dataset.oid); });
+  // Zelf een review vragen bij een verzonden factuur — het moment waarop de klus af is.
+  $$('.inv-review').forEach((b) => b.onclick = async () => {
+    const alGedaan = b.textContent.includes('✓');
+    if (alGedaan && !confirm('Er is al een review gevraagd voor deze klus. Nog een keer sturen?')) return;
+    b.disabled = true; const oud = b.innerHTML; b.textContent = 'Versturen…';
+    try {
+      const r = await api(`/api/invoices/${b.dataset.id}/review-request`, 'POST', { force: alGedaan });
+      toast(`Review gevraagd — mail naar ${r.to}`);
+      loadInvoices();
+    } catch (err) { toast(err.message, true); b.disabled = false; b.innerHTML = oud; }
+  });
   const quickStatus = (sel, status, msg) => $$(sel).forEach((b) => b.onclick = async () => {
     try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status }); toast(msg); loadInvoices(); }
     catch (err) { toast(err.message, true); }
