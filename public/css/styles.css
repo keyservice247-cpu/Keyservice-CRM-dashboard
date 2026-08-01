@@ -560,6 +560,11 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 /* Periode-filter op het bord: balk die uitlegt wat je nu ziet */
 .board-period-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--panel-2); border: 1px solid var(--accent); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 14px; }
 .board-period-bar .chip { cursor: pointer; margin-left: auto; }
+/* "Nog te factureren"-blok: ingeklapt tenzij je het zelf openzet */
+.todo-blok > summary::-webkit-details-marker { display: none; }
+.todo-blok > summary::before { content: "▸"; color: var(--muted); font-size: 12px; transition: transform .12s; }
+.todo-blok[open] > summary::before { content: "▾"; }
+.todo-blok > summary:hover { color: var(--accent-ink); }
 /* Monteur-overzicht regels */
 .mont-line { padding: 5px 0; border-top: 1px solid var(--line-soft); cursor: pointer; font-size: 13px; }
 .mont-line:hover { color: var(--accent-ink); }

@@ -2821,17 +2821,28 @@ function renderInvoices() {
       const todo = await api('/api/invoices/todo');
       const box = $('#invTodoWrap');
       if (!box || !todo.length) return;
+      // INGEKLAPT tenzij je hem zelf openzet: 45 regels duwden de hele facturenlijst
+      // weg. De keuze wordt onthouden per gebruiker (localStorage).
+      const open = localStorage.getItem('ks_todoOpen') === '1';
       box.innerHTML = `
-        <div class="info-card" style="margin-bottom:14px;border-left:4px solid var(--warn,#f59e0b)">
-          <h3 style="font-size:14px">${icon('tag', 14)} Nog te factureren (${todo.length})</h3>
-          <p class="muted small" style="margin:4px 0 8px">Afgeronde klussen waar nog géén factuur voor is gemaakt.</p>
+        <details class="info-card todo-blok" style="margin-bottom:14px;border-left:4px solid var(--warn,#f59e0b)"${open ? ' open' : ''}>
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600">
+            ${icon('tag', 14)} Nog te factureren <span class="chip" style="font-size:11px">${todo.length}</span>
+            <span class="muted small" style="font-weight:400;margin-left:auto">klik om te openen</span>
+          </summary>
+          <p class="muted small" style="margin:8px 0">Afgeronde klussen waar nog géén factuur voor is gemaakt.</p>
           ${todo.slice(0, 15).map((t) => `
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line-soft,#e5e7eb)">
               <span>${esc(t.title)}${t.customerName ? ` <span class="muted small">— ${esc(t.customerName)}</span>` : ''}<span class="muted small" style="display:block">afgerond ${fmtDateShort(t.completedAt)}${t.price ? ' · ' + esc(t.price) : ''}</span></span>
               <button class="btn btn-sm btn-primary todo-inv" data-cust="${esc(t.customerId)}" data-order="${esc(t.id)}">Maak factuur</button>
             </div>`).join('')}
           ${todo.length > 15 ? `<div class="muted small" style="margin-top:6px">+ nog ${todo.length - 15} oudere…</div>` : ''}
-        </div>`;
+        </details>`;
+      const det = $('.todo-blok', box);
+      if (det) det.addEventListener('toggle', () => {
+        localStorage.setItem('ks_todoOpen', det.open ? '1' : '0');
+        const hint = $('summary .muted', det); if (hint) hint.textContent = det.open ? 'klik om te sluiten' : 'klik om te openen';
+      });
       $$('.todo-inv', box).forEach((b) => b.onclick = async () => {
         try {
           const r = await api('/api/invoices', 'POST', { customerId: b.dataset.cust, orderId: b.dataset.order, type: 'factuur' });
