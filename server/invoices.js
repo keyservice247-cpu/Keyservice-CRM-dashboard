@@ -454,15 +454,24 @@ export function buildInvoicePdf(inv, order, customer) {
     if (cfg.warranty) { doc.font('Helvetica-Bold').fillColor(ink).text(cfg.warranty, 50, y, { width: 495 }); y += doc.heightOfString(cfg.warranty, { width: 495 }) + 10; }
     if (inv.note) { doc.font('Helvetica').fillColor(ink).text(inv.note, 50, y, { width: 495 }); y += doc.heightOfString(inv.note, { width: 495 }) + 10; }
     if (cfg.legal) {
-      // De voetregel staat VAST onderaan de pagina (y = 760/774). Bij ongeveer 8 tot
-      // 11 factuurregels kwam de juridische tekst daar dwars overheen. Daarom eerst
-      // meten hoe hoog de tekst wordt en pas plaatsen als het écht past; anders een
-      // nieuwe pagina beginnen. Opmaak blijft verder identiek.
+      // De voetregel staat VAST onderaan de pagina (y = 760/774). Bij een wat langere
+      // factuur (meer regels, korting, notitie) kwam de juridische tekst daar dwars
+      // overheen. Daarom eerst meten hoe hoog de tekst wordt en pas plaatsen als het
+      // écht past; anders een nieuwe pagina beginnen. Opmaak blijft verder identiek.
       doc.font('Helvetica').fontSize(7.5).fillColor(muted);
       const legalH = doc.heightOfString(cfg.legal, { width: 495, lineGap: 1 });
-      if (y + legalH > FOOTER_TOP - 10) { doc.addPage(); y = 60; }
+      if (y + legalH > FOOTER_TOP - 10) {
+        doc.addPage(); y = 60;
+        // pdfkit schrijft de tekstkleur PER PAGINA weg: na een eigen addPage staat de
+        // kleur weer op zwart. Zonder deze regel werd de juridische tekst op de nieuwe
+        // pagina ineens zwart in plaats van grijs.
+        doc.fillColor(muted);
+      }
       doc.text(cfg.legal, 50, y, { width: 495, lineGap: 1 });
-      y += legalH + 12;
+      // Doorschuiven met dezelfde maat als vóór deze wijziging (dus zonder lineGap):
+      // het "Voor akkoord"-blok en de handtekening hangen aan vaste y-drempels, en die
+      // 3 punt verschil zette een korte offerte anders zonder reden op een 2e pagina.
+      y += doc.heightOfString(cfg.legal, { width: 495 }) + 12;
       doc.fontSize(10);
     }
 
