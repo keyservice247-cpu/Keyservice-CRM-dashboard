@@ -302,6 +302,24 @@ export function getWeeklyAiCheck() {
   };
 }
 
+// WAT GAAT ER NAAR GOOGLE AGENDA?
+// Stond hardcoded op "alleen monteur Abdel of schuifpui-klussen" — daardoor kwam de
+// ene afspraak er wel in en de andere niet, wat als willekeur voelde. Nu instelbaar:
+//   alles     = elke afspraak met een datum (standaard)
+//   monteurs  = alleen afspraken van de gekozen monteurs
+//   schuifpui = alleen schuifpui-/schuifdeur-klussen
+//   monteurs+schuifpui = combinatie (het oude gedrag)
+export const DEFAULT_GOOGLE_SYNC = { mode: 'alles', monteurIds: [], keywords: 'schuifpui, schuifdeur, schuifwand, schuifsysteem' };
+export function getGoogleSync() {
+  const g = db().settings.googleSync || {};
+  const mode = ['alles', 'monteurs', 'schuifpui', 'monteurs+schuifpui'].includes(g.mode) ? g.mode : DEFAULT_GOOGLE_SYNC.mode;
+  return {
+    mode,
+    monteurIds: Array.isArray(g.monteurIds) ? g.monteurIds.filter((x) => typeof x === 'string').slice(0, 20) : [],
+    keywords: String(g.keywords || DEFAULT_GOOGLE_SYNC.keywords).slice(0, 300),
+  };
+}
+
 // Afspraakbevestiging naar de klant (+ herinnering X uur vooraf).
 // "Monteur onderweg"-bericht: met één knop op de kaart krijgt de klant een mail
 // én een appje dat de monteur er nu aankomt. Teksten aanpasbaar in Instellingen.

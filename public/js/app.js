@@ -3712,12 +3712,38 @@ async function loadSettings() {
       ${g.error ? `<div class="error small">Let op: ${esc(g.error)}</div>` : ''}
       <label style="display:block;margin:8px 0">Standaardagenda (voor opdrachten zonder gekoppelde monteur)
         <select id="g-defcal" style="margin-top:4px">${opts || '<option value="primary">primary</option>'}</select></label>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <label style="display:block;margin:12px 0 0">Welke afspraken gaan naar Google Agenda?
+        <select id="g-mode" style="margin-top:4px">
+          <option value="alles">Alle afspraken</option>
+          <option value="monteurs">Alleen van gekozen monteurs</option>
+          <option value="schuifpui">Alleen schuifpui-klussen</option>
+          <option value="monteurs+schuifpui">Gekozen monteurs én schuifpui-klussen</option>
+        </select></label>
+      <div id="g-mont-wrap" hidden style="margin-top:8px">
+        <div class="muted small" style="margin-bottom:4px">Van welke monteurs?</div>
+        <div id="g-monteurs" style="display:flex;flex-wrap:wrap;gap:10px"></div>
+      </div>
+      <p class="muted small" style="margin:6px 0 0">Stond eerder vast op "alleen Abdel of schuifpui" — daardoor kwam de ene afspraak er wel in en de andere niet.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-sm btn-primary" id="g-savemode">Keuze opslaan</button>
         <button class="btn btn-sm" id="g-savecal">Standaardagenda opslaan</button>
         <a class="btn btn-sm" href="/api/google/auth">Opnieuw verbinden</a>
         <button class="btn btn-sm btn-danger" id="g-disconnect">Loskoppelen</button>
       </div>
       <p class="muted small" style="margin-top:8px">Tip: maak in Google Agenda per monteur een aparte agenda (of deel hun agenda met dit account) en koppel die bij <strong>Monteurs → monteur bewerken</strong>.</p>`;
+    // Sync-regel invullen en opslaan.
+    const gs = (await api('/api/settings').catch(() => ({}))).googleSync || { mode: 'alles', monteurIds: [] };
+    $('#g-mode').value = gs.mode || 'alles';
+    const monteurs = state.monteurs || [];
+    $('#g-monteurs').innerHTML = monteurs.map((m) => `<label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" class="g-mont" value="${esc(m.id)}" style="width:auto"${(gs.monteurIds || []).includes(m.id) ? ' checked' : ''}> ${esc(m.name)}</label>`).join('') || '<span class="muted small">Nog geen monteurs</span>';
+    const toonMont = () => { $('#g-mont-wrap').hidden = !String($('#g-mode').value).includes('monteurs'); };
+    toonMont();
+    $('#g-mode').onchange = toonMont;
+    $('#g-savemode').onclick = async () => {
+      const googleSync = { mode: $('#g-mode').value, monteurIds: $$('.g-mont:checked').map((c) => c.value), keywords: gs.keywords || 'schuifpui, schuifdeur, schuifwand, schuifsysteem' };
+      try { await api('/api/settings', 'PATCH', { googleSync }); toast('Opgeslagen — nieuwe en gewijzigde afspraken volgen deze keuze'); }
+      catch (err) { toast(err.message, true); }
+    };
     $('#g-savecal').onclick = async () => {
       try { await api('/api/google/default-calendar', 'POST', { calendarId: $('#g-defcal').value }); toast('Standaardagenda opgeslagen'); }
       catch (err) { toast(err.message, true); }

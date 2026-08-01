@@ -68,7 +68,7 @@ import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
-  getHtmlSignature, getWeeklyAiCheck, syncBundlesToPriceList,
+  getHtmlSignature, getWeeklyAiCheck, syncBundlesToPriceList, getGoogleSync,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2150,6 +2150,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     crmAlerts: getCrmAlerts(),
     morningBriefing: getMorningBriefing(),
     weeklyAiCheck: getWeeklyAiCheck(),
+    googleSync: getGoogleSync(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
     htmlSignature: getHtmlSignature(),
     aiOverviewModel: db().settings.aiOverviewModel === 'opus' ? 'opus' : 'standaard',
@@ -2363,6 +2364,14 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       channel: ['whatsapp', 'email', 'beide'].includes(m.channel) ? m.channel : 'whatsapp',
       email: String(m.email || '').slice(0, 200).trim(),
       tone: m.tone === 'zakelijk' ? 'zakelijk' : 'coachend',
+    };
+  }
+  if ('googleSync' in b) {
+    const g = b.googleSync || {};
+    db().settings.googleSync = {
+      mode: ['alles', 'monteurs', 'schuifpui', 'monteurs+schuifpui'].includes(g.mode) ? g.mode : 'alles',
+      monteurIds: Array.isArray(g.monteurIds) ? g.monteurIds.filter((x) => typeof x === 'string').slice(0, 20) : [],
+      keywords: String(g.keywords || '').slice(0, 300),
     };
   }
   if ('weeklyAiCheck' in b) {

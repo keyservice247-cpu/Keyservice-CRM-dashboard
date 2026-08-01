@@ -250,8 +250,11 @@ de regressie meegroeit.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).
-- **Google Agenda-sync bewaakt + zelfherstellend (24 jul):** sync alleen voor monteur
-  "Abdel Rafour" of schuifpui-klussen (shouldSyncToGoogle, bewuste keuze eigenaar).
+- **Google Agenda-sync bewaakt + zelfherstellend (24 jul, sync-regel instelbaar 1 aug):**
+  WELKE afspraken meegaan is nu een INSTELLING (settings.googleSync, Instellingen →
+  Koppelingen): alles (STANDAARD) / alleen gekozen monteurs / alleen schuifpui /
+  monteurs+schuifpui (het oude hardcoded gedrag). Reden: de vaste regel "alleen Abdel
+  of schuifpui" voelde als willekeur ("soms wel, soms niet in de agenda").
   Zelfherstel: PATCH op verdwenen event (404/410) → verwijzing weg + nieuw event;
   aanmaken is idempotent (zoekt eerst op extendedProperty ksOrderId → nooit dubbel).
   Uurlijkse vangnet-ronde (runGoogleCalendarSweep) synct komende afspraken zonder

@@ -13,6 +13,7 @@
 //
 // Gebruikt alleen fetch — geen extra npm-pakket nodig.
 import { db, save, saveSoon, now } from './db.js';
+import { getGoogleSync } from './settings.js';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
@@ -31,10 +32,19 @@ const GOOGLE_SYNC_MONTEUR = 'abdel';                        // monteurnaam bevat
 const GOOGLE_SYNC_KEYWORDS = /schuifpui|schuifdeur|schuifwand|schuifsysteem/i;
 
 export function shouldSyncToGoogle(order, monteur) {
-  const monteurName = ((monteur && monteur.name) || '').toLowerCase();
-  if (GOOGLE_SYNC_MONTEUR && monteurName.includes(GOOGLE_SYNC_MONTEUR)) return true;
+  const cfg = getGoogleSync();
+  if (cfg.mode === 'alles') return true;
   const text = `${order.title || ''} ${order.description || ''}`;
-  return GOOGLE_SYNC_KEYWORDS.test(text);
+  const woorden = cfg.keywords.split(',').map((w) => w.trim()).filter(Boolean);
+  const opSchuifpui = () => woorden.some((w) => text.toLowerCase().includes(w.toLowerCase()));
+  const opMonteur = () => {
+    if (cfg.monteurIds.length) return !!(order.monteurId && cfg.monteurIds.includes(order.monteurId));
+    // Geen monteurs gekozen? Dan de oude vangrail: naam bevat "abdel".
+    return ((monteur && monteur.name) || '').toLowerCase().includes(GOOGLE_SYNC_MONTEUR);
+  };
+  if (cfg.mode === 'schuifpui') return opSchuifpui();
+  if (cfg.mode === 'monteurs') return opMonteur();
+  return opMonteur() || opSchuifpui(); // 'monteurs+schuifpui' (het oude gedrag)
 }
 
 // Haalt de plaatsnaam uit een adres (tekst na de postcode, of het laatste deel).
