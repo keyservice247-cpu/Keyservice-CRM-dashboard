@@ -55,7 +55,10 @@ export function wrapHtmlMail(text, afzender = null) {
   try { sig = getHtmlSignature(); } catch { return null; }
   // Wie stuurt deze mail? Verstuurt Youssef of de assistente een factuur of antwoord,
   // dan hoort daar HÚN naam en functie onder — niet die van de eigenaar.
-  if (afzender && afzender.name) sig = { ...sig, name: afzender.name, role: afzender.role || sig.role };
+  // Alleen overnemen als er ÉN een naam ÉN een functie is ingevuld voor die gebruiker.
+  // Zonder functie blijft de vaste handtekening staan; anders kwam de accountnaam
+  // ("Beheerder") boven de handtekening te staan in plaats van de eigenaar.
+  if (afzender && afzender.name && afzender.role) sig = { ...sig, name: afzender.name, role: afzender.role };
   if (!sig || !sig.enabled) return null;
   let t = String(text || '');
   try {

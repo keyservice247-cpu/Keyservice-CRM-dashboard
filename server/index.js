@@ -2143,8 +2143,12 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
 // standaard-handtekening staan.
 function afzenderVan(req) {
   const u = req && req.user;
-  if (!u || !u.name) return null;
-  return { name: u.name, role: u.functie || '' };
+  // ALLEEN overnemen als er voor deze gebruiker een FUNCTIE is ingevuld (Gebruikers →
+  // functie). Zonder dat blijft de vaste handtekening uit Instellingen staan. Anders
+  // kwam de accountnaam in de mail te staan — het beheerdersaccount heet "Beheerder",
+  // en dat verscheen ineens boven de handtekening in plaats van "Abdel Rafour".
+  if (!u || !u.name || !u.functie) return null;
+  return { name: u.name, role: u.functie };
 }
 
 let _lastPriceSync = null; // laatste "pakketten meegewijzigd"-melding voor het antwoord

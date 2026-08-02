@@ -513,7 +513,9 @@ export function getEmailSignature(afzender = null) {
   const basis = (s.emailSignature !== undefined ? s.emailSignature : DEFAULT_EMAIL_SIGNATURE);
   // Verstuurt Youssef of de assistente de mail, dan komt HÚN naam en functie erboven —
   // niet die van de eigenaar. De bedrijfsgegevens eronder blijven ongewijzigd.
-  if (!afzender || !afzender.name) return basis;
+  // Alleen overnemen als er ÉN een naam ÉN een functie is. Zonder functie blijft de
+  // vaste handtekening staan — anders belandde de accountnaam ("Beheerder") in de mail.
+  if (!afzender || !afzender.name || !afzender.role) return basis;
   const sig = getHtmlSignature();
   const oudeKop = `${sig.name}${sig.role ? `\n${sig.role}` : ''}`;
   const nieuweKop = `${afzender.name}${afzender.role ? `\n${afzender.role}` : ''}`;

@@ -4181,6 +4181,9 @@ function openUserPermsModal(u) {
       </select></label>
       <label id="up-monteur-wrap" ${u.role !== 'monteur' ? 'hidden' : ''}>Gekoppelde monteur <select id="up-monteur"><option value="">— kies monteur —</option>${monteurOpts}</select></label>
     </div>
+    <div class="form-sec">${icon('mail', 13)} Naam onder uitgaande e-mail</div>
+    <label>Functie van deze persoon <input id="up-functie" value="${esc(u.functie || '')}" placeholder="bv. Monteur | Key Service 24/7">
+      <span class="muted small">Vul je dit in, dan staat onder mails die déze gebruiker verstuurt zijn eigen naam en functie — in plaats van de vaste handtekening uit Instellingen. Leeg laten = de vaste handtekening blijft staan.</span></label>
     <div class="form-sec">${icon('shield', 13)} Functies</div>
     <div id="up-perms">${rows(u.role)}</div>
     <button type="button" class="btn btn-sm" id="up-reset" style="margin-top:10px">Terug naar standaard van de rol</button>
@@ -4199,7 +4202,7 @@ function openUserPermsModal(u) {
   $('#up-cancel').onclick = closeModal;
   $('#up-save').onclick = async () => {
     const role = $('#up-role').value;
-    const payload = { role, monteurId: role === 'monteur' ? $('#up-monteur').value : null };
+    const payload = { role, monteurId: role === 'monteur' ? $('#up-monteur').value : null, functie: $('#up-functie').value.trim() };
     if (role === 'monteur' && !payload.monteurId) return toast('Kies welke monteur dit account is', true);
     if (role !== 'admin') {
       const perms = {}; const defs = ROLE_PERM_DEFAULTS[role] || {};
