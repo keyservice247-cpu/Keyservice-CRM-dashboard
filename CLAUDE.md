@@ -379,6 +379,36 @@ goedkeuren. Gebouwd toen het bridge-nummer tijdelijk geblokkeerd was.
 LET OP: md-bestanden zijn dev-documentatie; de runtime-regels staan in code +
 settings. Wijzig je het één, houd BEIDE synchroon.
 
+## OFFICIËLE WHATSAPP (Meta Cloud API) — klaargezet 3 aug, staat UIT
+Aanleiding: 2 aug blokkeerde WhatsApp het wegwerpnummer wegens "geautomatiseerde
+berichten". `server/connectors/whatsapp-cloud.js` praat met Meta's officiële platform.
+- **Alles staat standaard uit.** Zonder `WHATSAPP_CLOUD_TOKEN` + `WHATSAPP_PHONE_ID`
+  doet de module niets; zonder `WHATSAPP_APP_SECRET` geeft de webhook 404.
+- **Binnenkomend:** `POST /api/ingest/whatsapp/cloud` controleert de HMAC-handtekening
+  (`x-hub-signature-256`) met het app secret in constante tijd — zonder geldige
+  handtekening 403. Daarna gaat het bericht door dezelfde `ingestMessage`, dus alle
+  lead-instroom-wetten gelden onverkort (bewezen in de test: klant-matching en
+  inhoud-dedup grijpen gewoon in). De vórige Cloud-route had GEEN enkele controle en is
+  daarom weggehaald; bouw die nooit terug zonder handtekening-check.
+- **Uitgaand:** `runCloudOutbox()` (elke 20 s) pakt alleen 1-op-1 KLANT-items uit de
+  bestaande outbox (`group === '__klant_dm__'`), nooit een groep. Aan te zetten in
+  Instellingen → Koppelingen (`settings.whatsappCloudSend`, default UIT); de pauzeknop
+  gaat er boven. **Vangnet:** weigert Meta het bericht (meestal buiten het 24-uursvenster),
+  dan blijft het item gewoon `queued` en verstuurt de bridge het alsnog — één Cloud-poging
+  per item (`cloudTried`). Er kan dus niets verloren gaan door dit aan te zetten.
+- **HARDE GRENS — groepen kunnen NIET officieel** (nagetrokken in Meta's eigen docs,
+  3 aug): de officiële Groups API werkt alléén met groepen die je zélf via die koppeling
+  aanmaakt. Er bestaat geen commando om een bestaande groep binnen te komen, geen
+  commando om iemand toe te voegen (alleen uitnodigingslink), max 8 deelnemers en max
+  één zakelijk nummer per groep. De DRS-groep is dus onmogelijk via de officiële weg —
+  ook niet met een blauw vinkje, want de gate is de Groups API zelf, niet je status.
+  Vandaar de gesplitste route: **bridge blijft voor groepen, officieel voor klantverkeer.**
+- Het blauwe vinkje is wél haalbaar (OBA gratis, of Meta Verified ~$15/mnd) en goed voor
+  klantvertrouwen — maar het opent DRS niet. KvK-bedrijfsverificatie is gratis en nodig
+  voor alles.
+- Test: `test/whatsapp-cloud-test.mjs` (20 assertions, PORT=3125, met
+  `WHATSAPP_APP_SECRET=appsecret123`).
+
 ## WhatsApp-groepstoring (LID) — opgelost ronde 26 (17 jul), NIET verzwakken
 - WhatsApp's LID-migratie brak het LEZEN van groeps-chats in whatsapp-web.js 1.34.7
   (getChats/getChat gooien een minified fout zoals "r"); 1-op-1 werkt, en VERSTUREN

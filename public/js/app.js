@@ -3294,6 +3294,12 @@ async function loadSettings() {
       <p class="muted small">Is het WhatsApp-nummer (tijdelijk) geblokkeerd? Zet dit vinkje AAN: het CRM geeft de bridge dan een lege wachtrij, zodat er geen enkel bericht meer uitgaat. Berichten die klaarstonden blijven bewaard en gaan vanzelf alsnog uit zodra je de pauze weer uitzet. Ontvangen blijft gewoon werken.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-pause" style="width:auto" ${s.whatsappPaused ? 'checked' : ''}> Alle uitgaande WhatsApp-berichten pauzeren</label>
     </div>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} Officiële WhatsApp (Meta) voor klantberichten</h3>
+      <p class="muted small">Stuurt facturen, offertes, review-verzoeken en bevestigingen naar de <strong>klant</strong> via het officiële WhatsApp Business-platform van Meta, in plaats van via het wegwerpnummer. Groepsberichten (DRS, monteurs) blijven altijd via de bridge lopen — de officiële route kan geen bestaande groepen binnen. Weigert Meta een bericht (bijvoorbeeld omdat de klant langer dan 24 uur niets stuurde), dan blijft het gewoon in de wachtrij staan en verstuurt de bridge het alsnog: er kan niets verloren gaan.</p>
+      ${s.whatsappCloudReady
+        ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-cloud-send" style="width:auto" ${s.whatsappCloudSend ? 'checked' : ''}> Klantberichten via de officiële WhatsApp versturen</label>`
+        : `<p class="muted small" style="margin:0"><strong>Nog niet ingesteld.</strong> Vul op de server eerst <code>WHATSAPP_CLOUD_TOKEN</code>, <code>WHATSAPP_PHONE_ID</code> en <code>WHATSAPP_APP_SECRET</code> in; daarna verschijnt hier de aan/uit-knop.</p>`}
+    </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-verbinding testen</h3>
       <p class="muted small">Stuur een testbericht naar een nummer en zie hieronder of de bridge het écht verstuurt. Blijft een bericht op <strong>wachtrij</strong> staan of wordt het <strong>mislukt</strong>? Dan moet de bridge op de VPS worden bijgewerkt/herstart.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
@@ -3774,6 +3780,11 @@ async function loadSettings() {
   if ($('#wa-pause')) $('#wa-pause').onchange = async () => {
     const aan = $('#wa-pause').checked;
     try { await api('/api/settings', 'PATCH', { whatsappPaused: aan }); toast(aan ? 'WhatsApp-verzending GEPAUZEERD — er gaat niets meer uit' : 'Pauze eraf — wachtrij gaat weer lopen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  if ($('#wa-cloud-send')) $('#wa-cloud-send').onchange = async () => {
+    const aan = $('#wa-cloud-send').checked;
+    try { await api('/api/settings', 'PATCH', { whatsappCloudSend: aan }); toast(aan ? 'Klantberichten gaan nu via de officiële WhatsApp' : 'Klantberichten gaan weer via de bridge'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveWeeklyCheck').onclick = async () => {

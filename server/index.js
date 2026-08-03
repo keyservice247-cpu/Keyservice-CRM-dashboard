@@ -52,6 +52,7 @@ import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORI
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries } from './storage.js';
+import { cloudConfigured, sendCloudText, sendCloudTemplate, sendCloudMedia, webhookSignatureOk, parseCloudWebhook, fetchCloudMedia } from './connectors/whatsapp-cloud.js';
 import Busboy from 'busboy';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
 import {
@@ -88,7 +89,9 @@ app.use((req, res, next) => {
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   next();
 });
-app.use(express.json({ limit: '2mb' }));
+// De RUWE body bewaren: de officiële WhatsApp-webhook van Meta ondertekent precies die
+// bytes, dus zonder het origineel is de handtekening niet te controleren.
+app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(attachUser);
 const isHttps = (req) => req.secure || req.get('x-forwarded-proto') === 'https';
 
@@ -2101,10 +2104,45 @@ function maybeRelayMonteurConfirmation({ group, body }) {
   saveSoon();
 }
 
-// --- Officiële WhatsApp Cloud API (Meta) — NIET IN GEBRUIK ---
-// Alleen de verificatie-GET blijft staan (die controleert wél netjes een token en kan
-// niets aanmaken). Het ontvangst-adres is op 1 aug 2026 verwijderd: dat accepteerde
-// berichten van iedereen. Al het WhatsApp-verkeer loopt via de eigen bridge.
+// --- Officiële WhatsApp Cloud API (Meta) ---
+// ONTVANGST van klantberichten, mét handtekening-controle. De oude versie van deze route
+// had die controle NIET en accepteerde berichten van iedereen; die is op 1 aug verwijderd.
+// Deze route doet niets zolang WHATSAPP_APP_SECRET niet is ingesteld.
+app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
+  if (!process.env.WHATSAPP_APP_SECRET) return res.sendStatus(404); // nog niet in gebruik
+  if (!webhookSignatureOk(req.rawBody, req.get('x-hub-signature-256'))) {
+    console.error('[wa-cloud] webhook GEWEIGERD — handtekening klopt niet');
+    return res.sendStatus(403);
+  }
+  try {
+    for (const m of parseCloudWebhook(req.body)) {
+      // Media (foto/pdf/spraak) ophalen en als bijlage opslaan, net als bij de bridge.
+      const attachments = [];
+      if (m.mediaId) {
+        const bestand = await fetchCloudMedia(m.mediaId).catch(() => null);
+        if (bestand) {
+          const saved = saveBuffer(bestand.buffer, { mime: bestand.mime, filename: m.filename || `whatsapp.${(bestand.mime.split('/')[1] || 'bin')}` });
+          if (saved) attachments.push(saved);
+        }
+      }
+      // Zelfde weg als elk ander bericht: door de pipeline, dus alle lead-instroom-wetten
+      // (klant-matching, dedup, filters) gelden onverkort.
+      await ingestMessage({
+        channel: 'whatsapp',
+        sender: m.sender,
+        body: m.body || (attachments.length ? '(bijlage)' : ''),
+        externalId: m.externalId,
+        fromPhone: m.fromPhone,
+        attachments,
+      });
+    }
+  } catch (e) { console.error('[wa-cloud] verwerken mislukt:', e.message); }
+  res.sendStatus(200); // Meta verwacht altijd 200, anders blijft hij herhalen
+});
+
+// --- Verificatie van de webhook (Meta doet eerst een GET) ---
+// Meta roept dit adres één keer aan bij het instellen van de webhook en verwacht de
+// "challenge" terug. Beveiligd met WHATSAPP_VERIFY_TOKEN (zelf te kiezen).
 app.get('/api/ingest/whatsapp/cloud', (req, res) => {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
   const mode = req.query['hub.mode'];
@@ -2188,6 +2226,8 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     weeklyAiCheck: getWeeklyAiCheck(),
     googleSync: getGoogleSync(),
     whatsappPaused: !!db().settings.whatsappPaused,
+    whatsappCloudSend: !!db().settings.whatsappCloudSend,
+    whatsappCloudReady: cloudConfigured(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
     htmlSignature: getHtmlSignature(),
     aiOverviewModel: db().settings.aiOverviewModel === 'opus' ? 'opus' : 'standaard',
@@ -2426,6 +2466,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     };
   }
   if ('whatsappPaused' in b) db().settings.whatsappPaused = !!b.whatsappPaused;
+  if ('whatsappCloudSend' in b) db().settings.whatsappCloudSend = !!b.whatsappCloudSend;
   if ('weeklyAiCheck' in b) {
     const w = b.weeklyAiCheck || {};
     db().settings.weeklyAiCheck = {
@@ -2711,6 +2752,55 @@ app.post('/api/orders/:id/merge-suggestion', requireRole('admin', 'assistent'), 
   }
   res.json(withRelations(order));
 });
+
+// ---------- OFFICIËLE WHATSAPP: uitgaand 1-op-1 klantverkeer ----------
+// Facturen, offertes, review-verzoeken en bevestigingen naar de KLANT gaan hiermee via
+// Meta's officiële platform in plaats van via het wegwerpnummer. Groepsberichten
+// (DRS-groep, monteursgroepen) blijven altijd via de bridge — de officiële API kan
+// bestaande groepen niet binnenkomen.
+//
+// STAAT STANDAARD UIT: pas actief als de drie omgevingsvariabelen zijn ingevuld ÉN
+// Instellingen → Koppelingen de knop "Officiële WhatsApp voor klantberichten" aan heeft.
+// VEILIGHEIDSNET: weigert Meta het bericht (bv. buiten het 24-uursvenster), dan blijft
+// het item gewoon in de wachtrij staan en pakt de bridge het op zoals altijd. Er kan
+// dus geen bericht verloren gaan door dit aan te zetten.
+const CLOUD_UIT_ADRES = () => (process.env.APP_URL || 'https://keyservice-crm.onrender.com').replace(/\/+$/, '');
+
+function cloudSendAan() {
+  return !!(cloudConfigured() && db().settings.whatsappCloudSend && !db().settings.whatsappPaused);
+}
+
+async function runCloudOutbox() {
+  if (!cloudSendAan()) return;
+  const items = (db().outbox || []).filter((o) => o.status === 'queued'
+    && (!o.group || o.group === '__klant_dm__')     // alleen klant-DM, nooit een groep
+    && o.phone
+    && !o.cloudTried);                              // één poging; daarna is de bridge aan de beurt
+  for (const it of items.slice(0, 10)) {
+    it.cloudTried = now();
+    try {
+      if (it.text) await sendCloudText(it.phone, it.text);
+      for (const m of (it.media || []).slice(0, 6)) {
+        const bestand = m.file || m.id || '';
+        if (!bestand) continue;
+        const url = `${CLOUD_UIT_ADRES()}/uploads/${bestand}?token=${encodeURIComponent(process.env.INGEST_TOKEN || '')}`;
+        const isFoto = /^image\//i.test(m.mime || '');
+        await sendCloudMedia(it.phone, {
+          url, filename: m.filename || m.name || 'bestand.pdf', soort: isFoto ? 'image' : 'document',
+        });
+      }
+      it.status = 'sent';
+      it.doneAt = now();
+      it.lastResult = 'verzonden via officiële WhatsApp (Meta)';
+    } catch (e) {
+      // Blijft 'queued': de bridge pakt het op. Alleen vastleggen wat Meta zei, zodat
+      // in Instellingen zichtbaar is waaróm (meestal: buiten het 24-uursvenster).
+      it.lastResult = `officiële WhatsApp: ${String(e.message || '').slice(0, 140)}`;
+      console.error('[wa-cloud] versturen mislukt, valt terug op de bridge:', e.message);
+    }
+  }
+  if (items.length) saveSoon();
+}
 
 // Eenmalig bij het opstarten: recente MISLUKTE groeps-berichten (monteur-dispatch,
 // terugkoppeling, CRM-meldingen) terug in de wachtrij zetten. Tijdens de WhatsApp-
@@ -4310,5 +4400,8 @@ app.listen(PORT, () => {
   startFollowUps();
   startBackupMail();
   startAutomations({ runStatusScan: runStatusScanJob });
+  // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.
+  setInterval(() => { runCloudOutbox().catch((e) => console.error('[wa-cloud]', e.message)); }, 20 * 1000);
+  if (cloudConfigured()) console.log(`  Officiële WhatsApp (Meta): ingesteld — versturen staat ${db().settings.whatsappCloudSend ? 'AAN' : 'UIT'}`);
   console.log('');
 });
