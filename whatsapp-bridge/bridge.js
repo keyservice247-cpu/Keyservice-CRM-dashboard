@@ -60,12 +60,19 @@ const client = new Client({
 // alleen cijfers, bv. 31612345678). Leeg laten = QR gebruiken.
 const HARDCODED_PAIR_NUMBER = '31685352477';
 const PAIR_NUMBER = (process.env.PAIR_NUMBER || HARDCODED_PAIR_NUMBER || '').replace(/[^\d]/g, '');
-let pairingRequested = false;
+// Een koppelcode verloopt na een paar minuten. WhatsApp stuurt dan een NIEUWE
+// qr-gebeurtenis — en juist dán heb je een verse code nodig. Eerder werd de code
+// maar ÉÉN keer aangevraagd (een vlag die nooit werd teruggezet), waardoor er na het
+// verlopen alleen nog QR-blokken in de log verschenen en koppelen onmogelijk werd
+// zonder de bridge te herstarten. Nu vragen we bij elke ronde een verse code aan.
+let laatsteCodeOp = 0;
 
 client.on('qr', async (qr) => {
-  // Als er een telefoonnummer is opgegeven: vraag een koppelcode aan.
-  if (PAIR_NUMBER && !pairingRequested) {
-    pairingRequested = true;
+  // Als er een telefoonnummer is opgegeven: vraag een (nieuwe) koppelcode aan.
+  // De rem van 30 seconden voorkomt dat een snelle reeks qr-gebeurtenissen de log
+  // volgooit met codes die je toch niet op tijd kunt intikken.
+  if (PAIR_NUMBER && Date.now() - laatsteCodeOp > 30000) {
+    laatsteCodeOp = Date.now();
     try {
       const code = await client.requestPairingCode(PAIR_NUMBER);
       const pretty = code.match(/.{1,4}/g)?.join('-') || code;
@@ -75,13 +82,16 @@ client.on('qr', async (qr) => {
       console.log('Op je iPhone: WhatsApp -> Instellingen -> Gekoppelde apparaten');
       console.log('-> Een apparaat koppelen -> "Koppel met telefoonnummer"');
       console.log('-> tik bovenstaande code in.\n');
-      console.log('(Code verloopt? Dan verschijnt hier vanzelf een nieuwe.)\n');
+      console.log('(Verlopen? Wacht — hieronder verschijnt vanzelf een verse code.)\n');
     } catch (e) {
       console.error('Kon geen koppelcode aanvragen:', e.message);
       console.error('Controleer of PAIR_NUMBER klopt (bv. 31612345678).');
     }
     return;
   }
+  // Met een nummer ingesteld koppelen we via de CODE; het QR-blok zou de log dan
+  // alleen maar vervuilen en de code uit beeld duwen.
+  if (PAIR_NUMBER) return;
   // Anders: toon de QR (tekst + scanbare afbeelding-link).
   console.log('\nScan deze QR-code met WhatsApp op je iPhone:');
   console.log('(WhatsApp -> Instellingen -> Gekoppelde apparaten -> Apparaat koppelen)\n');
