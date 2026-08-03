@@ -366,6 +366,16 @@ server/pipeline.js — er bestaat geen pad eromheen.
    gehangen (mergeAttachments/dedupeAttachments), binnen één upload/mail én bij
    samenvoegen. Eenmalige veilige opruiming bij boot (_attDedupV1): dubbele
    verwijzingen weg, bestanden blijven op schijf.
+VASTE WERKAFSPRAAK TITELS: een kaart-titel begint ALTIJD met de PLAATSNAAM van de
+klant, dan " — " en het probleem (bv. "Hoogerheide — slot voordeur eruit gekomen").
+Zit in de AI-prompt (categorizer "title") én in /api/orders/paste. Reden: het bord
+en de dagrapport-matching (postcode/plaats) leunen op de plaats vooraan.
+PLAK-OPDRACHT (noodroute 2 aug): knop "Plak opdracht" op het bord → POST
+/api/orders/paste parseert het DRS-formaat (Naam/Adres/Woonplaats/Telefoon/
+Opmerkingen) deterministisch, ontdubbelt de klant op telefoon, maakt direct een
+kaart (source "DRS WhatsApp groep") en draait dezelfde monteur-dispatch als
+goedkeuren. Gebouwd toen het bridge-nummer tijdelijk geblokkeerd was.
+
 LET OP: md-bestanden zijn dev-documentatie; de runtime-regels staan in code +
 settings. Wijzig je het één, houd BEIDE synchroon.
 

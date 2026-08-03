@@ -34,7 +34,7 @@ import {
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
   can, requirePerm, PERM_KEYS,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import { amsterdamParts } from './week.js';
 import {
@@ -1108,6 +1108,66 @@ app.post('/api/orders', requirePerm('orders'), (req, res) => {
   res.json(withRelations(order));
 });
 
+// PLAK-OPDRACHT (noodroute, 2 aug 2026). Toen het wegwerpnummer van de bridge tijdelijk
+// door WhatsApp werd geblokkeerd, kwamen de DRS-opdrachten niet meer automatisch binnen.
+// Met deze route kopieer je het DRS-bericht uit WhatsApp en plak je het in het CRM: de
+// klantgegevens worden er deterministisch uitgehaald (de vaste DRS-labels: Naam / Adres /
+// Woonplaats / Telefoon / Opmerkingen) en er ontstaat direct een kaart — zelfde pad als
+// een handmatige opdracht, inclusief klant-ontdubbeling op telefoonnummer.
+// VASTE REGEL: de kaart-TITEL begint altijd met de PLAATSNAAM ("Hoogerheide — slot
+// voordeur eruit gekomen"), zodat het bord en de dagrapport-matching op plaats werken.
+app.post('/api/orders/paste', requirePerm('orders'), (req, res) => {
+  const tekst = String(req.body?.text || '').trim();
+  if (tekst.length < 10) return res.status(400).json({ error: 'Plak eerst het hele bericht uit WhatsApp.' });
+  // Veld-voor-veld: pak de tekst achter een bekend label, tot het einde van de regel.
+  const grab = (labels) => {
+    for (const l of labels) {
+      const m = tekst.match(new RegExp(`^\\s*\\*?${l}\\*?\\s*[:=]\\s*(.+)$`, 'im'));
+      if (m && m[1]) return m[1].replace(/\s+/g, ' ').trim();
+    }
+    return '';
+  };
+  const naam = grab(['naam', 'name', 'klant']);
+  const straat = grab(['adres', 'address', 'straat']);
+  const woonplaats = grab(['woonplaats', 'plaats', 'stad', 'city']);
+  const telefoon = (grab(['telefoon', 'telefoonnummer', 'tel', 'phone']).match(/[+\d][\d\s()-]{5,}/) || [''])[0].replace(/[^\d+]/g, '');
+  const opmerking = grab(['opmerkingen', 'opmerking', 'probleem', 'bericht', 'omschrijving']);
+  // Vangnet voor vrije tekst zonder labels: de bestaande extractie.
+  const fallback = extractDetails(tekst);
+  const klantNaam = naam || fallback.customerName || '';
+  const klantTel = telefoon || fallback.customerPhone || '';
+  // Woonplaats-veld van DRS is "4631 AJ - Hoogerheide": postcode + streepje + plaats.
+  const wp = woonplaats.replace(/\s*-\s*/, ' ').replace(/\s+/g, ' ').trim();
+  const adres = [straat, wp].filter(Boolean).join(', ') || fallback.customerAddress || '';
+  // Plaatsnaam = alles ná de postcode; anders het laatste woord van het adres.
+  const plaatsM = (wp || adres).match(/\d{4}\s?[A-Za-z]{2}\s+(.+)$/);
+  const plaats = (plaatsM ? plaatsM[1] : (wp.split(' ').pop() || '')).replace(/,.*$/, '').trim();
+  if (!klantNaam && !klantTel) return res.status(400).json({ error: 'Geen klantgegevens gevonden in de geplakte tekst. Staat het hele bericht erin (Naam/Telefoon)?' });
+  const { customer, suggestions: sugg = [] } = upsertCustomer({ name: klantNaam, phone: klantTel, address: adres, source: 'DRS (geplakt)' });
+  const kern = (opmerking || fallback.problem || 'nieuwe opdracht').replace(/\s+/g, ' ').slice(0, 70);
+  const order = {
+    id: id('ord'),
+    // Titel begint ALTIJD met de plaatsnaam (vaste werkafspraak).
+    title: plaats ? `${plaats} — ${kern}` : kern,
+    description: tekst.slice(0, 4000),
+    status: 'nieuw',
+    source: 'DRS WhatsApp groep',
+    customerId: customer.id,
+    monteurId: null,
+    appointmentAt: null, appointmentEndAt: null,
+    price: '', urgent: false, notes: '', messageId: null,
+    intake: { name: klantNaam, phone: klantTel, email: '', address: adres },
+    createdAt: now(), updatedAt: now(),
+  };
+  if (sugg.length) order.dataSuggestions = sugg.map((x) => ({ id: id('sug'), field: x.field, value: x.to, current: x.from, at: now(), reason: 'geplakte DRS-opdracht wijkt af van het klantrecord' }));
+  db().orders.push(order);
+  logActivity(req.user.name, 'opdracht geplakt (DRS-noodroute)', order.title);
+  saveSoon();
+  // Zelfde vervolg als goedkeuren: automatisch naar de monteur als dat aanstaat.
+  maybeAutoSendToMonteur(order, 'approved');
+  res.json(withRelations(order));
+});
+
 app.patch('/api/orders/:id', requireAuth, (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
@@ -2127,6 +2187,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     morningBriefing: getMorningBriefing(),
     weeklyAiCheck: getWeeklyAiCheck(),
     googleSync: getGoogleSync(),
+    whatsappPaused: !!db().settings.whatsappPaused,
     autoMergeWindowHours: getAutoMergeWindowHours(),
     htmlSignature: getHtmlSignature(),
     aiOverviewModel: db().settings.aiOverviewModel === 'opus' ? 'opus' : 'standaard',
@@ -2364,6 +2425,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       keywords: String(g.keywords || '').slice(0, 300),
     };
   }
+  if ('whatsappPaused' in b) db().settings.whatsappPaused = !!b.whatsappPaused;
   if ('weeklyAiCheck' in b) {
     const w = b.weeklyAiCheck || {};
     db().settings.weeklyAiCheck = {
@@ -2732,6 +2794,12 @@ app.post('/api/orders/:id/send-monteur', requireRole('admin', 'assistent'), (req
 
 // De WhatsApp-bridge haalt hier de wachtrij op (queued items).
 app.get('/api/outbox', checkIngestToken, (req, res) => {
+  // PAUZEKNOP (2 aug 2026): toen het nummer tijdelijk door WhatsApp was geblokkeerd
+  // wegens "geautomatiseerde berichten", moest de verzending METEEN stil kunnen — zonder
+  // op de VPS in te loggen. Staat de pauze aan, dan krijgt de bridge een lege wachtrij;
+  // de items blijven gewoon staan en gaan alsnog uit zodra de pauze eraf is. Ontvangen
+  // blijft gewoon werken.
+  if (db().settings.whatsappPaused) return res.json([]);
   // Herkansings-rem: een eerder mislukt item mag pas na z'n wachttijd (nextTryAt)
   // opnieuw worden aangeboden. Anders hamert de bridge elke 8s op hetzelfde kapotte
   // bericht en loopt de log vol. Nieuwe items gaan wel meteen mee.

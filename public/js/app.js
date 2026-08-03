@@ -1678,6 +1678,32 @@ async function openCustomerDossier(custId) {
   } catch (err) { toast(err.message, true); }
 }
 
+// PLAK-OPDRACHT (noodroute): kopieer het DRS-bericht uit WhatsApp, plak het hier, en
+// het CRM haalt de klantgegevens eruit en maakt direct een kaart. Gebouwd toen het
+// bridge-nummer tijdelijk geblokkeerd was, maar ook daarna handig als vangnet.
+function openPasteOrderModal() {
+  modal(`
+    <h2>Opdracht plakken</h2>
+    <p class="muted small">Kopieer het hele bericht uit de WhatsApp-groep (met Naam, Adres, Woonplaats, Telefoon en Opmerkingen) en plak het hieronder. De kaart-titel begint automatisch met de plaatsnaam.</p>
+    <label>WhatsApp-bericht <textarea id="po-text" rows="10" placeholder="Hallo Abdel Rafour. We sturen je de volgende klant...\n\nNaam: ...\nAdres: ...\nWoonplaats: ...\nTelefoon: ...\nOpmerkingen: ..."></textarea></label>
+    <div class="modal-actions"><span></span><div class="right">
+      <button class="btn" id="po-cancel">Annuleren</button>
+      <button class="btn btn-primary" id="po-save">Maak kaart</button>
+    </div></div>`);
+  $('#po-cancel').onclick = closeModal;
+  $('#po-save').onclick = async () => {
+    const text = $('#po-text').value.trim();
+    if (!text) return toast('Plak eerst het bericht', true);
+    const btn = $('#po-save'); btn.disabled = true; btn.textContent = 'Bezig…';
+    try {
+      const o = await api('/api/orders/paste', 'POST', { text });
+      closeModal(); toast(`Kaart aangemaakt: ${o.title}`);
+      await loadBoard();
+      openOrderModal(o.id);
+    } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = 'Maak kaart'; }
+  };
+}
+
 // Maak een nieuwe opdracht voor een BESTAANDE klant (uit het klantenbestand).
 function openNewOrderForCustomer(c) {
   if (!c) return;
@@ -3264,6 +3290,10 @@ async function loadSettings() {
         <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
       </div>
     </div>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px;border-left:4px solid var(--danger)"> <h3>${icon('whatsapp', 15)} WhatsApp-verzending pauzeren (noodrem)</h3>
+      <p class="muted small">Is het WhatsApp-nummer (tijdelijk) geblokkeerd? Zet dit vinkje AAN: het CRM geeft de bridge dan een lege wachtrij, zodat er geen enkel bericht meer uitgaat. Berichten die klaarstonden blijven bewaard en gaan vanzelf alsnog uit zodra je de pauze weer uitzet. Ontvangen blijft gewoon werken.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-pause" style="width:auto" ${s.whatsappPaused ? 'checked' : ''}> Alle uitgaande WhatsApp-berichten pauzeren</label>
+    </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-verbinding testen</h3>
       <p class="muted small">Stuur een testbericht naar een nummer en zie hieronder of de bridge het écht verstuurt. Blijft een bericht op <strong>wachtrij</strong> staan of wordt het <strong>mislukt</strong>? Dan moet de bridge op de VPS worden bijgewerkt/herstart.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
@@ -3740,6 +3770,11 @@ async function loadSettings() {
       toast(`Test-briefing verstuurd via ${(r.via || []).map((v) => v === 'whatsapp' ? 'WhatsApp' : 'e-mail').join(' + ')}`);
     } catch (err) { toast(err.message, true); }
     finally { btn.disabled = false; btn.textContent = old; }
+  };
+  if ($('#wa-pause')) $('#wa-pause').onchange = async () => {
+    const aan = $('#wa-pause').checked;
+    try { await api('/api/settings', 'PATCH', { whatsappPaused: aan }); toast(aan ? 'WhatsApp-verzending GEPAUZEERD — er gaat niets meer uit' : 'Pauze eraf — wachtrij gaat weer lopen'); }
+    catch (err) { toast(err.message, true); }
   };
   $('#saveWeeklyCheck').onclick = async () => {
     const weeklyAiCheck = { enabled: $('#wc-enabled').checked, hour: Number($('#wc-hour').value) };
@@ -4460,6 +4495,7 @@ function bindButtons() {
   $('#newMonteurBtn')?.addEventListener('click', () => openMonteurModal());
   $('#newUserBtn')?.addEventListener('click', () => openUserModal());
   $('#simulateBtn')?.addEventListener('click', () => openSimulateModal());
+  $('#pasteOrderBtn')?.addEventListener('click', openPasteOrderModal);
   $('#boardSearch')?.addEventListener('input', renderBoard);
   // Periode wisselen = opnieuw laden (mét of zonder ingeklapte kaarten), niet alleen filteren.
   $('#boardPeriodFilter')?.addEventListener('change', loadBoard);

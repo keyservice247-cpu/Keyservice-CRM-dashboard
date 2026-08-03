@@ -332,7 +332,7 @@ Geef JSON met exact deze velden:
 {
   "isOpdracht": true/false,
   "status": "open|offerte_verzonden|afspraak_ingepland|afgerond|geannuleerd",
-  "title": "korte titel voor de opdracht (max 120 tekens)",
+  "title": "korte titel; BEGIN ALTIJD MET DE PLAATSNAAM van de klant als die bekend is, dan een streepje en het probleem (bv. \\"Hoogerheide — slot voordeur eruit gekomen\\"); max 120 tekens",
   "customerName": "naam klant of null",
   "customerPhone": "telefoonnummer of null",
   "customerEmail": "e-mailadres of null",

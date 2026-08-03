@@ -443,6 +443,30 @@ const alle = (await api('GET', '/api/orders')).json;
 const oudNa = alle.find((o) => o.id === oud.json.id); const nieuwNa = alle.find((o) => o.id === nieuw.json.id);
 ok('antwoord gaat naar de nieuwste kaart', (nieuwNa.thread || []).length > (oudNa.thread || []).length, `nieuw=${(nieuwNa.thread || []).length} oud=${(oudNa.thread || []).length}`);
 
+// ---------- Plak-opdracht (DRS-noodroute) + pauzeknop ----------
+console.log('\n== Plak-opdracht: DRS-bericht -> kaart met plaatsnaam-titel ==');
+const drsBericht = 'Hallo Abdel Rafour. We sturen je de volgende klant. Graag z.s.m. contact opnemen.:\n\nDatum: 03 augustus 2026\nNaam: Daniel Winters\nAdres: De Tulp, 13\nWoonplaats: 4631 AJ - Hoogerheide\nTelefoon: 0682049908\nOpmerkingen: Slot voordeur eruit gekomen\nLocatie: https://www.google.nl/maps?q=51.42983,4.31723';
+const pl = await api('POST', '/api/orders/paste', { text: drsBericht });
+ok('geplakte DRS-opdracht wordt een kaart', pl.status === 200 && !!pl.json.id, JSON.stringify(pl.json.error || pl.json.title));
+ok('titel begint met de PLAATSNAAM', /^Hoogerheide — /.test(pl.json.title || ''), pl.json.title);
+ok('klantgegevens er goed uitgehaald', pl.json.customer?.name === 'Daniel Winters' && pl.json.customer?.phone === '0682049908');
+ok('intake-adres compleet met postcode', /4631 AJ Hoogerheide/.test(pl.json.intake?.address || ''), pl.json.intake?.address);
+const pl2 = await api('POST', '/api/orders/paste', { text: drsBericht });
+const dubbelKlant = (await customers()).filter((k) => String(k.phone || '').includes('682049908'));
+ok('tweede keer plakken maakt GEEN dubbele klant', pl2.status === 200 && dubbelKlant.length === 1, `klanten=${dubbelKlant.length}`);
+const plLeeg = await api('POST', '/api/orders/paste', { text: 'hoi' });
+ok('onzin plakken geeft een nette uitleg', plLeeg.status === 400 && /klantgegevens|hele bericht/i.test(plLeeg.json.error || ''));
+
+console.log('\n== Pauzeknop: bridge krijgt een lege wachtrij ==');
+await api('POST', '/api/orders/paste', { text: drsBericht }); // vult mogelijk de outbox via dispatch
+const obVoor = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': TOKEN } })).json();
+await api('PATCH', '/api/settings', { whatsappPaused: true });
+const obPauze = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': TOKEN } })).json();
+ok('tijdens pauze gaat er NIETS naar de bridge', Array.isArray(obPauze) && obPauze.length === 0, `items=${obPauze.length}`);
+await api('PATCH', '/api/settings', { whatsappPaused: false });
+const obNa = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': TOKEN } })).json();
+ok('na de pauze staat de wachtrij er nog (niets kwijt)', obNa.length === obVoor.length, `voor=${obVoor.length} na=${obNa.length}`);
+
 // ---------- Samenvatting ----------
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
