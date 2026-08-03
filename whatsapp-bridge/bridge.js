@@ -66,6 +66,7 @@ const PAIR_NUMBER = (process.env.PAIR_NUMBER || HARDCODED_PAIR_NUMBER || '').rep
 // verlopen alleen nog QR-blokken in de log verschenen en koppelen onmogelijk werd
 // zonder de bridge te herstarten. Nu vragen we bij elke ronde een verse code aan.
 let laatsteCodeOp = 0;
+let codeGeblokkeerd = false;   // WhatsApp weigert (tijdelijk) codes -> QR blijft zichtbaar
 
 client.on('qr', async (qr) => {
   // Als er een telefoonnummer is opgegeven: vraag een (nieuwe) koppelcode aan.
@@ -83,15 +84,21 @@ client.on('qr', async (qr) => {
       console.log('-> Een apparaat koppelen -> "Koppel met telefoonnummer"');
       console.log('-> tik bovenstaande code in.\n');
       console.log('(Verlopen? Wacht — hieronder verschijnt vanzelf een verse code.)\n');
+      return;
     } catch (e) {
+      // GEEN code gekregen — meestal omdat WhatsApp een rem zet op het herhaald
+      // aanvragen van koppelcodes voor hetzelfde nummer. Dan mag de QR NOOIT
+      // wegvallen: dat is op zo'n moment de enige manier om nog te koppelen.
       console.error('Kon geen koppelcode aanvragen:', e.message);
-      console.error('Controleer of PAIR_NUMBER klopt (bv. 31612345678).');
+      console.error('Meestal betekent dit: te vaak achter elkaar een code gevraagd.');
+      console.error('Wacht 15 minuten, of koppel nu via de QR-code hieronder.\n');
+      codeGeblokkeerd = true;
     }
-    return;
   }
-  // Met een nummer ingesteld koppelen we via de CODE; het QR-blok zou de log dan
-  // alleen maar vervuilen en de code uit beeld duwen.
-  if (PAIR_NUMBER) return;
+  // Met een nummer ingesteld koppelen we normaal via de CODE; het QR-blok zou de log
+  // dan alleen maar vervuilen en de code uit beeld duwen. Lukt de code niet, dan komt
+  // de QR juist wél in beeld — anders sta je met lege handen.
+  if (PAIR_NUMBER && !codeGeblokkeerd) return;
   // Anders: toon de QR (tekst + scanbare afbeelding-link).
   console.log('\nScan deze QR-code met WhatsApp op je iPhone:');
   console.log('(WhatsApp -> Instellingen -> Gekoppelde apparaten -> Apparaat koppelen)\n');
