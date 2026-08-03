@@ -43,7 +43,16 @@ de regressie meegroeit.
 - **Hosting:** Render (auto-deploy "On Commit" vanaf `main`). URL: keyservice-crm.onrender.com
 - **WhatsApp-bridge:** los Node-programma in `whatsapp-bridge/` (whatsapp-web.js), draait op
   een Hetzner VPS (Falkenstein, CPX22) onder `pm2` (proces heet `wa`). Repo staat in
-  `/root/ksbridge`. Updaten = `cd /root/ksbridge && git pull && pm2 restart wa`.
+  `/root/ksbridge` — dat is een kloon van DEZE repo, dus `bridge.js` staat in
+  `/root/ksbridge/whatsapp-bridge/`, niet in de hoofdmap. De WhatsApp-sessie heet
+  `wa-session` (SESSION_DIR in bridge.js), NIET `.wwebjs_auth`.
+  Updaten = `cd /root/ksbridge && git pull && pm2 restart wa`.
+  OPNIEUW KOPPELEN (koppelcode) = eerst Ctrl+C als `pm2 logs` nog draait, dan:
+  `pm2 delete wa && cd /root/ksbridge/whatsapp-bridge && rm -rf wa-session &&
+  pm2 start bridge.js --name wa && pm2 logs wa`. De `cd` moet vóór `pm2 start`,
+  anders zoekt de bridge zijn sessiemap in de verkeerde map.
+  LET OP bij console-instructies: `pm2 logs` blijft draaien; wat je daarna typt wordt
+  alleen als tekst getoond en NIET uitgevoerd. Vermeld Ctrl+C dus altijd expliciet.
 - **Render env vars:** INGEST_TOKEN, ANTHROPIC_API_KEY (Claude Haiku), IMAP_* (TransIP ontvangen),
   SMTP_* (TransIP versturen), WHATSAPP_VERIFY_TOKEN, DATA_DIR=/var/data, SESSION_SECRET.
 - **Bridge .env / hardcoded:** DASHBOARD_URL, INGEST_TOKEN, PAIR_NUMBER (31685352477) en token
