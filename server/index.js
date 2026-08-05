@@ -91,7 +91,25 @@ app.use((req, res, next) => {
 });
 // De RUWE body bewaren: de officiële WhatsApp-webhook van Meta ondertekent precies die
 // bytes, dus zonder het origineel is de handtekening niet te controleren.
-app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
+const ruweBody = (req, res, buf) => { req.rawBody = buf; };
+// FOTO'S UPLOADEN (6 aug 2026). Bijlages gaan als base64 door een JSON-body, en base64
+// maakt een bestand ~33% groter. Met de vaste grens van 2 MB sneuvelde daardoor élke
+// telefoonfoto boven ongeveer 1,5 MB — terwijl storage.js gewoon 25 MB toestaat. Die
+// twee spraken elkaar tegen; de gebruiker kreeg alleen "foutmelding" en geen uitleg.
+// Daarom een RUIME grens op precies de upload-routes, en de krappe grens overal
+// anders — met name op /api/ingest/form, dat zonder token bereikbaar is.
+const jsonKlein = express.json({ limit: '2mb', verify: ruweBody });
+const jsonGroot = express.json({ limit: '40mb', verify: ruweBody });
+const UPLOAD_PADEN = /\/(attachments|werkbon|import-preview|import)$/;
+app.use((req, res, next) => (UPLOAD_PADEN.test(req.path) ? jsonGroot : jsonKlein)(req, res, next));
+// Een te grote body geeft standaard een kale 413 waar de gebruiker niets aan heeft.
+// Nu een nette uitleg met de werkelijke grens erin.
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({ error: 'Bestand te groot. Een foto of video mag maximaal 25 MB zijn — maak hem kleiner en probeer opnieuw.' });
+  }
+  return next(err);
+});
 app.use(attachUser);
 const isHttps = (req) => req.secure || req.get('x-forwarded-proto') === 'https';
 

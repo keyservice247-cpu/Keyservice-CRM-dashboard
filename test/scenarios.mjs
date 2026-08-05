@@ -493,6 +493,20 @@ ok('identiek dubbel bericht wordt niet verstuurd',
   naRem.some((o) => String(o.lastResult || '').startsWith('dubbel')),
   JSON.stringify(naRem.slice(0, 6).map((o) => `${o.status}:${o.lastResult}`)));
 
+// ---------- Foto's uploaden (6 aug 2026) ----------
+// Bijlages gaan als base64 door een JSON-body, en base64 maakt een bestand ~33% groter.
+// De vaste bodygrens van 2 MB liet daardoor geen enkele normale telefoonfoto door,
+// terwijl storage.js 25 MB toestaat. Deze twee assertions bewaken dat die grenzen
+// blijven kloppen — en dat een écht te groot bestand een leesbare uitleg geeft.
+console.log('\n== Foto uploaden op een kaart ==');
+const fotoOrder = (await orders())[0];
+const foto4mb = Buffer.alloc(4 * 1024 * 1024, 7).toString('base64');
+const up1 = await api('POST', `/api/orders/${fotoOrder.id}/attachments`, { filename: 'foto.jpg', mime: 'image/jpeg', dataBase64: foto4mb });
+ok('telefoonfoto van 4 MB wordt geaccepteerd', up1.status === 200, `status=${up1.status} ${JSON.stringify(up1.json)}`);
+ok('bijlage hangt aan de kaart', (up1.json?.attachments || []).some((a) => a.filename === 'foto.jpg'));
+const up2 = await api('POST', `/api/orders/${fotoOrder.id}/attachments`, { filename: 'groot.jpg', mime: 'image/jpeg', dataBase64: Buffer.alloc(30 * 1024 * 1024, 7).toString('base64') });
+ok('écht te groot bestand geeft een leesbare uitleg', up2.status === 413 && /maximaal 25 MB/i.test(up2.json?.error || ''), `status=${up2.status} ${JSON.stringify(up2.json)}`);
+
 // ---------- Samenvatting ----------
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
