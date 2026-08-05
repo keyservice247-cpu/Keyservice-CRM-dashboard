@@ -418,6 +418,22 @@ berichten". `server/connectors/whatsapp-cloud.js` praat met Meta's officiële pl
 - Test: `test/whatsapp-cloud-test.mjs` (20 assertions, PORT=3125, met
   `WHATSAPP_APP_SECRET=appsecret123`).
 
+## SNELHEIDSREM OP DE UITGAANDE WACHTRIJ (6 aug 2026) — NIET verzwakken
+Aanleiding: na de storing stond de wachtrij dagen vol. Zodra de bridge terugkwam ging
+ALLES in enkele seconden de deur uit — tientallen berichten, met dubbelen ertussen.
+Dat is exact het patroon waarvoor WhatsApp op 2 aug het nummer blokkeerde. Drie
+vangrails, alle drie in `GET /api/outbox` (aan de bron, niet in de bridge):
+1. **Verlopen klantberichten vervallen** (>24u in de wachtrij → status failed met
+   uitleg). Een appje van gisteren is niet meer relevant. GROEPS-items houden hun
+   ruimere herkansing van 36u — een opdracht mag nooit stil verloren gaan.
+2. **Dubbelen eruit**: zelfde ontvanger + identieke tekst → alleen de eerste gaat weg.
+3. **Snelheidsrem**: hooguit 2 berichten per ronde en minimaal 20 s tussen rondes
+   (`db()._outboxLaatsteRonde`). Bij normaal gebruik merk je hier niets van; alleen een
+   opgelopen wachtrij wordt rustig afgewikkeld.
+`GET /api/whatsapp/outbox-status?full=1` (admin) geeft de HELE wachtrij ongefilterd —
+nodig voor diagnose én voor de tests, want /api/outbox is sinds de rem geen eerlijk
+beeld meer van wat er klaarstaat. Regressie: 3 assertions in scenarios.mjs (88 totaal).
+
 ## WhatsApp-groepstoring (LID) — opgelost ronde 26 (17 jul), NIET verzwakken
 - WhatsApp's LID-migratie brak het LEZEN van groeps-chats in whatsapp-web.js 1.34.7
   (getChats/getChat gooien een minified fout zoals "r"); 1-op-1 werkt, en VERSTUREN

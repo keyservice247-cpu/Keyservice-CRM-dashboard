@@ -26,6 +26,10 @@ async function api(method, path, body, useToken = false) {
 const orders = async () => (await api('GET', '/api/orders')).json || [];
 const customers = async () => (await api('GET', '/api/customers')).json || [];
 const outboxQ = async () => (await api('GET', '/api/outbox', null, true)).json || [];
+// De HELE wachtrij (beheerdersweergave). /api/outbox toont sinds de snelheidsrem maar
+// een paar berichten per ronde aan de bridge; voor het inspecteren van wat er klaarstaat
+// is dat geen eerlijk beeld meer.
+const outboxAll = async () => (await api('GET', '/api/whatsapp/outbox-status?full=1')).json || [];
 
 // ---------- Setup ----------
 console.log('\n== Setup ==');
@@ -101,7 +105,7 @@ ok('kaart-intake heeft het NIEUWE adres', o7 && /nieuwe laan|arnhem/i.test(o7.in
 ok('suggestie "adres wijkt af" op de kaart', o7 && (o7.dataSuggestions || []).some((s) => s.field === 'adres'), o7 && JSON.stringify(o7.dataSuggestions));
 const karin = (await customers()).find((c) => (c.phone || '').includes('0611111111'));
 ok('klantrecord-adres ONGEWIJZIGD (Rhenen)', /rhenen/i.test(karin?.address || ''), karin?.address);
-const dispatch7 = (await outboxQ()).find((x) => x.orderId === o7?.id);
+const dispatch7 = (await outboxAll()).find((x) => x.orderId === o7?.id);
 ok('monteur-bericht gebruikt het AANVRAAG-adres (Arnhem)', dispatch7 && /arnhem/i.test(dispatch7.text), dispatch7 && dispatch7.text.slice(0, 120));
 // Suggestie toepassen via de kaart-knop -> record wél bijgewerkt (bewust, gelogd)
 await api('POST', `/api/orders/${o7.id}/data-suggestion`, { field: 'adres', action: 'apply' });
@@ -301,7 +305,7 @@ const sW2 = await api('POST', '/api/ingest/whatsapp', {
 ok('tweede aanvraag binnen venster -> GEEN nieuwe kaart', (await orders()).length === ordersBeforeW2, `${ordersBeforeW2} -> ${(await orders()).length}`);
 const oW = (await orders()).find((o) => (o.intake?.phone || '').includes('0633334444'));
 ok('tweede bericht in de thread + systeemnotitie samenvoegen', oW && (oW.thread || []).some((t) => /reservesleutel/i.test(t.body || '')) && (oW.thread || []).some((t) => /automatisch aan deze kaart/i.test(t.body || '')));
-const obW = (await outboxQ()).filter((x) => x.orderId === oW?.id);
+const obW = (await outboxAll()).filter((x) => x.orderId === oW?.id);
 ok('geen dubbele volledige dispatch, wél aanvulling naar de monteur', obW.filter((x) => x.by !== 'samenvoegen-aanvulling').length === 1 && obW.some((x) => x.by === 'samenvoegen-aanvulling'), JSON.stringify(obW.map((x) => x.by)));
 ok('kaart kreeg "Nieuw bericht"-badge bij samenvoegen (nooit stil)', oW && oW.customerReplied === true && (oW.unreadReplies || 0) >= 1);
 // Ander adres binnen het venster -> tóch een nieuwe kaart (andere klus, Regel 1).
@@ -383,7 +387,7 @@ await api('POST', '/api/ingest/whatsapp', {
 }, true);
 await pauze();
 await api('POST', '/api/ingest/whatsapp', { group: 'Youssef Keyservice247', name: 'Youssef', body: 'Ok', externalId: 'ack2' }, true);
-const ackCount1 = (await outboxQ()).filter((x) => x.by === 'monteur-bevestiging').length;
+const ackCount1 = (await outboxAll()).filter((x) => x.by === 'monteur-bevestiging').length;
 ok('direct "ok" van de monteur -> bevestiging naar de opdrachtgroep', ackCount1 === 1, `count=${ackCount1}`);
 await api('POST', '/api/ingest/whatsapp', {
   group: `groep ${RAF_ID}`, name: 'Sanne Vos',
@@ -398,7 +402,7 @@ await api('POST', '/api/ingest/whatsapp', {
 }, true);
 await pauze();
 await api('POST', '/api/ingest/whatsapp', { group: 'Youssef Keyservice247', name: 'Abdel', body: 'Oke', externalId: 'ack5' }, true);
-const ackCount2 = (await outboxQ()).filter((x) => x.by === 'monteur-bevestiging').length;
+const ackCount2 = (await outboxAll()).filter((x) => x.by === 'monteur-bevestiging').length;
 ok('"oke" op een dagrapport -> GEEN onterechte bevestiging naar de opdrachtgroep', ackCount2 === ackCount1, `count=${ackCount2}`);
 
 // ---------- Rustig scherm: huishoudelijke opslag mag geen verversing uitlokken ----------
@@ -464,8 +468,30 @@ await api('PATCH', '/api/settings', { whatsappPaused: true });
 const obPauze = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': TOKEN } })).json();
 ok('tijdens pauze gaat er NIETS naar de bridge', Array.isArray(obPauze) && obPauze.length === 0, `items=${obPauze.length}`);
 await api('PATCH', '/api/settings', { whatsappPaused: false });
-const obNa = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': TOKEN } })).json();
-ok('na de pauze staat de wachtrij er nog (niets kwijt)', obNa.length === obVoor.length, `voor=${obVoor.length} na=${obNa.length}`);
+const statusNa = (await api('GET', '/api/whatsapp/outbox-status')).json || [];
+ok('na de pauze staat de wachtrij er nog (niets kwijt)',
+  statusNa.some((o) => o.status === 'queued'), JSON.stringify(statusNa.map((o) => o.status)));
+
+// ---------- Snelheidsrem (6 aug 2026) ----------
+// Aanleiding: na de WhatsApp-storing stond de wachtrij dagen vol. Zodra de bridge
+// terugkwam ging ALLES in enkele seconden de deur uit — tientallen berichten, met
+// dubbelen ertussen. Dat is precies het patroon waarvoor WhatsApp een nummer blokkeert.
+// Deze assertions bewaken dat de rem er nooit stilletjes uitloopt.
+console.log('\n== Snelheidsrem: wachtrij mag nooit in één stortvloed leeglopen ==');
+// Twee identieke berichten naar hetzelfde nummer + drie verschillende.
+await api('POST', '/api/whatsapp/test', { phone: '0612000001', text: 'Zelfde bericht' });
+await api('POST', '/api/whatsapp/test', { phone: '0612000001', text: 'Zelfde bericht' });
+for (let i = 2; i <= 4; i++) await api('POST', '/api/whatsapp/test', { phone: `061200000${i}`, text: `Bericht ${i}` });
+// Even wachten tot de rem (20s tussen rondes) een nieuwe ronde toestaat.
+await new Promise((r) => setTimeout(r, 21000));
+const ronde1 = await outboxQ();
+ok('hooguit 2 berichten per ronde naar de bridge', ronde1.length <= 2, `kreeg ${ronde1.length}`);
+const ronde2 = await outboxQ();
+ok('direct daarna komt er niets bij (20 seconden ertussen)', ronde2.length === 0, `kreeg ${ronde2.length}`);
+const naRem = (await api('GET', '/api/whatsapp/outbox-status')).json || [];
+ok('identiek dubbel bericht wordt niet verstuurd',
+  naRem.some((o) => String(o.lastResult || '').startsWith('dubbel')),
+  JSON.stringify(naRem.slice(0, 6).map((o) => `${o.status}:${o.lastResult}`)));
 
 // ---------- Samenvatting ----------
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);

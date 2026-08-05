@@ -2894,7 +2894,63 @@ app.get('/api/outbox', checkIngestToken, (req, res) => {
   // opnieuw worden aangeboden. Anders hamert de bridge elke 8s op hetzelfde kapotte
   // bericht en loopt de log vol. Nieuwe items gaan wel meteen mee.
   const nu = now();
-  const items = db().outbox.filter((o) => o.status === 'queued' && (!o.nextTryAt || o.nextTryAt <= nu));
+  let items = db().outbox.filter((o) => o.status === 'queued' && (!o.nextTryAt || o.nextTryAt <= nu));
+
+  // ---- VERLOPEN BERICHTEN NIET ALSNOG VERSTUREN (6 aug 2026) ----
+  // Na de storing stond de wachtrij dagen vol. Zodra de bridge terugkwam ging ALLES in
+  // één klap de deur uit: tientallen berichten in enkele seconden, naar klanten die
+  // inmiddels allang gebeld waren. Dat is precies het patroon waar WhatsApp een nummer
+  // voor blokkeert. Een klantbericht dat een etmaal oud is, is bovendien niet meer
+  // relevant — dat hoort te vervallen, niet alsnog aan te komen.
+  // Groepsberichten (monteur-dispatch, terugkoppeling) houden hun eigen, ruimere
+  // herkansing van 36 uur: daar mag een opdracht nooit stil verloren gaan.
+  const KLANT_VERVALT_NA_UUR = 24;
+  for (const it of items) {
+    if (it.group && it.group !== '__klant_dm__') continue;
+    const ouderdom = Date.now() - new Date(it.createdAt || 0).getTime();
+    if (ouderdom > KLANT_VERVALT_NA_UUR * 3600000) {
+      it.status = 'failed';
+      it.doneAt = now();
+      it.lastResult = `verlopen — stond langer dan ${KLANT_VERVALT_NA_UUR} uur in de wachtrij, niet alsnog verstuurd`;
+    }
+  }
+  items = items.filter((o) => o.status === 'queued');
+
+  // ---- DUBBELE BERICHTEN ----
+  // In de log van 6 aug stonden meerdere nummers twee keer achter elkaar met exact
+  // hetzelfde bericht. Een klant twee keer hetzelfde sturen is niet alleen slordig, het
+  // telt bij WhatsApp mee als spam-signaal. Staan er twee wachtende items met dezelfde
+  // ontvanger én dezelfde tekst, dan gaat alleen de eerste eruit.
+  const gezien = new Set();
+  for (const it of items) {
+    const sleutel = `${it.phone || it.groupId || it.group || ''}|${String(it.text || '').trim()}`;
+    if (!sleutel.startsWith('|') && gezien.has(sleutel)) {
+      it.status = 'failed';
+      it.doneAt = now();
+      it.lastResult = 'dubbel — identiek bericht stond al klaar voor dezelfde ontvanger';
+      continue;
+    }
+    gezien.add(sleutel);
+  }
+  items = items.filter((o) => o.status === 'queued');
+
+  // ---- SNELHEIDSREM ----
+  // De bridge vraagt elke 8 seconden de wachtrij op en verstuurt ALLES wat hij krijgt.
+  // Daarom knijpen we hier af, aan de bron: hooguit een paar berichten per minuut, in
+  // menselijk tempo. Bij normaal gebruik merk je hier niets van (er staat zelden meer
+  // dan één bericht klaar); alleen een opgelopen wachtrij wordt nu rustig afgewikkeld
+  // in plaats van in één stortvloed.
+  const PER_RONDE = 2;              // hooguit 2 berichten per keer ophalen
+  const MIN_SECONDEN_TUSSEN = 20;   // en niet vaker dan om de 20 seconden
+  const laatst = db()._outboxLaatsteRonde ? new Date(db()._outboxLaatsteRonde).getTime() : 0;
+  if (items.length && Date.now() - laatst < MIN_SECONDEN_TUSSEN * 1000) return res.json([]);
+  const teveel = items.length > PER_RONDE;
+  items = items.slice(0, PER_RONDE);
+  if (items.length) {
+    db()._outboxLaatsteRonde = now();
+    saveSoonQuiet();
+    if (teveel) console.log(`[outbox] wachtrij afgeknepen: ${PER_RONDE} verstuurd, rest volgt over ${MIN_SECONDEN_TUSSEN}s`);
+  }
   // Groeps-id er bij het ophalen live bij zoeken: een koppeling kan ná het aanmaken
   // van het item zijn gezet/geleerd. Zo kan de bridge altijd rechtstreeks op id
   // versturen, ook voor oudere items in de wachtrij.
@@ -2925,6 +2981,11 @@ app.post('/api/whatsapp/test', requirePerm('settings'), (req, res) => {
 
 // Wachtrij-status voor het test-/diagnosekaartje: de laatste items met status.
 app.get('/api/whatsapp/outbox-status', requirePerm('settings'), (req, res) => {
+  // ?full=1 geeft de HELE wachtrij ongefilterd terug (alleen voor beheerders). Nodig
+  // sinds de snelheidsrem: /api/outbox laat de bridge bewust maar een paar berichten
+  // per keer zien, dus dat is geen eerlijk beeld meer van wat er klaarstaat — niet voor
+  // een diagnose, en niet voor de regressietests.
+  if (req.query.full) return res.json((db().outbox || []).filter((o) => o.status === 'queued'));
   const items = (db().outbox || []).slice(0, 12).map((o) => ({
     id: o.id, status: o.status, by: o.by || '', createdAt: o.createdAt, doneAt: o.doneAt || null,
     // Groeps-items tonen de groep (ook als er een nood-telefoonnummer op zit).

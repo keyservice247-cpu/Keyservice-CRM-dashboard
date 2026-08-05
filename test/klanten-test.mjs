@@ -79,7 +79,7 @@ const attId = ((up.json.attachments || [])[0] || {}).id;
 ok('foto-bijlage geüpload', up.status === 200 && !!attId);
 const disp = await api('POST', `/api/orders/${ord.json.id}/send-monteur`, { monteurId: fm.id, attachmentIds: [attId] });
 ok('dispatch geaccepteerd', disp.status === 200, JSON.stringify(disp.json));
-const ob = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+const ob = await (await fetch(`${BASE}/api/whatsapp/outbox-status?full=1`, { headers: { cookie } })).json();
 const item = ob.find((x) => x.orderId === ord.json.id && x.media);
 ok('outbox-item draagt de aangevinkte foto als media', !!item && item.media.length === 1 && /^\/uploads\//.test(item.media[0].url), JSON.stringify(item && item.media));
 // De bridge haalt de foto met het ingest-token op (zonder login-sessie).
@@ -94,7 +94,7 @@ console.log('\n== Kaart-correctie wint: dispatch gebruikt de verbeterde gegevens
 await api('PATCH', `/api/orders/${ord.json.id}`, { intake: { name: 'Karin Vijfhuizen', phone: '0650638809', email: '', address: 'Sportlaan 12, 2141 AB Vijfhuizen' } });
 const disp2 = await api('POST', `/api/orders/${ord.json.id}/send-monteur`, { monteurId: fm.id });
 ok('tweede dispatch geaccepteerd', disp2.status === 200);
-const ob2 = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+const ob2 = await (await fetch(`${BASE}/api/whatsapp/outbox-status?full=1`, { headers: { cookie } })).json();
 const item2 = ob2.find((x) => x.orderId === ord.json.id && /Karin Vijfhuizen/.test(x.text || ''));
 ok('monteur-bericht bevat de VERBETERDE gegevens (naam+adres)', !!item2 && /Sportlaan 12/.test(item2.text) && /0650638809/.test(item2.text), item2 ? item2.text.slice(0, 120) : 'geen item');
 ok('oude gegevens niet meer in het nieuwste bericht', !!item2 && !/Klant: U\b/.test(item2.text));

@@ -63,7 +63,7 @@ await api('PATCH', `/api/invoices/${off.id}`, { lines: [{ description: 'Reparati
 await api('POST', `/api/invoices/${off.id}/status`, { status: 'verzonden' });
 const fu = await api('POST', `/api/invoices/${off.id}/quote-followup`, {});
 ok('herinnering gaat via WhatsApp (geen e-mail bekend)', fu.json.ok && fu.json.via === 'whatsapp', JSON.stringify(fu.json));
-const ob = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+const ob = await (await fetch(`${BASE}/api/whatsapp/outbox-status?full=1`, { headers: { cookie } })).json();
 ok('appje in wachtrij naar het 06 van de klant', ob.some((x) => x.by === 'offerte-opvolging' && x.phone === '0612345600'), JSON.stringify(ob.map((x) => x.by)));
 ok('opvolg-teller opgehoogd', ((await api('GET', `/api/invoices/${off.id}`)).json.invoice || {}).quoteFollowupCount === 1);
 // Klant zonder e-mail én zonder 06 -> nette foutmelding, geen crash.
@@ -124,7 +124,7 @@ ok('lege factuur kan niet verstuurd worden', leeg.status === 400 && /regels/i.te
 await api('PATCH', `/api/invoices/${invWA.id}`, { lines: [{ description: 'Cilinderslot', qty: 1, priceExcl: 120 }], btwPct: 21, note: 'Let op: garantie 2 jaar' });
 const waSend = await api('POST', `/api/invoices/${invWA.id}/send-whatsapp`, {});
 ok('factuur via WhatsApp verstuurd', waSend.status === 200 && waSend.json.ok && waSend.json.phone === '0612347788', JSON.stringify(waSend.json));
-const obWA = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+const obWA = await (await fetch(`${BASE}/api/whatsapp/outbox-status?full=1`, { headers: { cookie } })).json();
 const item = obWA.find((x) => x.by === 'factuur-whatsapp' && x.phone === '0612347788');
 ok('appje staat in de wachtrij met de PDF als bijlage', !!item && Array.isArray(item.media) && item.media.length === 1 && item.media[0].mime === 'application/pdf', JSON.stringify(item?.media));
 ok('factuur staat nu op verzonden', waSend.json.status === 'verzonden');
