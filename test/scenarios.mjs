@@ -520,6 +520,14 @@ ok('verse code geldt niet als verlopen', pair?.verlopen === false);
 await api('POST', '/api/whatsapp/pairing', {}, true);
 ok('na koppelen verdwijnt het kaartje', (await api('GET', '/api/whatsapp/pairing')).json?.actief === false);
 
+// ---------- Agenda-diagnose (6 aug 2026) ----------
+// "Er staat verbonden maar de afspraak komt niet in de agenda": sync-fouten stonden
+// onzichtbaar in de database. De diagnose-knop maakt ze zichtbaar; zonder verbinding
+// hoort hij een nette uitleg te geven, geen crash.
+console.log('\n== Agenda-diagnose ==');
+const gd = await api('POST', '/api/google/sync-now');
+ok('zonder Google-koppeling: nette uitleg (geen crash)', gd.status === 400 && /niet verbonden/i.test(gd.json?.error || ''), JSON.stringify(gd));
+
 // ---------- Samenvatting ----------
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

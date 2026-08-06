@@ -2632,6 +2632,38 @@ app.post('/api/google/default-calendar', requireRole('admin'), (req, res) => {
   res.json({ ok: true, defaultCalendarId: googleInfo().defaultCalendarId });
 });
 
+// ---------- AGENDA-DIAGNOSE (6 aug 2026) ----------
+// Klacht: "er staat verbonden maar de afspraak komt niet in de agenda". De server
+// registreerde sync-fouten wél op de kaart (googleSyncError), maar geen enkel scherm
+// toonde ze — voor de gebruiker leek de koppeling dus willekeurig kapot. Deze route
+// geeft in één klap het echte verhaal: welke komende afspraken zijn gesynct, welke
+// niet, en WAAROM niet. En hij probeert het meteen opnieuw (zelfde vangnet als de
+// uurlijkse ronde, maar dan nu direct, op de knop).
+app.post('/api/google/sync-now', requireRole('admin', 'assistent'), async (req, res) => {
+  if (!googleConnected()) return res.status(400).json({ error: 'Google Agenda is niet verbonden. Koppel eerst via de knop hierboven.' });
+  const nowMs = Date.now();
+  const komend = (db().orders || []).filter((o) => !o.archivedWeek && o.appointmentAt
+    && o.status !== 'geannuleerd'
+    && new Date(o.appointmentAt).getTime() > nowMs - 6 * 3600000)
+    .sort((a, b) => new Date(a.appointmentAt) - new Date(b.appointmentAt));
+  const rows = [];
+  for (const o of komend.slice(0, 25)) {
+    await syncOrderToGoogle(o);
+    const monteur = o.monteurId ? db().monteurs.find((m) => m.id === o.monteurId) : null;
+    rows.push({
+      id: o.id, title: o.title, at: o.appointmentAt,
+      monteur: monteur?.name || '',
+      gesynct: !!(o.googleEvent && o.googleEvent.eventId && !o.googleSyncError),
+      fout: o.googleSyncError || '',
+      // Overgeslagen door de sync-REGEL (instelbaar): wel een afspraak, geen event, geen fout.
+      overgeslagen: !o.googleEvent && !o.googleSyncError,
+    });
+  }
+  saveSoon();
+  const cfg = db().settings.googleSync || { mode: 'alles' };
+  res.json({ regel: cfg.mode || 'alles', afspraken: rows });
+});
+
 // Koppeling verbreken.
 app.post('/api/google/disconnect', requireRole('admin'), (req, res) => {
   googleDisconnect();

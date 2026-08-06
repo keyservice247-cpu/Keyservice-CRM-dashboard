@@ -1136,7 +1136,7 @@ function openOrderModal(id, pool) {
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}" ${isMonteur ? 'disabled' : ''}></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" ${isMonteur ? 'disabled' : ''}></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" ${isMonteur ? 'disabled' : ''} placeholder="e-mailadres klant"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}" ${isMonteur ? 'disabled' : ''}></label> </div>`}
-    <div class="form-sec">${icon('calendar', 13)} Planning &amp; status</div> <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
+    <div class="form-sec">${icon('calendar', 13)} Planning &amp; status</div> <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''}${o && o.googleSyncError ? `<div class="muted small" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--danger);background:var(--danger-soft, rgba(220,53,69,.08))"><strong>Niet in Google Agenda.</strong> ${esc(o.googleSyncError)} — ga naar Instellingen → Koppelingen en klik "Controleer &amp; herstel nu".</div>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <div class="form-sec">${icon('message', 13)} Intern</div> <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     ${o ? `
       <div class="attach"> <div class="thread-head">${icon('paperclip', 15)} Foto's &amp; bestanden${o.attachments && o.attachments.length ? ` (${o.attachments.length})` : ''}
@@ -3906,9 +3906,11 @@ async function loadSettings() {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="btn btn-sm btn-primary" id="g-savemode">Keuze opslaan</button>
         <button class="btn btn-sm" id="g-savecal">Standaardagenda opslaan</button>
+        <button class="btn btn-sm" id="g-syncnow">Controleer &amp; herstel nu</button>
         <a class="btn btn-sm" href="/api/google/auth">Opnieuw verbinden</a>
         <button class="btn btn-sm btn-danger" id="g-disconnect">Loskoppelen</button>
       </div>
+      <div id="g-syncresult" style="margin-top:10px"></div>
       <p class="muted small" style="margin-top:8px">Tip: maak in Google Agenda per monteur een aparte agenda (of deel hun agenda met dit account) en koppel die bij <strong>Monteurs → monteur bewerken</strong>.</p>`;
     // Sync-regel invullen en opslaan.
     const gs = (await api('/api/settings').catch(() => ({}))).googleSync || { mode: 'alles', monteurIds: [] };
@@ -3926,6 +3928,24 @@ async function loadSettings() {
     $('#g-savecal').onclick = async () => {
       try { await api('/api/google/default-calendar', 'POST', { calendarId: $('#g-defcal').value }); toast('Standaardagenda opgeslagen'); }
       catch (err) { toast(err.message, true); }
+    };
+    // "Controleer & herstel nu": laat per komende afspraak zien of hij in Google staat,
+    // en zo niet WAAROM — de sync-fout stond tot nu toe onzichtbaar in de database,
+    // waardoor de koppeling "verbonden maar kapot" leek.
+    $('#g-syncnow').onclick = async () => {
+      const uit = $('#g-syncresult');
+      uit.innerHTML = '<span class="muted small">Bezig — alle komende afspraken worden nu gecontroleerd en waar nodig opnieuw gezet…</span>';
+      try {
+        const r = await api('/api/google/sync-now', 'POST');
+        if (!(r.afspraken || []).length) { uit.innerHTML = '<span class="muted small">Geen komende afspraken gevonden om te controleren.</span>'; return; }
+        const chip = (a) => a.gesynct ? '<span class="inv-st betaald">in agenda ✓</span>'
+          : a.fout ? '<span class="inv-st verlopen">FOUT</span>'
+          : `<span class="inv-st verzonden">overgeslagen door regel "${esc(r.regel)}"</span>`;
+        uit.innerHTML = `<table><thead><tr><th>Afspraak</th><th>Wanneer</th><th>Monteur</th><th>Google</th></tr></thead><tbody>
+          ${r.afspraken.map((a) => `<tr><td>${esc(a.title)}</td><td class="muted small">${esc(fmtDate(a.at))}</td><td class="muted small">${esc(a.monteur || '—')}</td><td>${chip(a)}${a.fout ? `<div class="muted small" style="color:var(--danger)">${esc(a.fout)}</div>` : ''}</td></tr>`).join('')}
+        </tbody></table>
+        ${r.afspraken.some((a) => !a.gesynct && !a.fout) ? '<p class="muted small" style="margin-top:6px">Overgeslagen afspraken vallen buiten je sync-keuze hierboven. Zet de keuze op "Alle afspraken" en klik opnieuw als je ze wél in de agenda wilt.</p>' : ''}`;
+      } catch (err) { uit.innerHTML = `<span class="error small">${esc(err.message)}</span>`; }
     };
     $('#g-disconnect').onclick = async () => {
       if (!confirm('Google Agenda loskoppelen? Bestaande events blijven in Google staan, maar worden niet meer bijgewerkt.')) return;
