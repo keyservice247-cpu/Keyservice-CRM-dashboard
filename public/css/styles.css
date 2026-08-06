@@ -699,6 +699,16 @@ select#f-status.status-field { border-width: 2px; font-weight: 600; transition: 
 
 /* — Zijbalk: rustiger, duidelijke actieve staat — */
 .sidebar { padding: 18px 12px; }
+/* ZIJBALK PAST ALTIJD (6 aug 2026). De balk stond op 100vh zonder scrollmogelijkheid:
+   op een kleiner scherm (of met browserzoom op 100%) viel de onderkant er gewoon af —
+   "AI actief", "WhatsApp actief", je account en Uitloggen waren onbereikbaar tenzij je
+   naar 75% uitzoomde. Nu scrollt alleen de MENU-lijst mee en blijft het blok onderaan
+   altijd in beeld staan. Alleen op desktop; op mobiel is de balk een rij bovenin. */
+@media (min-width: 821px) {
+  .sidebar { overflow: hidden; }
+  .nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+  .sidebar-foot { flex: 0 0 auto; }
+}
 .brand { font-weight: 700; letter-spacing: .2px; padding: 4px 10px 16px; }
 .nav-item { padding: 9px 12px; border-radius: 10px; font-weight: 550; gap: 10px; margin-bottom: 1px; transition: background .12s, color .12s; }
 .nav-item:hover { background: var(--accent-soft); }

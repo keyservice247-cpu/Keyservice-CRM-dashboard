@@ -219,6 +219,34 @@ ok('na gelukte koppeling verdwijnt het kaartje', await page.locator('#wa-pair-ca
 await page.setViewportSize({ width: 1280, height: 800 });
 noErr('Koppelcode-kaartje (mobiel)');
 
+// ---------- Zijbalk past altijd (6 aug 2026) ----------
+// Klacht: "ik moet naar 75% uitzoomen om AI actief / WhatsApp actief en alles
+// eronder te zien". De balk stond op 100vh zonder scroll, dus de onderkant viel
+// er gewoon af. Dit test op een LAAG scherm dat het voetblok in beeld blijft.
+clear();
+await page.setViewportSize({ width: 1280, height: 620 });   // laag scherm / 100% zoom
+await page.evaluate(() => showView('start'));
+await page.waitForTimeout(800);
+const zij = await page.evaluate(() => {
+  const foot = document.querySelector('.sidebar-foot');
+  const bar = document.querySelector('.sidebar');
+  if (!foot || !bar) return { err: 'zijbalk niet gevonden' };
+  const f = foot.getBoundingClientRect();
+  const nav = document.querySelector('.nav');
+  return {
+    footOnderkant: Math.round(f.bottom),
+    schermHoogte: window.innerHeight,
+    navScrollt: nav ? getComputedStyle(nav).overflowY : '',
+    uitloggenZichtbaar: !!document.querySelector('#logoutBtn, .foot-actions'),
+  };
+});
+ok('voetblok (status + account + uitloggen) valt binnen het scherm',
+  !zij.err && zij.footOnderkant <= zij.schermHoogte + 1, JSON.stringify(zij));
+ok('menu-lijst scrollt zelf als hij niet past', zij.navScrollt === 'auto' || zij.navScrollt === 'scroll', zij.navScrollt);
+ok('uitlog-/accountknoppen aanwezig', zij.uitloggenZichtbaar === true);
+await page.setViewportSize({ width: 1280, height: 800 });
+noErr('Zijbalk op laag scherm');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
