@@ -54,6 +54,27 @@ const client = new Client({
   takeoverTimeoutMs: 10000,
 });
 
+// --- SESSIE-BESCHERMING (6 aug 2026) — de bodem van "steeds opnieuw koppelen" ---
+// In de bibliotheek (whatsapp-web.js Client.js) staat: zodra er een LOGOUT-melding
+// binnenkomt, wordt de HELE sessiemap gewist (LocalAuth.logout doet rm -rf). Sinds
+// WhatsApp's LID-migratie komt die melding regelmatig ONTERECHT: op de telefoon staat
+// het apparaat gewoon nog gekoppeld, maar de bridge heeft zijn eigen sleutels al
+// weggegooid en vraagt om een nieuwe koppelcode. Dát is waarom koppelen "even werkte"
+// en daarna telkens opnieuw moest.
+// Daarom wissen we de sessie NOOIT meer automatisch bij een LOGOUT-melding. Is de
+// sessie écht ongeldig, dan geeft de volgende start een auth_failure — pas dán wissen
+// we de map en is een nieuwe koppelcode aantoonbaar terecht.
+const _sessieEchtWissen = client.authStrategy.logout.bind(client.authStrategy);
+client.authStrategy.logout = async () => {
+  console.error('[sessie] LOGOUT-melding — sessie bewust NIET gewist (vaak vals alarm sinds de LID-migratie). De bridge herstart en logt gewoon weer in met de bewaarde sessie.');
+};
+client.on('auth_failure', async (msg) => {
+  console.error('[sessie] auth_failure:', msg);
+  console.error('[sessie] De bewaarde sessie is écht ongeldig — map wordt nu wel gewist; hierna verschijnt een nieuwe koppelcode (ook in het CRM).');
+  try { await _sessieEchtWissen(); } catch (e) { console.error('[sessie] wissen mislukt:', e.message); }
+  setTimeout(() => process.exit(1), 1500);
+});
+
 // Koppelen via 8-cijferige code i.p.v. QR-scan.
 // Nummer staat hier hardcoded omdat de Hetzner-webconsole _ en $ bij plakken
 // sloopt. Pas dit getal aan als je een ander nummer koppelt (internationaal,
@@ -212,6 +233,7 @@ async function readGroupNameDirect(chatId) {
 // bleef de bridge als zombie draaien: heartbeat groen, maar niets kwam meer binnen.)
 client.on('disconnected', (r) => {
   console.error('Verbinding verbroken:', r, '— bridge sluit af zodat pm2 opnieuw start.');
+  console.error('(De sessie blijft bewaard; na de herstart logt hij vanzelf weer in. Alleen bij een échte auth_failure is opnieuw koppelen nodig.)');
   setTimeout(() => process.exit(1), 2000);
 });
 
