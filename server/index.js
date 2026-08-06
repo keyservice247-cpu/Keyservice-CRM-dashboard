@@ -2997,6 +2997,34 @@ app.post('/api/whatsapp/test', requirePerm('settings'), (req, res) => {
   res.json({ ok: true, id: item.id });
 });
 
+// ---------- KOPPELCODE IN HET CRM (6 aug 2026) ----------
+// Opnieuw koppelen kon alleen via de Hetzner-webconsole. Daar valt niets uit te
+// kopiëren, verloopt de code terwijl je je telefoon zoekt, en rolt er soms een QR-blok
+// overheen. Dat kostte een halve nacht. De bridge stuurt de code nu hierheen, zodat hij
+// gewoon in Instellingen → Koppelingen staat — met de QR als scanbare afbeelding.
+app.post('/api/whatsapp/pairing', checkIngestToken, (req, res) => {
+  const b = req.body || {};
+  // Lege melding = koppeling gelukt, kaartje weer weghalen.
+  if (!b.code && !b.qr && !b.fout) { delete db()._waPairing; saveSoonQuiet(); return res.json({ ok: true }); }
+  db()._waPairing = {
+    code: String(b.code || '').slice(0, 20),
+    qr: String(b.qr || '').slice(0, 1000),
+    fout: String(b.fout || '').slice(0, 300),
+    at: b.at || now(),
+  };
+  saveSoonQuiet();
+  res.json({ ok: true });
+});
+
+// Het scherm haalt de code hier op. Een koppelcode is een paar minuten geldig; daarna
+// tonen we hem niet meer, anders tik je een dode code in en denk je dat het aan jou ligt.
+app.get('/api/whatsapp/pairing', requirePerm('settings'), (req, res) => {
+  const p = db()._waPairing;
+  if (!p) return res.json({ actief: false });
+  const seconden = Math.round((Date.now() - new Date(p.at).getTime()) / 1000);
+  res.json({ actief: true, ...p, seconden, verlopen: seconden > 240 });
+});
+
 // Wachtrij-status voor het test-/diagnosekaartje: de laatste items met status.
 app.get('/api/whatsapp/outbox-status', requirePerm('settings'), (req, res) => {
   // ?full=1 geeft de HELE wachtrij ongefilterd terug (alleen voor beheerders). Nodig

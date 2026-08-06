@@ -3300,6 +3300,7 @@ async function loadSettings() {
         ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-cloud-send" style="width:auto" ${s.whatsappCloudSend ? 'checked' : ''}> Klantberichten via de officiële WhatsApp versturen</label>`
         : `<p class="muted small" style="margin:0"><strong>Nog niet ingesteld.</strong> Vul op de server eerst <code>WHATSAPP_CLOUD_TOKEN</code>, <code>WHATSAPP_PHONE_ID</code> en <code>WHATSAPP_APP_SECRET</code> in; daarna verschijnt hier de aan/uit-knop.</p>`}
     </div>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px" id="wa-pair-card"></div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-verbinding testen</h3>
       <p class="muted small">Stuur een testbericht naar een nummer en zie hieronder of de bridge het écht verstuurt. Blijft een bericht op <strong>wachtrij</strong> staan of wordt het <strong>mislukt</strong>? Dan moet de bridge op de VPS worden bijgewerkt/herstart.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
@@ -3608,6 +3609,33 @@ async function loadSettings() {
     try { await api('/api/settings', 'PATCH', { appointmentMsg }); toast('Afspraakberichten opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
+  // --- Koppelcode (6 aug 2026) ---
+  // Opnieuw koppelen kon alleen via de VPS-console: daar valt niets uit te kopiëren en
+  // verloopt de code terwijl je je telefoon zoekt. De bridge stuurt hem nu hierheen.
+  // Het kaartje blijft onzichtbaar zolang er niets te koppelen valt.
+  const pairLaad = async () => {
+    const kaart = $('#wa-pair-card');
+    if (!kaart) return;
+    let p = null;
+    try { p = await api('/api/whatsapp/pairing'); } catch { /* niet erg */ }
+    if (!p || !p.actief) { kaart.style.display = 'none'; kaart.innerHTML = ''; return; }
+    kaart.style.display = '';
+    kaart.style.borderLeft = '4px solid var(--accent, #1b4fa8)';
+    const qrSrc = p.qr ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(p.qr)}` : '';
+    kaart.innerHTML = `<h3>${icon('whatsapp', 15)} WhatsApp koppelen</h3>
+      ${p.fout ? `<p class="muted small" style="color:var(--danger)">${esc(p.fout)}</p>` : ''}
+      ${p.code ? `<p class="muted small">Op de telefoon van het WhatsApp-nummer: <strong>WhatsApp → Instellingen → Gekoppelde apparaten → Apparaat koppelen → Koppelen met telefoonnummer</strong>, en tik deze code in:</p>
+        <div id="pair-code" style="font-size:clamp(24px,7vw,34px);font-weight:700;letter-spacing:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:10px 0;word-break:break-all;line-height:1.2">${esc(p.code)}</div>
+        <p class="muted small">${p.verlopen ? 'Deze code is waarschijnlijk verlopen — er verschijnt vanzelf een nieuwe.' : `Aangemaakt ${p.seconden}s geleden. Een code is ongeveer 4 minuten geldig.`}</p>` : ''}
+      ${qrSrc ? `<p class="muted small" style="margin-top:10px">Of scan deze code met je telefoon:</p>
+        <img src="${qrSrc}" alt="QR-code om te koppelen" loading="lazy"
+             onerror="this.style.display='none'"
+             style="width:min(220px,60vw);height:auto;aspect-ratio:1;background:#fff;padding:8px;border-radius:8px;max-width:100%">` : ''}
+      <div style="margin-top:12px"><button class="btn" id="pair-refresh">Verversen</button></div>`;
+    const knop = $('#pair-refresh');
+    if (knop) knop.onclick = pairLaad;
+  };
+
   const wtRender = (items) => {
     const stChip = { queued: '<span class="inv-st verzonden">wachtrij</span>', sent: '<span class="inv-st betaald">verstuurd ✓</span>', failed: '<span class="inv-st verlopen">MISLUKT</span>' };
     $('#wt-status').innerHTML = items.length ? `<table><thead><tr><th>Tijd</th><th>Naar</th><th>Status</th><th>Door</th></tr></thead><tbody>${items.map((i) => `<tr><td class="muted small">${esc(fmtDate(i.createdAt))}</td><td>${esc(i.to)}</td><td>${stChip[i.status] || esc(i.status)}</td><td class="muted small">${esc(i.by)}</td></tr>`).join('')}</tbody></table>` : '<span class="muted small">Nog geen berichten in de wachtrij.</span>';
@@ -3642,6 +3670,11 @@ async function loadSettings() {
   }).catch(() => {});
   const wtLoad = async () => { try { wtRender(await api('/api/whatsapp/outbox-status')); } catch { /* stil */ } };
   wtLoad();
+  // Koppelcode meteen tonen, en elke 15 seconden bijwerken zolang dit scherm openstaat —
+  // een code is maar een paar minuten geldig, dus verversen moet vanzelf gaan.
+  pairLaad();
+  if (window._pairTimer) clearInterval(window._pairTimer);
+  window._pairTimer = setInterval(() => { if ($('#wa-pair-card')) pairLaad(); else clearInterval(window._pairTimer); }, 15000);
   $('#wt-refresh').onclick = wtLoad;
   $('#wt-send').onclick = async () => {
     const phone = $('#wt-phone').value.trim();

@@ -185,6 +185,40 @@ if (aantalVinkjes >= 2) {
 }
 noErr('Bulk-selectie & verversing');
 
+// ---------- Koppelcode-kaartje (6 aug 2026) — óók op telefoonformaat ----------
+// De bridge stuurt de koppelcode naar het CRM zodat je nooit meer in de VPS-console
+// hoeft. Dit MOET op mobiel werken (daar zoek je de code op terwijl de telefoon met
+// WhatsApp in je andere hand ligt), dus we testen het letterlijk op iPhone-formaat.
+clear();
+// Bridge gesimuleerd: code melden zoals bridge.js dat doet (zelfde endpoint + token).
+const gemeld = await page.evaluate(() => fetch('/api/whatsapp/pairing', {
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' },
+  body: JSON.stringify({ code: 'V6AF-P2CR', qr: '2@testqrdata', at: new Date().toISOString() }),
+}).then((r) => r.status));
+ok('bridge kan de koppelcode melden', gemeld === 200, `status=${gemeld}`);
+await page.setViewportSize({ width: 390, height: 844 }); // iPhone-formaat
+await page.evaluate(() => showView('settings'));
+await page.waitForTimeout(1800);
+ok('koppel-kaartje zichtbaar op telefoonformaat', await page.locator('#wa-pair-card').isVisible());
+ok('de code staat er leesbaar in', (await page.locator('#pair-code').textContent().catch(() => '')) === 'V6AF-P2CR');
+const past = await page.evaluate(() => {
+  const el = document.querySelector('#pair-code');
+  return el && el.getBoundingClientRect().right <= window.innerWidth + 1;
+});
+ok('code valt binnen het scherm (geen horizontaal scrollen)', past === true);
+// Koppeling gelukt -> bridge meldt leeg -> kaartje verdwijnt vanzelf (poll of herbezoek).
+await page.evaluate(() => fetch('/api/whatsapp/pairing', {
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' },
+  body: JSON.stringify({}),
+}));
+await page.evaluate(() => showView('start'));
+await page.waitForTimeout(300);
+await page.evaluate(() => showView('settings'));
+await page.waitForTimeout(1200);
+ok('na gelukte koppeling verdwijnt het kaartje', await page.locator('#wa-pair-card').isHidden());
+await page.setViewportSize({ width: 1280, height: 800 });
+noErr('Koppelcode-kaartje (mobiel)');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

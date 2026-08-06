@@ -68,6 +68,20 @@ const PAIR_NUMBER = (process.env.PAIR_NUMBER || HARDCODED_PAIR_NUMBER || '').rep
 let laatsteCodeOp = 0;
 let codeGeblokkeerd = false;   // WhatsApp weigert (tijdelijk) codes -> QR blijft zichtbaar
 
+// De koppelcode ook NAAR HET CRM sturen. Reden (6 aug 2026): opnieuw koppelen kon
+// alleen via de Hetzner-webconsole, en daar valt niets uit te kopiëren, verloopt de code
+// terwijl je je telefoon zoekt, en verdwijnt hij uit beeld zodra er een QR-blok overheen
+// rolt. Nu staat hij gewoon in Instellingen -> Koppelingen, met de QR als afbeelding.
+async function meldKoppelcode({ code = '', qr = '', fout = '' }) {
+  try {
+    await fetch(`${DASHBOARD_URL}/api/whatsapp/pairing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
+      body: JSON.stringify({ code, qr, fout, at: new Date().toISOString() }),
+    });
+  } catch { /* CRM even niet bereikbaar — de console blijft de terugval */ }
+}
+
 client.on('qr', async (qr) => {
   // Als er een telefoonnummer is opgegeven: vraag een (nieuwe) koppelcode aan.
   // De rem van 30 seconden voorkomt dat een snelle reeks qr-gebeurtenissen de log
@@ -84,6 +98,8 @@ client.on('qr', async (qr) => {
       console.log('-> Een apparaat koppelen -> "Koppel met telefoonnummer"');
       console.log('-> tik bovenstaande code in.\n');
       console.log('(Verlopen? Wacht — hieronder verschijnt vanzelf een verse code.)\n');
+      console.log('De code staat ook in het CRM: Instellingen -> Koppelingen.\n');
+      meldKoppelcode({ code: pretty, qr });
       return;
     } catch (e) {
       // GEEN code gekregen — meestal omdat WhatsApp een rem zet op het herhaald
@@ -93,6 +109,7 @@ client.on('qr', async (qr) => {
       console.error('Meestal betekent dit: te vaak achter elkaar een code gevraagd.');
       console.error('Wacht 15 minuten, of koppel nu via de QR-code hieronder.\n');
       codeGeblokkeerd = true;
+      meldKoppelcode({ qr, fout: 'WhatsApp geeft nu geen koppelcode — te vaak achter elkaar gevraagd. Wacht een half uur en probeer opnieuw, of scan hiernaast de QR.' });
     }
   }
   // Met een nummer ingesteld koppelen we normaal via de CODE; het QR-blok zou de log
@@ -102,6 +119,7 @@ client.on('qr', async (qr) => {
   // Anders: toon de QR (tekst + scanbare afbeelding-link).
   console.log('\nScan deze QR-code met WhatsApp op je iPhone:');
   console.log('(WhatsApp -> Instellingen -> Gekoppelde apparaten -> Apparaat koppelen)\n');
+  meldKoppelcode({ qr });
   qrcode.generate(qr, { small: true });
   const link = 'https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(qr);
   console.log('\n>>> Lukt scannen niet? Open DEZE link in je browser en scan die QR:\n');
@@ -118,6 +136,8 @@ const BRIDGE_VERSION = 2;
 client.on('authenticated', () => console.log('Gekoppeld — sessie opgeslagen, geen QR meer nodig bij herstart.'));
 client.on('ready', async () => {
   console.log(`\nBridge actief (v${BRIDGE_VERSION}). Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
+  codeGeblokkeerd = false;
+  meldKoppelcode({});   // koppeling gelukt -> melding in het CRM opruimen
   startHeartbeat();
   startOutbox();
   // Reparatie voor de WhatsApp-storing (LID-migratie, zomer 2026): vang de lees-fout

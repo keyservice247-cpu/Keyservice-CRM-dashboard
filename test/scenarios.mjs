@@ -507,6 +507,19 @@ ok('bijlage hangt aan de kaart', (up1.json?.attachments || []).some((a) => a.fil
 const up2 = await api('POST', `/api/orders/${fotoOrder.id}/attachments`, { filename: 'groot.jpg', mime: 'image/jpeg', dataBase64: Buffer.alloc(30 * 1024 * 1024, 7).toString('base64') });
 ok('écht te groot bestand geeft een leesbare uitleg', up2.status === 413 && /maximaal 25 MB/i.test(up2.json?.error || ''), `status=${up2.status} ${JSON.stringify(up2.json)}`);
 
+// ---------- Koppelcode in het CRM (6 aug 2026) ----------
+// Opnieuw koppelen kon alleen via de VPS-console; daar valt niets uit te kopiëren en
+// verloopt de code terwijl je je telefoon zoekt. De bridge stuurt hem nu naar het CRM.
+console.log('\n== Koppelcode verschijnt in het CRM ==');
+const pairLeeg = (await api('GET', '/api/whatsapp/pairing')).json;
+ok('geen koppeling nodig -> geen kaartje', pairLeeg?.actief === false, JSON.stringify(pairLeeg));
+await api('POST', '/api/whatsapp/pairing', { code: 'V6AF-P2CR', qr: '2@abc', at: new Date().toISOString() }, true);
+const pair = (await api('GET', '/api/whatsapp/pairing')).json;
+ok('code van de bridge staat in het CRM', pair?.actief === true && pair.code === 'V6AF-P2CR', JSON.stringify(pair));
+ok('verse code geldt niet als verlopen', pair?.verlopen === false);
+await api('POST', '/api/whatsapp/pairing', {}, true);
+ok('na koppelen verdwijnt het kaartje', (await api('GET', '/api/whatsapp/pairing')).json?.actief === false);
+
 // ---------- Samenvatting ----------
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
