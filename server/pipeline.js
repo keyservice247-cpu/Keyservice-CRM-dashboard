@@ -593,6 +593,12 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     // "contact@keyservice247.nl" of "website-direct"). Leeg = hoofdroute.
     mailbox: mailbox || '',
     externalId: externalId || '',
+    // AFZENDERNUMMER APART BEWAARD (7 aug 2026). De bridge plakt het nummer als
+    // laatste regel "Telefoon: +31…" onder de body; de officiële Meta-route doet dat
+    // NIET en geeft het alleen als veld mee. Wie het nummer dus uit de tekst probeerde
+    // te lezen (Berichten-scherm, klanthistorie) vond bij een officieel bericht niets,
+    // en het appje leek spoorloos. Vanaf nu staat het altijd op het bericht zelf.
+    fromPhone: String(fromPhone || '').replace(/[^\d+]/g, '') || senderPhoneFromText(body) || '',
     attachments: attachments || [],
     receivedAt: now(),
   };
@@ -935,6 +941,14 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     queueCrmWhatsappAlert(isAuto
       ? `✅ CRM: aanvraag AUTOMATISCH goedgekeurd — ${who}${place ? ` (${place})` : ''} via ${src}. De kaart staat op het bord.\nhttps://keyservice-crm.onrender.com`
       : `🔔 CRM: nieuwe aanvraag te controleren — ${who}${place ? ` (${place})` : ''} via ${src}.\nOpen de inbox: https://keyservice-crm.onrender.com`);
+  } else if (channel === 'whatsapp' && !group) {
+    // EEN 1-OP-1 APPJE MAG NOOIT STIL BINNENKOMEN (7 aug 2026). Kort verkeer ("hoi",
+    // "kunt u bellen?") belandt terecht in Overige i.p.v. de leadwachtrij — maar het
+    // is wél een klant die op je zit te wachten. Zonder melding merkte niemand het,
+    // en dan lijkt het appje verdwenen. Het gesprek staat in het Berichten-scherm.
+    const who = suggestion.customerName || sender || message.fromPhone || 'Onbekend nummer';
+    const what = String(body || '').replace(/\s+/g, ' ').slice(0, 80);
+    notifyPush('Nieuw WhatsApp-bericht', `${who}${what ? ' — ' + what : ''}`);
   }
   return { message, review };
 }

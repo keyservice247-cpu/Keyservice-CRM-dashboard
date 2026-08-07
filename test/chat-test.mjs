@@ -115,6 +115,30 @@ ok('antwoord staat in het gesprek met verzendstatus', (histO2.json?.items || [])
 const kl1 = (await api('GET', '/api/customers')).json || [];
 ok('ook na versturen nog steeds geen klantrecord', !kl1.some((c) => (c.phone || '').includes('688877766')));
 
+console.log('\n== Officiële Meta-route: nummer staat OP het bericht (niet in de tekst) ==');
+// De bridge plakt "Telefoon: +31…" onder de body; Meta doet dat NIET en geeft het
+// alleen als veld mee. Zonder opslaan viel zo'n appje overal buiten en leek het weg.
+await api('POST', '/api/ingest/whatsapp', {
+  name: 'Meta Klant', body: 'Goedemiddag, mijn voordeur klemt. Kunt u langskomen?',
+  fromPhone: '0699911122', externalId: 'chat-meta-1',
+}, true);
+const chatsM = await api('GET', '/api/chats');
+const mChat = (chatsM.json || []).find((c) => (c.phone || '').includes('699911122'));
+ok('appje zonder telefoonregel in de tekst is TOCH zichtbaar', !!mChat, JSON.stringify((chatsM.json || []).map((c) => `${c.id}:${c.phone}`)));
+ok('met de tekst van de klant erbij', /voordeur klemt/i.test(mChat?.lastBody || ''));
+const histM = await api('GET', `/api/chats/nummer/${encodeURIComponent(mChat.phone)}`);
+ok('het gesprek is te openen', (histM.json?.items || []).some((t) => /voordeur klemt/i.test(t.body || '')));
+
+console.log('\n== Melding-teller: nieuwe klantappjes ==');
+const puls1 = await api('GET', '/api/pulse');
+ok('pulse telt nieuwe klantappjes', (puls1.json?.newChats || 0) >= 1, JSON.stringify(puls1.json?.newChats));
+await api('POST', '/api/chats/seen', {});
+const puls2 = await api('GET', '/api/pulse');
+ok('na openen van Berichten staat de teller op nul', (puls2.json?.newChats || 0) === 0, JSON.stringify(puls2.json?.newChats));
+await api('POST', '/api/ingest/whatsapp', { name: 'Meta Klant', body: 'Bent u er nog?', fromPhone: '0699911122', externalId: 'chat-meta-2' }, true);
+const puls3 = await api('GET', '/api/pulse');
+ok('nieuw appje laat de teller weer oplopen', (puls3.json?.newChats || 0) >= 1, JSON.stringify(puls3.json?.newChats));
+
 console.log('\n== Klant-link naar een bijlage (voor PDF via WhatsApp) ==');
 // Ondertekende link: zonder inloggen te openen, maar alleen met de juiste handtekening.
 const ordersU = (await api('GET', '/api/orders')).json || [];

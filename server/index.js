@@ -335,7 +335,7 @@ function verzamelKlantHistorie(customer) {
     if (m.skipped || m.bounce || !m.body) continue;
     let match = false;
     if (m.channel === 'whatsapp' && !m.group && custPhoneNorm.length >= 6) {
-      const p = matchPhone(senderPhoneFromText(m.body));
+      const p = matchPhone(m.fromPhone || senderPhoneFromText(m.body));
       match = p.length >= 6 && p === custPhoneNorm;
     } else if (m.channel === 'email' && custEmail) {
       const em = ((String(m.sender || '').match(EMAIL_IN_SENDER) || [''])[0]).toLowerCase();
@@ -423,7 +423,7 @@ app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
   };
   for (const m of db().messages || []) {
     if (m.channel !== 'whatsapp' || m.group || m.skipped || !m.body) continue;
-    const p = matchPhone(senderPhoneFromText(m.body));
+    const p = matchPhone(m.fromPhone || senderPhoneFromText(m.body));
     if (p.length < 6) continue;
     const c = perNummer.get(p);
     if (c) bump(c.id, m.receivedAt, m.body, false);
@@ -469,7 +469,7 @@ app.get('/api/chats/nummer/:phone', requireRole('admin', 'assistent'), (req, res
   const items = [];
   for (const m of db().messages || []) {
     if (m.channel !== 'whatsapp' || m.group || m.skipped || !m.body) continue;
-    if (matchPhone(senderPhoneFromText(m.body)) !== p) continue;
+    if (matchPhone(m.fromPhone || senderPhoneFromText(m.body)) !== p) continue;
     items.push({ id: m.id, channel: 'whatsapp', sender: m.sender, body: m.body, at: m.receivedAt, attachments: m.attachments || [], standalone: true });
   }
   for (const ob of db().outbox || []) {
@@ -1630,7 +1630,7 @@ app.get('/api/reviews', requireAuth, (req, res) => {
     try {
       let c = null;
       if (m && m.channel === 'whatsapp' && !m.group) {
-        const p = senderPhoneFromText(m.body);
+        const p = m.fromPhone || senderPhoneFromText(m.body);
         if (p) c = findCustomerStrong({ phone: p });
       } else if (m && m.channel === 'email') {
         const em = (String(m.sender || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [''])[0];
@@ -4149,7 +4149,30 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     // Mailbox-vulgraad (alleen meegeven als bijna vol — anders blijft het stil).
     mailboxPct: (mq && mq.supported && mq.pct >= 90) ? mq.pct : null,
     mailboxBox: (mq && mq.supported && mq.pct >= 90 && mq.worstUser) ? String(mq.worstUser).split('@')[0] + '@' : null,
+    // Nieuwe 1-op-1 klantberichten sinds je Berichten voor het laatst opende. Zo zie je
+    // vanaf ELK scherm dat er een klant zit te wachten, ook als het appje (terecht) geen
+    // lead werd. Alleen zinvol voor wie het scherm mag zien.
+    newChats: ['admin', 'assistent'].includes(req.user.role) ? nieuweChats() : 0,
   });
+});
+
+// Aantal binnengekomen 1-op-1 WhatsApp-berichten sinds het Berichten-scherm voor het
+// laatst is geopend (gedeelde markering; het team werkt uit dezelfde inbox).
+function nieuweChats() {
+  const sinds = db().settings._chatsGezienOp || '';
+  let n = 0;
+  for (const m of db().messages || []) {
+    if (m.channel !== 'whatsapp' || m.group || m.skipped) continue;
+    if (!sinds || String(m.receivedAt || '').localeCompare(sinds) > 0) n++;
+  }
+  return n;
+}
+
+// Berichten-scherm geopend: markering bijwerken (stil, geen verversing elders).
+app.post('/api/chats/seen', requireRole('admin', 'assistent'), (req, res) => {
+  db().settings._chatsGezienOp = now();
+  saveSoonQuiet();
+  res.json({ ok: true });
 });
 
 // AI-vraagbaak: stel een vrije vraag over de opgeslagen WhatsApp/e-mail-berichten.

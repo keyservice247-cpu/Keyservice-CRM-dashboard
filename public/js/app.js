@@ -260,6 +260,9 @@ async function startLiveUpdates() {
       const badge = $('#inboxBadge');
       if (badge) { badge.textContent = p.pendingReviews; badge.hidden = p.pendingReviews === 0; }
       const bn = $('#bnInboxBadge'); if (bn) { bn.textContent = p.pendingReviews; bn.hidden = p.pendingReviews === 0; }
+      // Nieuwe klantappjes: teller bij "Berichten", ook als je op een ander scherm zit.
+      const cb = $('#chatBadge');
+      if (cb) { cb.textContent = p.newChats || 0; cb.hidden = !p.newChats; }
       // Mailbox bijna vol? Rood lampje in de zijbalk (verdwijnt vanzelf na opruimen).
       const mw = $('#mailboxWarn');
       if (mw) {
@@ -363,6 +366,10 @@ async function loadChats(fromPulse) {
     const p = $('#chatPane'); if (p) p.innerHTML = '<div class="cp-empty muted">Kies een gesprek</div>';
   }
   $('#chatsLayout')?.classList.toggle('active-chat', !!_chatActive);
+  if (!fromPulse) {
+    api('/api/chats/seen', 'POST').catch(() => {});
+    const cb = $('#chatBadge'); if (cb) { cb.textContent = '0'; cb.hidden = true; }
+  }
   let list;
   try { list = await api('/api/chats'); } catch { return; }
   if (!Array.isArray(list)) return;

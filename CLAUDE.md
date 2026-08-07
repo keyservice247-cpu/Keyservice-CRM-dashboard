@@ -435,7 +435,21 @@ terugknop; scherm begint op mobiel ALTIJD met de lijst. Techniek:
 - Versturen loopt ALTIJD via de bestaande outbox — pauzeknop, snelheidsrem,
   dubbelfilter en vervaltermijn gelden onverkort; er bestaat geen apart verzendpad.
 - /read gebruikt saveSoonQuiet (geen geknipper op andere schermen).
-- Tests: test/chat-test.mjs (22 assertions, PORT=3127) + 11 browser-assertions
+- ONBEKENDE nummers staan er ook in als gesprek `tel:<nummer>` (WET regel 5: er
+  ontstaat GEEN klantrecord; dat gebeurt pas bij goedkeuren in de Inbox). Eigen
+  routes GET/POST /api/chats/nummer/:phone.
+- **Afzendernummer staat nu OP het bericht** (`message.fromPhone`, 7 aug): de bridge
+  plakt "Telefoon: +31…" onder de body, de officiële Meta-route NIET. Wie het nummer
+  uit de tekst las vond bij een officieel bericht niets → het appje leek spoorloos.
+  Overal `m.fromPhone || senderPhoneFromText(m.body)` (terugval voor oude berichten).
+- **Melding bij elk 1-op-1 appje**: valt het (terecht) buiten de leadwachtrij, dan
+  gaat er alsnog een push uit ('Nieuw WhatsApp-bericht'). Teller op het menu-item via
+  GET /api/pulse (`newChats`, sinds `settings._chatsGezienOp`); POST /api/chats/seen
+  zet hem op nul bij het openen van het scherm.
+- Bijlage-links zijn ONDERTEKEND (`/uploads/<file>?sig=HMAC(file)`) zodat een klant een
+  factuur-PDF kan openen zonder login én zonder ingest-token in de URL. Buiten het
+  24-uursvenster gaat een PDF als link mee in het sjabloon.
+- Tests: test/chat-test.mjs (37 assertions, PORT=3127) + 11 browser-assertions
   (desktop + iPhone-formaat, echt versturen).
 
 ## SNELHEIDSREM OP DE UITGAANDE WACHTRIJ (6 aug 2026) — NIET verzwakken
