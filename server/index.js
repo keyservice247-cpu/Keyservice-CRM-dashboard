@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -407,17 +408,33 @@ app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
     const p = matchPhone(c.phone || '');
     if (p.length >= 6 && !perNummer.has(p)) perNummer.set(p, c);
   }
+  // ONBEKENDE nummers horen hier óók (7 aug 2026): een klant die het officiële nummer
+  // appt heeft nog geen klantrecord (WET regel 5: dat ontstaat pas bij goedkeuren),
+  // maar het gesprek moet WEL meteen zichtbaar zijn — anders "verdwijnt" het appje
+  // voor de gebruiker in de Inbox. Zo'n gesprek krijgt id "tel:<genormaliseerd nummer>".
+  const onbekend = new Map(); // norm nummer -> {naam, lastAt, lastBody, lastOut, aantal}
+  const bumpOnbekend = (p, naam, at, body, uitgaand) => {
+    const cur = onbekend.get(p) || { naam: '', lastAt: '', lastBody: '', lastOut: false };
+    if (naam && !cur.naam) cur.naam = naam;
+    if (String(at || '').localeCompare(String(cur.lastAt || '')) > 0) {
+      cur.lastAt = at; cur.lastBody = body; cur.lastOut = !!uitgaand;
+    }
+    onbekend.set(p, cur);
+  };
   for (const m of db().messages || []) {
     if (m.channel !== 'whatsapp' || m.group || m.skipped || !m.body) continue;
     const p = matchPhone(senderPhoneFromText(m.body));
-    const c = p.length >= 6 ? perNummer.get(p) : null;
+    if (p.length < 6) continue;
+    const c = perNummer.get(p);
     if (c) bump(c.id, m.receivedAt, m.body, false);
+    else bumpOnbekend(p, m.sender || '', m.receivedAt, m.body, false);
   }
   for (const ob of db().outbox || []) {
     if (ob.group && ob.group !== '__klant_dm__') continue;
     const c = (ob.customerId && db().customers.find((x) => x.id === ob.customerId))
       || perNummer.get(matchPhone(ob.phone || ''));
     if (c) bump(c.id, ob.createdAt, ob.text, true);
+    else if (matchPhone(ob.phone || '').length >= 6) bumpOnbekend(matchPhone(ob.phone), '', ob.createdAt, ob.text, true);
   }
   const uit = [];
   for (const [cid, v] of perKlant) {
@@ -433,8 +450,56 @@ app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
       unread, orderId: open ? open.id : null, orderTitle: open ? (open.title || '') : '',
     });
   }
+  for (const [p, v] of onbekend) {
+    uit.push({
+      id: `tel:${p}`, name: v.naam || `Onbekend nummer ${p}`, phone: p,
+      lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
+      unread: 0, orderId: null, orderTitle: '', nieuw: true,
+    });
+  }
   uit.sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
   res.json(uit.slice(0, 200));
+});
+
+// Gesprek met een ONBEKEND nummer (nog geen klantrecord): de losse berichten van/naar
+// dat nummer, zelfde vorm als de klant-historie zodat het scherm er niets van merkt.
+app.get('/api/chats/nummer/:phone', requireRole('admin', 'assistent'), (req, res) => {
+  const p = matchPhone(req.params.phone || '');
+  if (p.length < 6) return res.status(400).json({ error: 'Ongeldig nummer' });
+  const items = [];
+  for (const m of db().messages || []) {
+    if (m.channel !== 'whatsapp' || m.group || m.skipped || !m.body) continue;
+    if (matchPhone(senderPhoneFromText(m.body)) !== p) continue;
+    items.push({ id: m.id, channel: 'whatsapp', sender: m.sender, body: m.body, at: m.receivedAt, attachments: m.attachments || [], standalone: true });
+  }
+  for (const ob of db().outbox || []) {
+    if (ob.group && ob.group !== '__klant_dm__') continue;
+    if (matchPhone(ob.phone || '') !== p) continue;
+    items.push({ id: ob.id, channel: 'whatsapp', outgoing: true, sender: ob.by || '', body: ob.text || '', at: ob.createdAt, waStatus: ob.status, attachments: [], standalone: true });
+  }
+  items.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+  res.json({ customer: { id: `tel:${p}`, name: `Onbekend nummer ${p}` }, items: items.slice(-300), total: items.length });
+});
+
+// Versturen naar een onbekend nummer. Er wordt BEWUST geen klantrecord aangemaakt
+// (WET regel 5: dat gebeurt pas als een mens de aanvraag in de Inbox goedkeurt) —
+// het bericht gaat gewoon de beveiligde wachtrij in.
+app.post('/api/chats/nummer/:phone/send', requireRole('admin', 'assistent'), (req, res) => {
+  const p = matchPhone(req.params.phone || '');
+  const digits = p.replace(/\D/g, '');
+  if (digits.length < 6 || digits.length > 13) return res.status(400).json({ error: 'Ongeldig nummer' });
+  const text = String(req.body?.text || '').trim().slice(0, 4000);
+  if (!text) return res.status(400).json({ error: 'Typ eerst een bericht' });
+  const item = {
+    id: id('out'), kind: 'whatsapp_customer', phone: p, group: '__klant_dm__',
+    text, status: 'queued', createdAt: now(), by: `chat (${req.user.name})`,
+  };
+  db().outbox = db().outbox || [];
+  db().outbox.unshift(item);
+  if (db().outbox.length > 1000) db().outbox.length = 1000;
+  logActivity(req.user.name, 'WhatsApp-bericht via Berichten (onbekend nummer)', `${p}: ${text.slice(0, 60)}`);
+  saveSoon();
+  res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused, orderId: null });
 });
 
 // Versturen: bericht in de beveiligde wachtrij + zichtbaar op de nieuwste open kaart.
@@ -2965,7 +3030,8 @@ async function runCloudOutbox() {
       for (const m of (it.media || []).slice(0, 6)) {
         const bestand = m.file || m.id || '';
         if (!bestand) continue;
-        const url = `${CLOUD_UIT_ADRES()}/uploads/${bestand}?token=${encodeURIComponent(process.env.INGEST_TOKEN || '')}`;
+        // Ondertekende link (geen ingest-token in de URL): geldig voor precies dit bestand.
+        const url = `${CLOUD_UIT_ADRES()}/uploads/${bestand}?sig=${uploadSig(bestand)}`;
         const isFoto = /^image\//i.test(m.mime || '');
         await sendCloudMedia(it.phone, {
           url, filename: m.filename || m.name || 'bestand.pdf', soort: isFoto ? 'image' : 'document',
@@ -2983,9 +3049,15 @@ async function runCloudOutbox() {
       // sjabloon-invulveld, dus de tekst wordt daarvoor platgeslagen tot één regel.
       const buitenVenster = e.metaCode === 131047 || /131047|24 hours/i.test(String(e.message || ''));
       const sjabloon = String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht').trim();
-      if (buitenVenster && sjabloon && it.text && !(it.media || []).length) {
+      if (buitenVenster && sjabloon && (it.text || (it.media || []).length)) {
         try {
-          const platteTekst = String(it.text).replace(/\s+/g, ' ').trim().slice(0, 900);
+          // Bijlages (bv. de factuur-PDF) kunnen niet ÍN een sjabloon mee, maar als
+          // ondertekende LINK wél: de klant tikt en opent het bestand direct.
+          const links = (it.media || []).slice(0, 3)
+            .map((m) => { const f = m.file || m.id || ''; return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
+            .filter(Boolean);
+          const platteTekst = [String(it.text || '').replace(/\s+/g, ' ').trim(), links.length ? `Bekijk hier: ${links.join(' ')}` : '']
+            .filter(Boolean).join(' ').slice(0, 900);
           await sendCloudTemplate(it.phone, sjabloon, [platteTekst], 'nl');
           it.status = 'sent';
           it.doneAt = now();
@@ -4593,10 +4665,19 @@ app.get('/api/activity', requireAuth, (req, res) => {
 
 // ---------- Bijlagen (alleen voor ingelogde gebruikers) ----------
 // Bijlages: ingelogde gebruikers, ÓF de bridge met het ingest-token (die haalt
-// aangevinkte foto's op om ze naar de monteur-groep te sturen).
+// aangevinkte foto's op om ze naar de monteur-groep te sturen), ÓF een ONDERTEKENDE
+// klant-link (7 aug 2026): ?sig=HMAC(bestandsnaam). Daarmee kan een klant een
+// factuur-PDF openen via een link in een WhatsApp-bericht, zonder in te loggen en
+// zonder dat het ingest-token in de link staat. De handtekening hoort bij precies
+// één bestand (raden van andere bestandsnamen levert niets op) en de namen zelf
+// zijn al willekeurig.
+const uploadSig = (file) => crypto.createHmac('sha256', process.env.SESSION_SECRET || 'ks-upload')
+  .update(String(file)).digest('hex').slice(0, 32);
 const allowUploadAccess = (req, res, next) => {
   const tok = req.headers['x-ingest-token'] || req.query.token;
   if (tok && process.env.INGEST_TOKEN && tok === process.env.INGEST_TOKEN) return next();
+  const sig = String(req.query.sig || '');
+  if (sig && sig === uploadSig(req.params.file)) return next();
   return requireAuth(req, res, next);
 };
 app.get('/uploads/:file', allowUploadAccess, (req, res) => {

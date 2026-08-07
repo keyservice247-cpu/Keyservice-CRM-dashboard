@@ -94,6 +94,41 @@ await api('POST', `/api/chats/${gesprek.id}/read`, {});
 const chats3 = await api('GET', '/api/chats');
 ok('na openen: teller op nul', ((chats3.json || []).find((c) => c.id === gesprek.id)?.unread || 0) === 0);
 
+console.log('\n== Onbekend nummer: appje is METEEN zichtbaar in Berichten ==');
+// Een 1-op-1 appje van een onbekend nummer maakt (WET regel 5) géén klant aan — maar
+// het gesprek moet wél direct in de lijst staan, anders "verdwijnt" het voor de gebruiker.
+await api('POST', '/api/ingest/whatsapp', {
+  name: 'Piet Onbekend', body: 'Hallo, wat kost een cilinderslot vervangen?\nTelefoon: +31688877766', externalId: 'chat-onb-1',
+}, true);
+const chatsO = await api('GET', '/api/chats');
+const onb = (chatsO.json || []).find((c) => String(c.id).startsWith('tel:') && (c.phone || '').includes('688877766'));
+ok('onbekend nummer staat in de gesprekkenlijst', !!onb, JSON.stringify((chatsO.json || []).map((c) => c.id)));
+ok('met de profielnaam van de afzender', /Piet Onbekend/i.test(onb?.name || ''), onb?.name);
+const kl0 = (await api('GET', '/api/customers')).json || [];
+ok('er is GEEN klantrecord aangemaakt (WET regel 5)', !kl0.some((c) => (c.phone || '').includes('688877766')));
+const histO = await api('GET', `/api/chats/nummer/${encodeURIComponent(onb.phone)}`);
+ok('gesprek toont het binnengekomen appje', (histO.json?.items || []).some((t) => /cilinderslot vervangen/i.test(t.body || '')));
+const stuurO = await api('POST', `/api/chats/nummer/${encodeURIComponent(onb.phone)}/send`, { text: 'Dat kost vanaf 95 euro incl. montage.' });
+ok('terugsturen naar onbekend nummer lukt', stuurO.status === 200 && stuurO.json?.ok, JSON.stringify(stuurO.json));
+const histO2 = await api('GET', `/api/chats/nummer/${encodeURIComponent(onb.phone)}`);
+ok('antwoord staat in het gesprek met verzendstatus', (histO2.json?.items || []).some((t) => t.outgoing && /95 euro/.test(t.body || '') && t.waStatus === 'queued'));
+const kl1 = (await api('GET', '/api/customers')).json || [];
+ok('ook na versturen nog steeds geen klantrecord', !kl1.some((c) => (c.phone || '').includes('688877766')));
+
+console.log('\n== Klant-link naar een bijlage (voor PDF via WhatsApp) ==');
+// Ondertekende link: zonder inloggen te openen, maar alleen met de juiste handtekening.
+const ordersU = (await api('GET', '/api/orders')).json || [];
+const metBijlage = ordersU.find((o) => (o.attachments || []).length) || null;
+let upFile = metBijlage?.attachments?.[0]?.file;
+if (!upFile) {
+  const up = await api('POST', `/api/orders/${ordersU[0].id}/attachments`, { filename: 'test.pdf', mime: 'application/pdf', dataBase64: Buffer.from('%PDF-1.4 test').toString('base64') });
+  upFile = (up.json?.attachments || []).slice(-1)[0]?.file;
+}
+const zonderSig = await fetch(`${BASE}/uploads/${upFile}`, { redirect: 'manual' });
+ok('zonder handtekening of login: geen toegang', zonderSig.status !== 200, String(zonderSig.status));
+const fouteSig = await fetch(`${BASE}/uploads/${upFile}?sig=${'a'.repeat(32)}`, { redirect: 'manual' });
+ok('met verkeerde handtekening: geen toegang', fouteSig.status !== 200, String(fouteSig.status));
+
 console.log('\n== Rechten: monteur komt er niet in ==');
 // Vers monteur-account aanmaken en daarmee proberen.
 await api('POST', '/api/users', { name: 'Monteur Test', email: 'monteurtest@keyservice.nl', password: 'monteur123', role: 'monteur' });

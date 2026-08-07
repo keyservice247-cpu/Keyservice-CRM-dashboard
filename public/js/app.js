@@ -392,7 +392,7 @@ async function openChat(cid) {
   _lastChatPaneHtml = '';
   $('#chatsLayout')?.classList.add('active-chat');
   $$('.chat-item').forEach((b) => b.classList.toggle('active', b.dataset.cid === cid));
-  api(`/api/chats/${cid}/read`, 'POST').catch(() => {});
+  if (!cid.startsWith('tel:')) api(`/api/chats/${cid}/read`, 'POST').catch(() => {});
   renderChatPane(true);
 }
 function sluitChat() {
@@ -407,7 +407,11 @@ async function renderChatPane(scrollDown) {
   const pane = $('#chatPane');
   if (!pane || !_chatActive) return;
   let h;
-  try { h = await api(`/api/customers/${_chatActive}/history?limit=200`); } catch { return; }
+  // Onbekend nummer (nog geen klantrecord) heeft zijn eigen gesprek-route.
+  const histUrl = _chatActive.startsWith('tel:')
+    ? `/api/chats/nummer/${encodeURIComponent(_chatActive.slice(4))}`
+    : `/api/customers/${_chatActive}/history?limit=200`;
+  try { h = await api(histUrl); } catch { return; }
   const info = _chatList.find((c) => c.id === _chatActive) || {};
   const msgs = (h.items || []).filter((t) => t.channel !== 'systeem');
   const msgsHtml = msgs.length ? msgs.map((t) => {
@@ -454,7 +458,10 @@ async function renderChatPane(scrollDown) {
     if (!text) return;
     stuur.disabled = true;
     try {
-      const r = await api(`/api/chats/${_chatActive}/send`, 'POST', { text });
+      const sendUrl = _chatActive.startsWith('tel:')
+        ? `/api/chats/nummer/${encodeURIComponent(_chatActive.slice(4))}/send`
+        : `/api/chats/${_chatActive}/send`;
+      const r = await api(sendUrl, 'POST', { text });
       if (veld) veld.value = '';
       toast(r.paused ? 'In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit' : 'Bericht in de wachtrij — wordt zo verstuurd', r.paused);
       _lastChatPaneHtml = '';
