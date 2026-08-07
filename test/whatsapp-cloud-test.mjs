@@ -102,5 +102,19 @@ if (!bereikbaar) {
     naLijst.filter((r) => String(r.message?.body || '').includes(uniek)).length === 1);
 }
 
+if (bereikbaar) {
+  console.log('\n== Sjabloon-instelling (buiten 24-uursvenster) ==');
+  const login = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) });
+  const ck = (login.headers.get('set-cookie') || '').split(';')[0];
+  const inst = (p) => fetch(BASE + '/api/settings', { method: p ? 'PATCH' : 'GET', headers: { 'content-type': 'application/json', cookie: ck }, body: p ? JSON.stringify(p) : undefined }).then((r) => r.json());
+  const std = await inst();
+  ok('sjabloonnaam heeft een verstandige standaard', std.whatsappCloudTemplate === 'keyservice_bericht', JSON.stringify(std.whatsappCloudTemplate));
+  await inst({ whatsappCloudTemplate: 'mijn_eigen_sjabloon' });
+  ok('sjabloonnaam is aan te passen', (await inst()).whatsappCloudTemplate === 'mijn_eigen_sjabloon');
+  await inst({ whatsappCloudTemplate: '' });
+  ok('leeg = sjabloon-terugval uit', (await inst()).whatsappCloudTemplate === '');
+  await inst({ whatsappCloudTemplate: 'keyservice_bericht' });
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} geslaagd, ${failed} gefaald${bad.length ? ':\n  - ' + bad.join('\n  - ') : ''}`);
 process.exit(failed === 0 ? 1 && 0 : 1);

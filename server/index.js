@@ -2374,6 +2374,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     googleSync: getGoogleSync(),
     whatsappPaused: !!db().settings.whatsappPaused,
     whatsappCloudSend: !!db().settings.whatsappCloudSend,
+    whatsappCloudTemplate: String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht'),
     whatsappCloudReady: cloudConfigured(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
     htmlSignature: getHtmlSignature(),
@@ -2614,6 +2615,8 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   }
   if ('whatsappPaused' in b) db().settings.whatsappPaused = !!b.whatsappPaused;
   if ('whatsappCloudSend' in b) db().settings.whatsappCloudSend = !!b.whatsappCloudSend;
+  // Sjabloonnaam voor buiten het 24-uursvenster. Leeg = sjabloon-terugval uit.
+  if ('whatsappCloudTemplate' in b) db().settings.whatsappCloudTemplate = String(b.whatsappCloudTemplate || '').trim().slice(0, 100);
   if ('weeklyAiCheck' in b) {
     const w = b.weeklyAiCheck || {};
     db().settings.weeklyAiCheck = {
@@ -2972,8 +2975,30 @@ async function runCloudOutbox() {
       it.doneAt = now();
       it.lastResult = 'verzonden via officiële WhatsApp (Meta)';
     } catch (e) {
+      // BUITEN HET 24-UURSVENSTER (Meta-code 131047): een vrij bericht mag dan niet,
+      // maar een vooraf goedgekeurd SJABLOON wél. We sturen dezelfde tekst nogmaals,
+      // verpakt in het sjabloon (Instellingen → Koppelingen; standaard
+      // "keyservice_bericht" met één invulveld). Zo kun je élke klant appen — ook wie
+      // nooit eerder naar dit nummer stuurde. Meta staat geen regeleindes toe in een
+      // sjabloon-invulveld, dus de tekst wordt daarvoor platgeslagen tot één regel.
+      const buitenVenster = e.metaCode === 131047 || /131047|24 hours/i.test(String(e.message || ''));
+      const sjabloon = String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht').trim();
+      if (buitenVenster && sjabloon && it.text && !(it.media || []).length) {
+        try {
+          const platteTekst = String(it.text).replace(/\s+/g, ' ').trim().slice(0, 900);
+          await sendCloudTemplate(it.phone, sjabloon, [platteTekst], 'nl');
+          it.status = 'sent';
+          it.doneAt = now();
+          it.lastResult = 'verzonden via officiële WhatsApp (sjabloon — klant zat buiten het 24-uursvenster)';
+          continue;
+        } catch (e2) {
+          it.lastResult = `officiële WhatsApp: buiten 24-uursvenster én sjabloon mislukt: ${String(e2.message || '').slice(0, 120)}`;
+          console.error('[wa-cloud] sjabloon-terugval mislukt:', e2.message);
+          continue;
+        }
+      }
       // Blijft 'queued': de bridge pakt het op. Alleen vastleggen wat Meta zei, zodat
-      // in Instellingen zichtbaar is waaróm (meestal: buiten het 24-uursvenster).
+      // in Instellingen zichtbaar is waaróm.
       it.lastResult = `officiële WhatsApp: ${String(e.message || '').slice(0, 140)}`;
       console.error('[wa-cloud] versturen mislukt, valt terug op de bridge:', e.message);
     }

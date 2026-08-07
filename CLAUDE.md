@@ -400,7 +400,11 @@ berichten". `server/connectors/whatsapp-cloud.js` praat met Meta's officiële pl
   inhoud-dedup grijpen gewoon in). De vórige Cloud-route had GEEN enkele controle en is
   daarom weggehaald; bouw die nooit terug zonder handtekening-check.
 - **Uitgaand:** `runCloudOutbox()` (elke 20 s) pakt alleen 1-op-1 KLANT-items uit de
-  bestaande outbox (`group === '__klant_dm__'`), nooit een groep. Aan te zetten in
+  bestaande outbox (`group === '__klant_dm__'`), nooit een groep. BUITEN het
+  24-uursvenster (Meta-code 131047) wordt de tekst automatisch nogmaals verstuurd
+  als SJABLOON (settings.whatsappCloudTemplate, standaard `keyservice_bericht`,
+  één invulveld {{1}}; tekst platgeslagen tot één regel — Meta verbiedt
+  regeleindes in invulvelden; leeg = terugval uit). Zo kun je élke klant appen. Aan te zetten in
   Instellingen → Koppelingen (`settings.whatsappCloudSend`, default UIT); de pauzeknop
   gaat er boven. **Vangnet:** weigert Meta het bericht (meestal buiten het 24-uursvenster),
   dan blijft het item gewoon `queued` en verstuurt de bridge het alsnog — één Cloud-poging

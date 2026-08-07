@@ -3431,7 +3431,11 @@ async function loadSettings() {
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} Officiële WhatsApp (Meta) voor klantberichten</h3>
       <p class="muted small">Stuurt facturen, offertes, review-verzoeken en bevestigingen naar de <strong>klant</strong> via het officiële WhatsApp Business-platform van Meta, in plaats van via het wegwerpnummer. Groepsberichten (DRS, monteurs) blijven altijd via de bridge lopen — de officiële route kan geen bestaande groepen binnen. Weigert Meta een bericht (bijvoorbeeld omdat de klant langer dan 24 uur niets stuurde), dan blijft het gewoon in de wachtrij staan en verstuurt de bridge het alsnog: er kan niets verloren gaan.</p>
       ${s.whatsappCloudReady
-        ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-cloud-send" style="width:auto" ${s.whatsappCloudSend ? 'checked' : ''}> Klantberichten via de officiële WhatsApp versturen</label>`
+        ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-cloud-send" style="width:auto" ${s.whatsappCloudSend ? 'checked' : ''}> Klantberichten via de officiële WhatsApp versturen</label>
+        <label style="margin-top:10px">Sjabloon voor klanten buiten het 24-uursvenster
+          <input id="wa-cloud-template" value="${esc(s.whatsappCloudTemplate ?? 'keyservice_bericht')}" placeholder="keyservice_bericht" style="max-width:280px">
+        </label>
+        <p class="muted small" style="margin:4px 0 0">Heeft een klant langer dan 24 uur niets gestuurd, dan eist Meta een vooraf goedgekeurd sjabloon. Het CRM verpakt je bericht dan automatisch in dit sjabloon. Maak het aan in WhatsApp-beheer → Berichtsjablonen (naam exact gelijk); leeg laten = uit.</p>`
         : `<p class="muted small" style="margin:0"><strong>Nog niet ingesteld.</strong> Vul op de server eerst <code>WHATSAPP_CLOUD_TOKEN</code>, <code>WHATSAPP_PHONE_ID</code> en <code>WHATSAPP_APP_SECRET</code> in; daarna verschijnt hier de aan/uit-knop.</p>`}
     </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px" id="wa-pair-card"></div>
@@ -3952,6 +3956,10 @@ async function loadSettings() {
   if ($('#wa-cloud-send')) $('#wa-cloud-send').onchange = async () => {
     const aan = $('#wa-cloud-send').checked;
     try { await api('/api/settings', 'PATCH', { whatsappCloudSend: aan }); toast(aan ? 'Klantberichten gaan nu via de officiële WhatsApp' : 'Klantberichten gaan weer via de bridge'); }
+    catch (err) { toast(err.message, true); }
+  };
+  if ($('#wa-cloud-template')) $('#wa-cloud-template').onchange = async () => {
+    try { await api('/api/settings', 'PATCH', { whatsappCloudTemplate: $('#wa-cloud-template').value.trim() }); toast('Sjabloonnaam opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveWeeklyCheck').onclick = async () => {
