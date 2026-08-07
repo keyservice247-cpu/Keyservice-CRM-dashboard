@@ -21,6 +21,9 @@ node test/opslag-test.mjs    # SQLite-opslag: migratie, volgorde, verwijderen, t
 #   DATA_DIR=/tmp/crm-watest INGEST_TOKEN=test123 SESSION_SECRET=test \
 #     WHATSAPP_APP_SECRET=appsecret123 PORT=3125 node server/index.js &
 node test/whatsapp-cloud-test.mjs
+# Berichten-scherm: gesprekkenlijst, versturen via de wachtrij, kaart-koppeling,
+# gelezen-teller, monteur-weigering (PORT=3127)
+node test/chat-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 

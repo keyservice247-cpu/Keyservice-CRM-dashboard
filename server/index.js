@@ -309,16 +309,10 @@ app.get('/api/customers', requireAuth, (req, res) => {
 // WhatsApp-afzendernummer / e-mailadres) bij deze klant horen. Chronologisch,
 // met kaart-label per bericht — zodat je in de kaart gewoon kunt terugscrollen
 // door ALLES van deze klant.
-app.get('/api/customers/:id/history', requireAuth, (req, res) => {
-  const customer = db().customers.find((c) => c.id === req.params.id);
-  if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
-  // AVG: een monteur mag alleen de historie van klanten van zijn eigen opdrachten
-  // zien. LET OP de o.monteurId-guard: zonder die matcht null === null en leest een
-  // monteur-account zonder koppeling álles (zelfde patroon als GET /api/customers).
-  if (req.user.role === 'monteur') {
-    const mine = db().orders.some((o) => o.customerId === customer.id && o.monteurId && o.monteurId === req.user.monteurId);
-    if (!mine) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
-  }
+// Alle communicatie van één klant, chronologisch: kaart-threads (incl. archief en
+// prullenbak) + losse inbox-berichten + uitgaande WhatsApp-wachtrij. Gedeeld door het
+// klant-historiescherm op de kaart én het Berichten-scherm (7 aug 2026).
+function verzamelKlantHistorie(customer) {
   const items = [];
   const seen = new Set(); // dedup: zelfde bericht op kaart én als los bericht
   const key = (channel, body) => `${channel}|${String(body || '').replace(/\s+/g, ' ').trim().slice(0, 180)}`;
@@ -349,9 +343,144 @@ app.get('/api/customers/:id/history', requireAuth, (req, res) => {
     if (!match || seen.has(key(m.channel, m.body))) continue;
     items.push({ id: m.id, channel: m.channel, sender: m.sender, subject: m.subject, body: m.body, at: m.receivedAt, attachments: m.attachments || [], standalone: true });
   }
+  // Uitgaande WhatsApp-berichten uit de wachtrij. Twee smaken: (a) via de chat
+  // verstuurd en al als kaart-notitie in de thread (outboxId op de thread-entry) —
+  // dan plakken we alleen de VERZENDSTATUS aan; (b) losse wachtrij-items (testbericht,
+  // factuur-PDF, review-verzoek zonder kaart) — die komen er als eigen regel bij.
+  const statusById = new Map();
+  for (const ob of db().outbox || []) {
+    if (ob.group && ob.group !== '__klant_dm__') continue;
+    statusById.set(ob.id, ob.status);
+    const vanKlant = (ob.customerId && ob.customerId === customer.id)
+      || (custPhoneNorm.length >= 6 && matchPhone(ob.phone || '') === custPhoneNorm);
+    if (!vanKlant || ob.threaded) continue;
+    if (seen.has(key('whatsapp', ob.text))) continue;
+    seen.add(key('whatsapp', ob.text));
+    items.push({ id: ob.id, channel: 'whatsapp', outgoing: true, sender: ob.by || '', body: ob.text || '', at: ob.createdAt, waStatus: ob.status, attachments: [], standalone: true });
+  }
+  for (const it of items) { if (it.outboxId && statusById.has(it.outboxId)) it.waStatus = statusById.get(it.outboxId); }
   items.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+  return items;
+}
+
+app.get('/api/customers/:id/history', requireAuth, (req, res) => {
+  const customer = db().customers.find((c) => c.id === req.params.id);
+  if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
+  // AVG: een monteur mag alleen de historie van klanten van zijn eigen opdrachten
+  // zien. LET OP de o.monteurId-guard: zonder die matcht null === null en leest een
+  // monteur-account zonder koppeling álles (zelfde patroon als GET /api/customers).
+  if (req.user.role === 'monteur') {
+    const mine = db().orders.some((o) => o.customerId === customer.id && o.monteurId && o.monteurId === req.user.monteurId);
+    if (!mine) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
+  }
+  const items = verzamelKlantHistorie(customer);
   const limit = Math.min(500, Math.max(20, Number(req.query.limit) || 300));
   res.json({ customer: { id: customer.id, name: customer.name }, items: items.slice(-limit), total: items.length });
+});
+
+// ---------- BERICHTEN-SCHERM (7 aug 2026): alle gesprekken op één plek ----------
+// Eén overzicht van alle klantgesprekken (WhatsApp + e-mail), met versturen vanuit het
+// CRM. Versturen loopt ALTIJD via de bestaande outbox — dus de pauzeknop, de
+// snelheidsrem, het dubbelfilter en de vervaltermijn gelden onverkort, en de bridge of
+// de officiële route bezorgt het bericht zoals altijd. Er bestaat geen apart verzendpad.
+// Alleen admin + assistent (de assistente is de hoofdgebruiker; monteurs hebben hun
+// eigen kaart-weergave en horen niet in álle klantgesprekken te kunnen kijken).
+app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
+  const perKlant = new Map(); // customerId -> samenvatting
+  const bump = (cid, at, body, uitgaand) => {
+    if (!cid) return;
+    const cur = perKlant.get(cid);
+    if (!cur || String(at || '').localeCompare(String(cur.lastAt || '')) > 0) {
+      perKlant.set(cid, { lastAt: at, lastBody: body, lastOut: !!uitgaand });
+    } else if (!cur.lastAt) perKlant.set(cid, { lastAt: at, lastBody: body, lastOut: !!uitgaand });
+  };
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    if (!o.customerId) continue;
+    for (const t of o.thread || []) {
+      if (t.channel === 'systeem') continue; // systeemnotities zijn geen gesprek
+      bump(o.customerId, t.at, t.body, !!t.outgoing);
+    }
+  }
+  // Losse WhatsApp-berichten -> klant op het GENORMALISEERDE nummer (Regel 2).
+  const perNummer = new Map();
+  for (const c of db().customers || []) {
+    const p = matchPhone(c.phone || '');
+    if (p.length >= 6 && !perNummer.has(p)) perNummer.set(p, c);
+  }
+  for (const m of db().messages || []) {
+    if (m.channel !== 'whatsapp' || m.group || m.skipped || !m.body) continue;
+    const p = matchPhone(senderPhoneFromText(m.body));
+    const c = p.length >= 6 ? perNummer.get(p) : null;
+    if (c) bump(c.id, m.receivedAt, m.body, false);
+  }
+  for (const ob of db().outbox || []) {
+    if (ob.group && ob.group !== '__klant_dm__') continue;
+    const c = (ob.customerId && db().customers.find((x) => x.id === ob.customerId))
+      || perNummer.get(matchPhone(ob.phone || ''));
+    if (c) bump(c.id, ob.createdAt, ob.text, true);
+  }
+  const uit = [];
+  for (const [cid, v] of perKlant) {
+    const c = db().customers.find((x) => x.id === cid);
+    if (!c) continue;
+    const open = (db().orders || [])
+      .filter((o) => o.customerId === cid && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+    const unread = (db().orders || []).filter((o) => o.customerId === cid).reduce((s, o) => s + (o.unreadReplies || 0), 0);
+    uit.push({
+      id: cid, name: c.name || 'Onbekende klant', phone: c.phone || '',
+      lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
+      unread, orderId: open ? open.id : null, orderTitle: open ? (open.title || '') : '',
+    });
+  }
+  uit.sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
+  res.json(uit.slice(0, 200));
+});
+
+// Versturen: bericht in de beveiligde wachtrij + zichtbaar op de nieuwste open kaart.
+app.post('/api/chats/:id/send', requireRole('admin', 'assistent'), (req, res) => {
+  const customer = db().customers.find((c) => c.id === req.params.id);
+  if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
+  const text = String(req.body?.text || '').trim().slice(0, 4000);
+  if (!text) return res.status(400).json({ error: 'Typ eerst een bericht' });
+  const phoneRaw = String(customer.phone || '').trim();
+  const digits = phoneRaw.replace(/\D/g, '');
+  if (digits.length < 6 || digits.length > 13) {
+    return res.status(400).json({ error: 'Deze klant heeft geen geldig telefoonnummer. Vul eerst een 06-nummer in bij de klantgegevens.' });
+  }
+  const open = (db().orders || [])
+    .filter((o) => o.customerId === customer.id && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
+    .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+  const item = {
+    id: id('out'), kind: 'whatsapp_customer', phone: phoneRaw, group: '__klant_dm__',
+    text, customerId: customer.id, orderId: open ? open.id : undefined,
+    // threaded: dit bericht staat óók als thread-notitie op de kaart; de historie toont
+    // dan die notitie (met status erbij geplakt) i.p.v. het wachtrij-item dubbel.
+    threaded: !!open,
+    status: 'queued', createdAt: now(), by: `chat (${req.user.name})`,
+  };
+  db().outbox = db().outbox || [];
+  db().outbox.unshift(item);
+  if (db().outbox.length > 1000) db().outbox.length = 1000;
+  if (open) {
+    open.thread = open.thread || [];
+    open.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: req.user.name, body: text, at: now(), outboxId: item.id });
+    open.updatedAt = now();
+  }
+  logActivity(req.user.name, 'WhatsApp-bericht via Berichten', `${customer.name || phoneRaw}: ${text.slice(0, 60)}`);
+  saveSoon();
+  res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused, orderId: open ? open.id : null });
+});
+
+// Gesprek gelezen: haalt de "nieuw bericht"-tellers van de kaarten van deze klant weg.
+app.post('/api/chats/:id/read', requireRole('admin', 'assistent'), (req, res) => {
+  let n = 0;
+  for (const o of db().orders || []) {
+    if (o.customerId !== req.params.id) continue;
+    if (o.unreadReplies || o.customerReplied) { o.unreadReplies = 0; o.customerReplied = false; n++; }
+  }
+  if (n) saveSoonQuiet(); // huishoudelijk: geen verversing van andere schermen forceren
+  res.json({ ok: true, cleared: n });
 });
 
 // KLANTDOSSIER: alles van één klant op één scherm — gegevens, alle kaarten (ook

@@ -24,6 +24,7 @@
         <button class="nav-item" data-view="board" data-channel="all"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span> Opdrachten</button>
         <button class="nav-item" data-view="board" data-channel="email"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span> E-mail</button>
         <button class="nav-item" data-view="board" data-channel="whatsapp"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21l1.7-5A8 8 0 1 1 8 19.3z"/></svg></span> WhatsApp</button>
+        <button class="nav-item" data-view="chats"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M8 11h8M8 14h5"/></svg></span> Berichten <span id="chatBadge" class="badge" hidden>0</span></button>
         <button class="nav-item" data-view="agenda"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/></svg></span> Agenda</button>
         <div class="nav-sep">Postvak &amp; AI</div>
         <button class="nav-item" data-view="inbox"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H4z"/><path d="M4 12h4l2 3h4l2-3h4"/></svg></span> Inbox / AI <span id="inboxBadge" class="badge" hidden>0</span></button>
@@ -154,6 +155,14 @@
           <div><h2>AI Assistent</h2><div class="muted small">Stel een vraag over alle WhatsApp- en e-mailberichten. De AI zoekt het uit en koppelt terug.</div></div>
         </div>
         <div id="assistantPanel"></div>
+      </section>
+
+      <!-- Berichten (gesprekken per klant, in- en uitgaand) -->
+      <section id="view-chats" class="view" hidden>
+        <div class="view-head">
+          <div><h2>Berichten</h2><div class="muted small">Alle klantgesprekken op één plek. Antwoorden gaat via WhatsApp; alles komt ook op de kaart te staan.</div></div>
+        </div>
+        <div id="chatsWrap"></div>
       </section>
 
       <!-- Agenda -->

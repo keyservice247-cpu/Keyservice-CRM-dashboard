@@ -919,3 +919,34 @@ table tbody tr:hover { background: var(--panel-2); }
 }
 @keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .modal { animation: none; } }
+
+/* ---------- Berichten-scherm (7 aug 2026): gesprekken links, chat rechts ---------- */
+.chats-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; align-items: start; }
+.chat-list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow-y: auto; max-height: calc(100vh - 190px); overscroll-behavior: contain; }
+.chat-item { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; background: transparent; border: none; border-bottom: 1px solid var(--line-soft); padding: 11px 13px; cursor: pointer; color: var(--ink); }
+.chat-item:hover { background: var(--line-soft); }
+.chat-item.active { background: var(--accent-soft); }
+.chat-item .ci-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.chat-item .ci-name { font-weight: 600; font-size: 14.5px; }
+.chat-item .ci-bottom { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.chat-item .ci-last { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chat-item .ci-order { display: flex; align-items: center; gap: 4px; }
+.chat-unread { background: var(--accent); color: #fff; border-radius: 999px; font-size: 11px; font-weight: 600; padding: 1px 7px; flex-shrink: 0; }
+.chat-pane { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); max-height: calc(100vh - 190px); min-height: 380px; overflow: hidden; }
+.chat-pane .cp-empty { display: flex; align-items: center; justify-content: center; flex: 1; padding: 40px; }
+.cp-head { display: flex; align-items: center; gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.cp-head .cp-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--panel-2); overscroll-behavior: contain; }
+.cp-send { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); flex-shrink: 0; align-items: flex-end; }
+.cp-send textarea { flex: 1; resize: none; min-height: 44px; max-height: 120px; font-size: 15px; }
+.cp-back { display: none; flex-shrink: 0; }
+@media (max-width: 820px) {
+  .chats-layout { grid-template-columns: 1fr; }
+  /* Mobiel: óf de lijst, óf het gesprek — nooit allebei geplet naast elkaar. */
+  .chats-layout.active-chat .chat-list { display: none; }
+  .chats-layout:not(.active-chat) .chat-pane { display: none; }
+  .chat-list { max-height: calc(100vh - 210px); }
+  .chat-pane { max-height: calc(100dvh - 200px); min-height: 320px; }
+  .cp-back { display: inline-flex; }
+  .cp-send .btn { min-height: 44px; }
+}

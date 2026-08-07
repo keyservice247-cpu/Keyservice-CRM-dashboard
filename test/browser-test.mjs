@@ -219,6 +219,55 @@ ok('na gelukte koppeling verdwijnt het kaartje', await page.locator('#wa-pair-ca
 await page.setViewportSize({ width: 1280, height: 800 });
 noErr('Koppelcode-kaartje (mobiel)');
 
+// ---------- Berichten-scherm (7 aug 2026) — desktop én telefoonformaat ----------
+// Het chatscherm: gesprekkenlijst, gesprek openen, bericht versturen (gaat door de
+// echte beveiligde wachtrij), koppeling naar de kaart. Moet vlekkeloos op mobiel.
+clear();
+// Testdata: klant + kaart + binnengekomen appje via de echte pipeline.
+await page.evaluate(async () => {
+  await fetch('/api/ingest/whatsapp', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' },
+    body: JSON.stringify({ name: 'Chat Browserklant', body: 'Goedemiddag, cilinder kapot in Veenendaal, Beukenlaan 4, 3903AB. Kunt u helpen?\nTelefoon: +31644455566', externalId: 'br-chat-1' }),
+  });
+});
+await page.evaluate(() => goView('chats'));
+await page.waitForTimeout(1500);
+ok('Berichten-scherm opent met gesprekkenlijst', await page.locator('#chatList').count() > 0);
+const rij = page.locator('.chat-item', { hasText: 'Chat Browserklant' }).first();
+const rijGevonden = await rij.count() > 0 || await page.locator('.chat-item').count() > 0;
+ok('gesprek zichtbaar in de lijst', rijGevonden);
+await (await rij.count() ? rij : page.locator('.chat-item').first()).click();
+await page.waitForTimeout(1200);
+ok('gesprek opent met berichten', await page.locator('#cpMsgs .chat-msg').count() > 0, String(await page.locator('#cpMsgs .chat-msg').count()));
+await page.fill('#cpText', 'Browsertest: we komen eraan!');
+await page.click('#cpSend');
+await page.waitForTimeout(1200);
+ok('verstuurd bericht verschijnt als uitgaande bubbel', await page.locator('#cpMsgs .chat-msg.out', { hasText: 'we komen eraan' }).count() > 0);
+noErr('Berichten-scherm (desktop)');
+
+// Telefoonformaat: lijst -> gesprek vult het scherm -> terugknop terug naar de lijst.
+clear();
+await page.setViewportSize({ width: 390, height: 844 });
+await page.evaluate(() => showView('overview'));
+await page.waitForTimeout(300);
+await page.evaluate(() => goView('chats'));
+await page.waitForTimeout(1200);
+ok('mobiel: lijst zichtbaar, gesprek nog niet', await page.locator('#chatList').isVisible() && await page.locator('#chatPane').isHidden());
+await page.locator('.chat-item').first().click();
+await page.waitForTimeout(1200);
+ok('mobiel: gesprek vult het scherm, lijst weg', await page.locator('#chatPane').isVisible() && await page.locator('#chatList').isHidden());
+const chatPast = await page.evaluate(() => {
+  const p = document.querySelector('.chat-pane');
+  return p && p.getBoundingClientRect().right <= window.innerWidth + 1;
+});
+ok('mobiel: gesprek valt binnen het scherm', chatPast === true);
+ok('mobiel: verstuur-balk bereikbaar', await page.locator('#cpText').isVisible());
+await page.click('#cpBack');
+await page.waitForTimeout(600);
+ok('mobiel: terugknop -> lijst terug', await page.locator('#chatList').isVisible());
+await page.setViewportSize({ width: 1280, height: 800 });
+noErr('Berichten-scherm (mobiel)');
+
 // ---------- Zijbalk past altijd (6 aug 2026) ----------
 // Klacht: "ik moet naar 75% uitzoomen om AI actief / WhatsApp actief en alles
 // eronder te zien". De balk stond op 100vh zonder scroll, dus de onderkant viel

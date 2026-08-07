@@ -275,6 +275,7 @@ async function startLiveUpdates() {
         else if (state.view === 'board') loadBoard();
         else if (state.view === 'inbox') loadInbox();
         else if (state.view === 'customers') loadCustomers();
+        else if (state.view === 'chats') loadChats(true);
       }
       _lastPulse = p.v;
     } catch { /* offline: volgende keer opnieuw */ }
@@ -332,6 +333,139 @@ function bindNav() {
   }
 }
 
+// ---------- Berichten-scherm (7 aug 2026): alle klantgesprekken op één plek ----------
+// Links de gesprekken (nieuwste bovenaan, ongelezen-teller), rechts het gekozen gesprek
+// als chat met een verstuur-balk. Op mobiel: lijst -> tik -> gesprek vult het scherm,
+// terugknop linksboven. Versturen loopt via de beveiligde wachtrij op de server; de
+// historie is dezelfde als "Alles van deze klant" op de kaart, dus alles blijft gekoppeld.
+let _chatActive = null;         // customerId van het open gesprek
+let _chatList = [];             // laatste lijst (voor naam/kaart in de kop)
+let _lastChatListHtml = '';     // geknipper-vangrail (zelfde patroon als het bord)
+let _lastChatPaneHtml = '';
+function chatStatusChip(s) {
+  if (s === 'queued') return '<span class="inv-st verzonden" title="Staat klaar; de wachtrij verstuurt hem zo">wachtrij</span>';
+  if (s === 'sent') return '<span class="inv-st betaald" title="Verstuurd">✓</span>';
+  if (s === 'failed') return '<span class="inv-st verlopen" title="Versturen is niet gelukt">mislukt</span>';
+  return '';
+}
+async function loadChats(fromPulse) {
+  const wrap = $('#chatsWrap');
+  if (!wrap) return;
+  if (!wrap.dataset.init) {
+    wrap.dataset.init = '1';
+    wrap.innerHTML = `<div class="chats-layout" id="chatsLayout"><aside id="chatList" class="chat-list"></aside><section id="chatPane" class="chat-pane"><div class="cp-empty muted">Kies links een gesprek</div></section></div>`;
+  }
+  // Op de TELEFOON begint het scherm altijd met de lijst: het open gesprek van de
+  // vorige keer zou anders de hele lijst verbergen en je weet niet meer waar je bent.
+  // Op desktop (twee kolommen) blijft het open gesprek juist netjes staan.
+  if (!fromPulse && _chatActive && window.matchMedia('(max-width: 820px)').matches) {
+    _chatActive = null; _lastChatPaneHtml = '';
+    const p = $('#chatPane'); if (p) p.innerHTML = '<div class="cp-empty muted">Kies een gesprek</div>';
+  }
+  $('#chatsLayout')?.classList.toggle('active-chat', !!_chatActive);
+  let list;
+  try { list = await api('/api/chats'); } catch { return; }
+  if (!Array.isArray(list)) return;
+  _chatList = list;
+  const totaalOngelezen = list.reduce((s, c) => s + (c.unread || 0), 0);
+  const badge = $('#chatBadge');
+  if (badge) { badge.textContent = totaalOngelezen; badge.hidden = totaalOngelezen === 0; }
+  const listHtml = list.length ? list.map((c) => `
+    <button type="button" class="chat-item ${c.id === _chatActive ? 'active' : ''}" data-cid="${esc(c.id)}">
+      <div class="ci-top"><span class="ci-name">${esc(c.name)}</span><span class="muted small">${c.lastAt ? fmtDate(c.lastAt) : ''}</span></div>
+      <div class="ci-bottom"><span class="ci-last">${c.lastOut ? '↦ ' : ''}${esc(c.lastBody || '')}</span>${c.unread ? `<span class="chat-unread">${c.unread}</span>` : ''}</div>
+      ${c.orderTitle ? `<div class="ci-order muted small">${icon('tag', 11)} ${esc(c.orderTitle.slice(0, 48))}</div>` : ''}
+    </button>`).join('')
+    : '<div class="muted small" style="padding:14px">Nog geen gesprekken. Zodra een klant appt of mailt, verschijnt het gesprek hier.</div>';
+  const listEl = $('#chatList');
+  if (listEl && listHtml !== _lastChatListHtml) {
+    const scrollY = listEl.scrollTop;
+    listEl.innerHTML = listHtml;
+    listEl.scrollTop = scrollY;
+    _lastChatListHtml = listHtml;
+    $$('.chat-item', listEl).forEach((b) => b.onclick = () => openChat(b.dataset.cid));
+  }
+  if (_chatActive) renderChatPane(!fromPulse);
+}
+async function openChat(cid) {
+  _chatActive = cid;
+  _lastChatPaneHtml = '';
+  $('#chatsLayout')?.classList.add('active-chat');
+  $$('.chat-item').forEach((b) => b.classList.toggle('active', b.dataset.cid === cid));
+  api(`/api/chats/${cid}/read`, 'POST').catch(() => {});
+  renderChatPane(true);
+}
+function sluitChat() {
+  _chatActive = null;
+  _lastChatPaneHtml = '';
+  $('#chatsLayout')?.classList.remove('active-chat');
+  const pane = $('#chatPane');
+  if (pane) pane.innerHTML = '<div class="cp-empty muted">Kies links een gesprek</div>';
+  loadChats();
+}
+async function renderChatPane(scrollDown) {
+  const pane = $('#chatPane');
+  if (!pane || !_chatActive) return;
+  let h;
+  try { h = await api(`/api/customers/${_chatActive}/history?limit=200`); } catch { return; }
+  const info = _chatList.find((c) => c.id === _chatActive) || {};
+  const msgs = (h.items || []).filter((t) => t.channel !== 'systeem');
+  const msgsHtml = msgs.length ? msgs.map((t) => {
+    const q = splitQuoted(t.body || '');
+    const uit = !!t.outgoing;
+    const meta = `<div class="chat-meta">${uit ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (uit ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)} ${t.waStatus ? chatStatusChip(t.waStatus) : ''}${t.orderTitle ? ` · <a href="#" class="cp-orderlink" data-oid="${esc(t.orderId)}">${esc(t.orderTitle.slice(0, 40))}</a>` : ''}</div>`;
+    const bubble = `<div class="chat-bubble">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div>`;
+    return `<div class="chat-msg ${uit ? 'out' : 'in'}">${meta}${bubble}</div>`;
+  }).join('') : '<div class="muted small" style="padding:14px">Nog geen berichten met deze klant.</div>';
+  const kanSturen = String(info.phone || '').replace(/\D/g, '').length >= 6;
+  const html = `
+    <div class="cp-head">
+      <button type="button" class="btn btn-sm cp-back" id="cpBack" title="Terug naar de lijst">←</button>
+      <div class="cp-who"><strong>${esc(info.name || h.customer?.name || 'Klant')}</strong>${info.phone ? `<span class="muted small"> · ${esc(info.phone)}</span>` : ''}</div>
+      ${info.orderId ? `<button type="button" class="btn btn-sm" id="cpCard">${icon('tag', 12)} Kaart openen</button>` : ''}
+    </div>
+    <div class="cp-msgs" id="cpMsgs">${msgsHtml}</div>
+    <div class="cp-send">
+      ${kanSturen
+        ? `<textarea id="cpText" placeholder="Typ een WhatsApp-bericht… (komt ook op de kaart)" rows="1"></textarea><button class="btn btn-primary" id="cpSend">${icon('whatsapp', 14)} Stuur</button>`
+        : '<div class="muted small">Deze klant heeft geen telefoonnummer — vul die eerst in bij de klantgegevens om te kunnen appen.</div>'}
+    </div>`;
+  if (html === _lastChatPaneHtml && !scrollDown) return;
+  // Niet hertekenen terwijl er getypt wordt: dan verdwijnt de tekst onder je vingers.
+  const bezig = document.activeElement && document.activeElement.id === 'cpText' && document.activeElement.value;
+  if (bezig && !scrollDown) return;
+  const oudeTekst = $('#cpText')?.value || '';
+  const box = $('#cpMsgs');
+  const stondOnderaan = !box || (box.scrollHeight - box.scrollTop - box.clientHeight < 60);
+  pane.innerHTML = html;
+  _lastChatPaneHtml = html;
+  if (oudeTekst && $('#cpText')) $('#cpText').value = oudeTekst;
+  const nieuw = $('#cpMsgs');
+  if (nieuw && (scrollDown || stondOnderaan)) nieuw.scrollTop = nieuw.scrollHeight;
+  $('#cpBack')?.addEventListener('click', sluitChat);
+  const kaartKnop = $('#cpCard');
+  if (kaartKnop) kaartKnop.onclick = async () => { state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(info.orderId); };
+  $$('.cp-orderlink', pane).forEach((a) => a.onclick = async (e) => { e.preventDefault(); state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(a.dataset.oid); });
+  $$('.quote-toggle', pane).forEach((btn) => btn.onclick = () => { const b = btn.nextElementSibling; if (b) b.hidden = !b.hidden; });
+  const stuur = $('#cpSend');
+  if (stuur) stuur.onclick = async () => {
+    const veld = $('#cpText');
+    const text = (veld?.value || '').trim();
+    if (!text) return;
+    stuur.disabled = true;
+    try {
+      const r = await api(`/api/chats/${_chatActive}/send`, 'POST', { text });
+      if (veld) veld.value = '';
+      toast(r.paused ? 'In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit' : 'Bericht in de wachtrij — wordt zo verstuurd', r.paused);
+      _lastChatPaneHtml = '';
+      await renderChatPane(true);
+    } catch (err) { toast(err.message, true); }
+    finally { const k = $('#cpSend'); if (k) k.disabled = false; }
+  };
+  const veld = $('#cpText');
+  if (veld) veld.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !('ontouchstart' in window)) { e.preventDefault(); $('#cpSend')?.click(); } });
+}
+
 function showView(view, tab) {
   const anderView = state.view !== view;
   state.view = view;
@@ -350,7 +484,7 @@ function showView(view, tab) {
   if (anderView) window.scrollTo(0, 0);
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance };
+  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance, chats: loadChats };
   (map[view] || (() => {}))();
 }
 
@@ -4775,6 +4909,7 @@ function navItems() {
   if (!monteur) nav.push({ label: 'Overzicht', view: 'overview', ic: 'activity' });
   nav.push({ label: 'Opdrachten', view: 'board', ic: 'list' });
   if (hasPerm('inbox')) nav.push({ label: 'Inbox / AI', view: 'inbox', ic: 'mail' });
+  if (!monteur) nav.push({ label: 'Berichten', view: 'chats', ic: 'whatsapp' });
   nav.push({ label: 'Agenda', view: 'agenda', ic: 'calendar' });
   if (hasPerm('customers')) nav.push({ label: 'Klanten & leads', view: 'customers', ic: 'users' }, { label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
   nav.push({ label: 'Facturen', view: 'invoices', ic: 'file' });

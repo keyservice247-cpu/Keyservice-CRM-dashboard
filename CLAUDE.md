@@ -418,6 +418,22 @@ berichten". `server/connectors/whatsapp-cloud.js` praat met Meta's officiële pl
 - Test: `test/whatsapp-cloud-test.mjs` (20 assertions, PORT=3125, met
   `WHATSAPP_APP_SECRET=appsecret123`).
 
+## BERICHTEN-SCHERM (7 aug 2026) — alle klantgesprekken op één plek
+Nieuw menu-item "Berichten" (admin+assistent; monteur bewust niet): links alle
+gesprekken (nieuwste bovenaan, ongelezen-teller, gekoppelde open kaart), rechts het
+gesprek als chat met verstuur-balk. Mobiel: lijst → tik → gesprek vult het scherm,
+terugknop; scherm begint op mobiel ALTIJD met de lijst. Techniek:
+- GET /api/chats (lijst), POST /api/chats/:id/send, POST /api/chats/:id/read.
+- Historie = verzamelKlantHistorie() — dezelfde functie als "Alles van deze klant"
+  op de kaart, nu mét uitgaande outbox-items + verzendstatus (waStatus). Een via de
+  chat verstuurd bericht komt óók als thread-notitie op de nieuwste open kaart
+  (outboxId koppelt notitie ↔ wachtrij-item; vlag threaded voorkomt dubbelen).
+- Versturen loopt ALTIJD via de bestaande outbox — pauzeknop, snelheidsrem,
+  dubbelfilter en vervaltermijn gelden onverkort; er bestaat geen apart verzendpad.
+- /read gebruikt saveSoonQuiet (geen geknipper op andere schermen).
+- Tests: test/chat-test.mjs (22 assertions, PORT=3127) + 11 browser-assertions
+  (desktop + iPhone-formaat, echt versturen).
+
 ## SNELHEIDSREM OP DE UITGAANDE WACHTRIJ (6 aug 2026) — NIET verzwakken
 Aanleiding: na de storing stond de wachtrij dagen vol. Zodra de bridge terugkwam ging
 ALLES in enkele seconden de deur uit — tientallen berichten, met dubbelen ertussen.
