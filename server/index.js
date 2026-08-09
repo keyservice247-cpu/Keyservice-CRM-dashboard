@@ -331,8 +331,10 @@ function verzamelKlantHistorie(customer) {
   const custEmail = String(customer.email || '').toLowerCase();
   const custPhoneNorm = matchPhone(customer.phone || '');
   const EMAIL_IN_SENDER = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+  const SYSTEEM_RUIS_RE = /^\s*\[?(e2e_notification|ciphertext|protocol|revoked|gp2|notification_template|call_log)\b/i;
   for (const m of db().messages || []) {
     if (m.skipped || m.bounce || !m.body) continue;
+    if (SYSTEEM_RUIS_RE.test(m.body)) continue;   // WhatsApp-systeemmelding, geen gesprek
     let match = false;
     if (m.channel === 'whatsapp' && !m.group && custPhoneNorm.length >= 6) {
       const p = matchPhone(m.fromPhone || senderPhoneFromText(m.body));
@@ -421,10 +423,18 @@ app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
     }
     onbekend.set(p, cur);
   };
+  // RUIS ERUIT (7 aug 2026). In de lijst stonden systeemmeldingen van WhatsApp zelf
+  // ("[e2e_notification]", statusmeldingen) en interne WhatsApp-codes van 15-18 cijfers
+  // (LID's) als waren het klanten. Die verdrongen de échte gesprekken en gaven bij
+  // versturen "Ongeldig nummer". Een gesprek hoort alleen te bestaan bij een ECHT
+  // telefoonnummer (6-13 cijfers, zelfde grens als WET regel 2) en echte tekst.
+  const SYSTEEMRUIS = /^\s*\[?(e2e_notification|ciphertext|protocol|revoked|gp2|notification_template|call_log)\b/i;
+  const echtNummer = (p) => { const d = String(p).replace(/\D/g, ''); return d.length >= 6 && d.length <= 13; };
   for (const m of db().messages || []) {
     if (m.channel !== 'whatsapp' || m.group || m.skipped || !m.body) continue;
+    if (SYSTEEMRUIS.test(m.body)) continue;
     const p = matchPhone(m.fromPhone || senderPhoneFromText(m.body));
-    if (p.length < 6) continue;
+    if (!echtNummer(p)) continue;
     const c = perNummer.get(p);
     if (c) bump(c.id, m.receivedAt, m.body, false);
     else bumpOnbekend(p, m.sender || '', m.receivedAt, m.body, false);
@@ -434,7 +444,7 @@ app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
     const c = (ob.customerId && db().customers.find((x) => x.id === ob.customerId))
       || perNummer.get(matchPhone(ob.phone || ''));
     if (c) bump(c.id, ob.createdAt, ob.text, true);
-    else if (matchPhone(ob.phone || '').length >= 6) bumpOnbekend(matchPhone(ob.phone), '', ob.createdAt, ob.text, true);
+    else if (echtNummer(matchPhone(ob.phone || ''))) bumpOnbekend(matchPhone(ob.phone), '', ob.createdAt, ob.text, true);
   }
   const uit = [];
   for (const [cid, v] of perKlant) {
@@ -469,6 +479,7 @@ app.get('/api/chats/nummer/:phone', requireRole('admin', 'assistent'), (req, res
   const items = [];
   for (const m of db().messages || []) {
     if (m.channel !== 'whatsapp' || m.group || m.skipped || !m.body) continue;
+    if (/^\s*\[?(e2e_notification|ciphertext|protocol|revoked|gp2)\b/i.test(m.body)) continue;
     if (matchPhone(m.fromPhone || senderPhoneFromText(m.body)) !== p) continue;
     items.push({ id: m.id, channel: 'whatsapp', sender: m.sender, body: m.body, at: m.receivedAt, attachments: m.attachments || [], standalone: true });
   }

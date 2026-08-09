@@ -139,6 +139,24 @@ await api('POST', '/api/ingest/whatsapp', { name: 'Meta Klant', body: 'Bent u er
 const puls3 = await api('GET', '/api/pulse');
 ok('nieuw appje laat de teller weer oplopen', (puls3.json?.newChats || 0) >= 1, JSON.stringify(puls3.json?.newChats));
 
+console.log('\n== Ruis hoort NIET in de gesprekkenlijst ==');
+// WhatsApp stuurt zelf systeemmeldingen door en gebruikt interne codes van 15-18
+// cijfers (LID's). Die stonden als "klanten" in de lijst en verdrongen de echte
+// gesprekken; versturen gaf dan "Ongeldig nummer".
+await api('POST', '/api/ingest/whatsapp', {
+  name: '236206105329815', body: '[e2e_notification] Telefoon: +236206105329815', externalId: 'ruis-1',
+}, true);
+await api('POST', '/api/ingest/whatsapp', {
+  name: 'LID Nummer', body: 'Bericht van een interne code\nTelefoon: +187419588604031', externalId: 'ruis-2',
+}, true);
+const chatsR = await api('GET', '/api/chats');
+const lijstR = chatsR.json || [];
+ok('systeemmelding [e2e_notification] staat NIET in de lijst',
+  !lijstR.some((c) => /e2e_notification/i.test(c.lastBody || '')), JSON.stringify(lijstR.map((c) => c.lastBody).slice(0, 5)));
+ok('interne WhatsApp-code (15+ cijfers) wordt geen gesprek',
+  !lijstR.some((c) => String(c.phone || '').replace(/\D/g, '').length > 13), JSON.stringify(lijstR.map((c) => c.phone)));
+ok('echte klantgesprekken staan er nog gewoon in', lijstR.some((c) => (c.phone || '').includes('0655512399')));
+
 console.log('\n== Klant-link naar een bijlage (voor PDF via WhatsApp) ==');
 // Ondertekende link: zonder inloggen te openen, maar alleen met de juiste handtekening.
 const ordersU = (await api('GET', '/api/orders')).json || [];
