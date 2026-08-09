@@ -292,6 +292,15 @@ de regressie meegroeit.
 - **Bewaking:** WhatsApp-heartbeat (bridge pingt elke 60s) → zijbalk groen "WhatsApp: actief" /
   rood "GESTOPT". Systeemcheck (DB/IMAP/SMTP/AI) in AI-controle. Abonnementen-pagina (Render/
   Claude/TransIP/VPS + AI-verbruiksteller).
+- **Agenda "blijft ontkoppelen" (7 aug):** oorzaak zit bij GOOGLE, niet in het CRM —
+  staat de OAuth-toestemmingspagina nog op **Testing**, dan trekt Google het
+  refresh-token na **7 dagen** in, hoe vaak je ook opnieuw koppelt. Eenmalige fix:
+  console.cloud.google.com → OAuth consent screen → **PUBLISH APP** (In production).
+  Het CRM legt nu elke `invalid_grant` met tijdstip vast (`google.disconnectHistory`,
+  laatste 6); `testingModusVermoeden()` herkent het 7-dagen-ritme (tussenpoos 3–10
+  dagen). Bij dat patroon noemen zowel het alarm als Instellingen → Koppelingen de
+  ÉCHTE oplossing met klikpad, i.p.v. eeuwig "verbind opnieuw". Test: 6 assertions in
+  test/google-test.mjs (22 totaal).
 - **Google Agenda-sync bewaakt + zelfherstellend (24 jul, sync-regel instelbaar 1 aug):**
   WELKE afspraken meegaan is nu een INSTELLING (settings.googleSync, Instellingen →
   Koppelingen): alles (STANDAARD) / alleen gekozen monteurs / alleen schuifpui /
