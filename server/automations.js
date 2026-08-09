@@ -9,7 +9,7 @@ import {
   getWeeklyAiCheck,
 } from './settings.js';
 import { morningInsight, askAssistant } from './ai/categorizer.js';
-import { syncOrderToGoogle, isConnected as googleIsConnected, calendarAlarmDecision } from './google.js';
+import { syncOrderToGoogle, isConnected as googleIsConnected, calendarAlarmDecision, testingModusVermoeden } from './google.js';
 import { deleteFile } from './storage.js';
 import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -438,7 +438,13 @@ async function runWatchdog() {
     const d = calendarAlarmDecision({ disconnectReason: g.disconnectReason, alerted: !!s._alerts.googleCal });
     if (d.alert) {
       s._alerts.googleCal = now(); save();
-      await alertAdmins('Google Agenda-koppeling VERBROKEN', `De koppeling met Google Agenda werkt niet meer (${g.disconnectReason}). Nieuwe afspraken komen NIET meer automatisch in je agenda. Ga naar Instellingen → Koppelingen en verbind Google opnieuw.`);
+      // Herhaalt dit zich ongeveer wekelijks, dan is het niet "pech" maar de
+      // 7-dagen-limiet van een Google-app die nog op Testing staat. Dan noemen we de
+      // échte oplossing, anders blijft de gebruiker eeuwig opnieuw koppelen.
+      const patroon = testingModusVermoeden(g.disconnectHistory);
+      await alertAdmins('Google Agenda-koppeling VERBROKEN', patroon
+        ? `De koppeling met Google Agenda is opnieuw verbroken — dit is nu ${(g.disconnectHistory || []).length}x gebeurd, steeds na ongeveer een week. Dat is de 7-dagen-limiet van Google: jullie Google-app staat nog op "Testing". DEFINITIEVE OPLOSSING: console.cloud.google.com → APIs & Services → OAuth consent screen → knop PUBLISH APP (In production). Daarna blijft de koppeling staan. Verbind daarna nog één keer opnieuw via Instellingen → Koppelingen.`
+        : `De koppeling met Google Agenda werkt niet meer (${g.disconnectReason}). Nieuwe afspraken komen NIET meer automatisch in je agenda. Ga naar Instellingen → Koppelingen en verbind Google opnieuw.`);
     } else if (d.recover) {
       delete s._alerts.googleCal; save();
       await alertAdmins('Google Agenda weer verbonden', 'De koppeling doet het weer — afspraken worden weer automatisch in de agenda gezet.');

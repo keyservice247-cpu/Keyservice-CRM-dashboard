@@ -25,6 +25,19 @@ ok('schuifpui-klus zonder monteur -> wél syncen', shouldSyncToGoogle({ title: '
 ok('gewone klus zonder monteur -> niet syncen', shouldSyncToGoogle({ title: 'Slot vervangen', description: '' }, null) === false);
 delete dbmod0.db().settings.googleSync;
 
+console.log('\n== "Blijft ontkoppelen": het 7-dagen-patroon van Testing-modus herkennen ==');
+// Google trekt een refresh-token na 7 dagen in zolang de OAuth-app op Testing staat.
+// Verbreekt de koppeling dus telkens met ~een week ertussen, dan moeten we DAT zeggen
+// i.p.v. eeuwig "verbind opnieuw" — anders blijft de gebruiker in een lus zitten.
+const { testingModusVermoeden } = await import('../server/google.js');
+const dagen = (n) => new Date(Date.now() - n * 86400000).toISOString();
+ok('één losse storing -> geen patroon', testingModusVermoeden([dagen(3)]) === false);
+ok('twee keer met een week ertussen -> patroon herkend', testingModusVermoeden([dagen(14), dagen(7)]) === true);
+ok('drie keer wekelijks -> patroon herkend', testingModusVermoeden([dagen(21), dagen(14), dagen(7)]) === true);
+ok('twee storingen op dezelfde dag -> geen patroon (dat is geen 7-dagen-ritme)', testingModusVermoeden([dagen(2), dagen(2)]) === false);
+ok('storingen maanden uit elkaar -> geen patroon', testingModusVermoeden([dagen(200), dagen(20)]) === false);
+ok('lege of rommelige invoer geeft geen fout', testingModusVermoeden([]) === false && testingModusVermoeden(['onzin']) === false);
+
 console.log('\n== Alarm-beslissing: stil verbroken koppeling ==');
 ok('verbroken + nog niet gemeld -> ALARM', calendarAlarmDecision({ disconnectReason: 'token ingetrokken', alerted: false }).alert === true);
 ok('verbroken + al gemeld -> geen tweede alarm', calendarAlarmDecision({ disconnectReason: 'token ingetrokken', alerted: true }).alert === false);

@@ -4038,7 +4038,26 @@ async function loadSettings() {
       return;
     }
     if (!g.connected) {
-      box.innerHTML = `<div style="margin-bottom:10px">Status: <strong>niet verbonden</strong></div><a class="btn btn-primary" href="/api/google/auth">${icon('calendar', 14)} Verbind Google Agenda</a>`;
+      // "Blijft ontkoppelen": als Google er meermaals met ~een week ertussen uit gooit,
+      // is dat de 7-dagen-limiet van een app die nog op Testing staat. Dan tonen we de
+      // ECHTE oplossing i.p.v. alleen een verbind-knop waarmee je in een lus blijft.
+      const uitlegTesting = `
+        <div class="info-card" style="border-left:4px solid var(--danger);margin:10px 0;padding:12px">
+          <strong>Waarom dit steeds opnieuw gebeurt${g.disconnectCount ? ` (${g.disconnectCount}x)` : ''}</strong>
+          <p class="muted small" style="margin:6px 0">Jullie Google-app staat nog op <strong>"Testing"</strong>. Google trekt de toegang dan automatisch na <strong>7 dagen</strong> in — hoe vaak je ook opnieuw koppelt. Dit ligt niet aan het CRM.</p>
+          <p class="muted small" style="margin:6px 0"><strong>Definitieve oplossing (eenmalig, 2 minuten):</strong></p>
+          <ol class="muted small" style="margin:6px 0 0;padding-left:18px">
+            <li>Ga naar <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener">console.cloud.google.com → OAuth consent screen</a></li>
+            <li>Kies bovenaan hetzelfde project als waarmee je de koppeling hebt gemaakt</li>
+            <li>Staat er <em>Publishing status: Testing</em>? Klik dan op <strong>PUBLISH APP</strong> → bevestigen (<em>In production</em>)</li>
+            <li>Kom hier terug en verbind nog één keer opnieuw — daarna blijft hij staan</li>
+          </ol>
+          <p class="muted small" style="margin:8px 0 0">Een waarschuwing "niet-geverifieerde app" is normaal en onschadelijk: je bent zelf de eigenaar. Klik "Geavanceerd → doorgaan".</p>
+        </div>`;
+      box.innerHTML = `<div style="margin-bottom:10px">Status: <strong style="color:var(--danger)">niet verbonden</strong>${g.disconnectReason ? ` — ${esc(g.disconnectReason)}` : ''}</div>
+        ${g.testingVermoeden ? uitlegTesting : ''}
+        <a class="btn btn-primary" href="/api/google/auth">${icon('calendar', 14)} Verbind Google Agenda</a>
+        ${!g.testingVermoeden && g.disconnectCount >= 1 ? `<p class="muted small" style="margin-top:10px">Gaat de koppeling er vaker uit? Controleer of jullie Google-app op <strong>"In production"</strong> staat — op "Testing" trekt Google de toegang elke 7 dagen in. Zie <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener">OAuth consent screen</a>.</p>` : ''}`;
       return;
     }
     const opts = (g.calendars || []).map((c) => `<option value="${esc(c.id)}" ${c.id === g.defaultCalendarId ? 'selected' : ''}>${esc(c.name)}${c.primary ? ' (hoofd)' : ''}</option>`).join('');

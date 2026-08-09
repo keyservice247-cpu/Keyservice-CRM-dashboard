@@ -88,6 +88,21 @@ export function isConnected() {
 }
 
 // Veilige status voor de frontend (nooit de tokens zelf meesturen).
+// Herkent het "elke week opnieuw koppelen"-patroon. Google trekt een refresh-token na
+// 7 dagen in zolang de OAuth-toestemmingspagina op TESTING staat; verbreekt de koppeling
+// dus herhaaldelijk met ongeveer een week ertussen, dan is dát vrijwel zeker de oorzaak
+// — en niet iets in dit CRM. Zo kunnen we de gebruiker de échte oplossing tonen.
+export function testingModusVermoeden(history = []) {
+  const tijden = (history || []).map((t) => new Date(t).getTime()).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+  if (tijden.length < 2) return false;
+  // Minstens één tussenpoos van 3 tot 10 dagen = het 7-dagen-ritme van Testing-modus.
+  for (let i = 1; i < tijden.length; i++) {
+    const dagen = (tijden[i] - tijden[i - 1]) / 86400000;
+    if (dagen >= 3 && dagen <= 10) return true;
+  }
+  return false;
+}
+
 export function connectionInfo() {
   const g = gstore();
   return {
@@ -96,6 +111,11 @@ export function connectionInfo() {
     email: g.email || '',
     connectedAt: g.connectedAt || '',
     defaultCalendarId: g.defaultCalendarId || 'primary',
+    disconnectReason: g.disconnectReason || '',
+    disconnectCount: (g.disconnectHistory || []).length,
+    lastDisconnectAt: (g.disconnectHistory || []).slice(-1)[0] || '',
+    // Waarschijnlijk de 7-dagen-limiet van een niet-gepubliceerde Google-app.
+    testingVermoeden: testingModusVermoeden(g.disconnectHistory),
   };
 }
 
@@ -190,7 +210,18 @@ async function getAccessToken() {
   if (!resp.ok) {
     // Token ingetrokken / ongeldig → koppeling als verbroken beschouwen. De reden
     // blijft bewaard zodat de watchdog er een melding van maakt (stil verbreken mag niet).
-    if (json.error === 'invalid_grant') { disconnect('Google heeft de toegang ingetrokken of het token is verlopen'); throw new Error('Google-koppeling verlopen — opnieuw verbinden in Instellingen'); }
+    if (json.error === 'invalid_grant') {
+      // OORZAAK VASTLEGGEN (7 aug 2026). "Elke keer opnieuw koppelen" heeft bijna
+      // altijd één oorzaak: staat de OAuth-toestemmingspagina in Google Cloud nog op
+      // TESTING, dan trekt Google het refresh-token na 7 DAGEN in. Publiceren ("In
+      // production") maakt het permanent. We houden daarom bij wanneer de koppeling
+      // verbrak, zodat we dat patroon kunnen herkennen en benoemen i.p.v. steeds
+      // hetzelfde "verbind opnieuw" te tonen.
+      const g = gstore();
+      g.disconnectHistory = [...(g.disconnectHistory || []), new Date().toISOString()].slice(-6);
+      disconnect('Google heeft de toegang ingetrokken of het token is verlopen');
+      throw new Error('Google-koppeling verlopen — opnieuw verbinden in Instellingen');
+    }
     throw new Error(json.error_description || json.error || `token-fout ${resp.status}`);
   }
   _tok = { value: json.access_token, exp: Date.now() + (json.expires_in || 3600) * 1000 };
