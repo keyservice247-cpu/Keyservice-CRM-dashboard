@@ -103,6 +103,14 @@ if (!bereikbaar) {
 }
 
 if (bereikbaar) {
+  console.log('\n== Zelftest van de koppeling ==');
+  const login0 = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) });
+  const ck0 = (login0.headers.get('set-cookie') || '').split(';')[0];
+  const zt = await fetch(BASE + '/api/whatsapp/cloud-test', { method: 'POST', headers: { cookie: ck0 } }).then((r) => r.json());
+  ok('zelftest antwoordt netjes (geen crash) zonder token/phone-id', zt && zt.ok === false, JSON.stringify(zt));
+  ok('en legt uit wát er ontbreekt', /niet compleet ingesteld/i.test(zt.uitleg || ''), zt.uitleg);
+  ok('toont per waarde of hij gevuld is', zt.token === false && zt.phoneId === false && zt.appSecret === true, JSON.stringify(zt));
+
   console.log('\n== Sjabloon-instelling (buiten 24-uursvenster) ==');
   const login = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) });
   const ck = (login.headers.get('set-cookie') || '').split(';')[0];

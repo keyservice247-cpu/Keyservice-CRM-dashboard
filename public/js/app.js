@@ -3451,6 +3451,8 @@ async function loadSettings() {
         </label>
         <p class="muted small" style="margin:4px 0 0">Heeft een klant langer dan 24 uur niets gestuurd, dan eist Meta een vooraf goedgekeurd sjabloon. Het CRM verpakt je bericht dan automatisch in dit sjabloon. Maak het aan in WhatsApp-beheer → Berichtsjablonen (naam exact gelijk); leeg laten = uit.</p>`
         : `<p class="muted small" style="margin:0"><strong>Nog niet ingesteld.</strong> Vul op de server eerst <code>WHATSAPP_CLOUD_TOKEN</code>, <code>WHATSAPP_PHONE_ID</code> en <code>WHATSAPP_APP_SECRET</code> in; daarna verschijnt hier de aan/uit-knop.</p>`}
+      <div style="margin-top:12px"><button class="btn btn-sm" id="wa-cloud-test">Koppeling testen</button></div>
+      <div id="wa-cloud-testout" style="margin-top:8px"></div>
     </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px" id="wa-pair-card"></div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-verbinding testen</h3>
@@ -3971,6 +3973,22 @@ async function loadSettings() {
     const aan = $('#wa-cloud-send').checked;
     try { await api('/api/settings', 'PATCH', { whatsappCloudSend: aan }); toast(aan ? 'Klantberichten gaan nu via de officiële WhatsApp' : 'Klantberichten gaan weer via de bridge'); }
     catch (err) { toast(err.message, true); }
+  };
+  if ($('#wa-cloud-test')) $('#wa-cloud-test').onclick = async () => {
+    const uit = $('#wa-cloud-testout');
+    uit.innerHTML = '<span class="muted small">Bezig met controleren bij Meta…</span>';
+    try {
+      const r = await api('/api/whatsapp/cloud-test', 'POST');
+      const vink = (aan, label) => `<div class="muted small">${aan ? '✓' : '✗'} ${esc(label)}</div>`;
+      uit.innerHTML = `<div class="info-card" style="padding:10px;border-left:4px solid ${r.ok ? 'var(--ok,#10b981)' : 'var(--danger)'}">
+        <strong>${r.ok ? 'Koppeling werkt' : 'Koppeling werkt nog niet'}</strong>
+        <p class="muted small" style="margin:6px 0">${esc(r.uitleg || '')}</p>
+        ${vink(r.token, 'WHATSAPP_CLOUD_TOKEN in Render')}
+        ${vink(r.phoneId, 'WHATSAPP_PHONE_ID in Render')}
+        ${vink(r.appSecret, 'WHATSAPP_APP_SECRET in Render (nodig om berichten te ONTVANGEN)')}
+        ${r.kwaliteit ? `<div class="muted small" style="margin-top:4px">Kwaliteitsscore bij Meta: ${esc(r.kwaliteit)}</div>` : ''}
+      </div>`;
+    } catch (err) { uit.innerHTML = `<span class="error small">${esc(err.message)}</span>`; }
   };
   if ($('#wa-cloud-template')) $('#wa-cloud-template').onchange = async () => {
     try { await api('/api/settings', 'PATCH', { whatsappCloudTemplate: $('#wa-cloud-template').value.trim() }); toast('Sjabloonnaam opgeslagen'); }

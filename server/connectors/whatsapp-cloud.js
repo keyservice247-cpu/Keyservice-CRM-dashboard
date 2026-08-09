@@ -129,6 +129,45 @@ export function parseCloudWebhook(body) {
   return uit;
 }
 
+// ZELFTEST: klopt de koppeling écht? Vraagt bij Meta het geregistreerde nummer op.
+// Zo weet je zeker of het token, het phone-id én de rechten kloppen — in plaats van te
+// wachten tot een klantbericht stilletjes mislukt.
+export async function cloudSelftest() {
+  const uit = { token: !!process.env.WHATSAPP_CLOUD_TOKEN, phoneId: !!process.env.WHATSAPP_PHONE_ID, appSecret: !!process.env.WHATSAPP_APP_SECRET };
+  if (!uit.token || !uit.phoneId) {
+    uit.ok = false;
+    uit.uitleg = 'Nog niet compleet ingesteld op de server. Vul in Render de ontbrekende waarde(n) in.';
+    return uit;
+  }
+  try {
+    const resp = await fetch(`${API}/${process.env.WHATSAPP_PHONE_ID}?fields=display_phone_number,verified_name,quality_rating,platform_type`, {
+      headers: { authorization: `Bearer ${process.env.WHATSAPP_CLOUD_TOKEN}` },
+    });
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      uit.ok = false;
+      const code = json?.error?.code;
+      uit.uitleg = code === 190
+        ? 'Meta weigert het token (verlopen of ingetrokken). Maak in Bedrijfsinstellingen → Systeemgebruikers een nieuw token met vervaldatum "Nooit" en zet dat in Render.'
+        : code === 100
+        ? 'Meta kent dit telefoonnummer-ID niet, of de systeemgebruiker heeft geen toegang tot dit WhatsApp-account. Controleer het Phone number ID en of het WhatsApp-account aan de systeemgebruiker is toegewezen met "Volledige controle".'
+        : `Meta antwoordde: ${json?.error?.message || `HTTP ${resp.status}`}`;
+      return uit;
+    }
+    uit.ok = true;
+    uit.nummer = json.display_phone_number || '';
+    uit.naam = json.verified_name || '';
+    uit.kwaliteit = json.quality_rating || '';
+    uit.uitleg = `Verbonden met ${uit.nummer}${uit.naam ? ` (${uit.naam})` : ''}.`;
+    if (!uit.appSecret) uit.uitleg += ' LET OP: WHATSAPP_APP_SECRET ontbreekt nog — zonder die waarde komen binnenkomende berichten van klanten niet binnen.';
+    return uit;
+  } catch (e) {
+    uit.ok = false;
+    uit.uitleg = `Kon Meta niet bereiken: ${String(e.message || '').slice(0, 120)}`;
+    return uit;
+  }
+}
+
 // Een meegestuurd bestand ophalen (twee stappen bij Meta: eerst de URL, dan het bestand).
 export async function fetchCloudMedia(mediaId) {
   if (!cloudConfigured() || !mediaId) return null;

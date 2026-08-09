@@ -53,7 +53,7 @@ import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORI
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries } from './storage.js';
-import { cloudConfigured, sendCloudText, sendCloudTemplate, sendCloudMedia, webhookSignatureOk, parseCloudWebhook, fetchCloudMedia } from './connectors/whatsapp-cloud.js';
+import { cloudConfigured, sendCloudText, sendCloudTemplate, sendCloudMedia, webhookSignatureOk, parseCloudWebhook, fetchCloudMedia, cloudSelftest } from './connectors/whatsapp-cloud.js';
 import Busboy from 'busboy';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
 import {
@@ -3281,6 +3281,14 @@ app.get('/api/whatsapp/pairing', requirePerm('settings'), (req, res) => {
   if (!p) return res.json({ actief: false });
   const seconden = Math.round((Date.now() - new Date(p.at).getTime()) / 1000);
   res.json({ actief: true, ...p, seconden, verlopen: seconden > 240 });
+});
+
+// Zelftest van de officiële WhatsApp-koppeling: vraagt bij Meta het nummer op, zodat
+// je in één klik weet of token, phone-id en rechten kloppen — met een leesbare uitleg
+// per foutsoort in plaats van een technische code.
+app.post('/api/whatsapp/cloud-test', requirePerm('settings'), async (req, res) => {
+  try { res.json(await cloudSelftest()); }
+  catch (e) { res.status(500).json({ ok: false, uitleg: String(e.message || 'onbekende fout') }); }
 });
 
 // Wachtrij-status voor het test-/diagnosekaartje: de laatste items met status.
