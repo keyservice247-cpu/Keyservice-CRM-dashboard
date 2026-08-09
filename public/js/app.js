@@ -3449,7 +3449,9 @@ async function loadSettings() {
         <label style="margin-top:10px">Sjabloon voor klanten buiten het 24-uursvenster
           <input id="wa-cloud-template" value="${esc(s.whatsappCloudTemplate ?? 'keyservice_bericht')}" placeholder="keyservice_bericht" style="max-width:280px">
         </label>
-        <p class="muted small" style="margin:4px 0 0">Heeft een klant langer dan 24 uur niets gestuurd, dan eist Meta een vooraf goedgekeurd sjabloon. Het CRM verpakt je bericht dan automatisch in dit sjabloon. Maak het aan in WhatsApp-beheer → Berichtsjablonen (naam exact gelijk); leeg laten = uit.</p>`
+        <p class="muted small" style="margin:4px 0 0">Heeft een klant langer dan 24 uur niets gestuurd, dan eist Meta een vooraf goedgekeurd sjabloon. Het CRM verpakt je bericht dan automatisch in dit sjabloon. Maak het aan in WhatsApp-beheer → Berichtsjablonen (naam exact gelijk); leeg laten = uit.</p>
+        <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:10px"><input type="checkbox" id="wa-bridge-groepen" style="width:auto" ${s.bridgeGroupsOnly ? 'checked' : ''}> Wegwerpnummer (bridge) alleen voor groepen — klantberichten gaan uitsluitend via de officiële route</label>
+        <p class="muted small" style="margin:4px 0 0">Aanbevolen zodra de officiële route werkt: de bridge leest dan alleen nog de DRS- en monteursgroepen en verstuurt vrijwel niets meer. Minder verzendgedrag = veel kleinere kans dat WhatsApp het wegwerpnummer nog eens blokkeert.</p>`
         : `<p class="muted small" style="margin:0"><strong>Nog niet ingesteld.</strong> Vul op de server eerst <code>WHATSAPP_CLOUD_TOKEN</code>, <code>WHATSAPP_PHONE_ID</code> en <code>WHATSAPP_APP_SECRET</code> in; daarna verschijnt hier de aan/uit-knop.</p>`}
       <div style="margin-top:12px"><button class="btn btn-sm" id="wa-cloud-test">Koppeling testen</button></div>
       <div id="wa-cloud-testout" style="margin-top:8px"></div>
@@ -3989,6 +3991,11 @@ async function loadSettings() {
         ${r.kwaliteit ? `<div class="muted small" style="margin-top:4px">Kwaliteitsscore bij Meta: ${esc(r.kwaliteit)}</div>` : ''}
       </div>`;
     } catch (err) { uit.innerHTML = `<span class="error small">${esc(err.message)}</span>`; }
+  };
+  if ($('#wa-bridge-groepen')) $('#wa-bridge-groepen').onchange = async () => {
+    const aan = $('#wa-bridge-groepen').checked;
+    try { await api('/api/settings', 'PATCH', { bridgeGroupsOnly: aan }); toast(aan ? 'Bridge doet alleen nog groepen — klantberichten gaan officieel' : 'Bridge mag ook weer klantberichten versturen'); }
+    catch (err) { toast(err.message, true); }
   };
   if ($('#wa-cloud-template')) $('#wa-cloud-template').onchange = async () => {
     try { await api('/api/settings', 'PATCH', { whatsappCloudTemplate: $('#wa-cloud-template').value.trim() }); toast('Sjabloonnaam opgeslagen'); }

@@ -47,6 +47,14 @@ ok('gewijzigde body met oude handtekening wordt geweigerd', webhookSignatureOk(r
 const zonderSecret = (() => { const s = process.env.WHATSAPP_APP_SECRET; delete process.env.WHATSAPP_APP_SECRET; const r = webhookSignatureOk(raw, teken(raw)); process.env.WHATSAPP_APP_SECRET = s; return r; })();
 ok('zonder app secret vertrouwen we niets', zonderSecret === false);
 
+console.log('\n== Status-meldingen lezen (bezorgd / geweigerd) ==');
+const { parseCloudStatuses } = await import('../server/connectors/whatsapp-cloud.js');
+const stB = parseCloudStatuses({ entry: [{ changes: [{ value: { statuses: [{ id: 'wamid.S1', status: 'delivered' }] } }] }] });
+ok('bezorgd-status wordt gelezen', stB.length === 1 && stB[0].status === 'delivered' && stB[0].id === 'wamid.S1');
+const stF = parseCloudStatuses({ entry: [{ changes: [{ value: { statuses: [{ id: 'wamid.S2', status: 'failed', errors: [{ code: 131047, title: 'Re-engagement message', error_data: { details: 'More than 24 hours have passed' } }] }] } }] }] });
+ok('geweigerd-status met code en uitleg', stF[0].status === 'failed' && stF[0].code === 131047 && /24 hours/.test(stF[0].detail));
+ok('lege payload geeft geen fout', parseCloudStatuses({}).length === 0 && parseCloudStatuses(null).length === 0);
+
 console.log('\n== Meta-formaat omzetten naar ons standaardformaat ==');
 const [m] = parseCloudWebhook(payload({ tekst: 'Slot kapot', wamid: 'wamid.A1' }));
 ok('bericht-id overgenomen', m.externalId === 'wamid.A1');
@@ -103,6 +111,31 @@ if (!bereikbaar) {
 }
 
 if (bereikbaar) {
+  console.log('\n== Gescheiden routes: bridge alleen voor groepen ==');
+  const loginS = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) });
+  const ckS = (loginS.headers.get('set-cookie') || '').split(';')[0];
+  const instS = (p2) => fetch(BASE + '/api/settings', { method: 'PATCH', headers: { 'content-type': 'application/json', cookie: ckS }, body: JSON.stringify(p2) }).then((r) => r.json());
+  // Eén klant-DM en één groepsitem in de wachtrij.
+  await fetch(BASE + '/api/whatsapp/test', { method: 'POST', headers: { 'content-type': 'application/json', cookie: ckS }, body: JSON.stringify({ phone: '0612349999', text: 'DM-testbericht routes' }) });
+  await fetch(BASE + '/api/outbox-group-test', { method: 'POST' }).catch(() => {}); // bestaat niet — groepsitem komt via dispatch elders
+  await instS({ bridgeGroupsOnly: true });
+  await new Promise((r) => setTimeout(r, 21000)); // snelheidsrem-ronde afwachten
+  const obG = await fetch(BASE + '/api/outbox', { headers: { 'x-ingest-token': 'test123' } }).then((r) => r.json());
+  ok('met de scheiding AAN krijgt de bridge geen klant-DM', !obG.some((o) => (o.text || '').includes('DM-testbericht routes')), JSON.stringify(obG.map((o) => o.text)));
+  await instS({ bridgeGroupsOnly: false });
+  await new Promise((r) => setTimeout(r, 21000));
+  const obG2 = await fetch(BASE + '/api/outbox', { headers: { 'x-ingest-token': 'test123' } }).then((r) => r.json());
+  ok('met de scheiding UIT komt de klant-DM weer bij de bridge', obG2.some((o) => (o.text || '').includes('DM-testbericht routes')), JSON.stringify(obG2.map((o) => o.text)));
+
+  console.log('\n== Status-webhook: geen crash op onbekende ids ==');
+  const stBody = JSON.stringify({ entry: [{ changes: [{ value: { statuses: [{ id: 'wamid.onbekend', status: 'failed', errors: [{ code: 131047 }] }] } }] }] });
+  const stResp = await fetch(BASE + '/api/ingest/whatsapp/cloud', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-hub-signature-256': teken(stBody) },
+    body: stBody,
+  });
+  ok('status-melding voor onbekend bericht -> gewoon 200', stResp.status === 200);
+
   console.log('\n== Zelftest van de koppeling ==');
   const login0 = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) });
   const ck0 = (login0.headers.get('set-cookie') || '').split(';')[0];

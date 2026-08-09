@@ -53,7 +53,7 @@ import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORI
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries } from './storage.js';
-import { cloudConfigured, sendCloudText, sendCloudTemplate, sendCloudMedia, webhookSignatureOk, parseCloudWebhook, fetchCloudMedia, cloudSelftest } from './connectors/whatsapp-cloud.js';
+import { cloudConfigured, sendCloudText, sendCloudTemplate, sendCloudMedia, webhookSignatureOk, parseCloudWebhook, parseCloudStatuses, fetchCloudMedia, cloudSelftest } from './connectors/whatsapp-cloud.js';
 import Busboy from 'busboy';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
 import {
@@ -2360,6 +2360,48 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
       });
     }
   } catch (e) { console.error('[wa-cloud] verwerken mislukt:', e.message); }
+  // STATUS-UPDATES (9 aug 2026). "Verstuurd" bij Meta betekent alleen "aangenomen";
+  // of het bericht écht bezorgd is (of geweigerd, bv. buiten het 24-uursvenster) komt
+  // hier pas binnen. Voorheen werd dit genegeerd — het CRM toonde "verstuurd ✓"
+  // terwijl de klant niets kreeg. Nu: bezorgd → vinkje; geweigerd wegens het
+  // 24-uursvenster → automatisch nogmaals als sjabloon; anders eerlijk "mislukt".
+  try {
+    for (const st of parseCloudStatuses(req.body)) {
+      if (!st.id) continue;
+      const item = (db().outbox || []).find((o) => o.cloudMsgId === st.id);
+      if (!item) continue;
+      if (st.status === 'delivered' || st.status === 'read') {
+        item.lastResult = 'afgeleverd bij de klant ✓';
+        saveSoonQuiet();
+      } else if (st.status === 'failed') {
+        const buitenVenster = st.code === 131047;
+        const sjabloon = String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht').trim();
+        if (buitenVenster && sjabloon && item.text && !item.cloudTemplateTried) {
+          item.cloudTemplateTried = now();
+          item.lastResult = 'buiten 24-uursvenster — wordt nogmaals verstuurd als sjabloon…';
+          const platteTekst = String(item.text).replace(/\s+/g, ' ').trim().slice(0, 900);
+          // Ná de respons versturen (Meta wil snel een 200 terug).
+          sendCloudTemplate(item.phone, sjabloon, [platteTekst], 'nl').then((r) => {
+            item.cloudMsgId = r?.messages?.[0]?.id || item.cloudMsgId;
+            item.status = 'sent';
+            item.lastResult = 'verzonden als sjabloon — wacht op bezorgbevestiging';
+            saveSoon();
+          }).catch((e2) => {
+            item.status = 'failed';
+            item.doneAt = now();
+            item.lastResult = `sjabloon geweigerd: ${String(e2.message || '').slice(0, 120)}`;
+            saveSoon();
+          });
+          saveSoon();
+        } else {
+          item.status = 'failed';
+          item.doneAt = now();
+          item.lastResult = `niet bezorgd: ${st.detail || (st.code ? `Meta-code ${st.code}` : 'onbekende reden')}`;
+          saveSoon();
+        }
+      }
+    }
+  } catch (e) { console.error('[wa-cloud] status verwerken mislukt:', e.message); }
   res.sendStatus(200); // Meta verwacht altijd 200, anders blijft hij herhalen
 });
 
@@ -2451,6 +2493,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     whatsappPaused: !!db().settings.whatsappPaused,
     whatsappCloudSend: !!db().settings.whatsappCloudSend,
     whatsappCloudTemplate: String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht'),
+    bridgeGroupsOnly: !!db().settings.bridgeGroupsOnly,
     whatsappCloudReady: cloudConfigured(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
     htmlSignature: getHtmlSignature(),
@@ -2693,6 +2736,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   if ('whatsappCloudSend' in b) db().settings.whatsappCloudSend = !!b.whatsappCloudSend;
   // Sjabloonnaam voor buiten het 24-uursvenster. Leeg = sjabloon-terugval uit.
   if ('whatsappCloudTemplate' in b) db().settings.whatsappCloudTemplate = String(b.whatsappCloudTemplate || '').trim().slice(0, 100);
+  if ('bridgeGroupsOnly' in b) db().settings.bridgeGroupsOnly = !!b.bridgeGroupsOnly;
   if ('weeklyAiCheck' in b) {
     const w = b.weeklyAiCheck || {};
     db().settings.weeklyAiCheck = {
@@ -3037,7 +3081,8 @@ async function runCloudOutbox() {
   for (const it of items.slice(0, 10)) {
     it.cloudTried = now();
     try {
-      if (it.text) await sendCloudText(it.phone, it.text);
+      let antwoordMeta = null;
+      if (it.text) antwoordMeta = await sendCloudText(it.phone, it.text);
       for (const m of (it.media || []).slice(0, 6)) {
         const bestand = m.file || m.id || '';
         if (!bestand) continue;
@@ -3050,7 +3095,10 @@ async function runCloudOutbox() {
       }
       it.status = 'sent';
       it.doneAt = now();
-      it.lastResult = 'verzonden via officiële WhatsApp (Meta)';
+      // Het bericht-id van Meta bewaren: daarmee koppelen we straks de status-update
+      // (bezorgd/mislukt) uit de webhook aan precies dit wachtrij-item.
+      it.cloudMsgId = antwoordMeta?.messages?.[0]?.id || it.cloudMsgId;
+      it.lastResult = 'aangenomen door Meta — wacht op bezorgbevestiging';
     } catch (e) {
       // BUITEN HET 24-UURSVENSTER (Meta-code 131047): een vrij bericht mag dan niet,
       // maar een vooraf goedgekeurd SJABLOON wél. We sturen dezelfde tekst nogmaals,
@@ -3069,10 +3117,12 @@ async function runCloudOutbox() {
             .filter(Boolean);
           const platteTekst = [String(it.text || '').replace(/\s+/g, ' ').trim(), links.length ? `Bekijk hier: ${links.join(' ')}` : '']
             .filter(Boolean).join(' ').slice(0, 900);
-          await sendCloudTemplate(it.phone, sjabloon, [platteTekst], 'nl');
+          it.cloudTemplateTried = now();
+          const sjabloonAntwoord = await sendCloudTemplate(it.phone, sjabloon, [platteTekst], 'nl');
           it.status = 'sent';
           it.doneAt = now();
-          it.lastResult = 'verzonden via officiële WhatsApp (sjabloon — klant zat buiten het 24-uursvenster)';
+          it.cloudMsgId = sjabloonAntwoord?.messages?.[0]?.id || it.cloudMsgId;
+          it.lastResult = 'verzonden als sjabloon (klant zat buiten het 24-uursvenster) — wacht op bezorgbevestiging';
           continue;
         } catch (e2) {
           it.lastResult = `officiële WhatsApp: buiten 24-uursvenster én sjabloon mislukt: ${String(e2.message || '').slice(0, 120)}`;
@@ -3182,6 +3232,14 @@ app.get('/api/outbox', checkIngestToken, (req, res) => {
   // bericht en loopt de log vol. Nieuwe items gaan wel meteen mee.
   const nu = now();
   let items = db().outbox.filter((o) => o.status === 'queued' && (!o.nextTryAt || o.nextTryAt <= nu));
+
+  // GESCHEIDEN ROUTES (9 aug 2026): staat "bridge alleen voor groepen" aan, dan krijgt
+  // de bridge GEEN klant-DM's meer — die gaan uitsluitend via de officiële route. Zo
+  // gedraagt het wegwerpnummer zich als stille groepslezer (minimaal verzendgedrag =
+  // minimale kans op blokkade) en loopt al het klantverkeer netjes officieel.
+  if (db().settings.bridgeGroupsOnly) {
+    items = items.filter((o) => o.group && o.group !== '__klant_dm__');
+  }
 
   // ---- VERLOPEN BERICHTEN NIET ALSNOG VERSTUREN (6 aug 2026) ----
   // Na de storing stond de wachtrij dagen vol. Zodra de bridge terugkwam ging ALLES in

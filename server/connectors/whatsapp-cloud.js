@@ -168,6 +168,28 @@ export async function cloudSelftest() {
   }
 }
 
+// STATUS-MELDINGEN uit de webhook: Meta zegt bij het versturen alleen "aangenomen".
+// Of het bericht écht is BEZORGD — of geweigerd (bv. buiten het 24-uursvenster,
+// code 131047) — komt pas daarna binnen als status-update. Wie die negeert, toont
+// "verstuurd" terwijl de klant niets kreeg. Deze functie haalt ze uit de payload.
+export function parseCloudStatuses(body) {
+  const uit = [];
+  for (const entry of body?.entry || []) {
+    for (const change of entry.changes || []) {
+      for (const st of change.value?.statuses || []) {
+        const fout = (st.errors || [])[0] || {};
+        uit.push({
+          id: st.id || '',
+          status: st.status || '',
+          code: fout.code || null,
+          detail: fout.error_data?.details || fout.message || fout.title || '',
+        });
+      }
+    }
+  }
+  return uit;
+}
+
 // Een meegestuurd bestand ophalen (twee stappen bij Meta: eerst de URL, dan het bestand).
 export async function fetchCloudMedia(mediaId) {
   if (!cloudConfigured() || !mediaId) return null;
