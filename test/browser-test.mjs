@@ -216,6 +216,20 @@ await page.waitForTimeout(300);
 await page.evaluate(() => showView('settings'));
 await page.waitForTimeout(1200);
 ok('na gelukte koppeling verdwijnt het kaartje', await page.locator('#wa-pair-card').isHidden());
+// Alleen een QR zonder code = niets tonen: wij koppelen uitsluitend met de CODE.
+await page.evaluate(() => fetch('/api/whatsapp/pairing', {
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' },
+  body: JSON.stringify({ qr: '2@alleen-qr', at: new Date().toISOString() }),
+}));
+await page.evaluate(() => showView('start'));
+await page.waitForTimeout(300);
+await page.evaluate(() => showView('settings'));
+await page.waitForTimeout(1200);
+ok('alleen-QR (zonder code) toont GEEN koppelkaartje meer', await page.locator('#wa-pair-card').isHidden());
+await page.evaluate(() => fetch('/api/whatsapp/pairing', {
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' },
+  body: JSON.stringify({}),
+}));
 await page.setViewportSize({ width: 1280, height: 800 });
 noErr('Koppelcode-kaartje (mobiel)');
 

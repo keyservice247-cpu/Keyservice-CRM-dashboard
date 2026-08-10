@@ -3774,10 +3774,14 @@ async function loadSettings() {
     if (!kaart) return;
     let p = null;
     try { p = await api('/api/whatsapp/pairing'); } catch { /* niet erg */ }
-    if (!p || !p.actief) { kaart.style.display = 'none'; kaart.innerHTML = ''; return; }
+    // Geen koppeling nodig, óf alleen een QR zonder code: kaartje verbergen. Wij
+    // koppelen uitsluitend met de 8-tekens code.
+    if (!p || !p.actief || (!p.code && !p.fout)) { kaart.style.display = 'none'; kaart.innerHTML = ''; return; }
     kaart.style.display = '';
     kaart.style.borderLeft = '4px solid var(--accent, #1b4fa8)';
-    const qrSrc = p.qr ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(p.qr)}` : '';
+    // QR bewust NIET meer tonen (10 aug): koppelen gaat bij ons altijd via de CODE.
+    // Het QR-blok gaf alleen verwarring en duwde de code uit beeld.
+    const qrSrc = '';
     kaart.innerHTML = `<h3>${icon('whatsapp', 15)} WhatsApp koppelen</h3>
       ${p.fout ? `<p class="muted small" style="color:var(--danger)">${esc(p.fout)}</p>` : ''}
       ${p.code ? `<p class="muted small">Op de telefoon van het WhatsApp-nummer: <strong>WhatsApp → Instellingen → Gekoppelde apparaten → Apparaat koppelen → Koppelen met telefoonnummer</strong>, en tik deze code in:</p>
@@ -3793,8 +3797,19 @@ async function loadSettings() {
   };
 
   const wtRender = (items) => {
-    const stChip = { queued: '<span class="inv-st verzonden">wachtrij</span>', sent: '<span class="inv-st betaald">verstuurd ✓</span>', failed: '<span class="inv-st verlopen">MISLUKT</span>' };
-    $('#wt-status').innerHTML = items.length ? `<table><thead><tr><th>Tijd</th><th>Naar</th><th>Status</th><th>Door</th></tr></thead><tbody>${items.map((i) => `<tr><td class="muted small">${esc(fmtDate(i.createdAt))}</td><td>${esc(i.to)}</td><td>${stChip[i.status] || esc(i.status)}</td><td class="muted small">${esc(i.by)}</td></tr>`).join('')}</tbody></table>` : '<span class="muted small">Nog geen berichten in de wachtrij.</span>';
+    // EERLIJKE STATUS (10 aug). "verstuurd ✓" betekende bij de officiële route alleen
+    // dat Meta het bericht had aangenomen — niet dat de klant het kreeg. Dat verschil
+    // moet zichtbaar zijn, anders denk je dat een bericht aankwam terwijl dat niet zo is.
+    const chip = (i) => {
+      if (i.status === 'queued') return '<span class="inv-st verzonden">wachtrij</span>';
+      if (i.status === 'failed') return '<span class="inv-st verlopen">MISLUKT</span>';
+      if (i.status !== 'sent') return esc(i.status);
+      const r = String(i.lastResult || '');
+      if (/afgeleverd/i.test(r)) return '<span class="inv-st betaald">afgeleverd ✓</span>';
+      if (/wacht op bezorgbevestiging|aangenomen/i.test(r)) return '<span class="inv-st verzonden" title="Meta heeft hem aangenomen; bezorging nog niet bevestigd">onderweg…</span>';
+      return '<span class="inv-st betaald">verstuurd ✓</span>';
+    };
+    $('#wt-status').innerHTML = items.length ? `<table><thead><tr><th>Tijd</th><th>Naar</th><th>Status</th><th>Door</th></tr></thead><tbody>${items.map((i) => `<tr><td class="muted small">${esc(fmtDate(i.createdAt))}</td><td>${esc(i.to)}</td><td>${chip(i)}${i.lastResult ? `<div class="muted small">${esc(i.lastResult)}</div>` : ''}</td><td class="muted small">${esc(i.by)}</td></tr>`).join('')}</tbody></table>` : '<span class="muted small">Nog geen berichten in de wachtrij.</span>';
   };
 
   // --- Groep-koppelingen (id -> naam) ---
