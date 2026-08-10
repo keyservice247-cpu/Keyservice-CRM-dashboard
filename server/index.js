@@ -3072,6 +3072,21 @@ function cloudSendAan() {
   return !!(cloudConfigured() && db().settings.whatsappCloudSend && !db().settings.whatsappPaused);
 }
 
+// Heeft deze klant in de afgelopen 24 uur naar ons geschreven? Zo ja, dan mag een vrij
+// bericht (gratis). Zo nee, dan eist Meta een sjabloon. We kijken naar onze eigen
+// binnengekomen berichten — betrouwbaarder dan wachten tot Meta een bericht weigert.
+function klantSchreefRecent(phone, urenTerug = 24) {
+  const p = matchPhone(phone || '');
+  if (p.length < 6) return false;
+  const grens = Date.now() - urenTerug * 3600000;
+  for (const m of db().messages || []) {
+    if (m.channel !== 'whatsapp' || m.group) continue;
+    if (matchPhone(m.fromPhone || senderPhoneFromText(m.body)) !== p) continue;
+    if (new Date(m.receivedAt || 0).getTime() >= grens) return true;
+  }
+  return false;
+}
+
 async function runCloudOutbox() {
   if (!cloudSendAan()) return;
   const items = (db().outbox || []).filter((o) => o.status === 'queued'
@@ -3081,6 +3096,28 @@ async function runCloudOutbox() {
   for (const it of items.slice(0, 10)) {
     it.cloudTried = now();
     try {
+      // NIET GOKKEN OF HET VENSTER OPEN STAAT (10 aug 2026). Meta laat een vrij bericht
+      // alleen toe binnen 24 uur na het LAATSTE bericht van die klant. Stuurden we het
+      // toch als vrij bericht, dan nam Meta het soms wél aan maar bezorgde het niet —
+      // en het CRM zei "verstuurd" terwijl de klant niets kreeg. We weten zelf prima
+      // wanneer die klant voor het laatst appte, dus: geen inkomend bericht binnen 24
+      // uur -> METEEN als sjabloon versturen. Dat is de enige manier die aankomt.
+      const sjabloonNaam = String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht').trim();
+      const venterOpen = klantSchreefRecent(it.phone);
+      if (!venterOpen && sjabloonNaam && it.text) {
+        const links = (it.media || []).slice(0, 3)
+          .map((m) => { const f = m.file || m.id || ''; return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
+          .filter(Boolean);
+        const platteTekst = [String(it.text).replace(/\s+/g, ' ').trim(), links.length ? `Bekijk hier: ${links.join(' ')}` : '']
+          .filter(Boolean).join(' ').slice(0, 900);
+        it.cloudTemplateTried = now();
+        const r = await sendCloudTemplate(it.phone, sjabloonNaam, [platteTekst], 'nl');
+        it.status = 'sent';
+        it.doneAt = now();
+        it.cloudMsgId = r?.messages?.[0]?.id || it.cloudMsgId;
+        it.lastResult = 'verzonden als sjabloon (klant schreef >24u niet) — wacht op bezorgbevestiging';
+        continue;
+      }
       let antwoordMeta = null;
       if (it.text) antwoordMeta = await sendCloudText(it.phone, it.text);
       for (const m of (it.media || []).slice(0, 6)) {

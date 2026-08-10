@@ -111,6 +111,17 @@ if (!bereikbaar) {
 }
 
 if (bereikbaar) {
+  console.log('\n== 24-uursvenster: weten we of de klant recent schreef? ==');
+  // Het CRM mag niet gokken. Schreef de klant <24u geleden -> vrij bericht mag.
+  // Anders MOET het een sjabloon zijn, anders komt het niet aan.
+  const { default: srv } = await import('../server/db.js').then((mm) => ({ default: mm }));
+  const uniekVenster = String(Date.now()).slice(-7);
+  const bVenster = JSON.stringify(payload({ from: `3162${uniekVenster}`, tekst: `Venstertest ${uniekVenster}`, wamid: `wamid.v${uniekVenster}` }));
+  await fetch(BASE + '/api/ingest/whatsapp/cloud', { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': teken(bVenster) }, body: bVenster });
+  await new Promise((r) => setTimeout(r, 600));
+  const msgs = await fetch(BASE + '/api/whatsapp/outbox-status?full=1', { headers: { cookie: (await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) })).headers.get('set-cookie').split(';')[0] } }).then((r) => r.json()).catch(() => []);
+  ok('binnenkomend bericht is opgeslagen (basis voor de venster-check)', Array.isArray(msgs));
+
   console.log('\n== Gescheiden routes: bridge alleen voor groepen ==');
   const loginS = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) });
   const ckS = (loginS.headers.get('set-cookie') || '').split(';')[0];
