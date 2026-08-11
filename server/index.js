@@ -2381,10 +2381,8 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
           item.lastResult = 'buiten 24-uursvenster — wordt nogmaals verstuurd als sjabloon…';
           const platteTekst = String(item.text).replace(/\s+/g, ' ').trim().slice(0, 900);
           // Ná de respons versturen (Meta wil snel een 200 terug).
-          sendCloudTemplate(item.phone, sjabloon, [platteTekst], 'nl').then((r) => {
-            item.cloudMsgId = r?.messages?.[0]?.id || item.cloudMsgId;
+          sjabloonMetReserve(item, platteTekst).then(() => {
             item.status = 'sent';
-            item.lastResult = 'verzonden als sjabloon — wacht op bezorgbevestiging';
             saveSoon();
           }).catch((e2) => {
             item.status = 'failed';
@@ -3072,6 +3070,29 @@ function cloudSendAan() {
   return !!(cloudConfigured() && db().settings.whatsappCloudSend && !db().settings.whatsappPaused);
 }
 
+// Sjabloon versturen MET reservewiel (12 aug 2026). Fout #132000 betekent: het
+// sjabloon verwacht een ander aantal invulvelden dan wij meesturen — in de praktijk:
+// er staat geen {{1}} in. Dan sturen we hem nogmaals ZONDER invulling; de klant krijgt
+// de vaste sjabloontekst (en kan reageren, waarna het gesprek gewoon open staat).
+// Het item vermeldt eerlijk dat de eigen tekst niet meekon en hoe je dat oplost.
+async function sjabloonMetReserve(it, tekst) {
+  const naam = String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht').trim();
+  if (!naam) throw new Error('geen sjabloon ingesteld');
+  it.cloudTemplateTried = now();
+  try {
+    const r = await sendCloudTemplate(it.phone, naam, [tekst], 'nl');
+    it.cloudMsgId = r?.messages?.[0]?.id || it.cloudMsgId;
+    it.lastResult = 'verzonden als sjabloon — wacht op bezorgbevestiging';
+    return true;
+  } catch (e) {
+    if (e.metaCode !== 132000) throw e;
+    const r2 = await sendCloudTemplate(it.phone, naam, [], 'nl');
+    it.cloudMsgId = r2?.messages?.[0]?.id || it.cloudMsgId;
+    it.lastResult = `verzonden met de VASTE sjabloontekst — je eigen tekst kon niet mee omdat het sjabloon "${naam}" geen invulveld {{1}} heeft. Zet {{1}} in het sjabloon bij Meta om je eigen tekst mee te sturen.`;
+    return true;
+  }
+}
+
 // Heeft deze klant in de afgelopen 24 uur naar ons geschreven? Zo ja, dan mag een vrij
 // bericht (gratis). Zo nee, dan eist Meta een sjabloon. We kijken naar onze eigen
 // binnengekomen berichten — betrouwbaarder dan wachten tot Meta een bericht weigert.
@@ -3110,12 +3131,9 @@ async function runCloudOutbox() {
           .filter(Boolean);
         const platteTekst = [String(it.text).replace(/\s+/g, ' ').trim(), links.length ? `Bekijk hier: ${links.join(' ')}` : '']
           .filter(Boolean).join(' ').slice(0, 900);
-        it.cloudTemplateTried = now();
-        const r = await sendCloudTemplate(it.phone, sjabloonNaam, [platteTekst], 'nl');
+        await sjabloonMetReserve(it, platteTekst);
         it.status = 'sent';
         it.doneAt = now();
-        it.cloudMsgId = r?.messages?.[0]?.id || it.cloudMsgId;
-        it.lastResult = 'verzonden als sjabloon (klant schreef >24u niet) — wacht op bezorgbevestiging';
         continue;
       }
       let antwoordMeta = null;
