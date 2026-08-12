@@ -47,6 +47,10 @@ ok('gewijzigde body met oude handtekening wordt geweigerd', webhookSignatureOk(r
 const zonderSecret = (() => { const s = process.env.WHATSAPP_APP_SECRET; delete process.env.WHATSAPP_APP_SECRET; const r = webhookSignatureOk(raw, teken(raw)); process.env.WHATSAPP_APP_SECRET = s; return r; })();
 ok('zonder app secret vertrouwen we niets', zonderSecret === false);
 
+console.log('\n== Sjabloon-invulveld knipt de link niet meer door ==');
+const { SJABLOON_PARAM_MAX } = await import('../server/connectors/whatsapp-cloud.js');
+ok('parameterlimiet ruim genoeg voor tekst + ondertekende link (>=900)', SJABLOON_PARAM_MAX >= 900, String(SJABLOON_PARAM_MAX));
+
 console.log('\n== Status-meldingen lezen (bezorgd / geweigerd) ==');
 const { parseCloudStatuses } = await import('../server/connectors/whatsapp-cloud.js');
 const stB = parseCloudStatuses({ entry: [{ changes: [{ value: { statuses: [{ id: 'wamid.S1', status: 'delivered' }] } }] }] });

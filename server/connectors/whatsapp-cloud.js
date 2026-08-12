@@ -59,10 +59,14 @@ export async function sendCloudText(nummer, tekst) {
 }
 
 // Sjabloonbericht — nodig buiten het 24-uursvenster. `variabelen` vult {{1}}, {{2}}, …
+// Maximale lengte van één sjabloon-invulveld. Stond op 200 en dat KNIPTE de
+// factuur-link doormidden (de ?sig= viel eraf -> klant kreeg "Niet ingelogd").
+// Meta staat ruim meer toe; 950 laat tekst + ondertekende link altijd heel.
+export const SJABLOON_PARAM_MAX = 950;
 export async function sendCloudTemplate(nummer, sjabloon, variabelen = [], taal = 'nl') {
   if (!cloudConfigured()) throw new Error('Officiële WhatsApp is nog niet ingesteld op de server.');
   const componenten = variabelen.length
-    ? [{ type: 'body', parameters: variabelen.map((v) => ({ type: 'text', text: String(v).slice(0, 200) })) }]
+    ? [{ type: 'body', parameters: variabelen.map((v) => ({ type: 'text', text: String(v).slice(0, SJABLOON_PARAM_MAX) })) }]
     : [];
   return post(`${process.env.WHATSAPP_PHONE_ID}/messages`, {
     messaging_product: 'whatsapp',

@@ -3083,6 +3083,15 @@ function mediaBestand(m) {
   return m.file || m.id || String(m.url || '').split('/').pop() || '';
 }
 
+// Sjabloontekst bouwen waarbij de LINK nooit kan sneuvelen: eerst de linkruimte
+// reserveren, dan pas de lopende tekst inkorten. (12 aug: een afgekapte link
+// stuurde klanten naar 'Niet ingelogd'.)
+function sjabloonTekstMetLinks(tekst, links = []) {
+  const linkDeel = links.length ? ` Bekijk hier: ${links.join(' ')}` : '';
+  const ruimte = Math.max(40, 900 - linkDeel.length);
+  return (String(tekst || '').replace(/\s+/g, ' ').trim().slice(0, ruimte) + linkDeel).trim();
+}
+
 // Sjabloon versturen MET reservewiel (12 aug 2026). Fout #132000 betekent: het
 // sjabloon verwacht een ander aantal invulvelden dan wij meesturen — in de praktijk:
 // er staat geen {{1}} in. Dan sturen we hem nogmaals ZONDER invulling; de klant krijgt
@@ -3157,8 +3166,7 @@ async function runCloudOutbox() {
         const links = (it.media || []).slice(0, 3)
           .map((m) => { const f = mediaBestand(m); return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
           .filter(Boolean);
-        const platteTekst = [String(it.text).replace(/\s+/g, ' ').trim(), links.length ? `Bekijk hier: ${links.join(' ')}` : '']
-          .filter(Boolean).join(' ').slice(0, 900);
+        const platteTekst = sjabloonTekstMetLinks(it.text, links);
         await sjabloonMetReserve(it, platteTekst);
         it.status = 'sent';
         it.doneAt = now();
