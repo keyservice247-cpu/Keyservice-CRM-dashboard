@@ -180,6 +180,11 @@ export async function cloudSelftest() {
         if (/whatsapp_business/.test(gs.scope || '')) (gs.target_ids || []).forEach((x) => wabas.add(String(x)));
       }
       uit.abonnement = [];
+      if (!wabas.size) {
+        // Zonder account-lijst valt er niets te repareren — en dan komen echte
+        // klantberichten dus nooit binnen, terwijl Meta's testknop wél werkt.
+        uit.abonnement.push({ account: '—', status: `GEEN WhatsApp-account via het token gevonden (debug_token: ${dbg?.error?.message || dbg?.data ? 'geen target_ids' : 'geen antwoord'}). Wijs in Bedrijfsinstellingen → Systeemgebruikers het WhatsApp-account met je nummer toe met "Volledige controle" en maak een NIEUW token.` });
+      }
       for (const waba of wabas) {
         const sub = await fetch(`${API}/${waba}/subscribed_apps`, { headers: kop }).then((r) => r.json()).catch(() => null);
         const al = (sub?.data || []).length > 0;

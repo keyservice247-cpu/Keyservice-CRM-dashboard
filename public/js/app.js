@@ -4044,6 +4044,7 @@ async function loadSettings() {
         ${vink(r.token, 'WHATSAPP_CLOUD_TOKEN in Render')}
         ${vink(r.phoneId, 'WHATSAPP_PHONE_ID in Render')}
         ${vink(r.appSecret, 'WHATSAPP_APP_SECRET in Render (nodig om berichten te ONTVANGEN)')}
+        ${(r.abonnement || []).map((ab) => `<div class="muted small" style="margin-top:4px">${/GEREPAREERD|stond al goed/.test(ab.status) ? '✓' : '✗'} Ontvangst-abonnement account ${esc(String(ab.account))}: ${esc(ab.status)}</div>`).join('')}
         ${r.kwaliteit ? `<div class="muted small" style="margin-top:4px">Kwaliteitsscore bij Meta: ${esc(r.kwaliteit)}</div>` : ''}
       </div>`;
     } catch (err) { uit.innerHTML = `<span class="error small">${esc(err.message)}</span>`; }
