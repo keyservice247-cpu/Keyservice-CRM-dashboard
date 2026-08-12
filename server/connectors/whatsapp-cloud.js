@@ -179,6 +179,19 @@ export async function cloudSelftest() {
       for (const gs of dbg?.data?.granular_scopes || []) {
         if (/whatsapp_business/.test(gs.scope || '')) (gs.target_ids || []).forEach((x) => wabas.add(String(x)));
       }
+      // TWEEDE WEG (12 aug): een beheerder-systeemgebruiker met portfolio-brede rechten
+      // heeft vaak GEEN target_ids in het token (rechten gelden dan op alles). Dan
+      // vragen we de portfolio's van de gebruiker op en per portfolio de WhatsApp-
+      // accounts — zo vinden we het account alsnog, zonder nieuw token.
+      if (!wabas.size) {
+        const bizzen = await fetch(`${API}/me/businesses?limit=10`, { headers: kop }).then((r) => r.json()).catch(() => null);
+        for (const biz of bizzen?.data || []) {
+          for (const rand of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+            const lijst = await fetch(`${API}/${biz.id}/${rand}?limit=10`, { headers: kop }).then((r) => r.json()).catch(() => null);
+            for (const w of lijst?.data || []) wabas.add(String(w.id));
+          }
+        }
+      }
       uit.abonnement = [];
       if (!wabas.size) {
         // Zonder account-lijst valt er niets te repareren — en dan komen echte

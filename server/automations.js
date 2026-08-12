@@ -103,7 +103,10 @@ export async function maybeSendAppointmentConfirm(order) {
         order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (afspraakbevestiging)', subject: fill(cfg.emailSubject, vars), body, at: now() });
         sent = true;
       } catch (e) { console.error('[afspraakbevestiging] e-mail mislukt:', e.message); }
-    } else if (cfg.whatsappEnabled && c.phone) {
+    }
+    // ALTIJD óók WhatsApp als er een nummer is (12 aug, verzoek eigenaar): eerder was
+    // dit een 'else if', waardoor klanten mét e-mailadres nooit een appje kregen.
+    if (cfg.whatsappEnabled && c.phone) {
       const body = fill(cfg.whatsappBody, vars);
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: body, orderId: order.id, status: 'queued', createdAt: now(), by: 'afspraakbevestiging' });
       order.thread = order.thread || [];
@@ -186,7 +189,8 @@ async function runAppointmentReminders() {
         o.thread = o.thread || []; o.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (herinnering)', subject: fill(cfg.reminderEmailSubject, vars), body, at: now() });
         sent = true;
       } catch (e) { console.error('[herinnering] e-mail mislukt:', e.message); }
-    } else if (cfg.whatsappEnabled && c.phone) {
+    }
+    if (cfg.whatsappEnabled && c.phone) {  // altijd óók WhatsApp — zie bevestiging hierboven
       const body = fill(cfg.reminderBody, vars);
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: body, orderId: o.id, status: 'queued', createdAt: now(), by: 'afspraakherinnering' });
       o.thread = o.thread || []; o.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (herinnering)', body, at: now() });

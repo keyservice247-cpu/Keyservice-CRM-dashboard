@@ -189,6 +189,18 @@ if (metB) {
   ok('te korte handtekening -> nette weigering, geen crash', kort.status !== 200 && kort.status < 500, String(kort.status));
 }
 
+console.log('\n== Afspraakbevestiging: e-mail EN WhatsApp tegelijk (12 aug) ==');
+// Klant mét e-mail én 06: voorheen kreeg die alleen e-mail. Nu hoort er ALTIJD ook
+// een appje in de wachtrij te staan. (SMTP is hier niet geconfigureerd, dus de
+// e-mailtak faalt stil — het appje mag daar nooit van afhangen.)
+await api('PATCH', '/api/settings', { appointmentMsg: { emailEnabled: true, whatsappEnabled: true, emailSubject: 'Afspraak', emailBody: 'Bevestiging {datum}', whatsappBody: 'Bevestiging appje {datum}', reminderEnabled: false, reminderHours: 24, reminderEmailSubject: 'Herinnering', reminderBody: 'Herinnering {datum}' } });
+const bevKlant = await api('POST', '/api/orders', { customerName: 'Bevestiging Klant', customerPhone: '0644332211', customerEmail: 'bevestiging@example.nl', title: 'Rhenen — bevestigingstest' });
+await api('PATCH', `/api/orders/${bevKlant.json.id}`, { appointmentAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16) });
+await new Promise((r) => setTimeout(r, 600));
+const wachtrijBev = (await api('GET', '/api/whatsapp/outbox-status?full=1')).json || [];
+ok('klant mét e-mailadres krijgt TOCH een WhatsApp-bevestiging in de wachtrij',
+  wachtrijBev.some((o) => (o.text || '').includes('Bevestiging appje')), JSON.stringify(wachtrijBev.map((o) => o.text).slice(0, 5)));
+
 console.log('\n== Rechten: monteur komt er niet in ==');
 // Vers monteur-account aanmaken en daarmee proberen.
 await api('POST', '/api/users', { name: 'Monteur Test', email: 'monteurtest@keyservice.nl', password: 'monteur123', role: 'monteur' });
