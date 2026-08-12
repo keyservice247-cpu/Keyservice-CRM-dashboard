@@ -3127,7 +3127,9 @@ function klantSchreefRecent(phone, urenTerug = 24) {
 
 async function runCloudOutbox() {
   if (!cloudSendAan()) return;
-  const items = (db().outbox || []).filter((o) => o.status === 'queued'
+  // LET OP: 'let', niet 'const' — de vangrails hieronder wijzen de lijst opnieuw toe.
+  // (12 aug: een const hier crashte de hele lus stilletjes; alles bleef op "wachtrij".)
+  let items = (db().outbox || []).filter((o) => o.status === 'queued'
     && (!o.group || o.group === '__klant_dm__')     // alleen klant-DM, nooit een groep
     && o.phone
     && !o.cloudTried);                              // één poging; daarna is de bridge aan de beurt
@@ -4975,6 +4977,13 @@ app.listen(PORT, () => {
   startAutomations({ runStatusScan: runStatusScanJob });
   // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.
   setInterval(() => { runCloudOutbox().catch((e) => console.error('[wa-cloud]', e.message)); }, 20 * 1000);
+  // Zelftest bij het opstarten: controleert token/nummer én repareert automatisch het
+  // ontvangst-abonnement (subscribed_apps) — dan hoeft niemand daarvoor op een knop te
+  // drukken en herstelt elke deploy de koppeling vanzelf.
+  if (cloudConfigured()) {
+    cloudSelftest().then((r) => console.log('[wa-cloud] zelftest bij start:', r.uitleg || JSON.stringify(r)))
+      .catch((e) => console.error('[wa-cloud] zelftest bij start mislukt:', e.message));
+  }
   if (cloudConfigured()) console.log(`  Officiële WhatsApp (Meta): ingesteld — versturen staat ${db().settings.whatsappCloudSend ? 'AAN' : 'UIT'}`);
   console.log('');
 });
