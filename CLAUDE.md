@@ -458,8 +458,18 @@ terugknop; scherm begint op mobiel ALTIJD met de lijst. Techniek:
 - Bijlage-links zijn ONDERTEKEND (`/uploads/<file>?sig=HMAC(file)`) zodat een klant een
   factuur-PDF kan openen zonder login én zonder ingest-token in de URL. Buiten het
   24-uursvenster gaat een PDF als link mee in het sjabloon.
-- Tests: test/chat-test.mjs (37 assertions, PORT=3127) + 11 browser-assertions
-  (desktop + iPhone-formaat, echt versturen).
+- **WhatsApp-look + live (12 aug):** het gesprek oogt als WhatsApp (beige wand,
+  groene uit-bubbels, tijd + bezorgvinkjes ÍN de bubbel: ◷ wachtrij, ✓ verstuurd,
+  ✓✓ blauw afgeleverd via waResult, ! mislukt) en werkt LIVE: de pulse-guard heeft
+  een uitzondering voor #cpText en renderChatPane ververst alléén #cpMsgs — kop en
+  verstuurbalk blijven staan, dus getypte tekst en cursor overleven elke update.
+  Berichten staat ook in de mobiele ONDERBALK (bn-item chats + bnChatBadge).
+  Zelftest-knop repareert het WABA-app-abonnement (subscribed_apps via debug_token)
+  — symptoom: Meta's test-webhook komt aan maar echte berichten niet.
+  sjabloonMetReserve: fout 132000 (sjabloon zonder {{1}}) → nogmaals zonder invulling
+  + eerlijke uitleg in lastResult.
+- Tests: test/chat-test.mjs (40 assertions, PORT=3127) + browser-assertions
+  (desktop + iPhone-formaat, echt versturen, live-update mét getypte tekst).
 
 ## SNELHEIDSREM OP DE UITGAANDE WACHTRIJ (6 aug 2026) — NIET verzwakken
 Aanleiding: na de storing stond de wachtrij dagen vol. Zodra de bridge terugkwam ging

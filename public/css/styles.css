@@ -950,3 +950,46 @@ table tbody tr:hover { background: var(--panel-2); }
   .cp-back { display: inline-flex; }
   .cp-send .btn { min-height: 44px; }
 }
+
+/* ---------- Berichten in WhatsApp-stijl (12 aug 2026) ---------- */
+/* Bewust een vaste, lichte WhatsApp-look binnen het gesprek — herkenbaar voor
+   iedereen, onafhankelijk van het CRM-thema. Alleen binnen .chat-pane. */
+.chat-pane .cp-msgs {
+  background: #efe7dd url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" opacity="0.06"><circle cx="12" cy="14" r="3" fill="%23555"/><circle cx="52" cy="40" r="4" fill="none" stroke="%23555"/><path d="M20 60l6-6 6 6" fill="none" stroke="%23555" stroke-width="2"/><rect x="58" y="10" width="8" height="8" rx="2" fill="none" stroke="%23555"/></svg>');
+  gap: 4px;
+}
+.chat-pane .chat-msg { max-width: 78%; }
+.chat-pane .chat-msg + .chat-msg { margin-top: 4px; }
+.chat-pane .chat-bubble {
+  background: #fff; color: #111b21; border: none; border-radius: 8px;
+  box-shadow: 0 1px .5px rgba(11, 20, 26, .13);
+  padding: 7px 9px 8px; font-size: 14.5px; line-height: 1.45;
+}
+.chat-pane .chat-msg.in .chat-bubble { border-top-left-radius: 2px; }
+.chat-pane .chat-msg.out .chat-bubble { background: #d9fdd3; color: #111b21; border-top-right-radius: 2px; border-top-left-radius: 8px; }
+.chat-pane .wa-meta {
+  float: right; margin: 8px -3px -5px 10px;
+  font-size: 11px; color: rgba(17, 27, 33, .45);
+  display: inline-flex; align-items: center; gap: 3px; line-height: 1;
+  user-select: none;
+}
+.chat-pane .wa-tick { font-size: 12px; letter-spacing: -2px; }
+.chat-pane .wa-blue { color: #53bdeb; }
+.chat-pane .wa-fail { color: #e02b2b; font-weight: 700; letter-spacing: 0; }
+.chat-pane .chat-meta { font-size: 11.5px; margin-bottom: 2px; opacity: .85; }
+.chat-pane .cp-head { background: var(--panel); }
+.cp-avatar {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  background: #00a884; color: #fff; font-weight: 600; font-size: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.chat-pane .cp-send { background: var(--panel); }
+.cp-sendbtn {
+  width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0;
+  background: #00a884; border-color: #00a884; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0;
+}
+.cp-sendbtn:hover { background: #029678; border-color: #029678; color: #fff; }
+.cp-send textarea { border-radius: 22px; padding: 11px 16px; }
+/* Ongelezen-stip in de lijst, WhatsApp-groen */
+.chat-unread { background: #25d366; color: #075e54; }

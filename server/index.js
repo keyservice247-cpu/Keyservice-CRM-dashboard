@@ -353,15 +353,21 @@ function verzamelKlantHistorie(customer) {
   const statusById = new Map();
   for (const ob of db().outbox || []) {
     if (ob.group && ob.group !== '__klant_dm__') continue;
-    statusById.set(ob.id, ob.status);
+    statusById.set(ob.id, { status: ob.status, lastResult: ob.lastResult || '' });
     const vanKlant = (ob.customerId && ob.customerId === customer.id)
       || (custPhoneNorm.length >= 6 && matchPhone(ob.phone || '') === custPhoneNorm);
     if (!vanKlant || ob.threaded) continue;
     if (seen.has(key('whatsapp', ob.text))) continue;
     seen.add(key('whatsapp', ob.text));
-    items.push({ id: ob.id, channel: 'whatsapp', outgoing: true, sender: ob.by || '', body: ob.text || '', at: ob.createdAt, waStatus: ob.status, attachments: [], standalone: true });
+    items.push({ id: ob.id, channel: 'whatsapp', outgoing: true, sender: ob.by || '', body: ob.text || '', at: ob.createdAt, waStatus: ob.status, waResult: ob.lastResult || '', attachments: [], standalone: true });
   }
-  for (const it of items) { if (it.outboxId && statusById.has(it.outboxId)) it.waStatus = statusById.get(it.outboxId); }
+  for (const it of items) {
+    if (it.outboxId && statusById.has(it.outboxId)) {
+      const st = statusById.get(it.outboxId);
+      it.waStatus = st.status;
+      it.waResult = st.lastResult;
+    }
+  }
   items.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
   return items;
 }
@@ -486,7 +492,7 @@ app.get('/api/chats/nummer/:phone', requireRole('admin', 'assistent'), (req, res
   for (const ob of db().outbox || []) {
     if (ob.group && ob.group !== '__klant_dm__') continue;
     if (matchPhone(ob.phone || '') !== p) continue;
-    items.push({ id: ob.id, channel: 'whatsapp', outgoing: true, sender: ob.by || '', body: ob.text || '', at: ob.createdAt, waStatus: ob.status, attachments: [], standalone: true });
+    items.push({ id: ob.id, channel: 'whatsapp', outgoing: true, sender: ob.by || '', body: ob.text || '', at: ob.createdAt, waStatus: ob.status, waResult: ob.lastResult || '', attachments: [], standalone: true });
   }
   items.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
   res.json({ customer: { id: `tel:${p}`, name: `Onbekend nummer ${p}` }, items: items.slice(-300), total: items.length });

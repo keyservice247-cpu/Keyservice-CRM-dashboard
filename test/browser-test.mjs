@@ -259,6 +259,21 @@ await page.waitForTimeout(1200);
 ok('verstuurd bericht verschijnt als uitgaande bubbel', await page.locator('#cpMsgs .chat-msg.out', { hasText: 'we komen eraan' }).count() > 0);
 noErr('Berichten-scherm (desktop)');
 
+// LIVE bijwerken terwijl je typt (12 aug): nieuw klantbericht verschijnt in het open
+// gesprek ZONDER dat je getypte tekst verdwijnt — de klassieke chat-valkuil.
+clear();
+await page.fill('#cpText', 'half getypt antwoord');
+await page.evaluate(() => fetch('/api/ingest/whatsapp', {
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' },
+  body: JSON.stringify({ name: 'Chat Browserklant', body: 'En de achterdeur graag ook nakijken!\nTelefoon: +31644455566', externalId: 'br-chat-live' }),
+}));
+await page.waitForTimeout(7000); // pulse-interval afwachten
+ok('nieuw klantbericht verschijnt LIVE in het open gesprek', await page.locator('#cpMsgs .chat-msg.in', { hasText: 'achterdeur graag ook' }).count() > 0);
+ok('getypte tekst blijft gewoon staan', (await page.inputValue('#cpText')) === 'half getypt antwoord');
+ok('WhatsApp-stijl: tijd + vinkjes in de bubbel', await page.locator('#cpMsgs .wa-meta').count() > 0);
+await page.fill('#cpText', '');
+noErr('Live bijwerken tijdens typen');
+
 // Telefoonformaat: lijst -> gesprek vult het scherm -> terugknop terug naar de lijst.
 clear();
 await page.setViewportSize({ width: 390, height: 844 });
@@ -279,6 +294,7 @@ ok('mobiel: verstuur-balk bereikbaar', await page.locator('#cpText').isVisible()
 await page.click('#cpBack');
 await page.waitForTimeout(600);
 ok('mobiel: terugknop -> lijst terug', await page.locator('#chatList').isVisible());
+ok('mobiel: Berichten-knop staat in de onderbalk', await page.locator('.bn-item[data-view="chats"]').isVisible());
 await page.setViewportSize({ width: 1280, height: 800 });
 noErr('Berichten-scherm (mobiel)');
 

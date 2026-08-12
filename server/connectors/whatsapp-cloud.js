@@ -160,6 +160,32 @@ export async function cloudSelftest() {
     uit.kwaliteit = json.quality_rating || '';
     uit.uitleg = `Verbonden met ${uit.nummer}${uit.naam ? ` (${uit.naam})` : ''}.`;
     if (!uit.appSecret) uit.uitleg += ' LET OP: WHATSAPP_APP_SECRET ontbreekt nog — zonder die waarde komen binnenkomende berichten van klanten niet binnen.';
+    // ONTVANGST-ABONNEMENT controleren en zo nodig REPAREREN (12 aug 2026).
+    // Meta stuurt echte klantberichten alleen door als het WhatsApp-account aan de app
+    // is gekoppeld ("subscribed app"). Is het account via Business Manager aangemaakt
+    // (zoals hier), dan ontbreekt die koppeling vaak — met precies dit symptoom: de
+    // test-webhook komt aan, echte berichten nooit. De WABA-id's halen we uit het
+    // token zelf (debug_token), daarna koppelen we de app aan elk account.
+    try {
+      const kop = { authorization: `Bearer ${process.env.WHATSAPP_CLOUD_TOKEN}` };
+      const dbg = await fetch(`${API}/debug_token?input_token=${encodeURIComponent(process.env.WHATSAPP_CLOUD_TOKEN)}`, { headers: kop })
+        .then((r) => r.json()).catch(() => null);
+      const wabas = new Set();
+      for (const gs of dbg?.data?.granular_scopes || []) {
+        if (/whatsapp_business/.test(gs.scope || '')) (gs.target_ids || []).forEach((x) => wabas.add(String(x)));
+      }
+      uit.abonnement = [];
+      for (const waba of wabas) {
+        const sub = await fetch(`${API}/${waba}/subscribed_apps`, { headers: kop }).then((r) => r.json()).catch(() => null);
+        const al = (sub?.data || []).length > 0;
+        if (al) { uit.abonnement.push({ account: waba, status: 'stond al goed' }); continue; }
+        const fix = await fetch(`${API}/${waba}/subscribed_apps`, { method: 'POST', headers: kop }).then((r) => r.json()).catch(() => null);
+        uit.abonnement.push({ account: waba, status: fix?.success ? 'GEREPAREERD — ontvangst staat nu aan' : `repareren mislukt: ${fix?.error?.message || 'onbekend'}` });
+      }
+      if (uit.abonnement.some((a) => /GEREPAREERD/.test(a.status))) {
+        uit.uitleg += ' Het ontvangst-abonnement ontbrak en is nu gerepareerd — stuur een nieuw testbericht naar het nummer.';
+      }
+    } catch { /* reparatie is een extraatje; de basis-uitslag blijft staan */ }
     return uit;
   } catch (e) {
     uit.ok = false;

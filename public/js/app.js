@@ -252,7 +252,11 @@ async function startLiveUpdates() {
     // Niet verversen vlak na scrollen/tikken (vooral mobiel): voorkomt haperingen.
     if (Date.now() - (window._lastInteract || 0) < 2500) return;
     const active = document.activeElement;
-    if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) return;
+    // Uitzondering: het typveld van Berichten. In een chat staat je cursor ALTIJD in
+    // het veld — zonder uitzondering ververst het gesprek dus nooit en lijken nieuwe
+    // klantberichten niet aan te komen. Het gesprek werkt alleen de berichtenlijst
+    // bij; het typveld zelf wordt nooit aangeraakt.
+    if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) && active.id !== 'cpText') return;
     try {
       const p = await api('/api/pulse');
       if (!p) return;
@@ -263,6 +267,8 @@ async function startLiveUpdates() {
       // Nieuwe klantappjes: teller bij "Berichten", ook als je op een ander scherm zit.
       const cb = $('#chatBadge');
       if (cb) { cb.textContent = p.newChats || 0; cb.hidden = !p.newChats; }
+      const bnc = $('#bnChatBadge');
+      if (bnc) { bnc.textContent = p.newChats || 0; bnc.hidden = !p.newChats; }
       // Mailbox bijna vol? Rood lampje in de zijbalk (verdwijnt vanzelf na opruimen).
       const mw = $('#mailboxWarn');
       if (mw) {
@@ -344,7 +350,7 @@ function bindNav() {
 let _chatActive = null;         // customerId van het open gesprek
 let _chatList = [];             // laatste lijst (voor naam/kaart in de kop)
 let _lastChatListHtml = '';     // geknipper-vangrail (zelfde patroon als het bord)
-let _lastChatPaneHtml = '';
+let _lastChatMsgsHtml = '';
 function chatStatusChip(s) {
   if (s === 'queued') return '<span class="inv-st verzonden" title="Staat klaar; de wachtrij verstuurt hem zo">wachtrij</span>';
   if (s === 'sent') return '<span class="inv-st betaald" title="Verstuurd">✓</span>';
@@ -362,13 +368,14 @@ async function loadChats(fromPulse) {
   // vorige keer zou anders de hele lijst verbergen en je weet niet meer waar je bent.
   // Op desktop (twee kolommen) blijft het open gesprek juist netjes staan.
   if (!fromPulse && _chatActive && window.matchMedia('(max-width: 820px)').matches) {
-    _chatActive = null; _lastChatPaneHtml = '';
-    const p = $('#chatPane'); if (p) p.innerHTML = '<div class="cp-empty muted">Kies een gesprek</div>';
+    _chatActive = null; _lastChatMsgsHtml = '';
+    const p = $('#chatPane'); if (p) { p.innerHTML = '<div class="cp-empty muted">Kies een gesprek</div>'; delete p.dataset.chat; }
   }
   $('#chatsLayout')?.classList.toggle('active-chat', !!_chatActive);
   if (!fromPulse) {
     api('/api/chats/seen', 'POST').catch(() => {});
     const cb = $('#chatBadge'); if (cb) { cb.textContent = '0'; cb.hidden = true; }
+    const bnc = $('#bnChatBadge'); if (bnc) { bnc.textContent = '0'; bnc.hidden = true; }
   }
   let list;
   try { list = await api('/api/chats'); } catch { return; }
@@ -396,7 +403,7 @@ async function loadChats(fromPulse) {
 }
 async function openChat(cid) {
   _chatActive = cid;
-  _lastChatPaneHtml = '';
+  _lastChatMsgsHtml = '';
   $('#chatsLayout')?.classList.add('active-chat');
   $$('.chat-item').forEach((b) => b.classList.toggle('active', b.dataset.cid === cid));
   if (!cid.startsWith('tel:')) api(`/api/chats/${cid}/read`, 'POST').catch(() => {});
@@ -404,10 +411,10 @@ async function openChat(cid) {
 }
 function sluitChat() {
   _chatActive = null;
-  _lastChatPaneHtml = '';
+  _lastChatMsgsHtml = '';
   $('#chatsLayout')?.classList.remove('active-chat');
   const pane = $('#chatPane');
-  if (pane) pane.innerHTML = '<div class="cp-empty muted">Kies links een gesprek</div>';
+  if (pane) { pane.innerHTML = '<div class="cp-empty muted">Kies links een gesprek</div>'; delete pane.dataset.chat; }
   loadChats();
 }
 async function renderChatPane(scrollDown) {
@@ -421,43 +428,76 @@ async function renderChatPane(scrollDown) {
   try { h = await api(histUrl); } catch { return; }
   const info = _chatList.find((c) => c.id === _chatActive) || {};
   const msgs = (h.items || []).filter((t) => t.channel !== 'systeem');
+  // WhatsApp-stijl: tijd + bezorgvinkjes ÍN de bubbel (rechtsonder), net als in de app.
+  const tikjes = (t) => {
+    if (!t.outgoing) return '';
+    if (t.waStatus === 'failed') return '<span class="wa-tick wa-fail" title="Niet bezorgd">!</span>';
+    if (t.waStatus === 'queued') return '<span class="wa-tick" title="Staat klaar voor verzending">◷</span>';
+    if (/afgeleverd/i.test(t.waResult || '')) return '<span class="wa-tick wa-blue" title="Afgeleverd bij de klant">✓✓</span>';
+    if (t.waStatus === 'sent') return '<span class="wa-tick" title="Verstuurd">✓</span>';
+    return '';
+  };
+  const klok = (at) => { const d = new Date(at || 0); return isNaN(d) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const msgsHtml = msgs.length ? msgs.map((t) => {
     const q = splitQuoted(t.body || '');
     const uit = !!t.outgoing;
-    const meta = `<div class="chat-meta">${uit ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (uit ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)} ${t.waStatus ? chatStatusChip(t.waStatus) : ''}${t.orderTitle ? ` · <a href="#" class="cp-orderlink" data-oid="${esc(t.orderId)}">${esc(t.orderTitle.slice(0, 40))}</a>` : ''}</div>`;
-    const bubble = `<div class="chat-bubble">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div>`;
-    return `<div class="chat-msg ${uit ? 'out' : 'in'}">${meta}${bubble}</div>`;
+    // Kaart-label alleen als het bericht bij een kaart hoort — klein, boven de bubbel.
+    const label = t.orderTitle ? `<div class="chat-meta"><a href="#" class="cp-orderlink" data-oid="${esc(t.orderId)}">${icon('tag', 11)} ${esc(t.orderTitle.slice(0, 44))}</a></div>` : '';
+    const kanaal = (!uit && t.channel === 'email') ? `<div class="chat-meta">${sourceIcon('email')} via e-mail</div>` : '';
+    const bubble = `<div class="chat-bubble" title="${esc((t.sender || '') + (t.waResult ? ' — ' + t.waResult : ''))}">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}<span class="wa-meta">${klok(t.at)} ${tikjes(t)}</span></div>`;
+    return `<div class="chat-msg ${uit ? 'out' : 'in'}">${label}${kanaal}${bubble}</div>`;
   }).join('') : '<div class="muted small" style="padding:14px">Nog geen berichten met deze klant.</div>';
+
+  const bindMsgs = () => {
+    const boxEl = $('#cpMsgs');
+    if (!boxEl) return;
+    $$('.cp-orderlink', boxEl).forEach((a) => a.onclick = async (e) => { e.preventDefault(); state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(a.dataset.oid); });
+    $$('.quote-toggle', boxEl).forEach((btn) => btn.onclick = () => { const b = btn.nextElementSibling; if (b) b.hidden = !b.hidden; });
+  };
+
+  // ZELFDE gesprek al open? Dan alleen de BERICHTEN bijwerken — de kop en de
+  // verstuurbalk blijven onaangeraakt, dus je getypte tekst en je cursor blijven
+  // gewoon staan terwijl nieuwe berichten binnenstromen (net als in WhatsApp zelf).
+  if (pane.dataset.chat === _chatActive) {
+    if (msgsHtml !== _lastChatMsgsHtml) {
+      const box = $('#cpMsgs');
+      const stondOnderaan = !box || (box.scrollHeight - box.scrollTop - box.clientHeight < 80);
+      if (box) box.innerHTML = msgsHtml;
+      _lastChatMsgsHtml = msgsHtml;
+      bindMsgs();
+      const nieuw = $('#cpMsgs');
+      if (nieuw && (scrollDown || stondOnderaan)) nieuw.scrollTop = nieuw.scrollHeight;
+    } else if (scrollDown) {
+      const box = $('#cpMsgs');
+      if (box) box.scrollTop = box.scrollHeight;
+    }
+    return;
+  }
+
+  // Ander gesprek (of eerste keer): alles opbouwen.
   const kanSturen = String(info.phone || '').replace(/\D/g, '').length >= 6;
-  const html = `
+  const initiaal = String(info.name || h.customer?.name || '?').trim().charAt(0).toUpperCase() || '?';
+  pane.innerHTML = `
     <div class="cp-head">
       <button type="button" class="btn btn-sm cp-back" id="cpBack" title="Terug naar de lijst">←</button>
+      <span class="cp-avatar">${esc(initiaal)}</span>
       <div class="cp-who"><strong>${esc(info.name || h.customer?.name || 'Klant')}</strong>${info.phone ? `<span class="muted small"> · ${esc(info.phone)}</span>` : ''}</div>
       ${info.orderId ? `<button type="button" class="btn btn-sm" id="cpCard">${icon('tag', 12)} Kaart openen</button>` : ''}
     </div>
     <div class="cp-msgs" id="cpMsgs">${msgsHtml}</div>
     <div class="cp-send">
       ${kanSturen
-        ? `<textarea id="cpText" placeholder="Typ een WhatsApp-bericht… (komt ook op de kaart)" rows="1"></textarea><button class="btn btn-primary" id="cpSend">${icon('whatsapp', 14)} Stuur</button>`
+        ? `<textarea id="cpText" placeholder="Typ een bericht" rows="1"></textarea><button class="btn cp-sendbtn" id="cpSend" title="Versturen">${icon('reply', 16)}</button>`
         : '<div class="muted small">Deze klant heeft geen telefoonnummer — vul die eerst in bij de klantgegevens om te kunnen appen.</div>'}
     </div>`;
-  if (html === _lastChatPaneHtml && !scrollDown) return;
-  // Niet hertekenen terwijl er getypt wordt: dan verdwijnt de tekst onder je vingers.
-  const bezig = document.activeElement && document.activeElement.id === 'cpText' && document.activeElement.value;
-  if (bezig && !scrollDown) return;
-  const oudeTekst = $('#cpText')?.value || '';
-  const box = $('#cpMsgs');
-  const stondOnderaan = !box || (box.scrollHeight - box.scrollTop - box.clientHeight < 60);
-  pane.innerHTML = html;
-  _lastChatPaneHtml = html;
-  if (oudeTekst && $('#cpText')) $('#cpText').value = oudeTekst;
+  pane.dataset.chat = _chatActive;
+  _lastChatMsgsHtml = msgsHtml;
+  bindMsgs();
   const nieuw = $('#cpMsgs');
-  if (nieuw && (scrollDown || stondOnderaan)) nieuw.scrollTop = nieuw.scrollHeight;
+  if (nieuw) nieuw.scrollTop = nieuw.scrollHeight;
   $('#cpBack')?.addEventListener('click', sluitChat);
   const kaartKnop = $('#cpCard');
   if (kaartKnop) kaartKnop.onclick = async () => { state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(info.orderId); };
-  $$('.cp-orderlink', pane).forEach((a) => a.onclick = async (e) => { e.preventDefault(); state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(a.dataset.oid); });
-  $$('.quote-toggle', pane).forEach((btn) => btn.onclick = () => { const b = btn.nextElementSibling; if (b) b.hidden = !b.hidden; });
   const stuur = $('#cpSend');
   if (stuur) stuur.onclick = async () => {
     const veld = $('#cpText');
@@ -470,8 +510,7 @@ async function renderChatPane(scrollDown) {
         : `/api/chats/${_chatActive}/send`;
       const r = await api(sendUrl, 'POST', { text });
       if (veld) veld.value = '';
-      toast(r.paused ? 'In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit' : 'Bericht in de wachtrij — wordt zo verstuurd', r.paused);
-      _lastChatPaneHtml = '';
+      if (r.paused) toast('In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit', true);
       await renderChatPane(true);
     } catch (err) { toast(err.message, true); }
     finally { const k = $('#cpSend'); if (k) k.disabled = false; }
