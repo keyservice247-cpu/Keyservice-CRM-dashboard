@@ -2389,12 +2389,12 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
           // Ná de respons versturen (Meta wil snel een 200 terug).
           sjabloonMetReserve(item, platteTekst).then(() => {
             item.status = 'sent';
-            saveSoon();
+            void db().outbox; saveSoon();
           }).catch((e2) => {
             item.status = 'failed';
             item.doneAt = now();
             item.lastResult = `sjabloon geweigerd: ${String(e2.message || '').slice(0, 120)}`;
-            saveSoon();
+            void db().outbox; saveSoon();
           });
           saveSoon();
         } else {
@@ -3076,6 +3076,13 @@ function cloudSendAan() {
   return !!(cloudConfigured() && db().settings.whatsappCloudSend && !db().settings.whatsappPaused);
 }
 
+
+// Bestandsnaam van een media-item: oudere items hebben alleen een url (/uploads/<file>).
+// Zonder deze terugval sloeg de officiële route factuur-PDF's stil over (audit 12 aug).
+function mediaBestand(m) {
+  return m.file || m.id || String(m.url || '').split('/').pop() || '';
+}
+
 // Sjabloon versturen MET reservewiel (12 aug 2026). Fout #132000 betekent: het
 // sjabloon verwacht een ander aantal invulvelden dan wij meesturen — in de praktijk:
 // er staat geen {{1}} in. Dan sturen we hem nogmaals ZONDER invulling; de klant krijgt
@@ -3106,10 +3113,14 @@ function klantSchreefRecent(phone, urenTerug = 24) {
   const p = matchPhone(phone || '');
   if (p.length < 6) return false;
   const grens = Date.now() - urenTerug * 3600000;
-  for (const m of db().messages || []) {
+  // Achterstevoren (nieuwste eerst) met vroege stop: de lijst is chronologisch, dus
+  // zodra we vóór de grens zitten kan er niets recents meer komen.
+  const msgs = db().messages || [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (new Date(m.receivedAt || 0).getTime() < grens) break;
     if (m.channel !== 'whatsapp' || m.group) continue;
-    if (matchPhone(m.fromPhone || senderPhoneFromText(m.body)) !== p) continue;
-    if (new Date(m.receivedAt || 0).getTime() >= grens) return true;
+    if (matchPhone(m.fromPhone || senderPhoneFromText(m.body)) === p) return true;
   }
   return false;
 }
@@ -3120,8 +3131,17 @@ async function runCloudOutbox() {
     && (!o.group || o.group === '__klant_dm__')     // alleen klant-DM, nooit een groep
     && o.phone
     && !o.cloudTried);                              // één poging; daarna is de bridge aan de beurt
-  for (const it of items.slice(0, 10)) {
+  // Zelfde vangrails als de bridge-wachtrij (audit 12 aug): verlopen klant-DM's
+  // vervallen, dubbelen gaan er niet twee keer uit, en hooguit 2 per ronde.
+  items = vervalOudeKlantItems(items);
+  items = filterDubbeleItems(items);
+  for (const it of items.slice(0, 2)) {
     it.cloudTried = now();
+    // CLAIM (audit 12 aug, kritiek): zolang wij met dit item bezig zijn mag de
+    // bridge het NIET ook oppakken — anders krijgt de klant hetzelfde bericht twee
+    // keer (bridge + officieel). /api/outbox respecteert nextTryAt al; lukt onze
+    // poging niet, dan halen we de claim er in het catch-pad direct weer af.
+    it.nextTryAt = new Date(Date.now() + 90 * 1000).toISOString();
     try {
       // NIET GOKKEN OF HET VENSTER OPEN STAAT (10 aug 2026). Meta laat een vrij bericht
       // alleen toe binnen 24 uur na het LAATSTE bericht van die klant. Stuurden we het
@@ -3133,7 +3153,7 @@ async function runCloudOutbox() {
       const venterOpen = klantSchreefRecent(it.phone);
       if (!venterOpen && sjabloonNaam && it.text) {
         const links = (it.media || []).slice(0, 3)
-          .map((m) => { const f = m.file || m.id || ''; return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
+          .map((m) => { const f = mediaBestand(m); return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
           .filter(Boolean);
         const platteTekst = [String(it.text).replace(/\s+/g, ' ').trim(), links.length ? `Bekijk hier: ${links.join(' ')}` : '']
           .filter(Boolean).join(' ').slice(0, 900);
@@ -3145,7 +3165,7 @@ async function runCloudOutbox() {
       let antwoordMeta = null;
       if (it.text) antwoordMeta = await sendCloudText(it.phone, it.text);
       for (const m of (it.media || []).slice(0, 6)) {
-        const bestand = m.file || m.id || '';
+        const bestand = mediaBestand(m);
         if (!bestand) continue;
         // Ondertekende link (geen ingest-token in de URL): geldig voor precies dit bestand.
         const url = `${CLOUD_UIT_ADRES()}/uploads/${bestand}?sig=${uploadSig(bestand)}`;
@@ -3174,7 +3194,7 @@ async function runCloudOutbox() {
           // Bijlages (bv. de factuur-PDF) kunnen niet ÍN een sjabloon mee, maar als
           // ondertekende LINK wél: de klant tikt en opent het bestand direct.
           const links = (it.media || []).slice(0, 3)
-            .map((m) => { const f = m.file || m.id || ''; return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
+            .map((m) => { const f = mediaBestand(m); return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
             .filter(Boolean);
           const platteTekst = [String(it.text || '').replace(/\s+/g, ' ').trim(), links.length ? `Bekijk hier: ${links.join(' ')}` : '']
             .filter(Boolean).join(' ').slice(0, 900);
@@ -3191,13 +3211,13 @@ async function runCloudOutbox() {
           continue;
         }
       }
-      // Blijft 'queued': de bridge pakt het op. Alleen vastleggen wat Meta zei, zodat
-      // in Instellingen zichtbaar is waaróm.
+      // Blijft 'queued': de bridge pakt het op. Claim opheffen zodat dat direct kan.
+      delete it.nextTryAt;
       it.lastResult = `officiële WhatsApp: ${String(e.message || '').slice(0, 140)}`;
       console.error('[wa-cloud] versturen mislukt, valt terug op de bridge:', e.message);
     }
   }
-  if (items.length) saveSoon();
+  if (items.length) { void db().outbox; saveSoon(); } // lijst aanraken: awaits kunnen de dirty-markering hebben gewist
 }
 
 // Eenmalig bij het opstarten: recente MISLUKTE groeps-berichten (monteur-dispatch,
@@ -3281,6 +3301,37 @@ app.post('/api/orders/:id/send-monteur', requireRole('admin', 'assistent'), (req
 });
 
 // De WhatsApp-bridge haalt hier de wachtrij op (queued items).
+// Gedeelde vangrails voor BEIDE verzendroutes (bridge én officieel) — audit 12 aug:
+// eerder zaten deze alleen in /api/outbox, waardoor de officiële route een dagenlang
+// opgelopen wachtrij alsnog in één keer kon legen (het 2-aug-scenario).
+function vervalOudeKlantItems(items) {
+  const KLANT_VERVALT_NA_UUR = 24;
+  for (const it of items) {
+    if (it.group && it.group !== '__klant_dm__') continue;
+    const ouderdom = Date.now() - new Date(it.createdAt || 0).getTime();
+    if (ouderdom > KLANT_VERVALT_NA_UUR * 3600000) {
+      it.status = 'failed';
+      it.doneAt = now();
+      it.lastResult = `verlopen — stond langer dan ${KLANT_VERVALT_NA_UUR} uur in de wachtrij, niet alsnog verstuurd`;
+    }
+  }
+  return items.filter((o) => o.status === 'queued');
+}
+function filterDubbeleItems(items) {
+  const gezien = new Set();
+  for (const it of items) {
+    const sleutel = `${it.phone || it.groupId || it.group || ''}|${String(it.text || '').trim()}`;
+    if (!sleutel.startsWith('|') && gezien.has(sleutel)) {
+      it.status = 'failed';
+      it.doneAt = now();
+      it.lastResult = 'dubbel — identiek bericht stond al klaar voor dezelfde ontvanger';
+      continue;
+    }
+    gezien.add(sleutel);
+  }
+  return items.filter((o) => o.status === 'queued');
+}
+
 app.get('/api/outbox', checkIngestToken, (req, res) => {
   // PAUZEKNOP (2 aug 2026): toen het nummer tijdelijk door WhatsApp was geblokkeerd
   // wegens "geautomatiseerde berichten", moest de verzending METEEN stil kunnen — zonder
@@ -3310,35 +3361,14 @@ app.get('/api/outbox', checkIngestToken, (req, res) => {
   // relevant — dat hoort te vervallen, niet alsnog aan te komen.
   // Groepsberichten (monteur-dispatch, terugkoppeling) houden hun eigen, ruimere
   // herkansing van 36 uur: daar mag een opdracht nooit stil verloren gaan.
-  const KLANT_VERVALT_NA_UUR = 24;
-  for (const it of items) {
-    if (it.group && it.group !== '__klant_dm__') continue;
-    const ouderdom = Date.now() - new Date(it.createdAt || 0).getTime();
-    if (ouderdom > KLANT_VERVALT_NA_UUR * 3600000) {
-      it.status = 'failed';
-      it.doneAt = now();
-      it.lastResult = `verlopen — stond langer dan ${KLANT_VERVALT_NA_UUR} uur in de wachtrij, niet alsnog verstuurd`;
-    }
-  }
-  items = items.filter((o) => o.status === 'queued');
+  items = vervalOudeKlantItems(items);
 
   // ---- DUBBELE BERICHTEN ----
   // In de log van 6 aug stonden meerdere nummers twee keer achter elkaar met exact
   // hetzelfde bericht. Een klant twee keer hetzelfde sturen is niet alleen slordig, het
   // telt bij WhatsApp mee als spam-signaal. Staan er twee wachtende items met dezelfde
   // ontvanger én dezelfde tekst, dan gaat alleen de eerste eruit.
-  const gezien = new Set();
-  for (const it of items) {
-    const sleutel = `${it.phone || it.groupId || it.group || ''}|${String(it.text || '').trim()}`;
-    if (!sleutel.startsWith('|') && gezien.has(sleutel)) {
-      it.status = 'failed';
-      it.doneAt = now();
-      it.lastResult = 'dubbel — identiek bericht stond al klaar voor dezelfde ontvanger';
-      continue;
-    }
-    gezien.add(sleutel);
-  }
-  items = items.filter((o) => o.status === 'queued');
+  items = filterDubbeleItems(items);
 
   // ---- SNELHEIDSREM ----
   // De bridge vraagt elke 8 seconden de wachtrij op en verstuurt ALLES wat hij krijgt.
@@ -4298,10 +4328,14 @@ app.get('/api/pulse', requireAuth, (req, res) => {
 // laatst is geopend (gedeelde markering; het team werkt uit dezelfde inbox).
 function nieuweChats() {
   const sinds = db().settings._chatsGezienOp || '';
+  if (!sinds) return 0; // nog nooit geopend -> niet ALLE oude appjes als "nieuw" tellen
   let n = 0;
-  for (const m of db().messages || []) {
+  const msgs = db().messages || [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (String(m.receivedAt || '').localeCompare(sinds) <= 0) break; // chronologisch: klaar
     if (m.channel !== 'whatsapp' || m.group || m.skipped) continue;
-    if (!sinds || String(m.receivedAt || '').localeCompare(sinds) > 0) n++;
+    n++;
   }
   return n;
 }
@@ -4838,7 +4872,11 @@ const allowUploadAccess = (req, res, next) => {
   const tok = req.headers['x-ingest-token'] || req.query.token;
   if (tok && process.env.INGEST_TOKEN && tok === process.env.INGEST_TOKEN) return next();
   const sig = String(req.query.sig || '');
-  if (sig && sig === uploadSig(req.params.file)) return next();
+  if (sig) {
+    const goed = Buffer.from(uploadSig(req.params.file));
+    const gegeven = Buffer.from(sig);
+    if (gegeven.length === goed.length && crypto.timingSafeEqual(gegeven, goed)) return next();
+  }
   return requireAuth(req, res, next);
 };
 app.get('/uploads/:file', allowUploadAccess, (req, res) => {

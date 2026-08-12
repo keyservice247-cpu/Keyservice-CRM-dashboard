@@ -420,12 +420,14 @@ function sluitChat() {
 async function renderChatPane(scrollDown) {
   const pane = $('#chatPane');
   if (!pane || !_chatActive) return;
+  const doel = _chatActive; // vasthouden: klikt de gebruiker tijdens de fetch een ander gesprek aan, dan gooien we dit antwoord weg
   let h;
   // Onbekend nummer (nog geen klantrecord) heeft zijn eigen gesprek-route.
   const histUrl = _chatActive.startsWith('tel:')
     ? `/api/chats/nummer/${encodeURIComponent(_chatActive.slice(4))}`
     : `/api/customers/${_chatActive}/history?limit=200`;
   try { h = await api(histUrl); } catch { return; }
+  if (doel !== _chatActive) return; // verouderd antwoord — inmiddels ander gesprek open
   const info = _chatList.find((c) => c.id === _chatActive) || {};
   const msgs = (h.items || []).filter((t) => t.channel !== 'systeem');
   // WhatsApp-stijl: tijd + bezorgvinkjes ÍN de bubbel (rechtsonder), net als in de app.

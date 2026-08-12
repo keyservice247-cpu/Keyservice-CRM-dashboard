@@ -147,6 +147,13 @@ if (bereikbaar) {
   });
   ok('status-melding voor onbekend bericht -> gewoon 200', stResp.status === 200);
 
+  console.log('\n== Audit-fixes (12 aug) ==');
+  // Webhook zonder JSON-body: nette 403, geen 500-crash (audit-punt 4).
+  const geenJson = await fetch(BASE + '/api/ingest/whatsapp/cloud', { method: 'POST', headers: { 'x-hub-signature-256': 'sha256=' + 'a'.repeat(64) } });
+  ok('POST zonder JSON-body -> 403 (geen crash)', geenJson.status === 403, String(geenJson.status));
+  const platteTekstBody = await fetch(BASE + '/api/ingest/whatsapp/cloud', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'onzin' });
+  ok('POST met platte tekst -> 403 (geen crash)', platteTekstBody.status === 403, String(platteTekstBody.status));
+
   console.log('\n== Zelftest van de koppeling ==');
   const login0 = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) });
   const ck0 = (login0.headers.get('set-cookie') || '').split(';')[0];

@@ -130,6 +130,12 @@ const histM = await api('GET', `/api/chats/nummer/${encodeURIComponent(mChat.pho
 ok('het gesprek is te openen', (histM.json?.items || []).some((t) => /voordeur klemt/i.test(t.body || '')));
 
 console.log('\n== Melding-teller: nieuwe klantappjes ==');
+// Verse installatie: zonder ooit-geopend-markering telt hij bewust NIETS (audit 12
+// aug — anders staat er "3000 nieuw" bij de eerste keer). Eerst openen, dan tellen.
+const puls0 = await api('GET', '/api/pulse');
+ok('vóór de eerste keer openen: teller op nul (geen oude berg)', (puls0.json?.newChats || 0) === 0, JSON.stringify(puls0.json?.newChats));
+await api('POST', '/api/chats/seen', {});
+await api('POST', '/api/ingest/whatsapp', { name: 'Meta Klant', body: 'Nog een vraagje!', fromPhone: '0699911122', externalId: 'chat-meta-1b' }, true);
 const puls1 = await api('GET', '/api/pulse');
 ok('pulse telt nieuwe klantappjes', (puls1.json?.newChats || 0) >= 1, JSON.stringify(puls1.json?.newChats));
 await api('POST', '/api/chats/seen', {});
@@ -170,6 +176,18 @@ const zonderSig = await fetch(`${BASE}/uploads/${upFile}`, { redirect: 'manual' 
 ok('zonder handtekening of login: geen toegang', zonderSig.status !== 200, String(zonderSig.status));
 const fouteSig = await fetch(`${BASE}/uploads/${upFile}?sig=${'a'.repeat(32)}`, { redirect: 'manual' });
 ok('met verkeerde handtekening: geen toegang', fouteSig.status !== 200, String(fouteSig.status));
+
+console.log('\n== Beveiligde bijlage-link (audit 12 aug) ==');
+// Constant-tijd-vergelijking mag het gedrag niet veranderen: goede sig werkt nog.
+const ordU = (await api('GET', '/api/orders')).json || [];
+const metB = ordU.find((o) => (o.attachments || []).length);
+if (metB) {
+  const f = metB.attachments[0].file;
+  // De handtekening kunnen we hier niet berekenen (secret op de server), maar een
+  // sig van verkeerde LENGTE mag nooit een 500 geven.
+  const kort = await fetch(`${BASE}/uploads/${f}?sig=abc`, { redirect: 'manual' });
+  ok('te korte handtekening -> nette weigering, geen crash', kort.status !== 200 && kort.status < 500, String(kort.status));
+}
 
 console.log('\n== Rechten: monteur komt er niet in ==');
 // Vers monteur-account aanmaken en daarmee proberen.

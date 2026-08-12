@@ -88,6 +88,7 @@ export async function sendCloudMedia(nummer, { url, filename = '', caption = '',
 export function webhookSignatureOk(ruweBody, handtekeningHeader) {
   const secret = process.env.WHATSAPP_APP_SECRET;
   if (!secret) return false;                       // geen secret = niets vertrouwen
+  if (!Buffer.isBuffer(ruweBody) && typeof ruweBody !== 'string') return false; // geen JSON-body -> gewoon weigeren, geen crash
   const gegeven = String(handtekeningHeader || '');
   if (!gegeven.startsWith('sha256=')) return false;
   const eigen = 'sha256=' + crypto.createHmac('sha256', secret).update(ruweBody).digest('hex');
