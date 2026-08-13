@@ -3163,7 +3163,7 @@ async function runCloudOutbox() {
       const sjabloonNaam = String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht').trim();
       const venterOpen = klantSchreefRecent(it.phone);
       if (!venterOpen && sjabloonNaam && it.text) {
-        const links = (it.media || []).slice(0, 3)
+        const links = it.bonLink ? [it.bonLink] : (it.media || []).slice(0, 3)
           .map((m) => { const f = mediaBestand(m); return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
           .filter(Boolean);
         const platteTekst = sjabloonTekstMetLinks(it.text, links);
@@ -3203,7 +3203,7 @@ async function runCloudOutbox() {
         try {
           // Bijlages (bv. de factuur-PDF) kunnen niet ÍN een sjabloon mee, maar als
           // ondertekende LINK wél: de klant tikt en opent het bestand direct.
-          const links = (it.media || []).slice(0, 3)
+          const links = it.bonLink ? [it.bonLink] : (it.media || []).slice(0, 3)
             .map((m) => { const f = mediaBestand(m); return f ? `${CLOUD_UIT_ADRES()}/uploads/${f}?sig=${uploadSig(f)}` : ''; })
             .filter(Boolean);
           const platteTekst = [String(it.text || '').replace(/\s+/g, ' ').trim(), links.length ? `Bekijk hier: ${links.join(' ')}` : '']
@@ -3802,6 +3802,53 @@ app.get('/api/invoices/:id/pdf', requireAuth, async (req, res) => {
 // VERSTUREN VIA WHATSAPP (factuur óf offerte) met de PDF als bijlage. De bridge haalt
 // het bestand op met het ingest-token en stuurt het als document naar de klant —
 // dezelfde weg die ook de foto's naar de monteur gebruikt.
+// ---------- KLANTPAGINA VOOR OFFERTE/FACTUUR (12 aug 2026) ----------
+// De klant krijgt in WhatsApp een KORTE link naar deze pagina: logo, nummer en een
+// grote downloadknop. Geen login nodig; de handtekening in de link hoort bij precies
+// één document. De PDF wordt altijd vers opgebouwd, dus hij klopt ook na wijzigingen.
+const bonSig = (invId) => crypto.createHmac('sha256', process.env.SESSION_SECRET || 'ks-upload')
+  .update(`bon:${invId}`).digest('hex').slice(0, 24);
+function bonToegang(req) {
+  const inv = (db().invoices || []).find((i) => i.id === req.params.id);
+  if (!inv) return null;
+  const goed = Buffer.from(bonSig(inv.id));
+  const gegeven = Buffer.from(String(req.params.sig || ''));
+  if (gegeven.length !== goed.length || !crypto.timingSafeEqual(gegeven, goed)) return null;
+  return inv;
+}
+app.get('/bon/:id/:sig', (req, res) => {
+  const inv = bonToegang(req);
+  if (!inv) return res.status(404).send('Document niet gevonden.');
+  const cfg = getInvoiceSettings();
+  const isQuote = inv.type === 'offerte';
+  const titel = `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number}`;
+  res.type('html').send(`<!doctype html><html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>${titel} — ${cfg.companyName || 'Keyservice'}</title>
+<style>body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f4f6f9;color:#10161f;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:20px}
+.kaart{background:#fff;border-radius:14px;box-shadow:0 4px 24px rgba(16,22,31,.08);padding:32px 28px;max-width:420px;width:100%;text-align:center}
+img{width:120px;margin-bottom:18px}h1{font-size:20px;margin:0 0 6px}p{color:#56616f;margin:0 0 22px;font-size:15px}
+a.dl{display:block;background:#1d4f9c;color:#fff;text-decoration:none;padding:15px 20px;border-radius:10px;font-weight:600;font-size:16px}
+.voet{margin-top:20px;font-size:12.5px;color:#8b95a3}</style></head><body><div class="kaart">
+<img src="/img/logo-factuur.png" alt="" onerror="this.style.display='none'">
+<h1>${titel}</h1>
+<p>van ${cfg.companyName || 'Key Service 24/7'}</p>
+<a class="dl" href="/bon/${inv.id}/${req.params.sig}/pdf">Download ${isQuote ? 'offerte' : 'factuur'} (PDF)</a>
+<div class="voet">Vragen? Reageer gerust op ons WhatsApp-bericht${cfg.companyPhone ? ` of bel ${cfg.companyPhone}` : ''}.</div>
+</div></body></html>`);
+});
+app.get('/bon/:id/:sig/pdf', async (req, res) => {
+  const inv = bonToegang(req);
+  if (!inv) return res.status(404).send('Document niet gevonden.');
+  try {
+    const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+    const customer = db().customers.find((c) => c.id === inv.customerId) || {};
+    const pdf = await buildInvoicePdf(inv, order || {}, customer);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `inline; filename="${inv.type === 'offerte' ? 'Offerte' : 'Factuur'}-${inv.number}.pdf"`);
+    res.send(pdf);
+  } catch (e) { res.status(500).send('PDF maken mislukt — probeer het later opnieuw.'); }
+});
+
 app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
@@ -3828,7 +3875,10 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
       id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
       text: tekst, orderId: inv.orderId || undefined, status: 'queued', createdAt: now(),
       by: isQuote ? 'offerte-whatsapp' : 'factuur-whatsapp',
-      media: [{ url: saved.url, name: saved.filename, mime: 'application/pdf' }],
+      media: [{ url: saved.url, name: saved.filename, mime: 'application/pdf', file: saved.file }],
+      // Korte klantlink naar de bon-pagina: gaat mee in het sjabloon i.p.v. de lange
+      // uploads-link, en werkt zonder login. De PDF wordt daar altijd vers opgebouwd.
+      bonLink: `${CLOUD_UIT_ADRES()}/bon/${inv.id}/${bonSig(inv.id)}`,
     });
     // Factuurdatum alleen bij de EERSTE verzending zetten (anders schuift de
     // betaaltermijn op); wel bijhouden wanneer er voor het laatst iets uitging.

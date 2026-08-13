@@ -139,6 +139,28 @@ await api('PATCH', `/api/invoices/${invGeen.id}`, { lines: [{ description: 'X', 
 const geenTel = await api('POST', `/api/invoices/${invGeen.id}/send-whatsapp`, {});
 ok('zonder telefoonnummer: nette melding', geenTel.status === 400 && /telefoonnummer/i.test(geenTel.json.error || ''), JSON.stringify(geenTel.json));
 
+console.log('\n== Klantpagina /bon (12 aug): bon bekijken zonder login ==');
+// De klant krijgt een korte ondertekende link; die toont zonder login een nette
+// pagina en levert de PDF vers. Foute handtekening -> 404. De handtekening kunnen we
+// hier zelf berekenen omdat de testserver met SESSION_SECRET=test draait.
+const cryptoBon = await import('node:crypto');
+const bonSigT = (invId) => cryptoBon.createHmac('sha256', 'test').update(`bon:${invId}`).digest('hex').slice(0, 24);
+const invLijst = (await api('GET', '/api/invoices')).json || [];
+const alleInv = Array.isArray(invLijst) ? invLijst : (invLijst.invoices || []);
+const eenInv = alleInv.find((i) => (i.lines || []).length) || alleInv[0];
+if (eenInv) {
+  const goed = await fetch(`${BASE}/bon/${eenInv.id}/${bonSigT(eenInv.id)}`);
+  const html = await goed.text();
+  ok('bon-pagina opent ZONDER login', goed.status === 200, String(goed.status));
+  ok('met downloadknop en documentnummer', /Download/.test(html) && html.includes(String(eenInv.number)), html.slice(0, 120));
+  const pdf = await fetch(`${BASE}/bon/${eenInv.id}/${bonSigT(eenInv.id)}/pdf`);
+  ok('PDF wordt vers geleverd', pdf.status === 200 && /application\/pdf/.test(pdf.headers.get('content-type') || ''), `${pdf.status} ${pdf.headers.get('content-type')}`);
+  const fout = await fetch(`${BASE}/bon/${eenInv.id}/aaaaaaaaaaaaaaaaaaaaaaaa`);
+  ok('foute handtekening -> 404', fout.status === 404, String(fout.status));
+} else {
+  ok('bon-test overgeslagen (geen factuur aanwezig)', true);
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);
