@@ -316,11 +316,14 @@ app.get('/api/customers', requireAuth, (req, res) => {
 function verzamelKlantHistorie(customer) {
   const items = [];
   const seen = new Set(); // dedup: zelfde bericht op kaart én als los bericht
-  const key = (channel, body) => `${channel}|${String(body || '').replace(/\s+/g, ' ').trim().slice(0, 180)}`;
+  // De DAG zit in de sleutel (15 aug): zonder die verdween een nieuw bericht met
+  // exact dezelfde tekst als ooit eerder ("Bedankt!") stilletjes uit het gesprek.
+  // Dubbel-op-hetzelfde-moment (thread + los record) wordt nog steeds ontdubbeld.
+  const key = (channel, body, at) => `${channel}|${String(at || '').slice(0, 10)}|${String(body || '').replace(/\s+/g, ' ').trim().slice(0, 180)}`;
   for (const o of [...(db().orders || []), ...(db().trash || [])]) {
     if (o.customerId !== customer.id) continue;
     for (const t of o.thread || []) {
-      seen.add(key(t.channel, t.body));
+      seen.add(key(t.channel, t.body, t.at));
       items.push({ ...t, orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', standalone: false });
     }
   }
@@ -343,7 +346,7 @@ function verzamelKlantHistorie(customer) {
       const em = ((String(m.sender || '').match(EMAIL_IN_SENDER) || [''])[0]).toLowerCase();
       match = !!em && em === custEmail;
     }
-    if (!match || seen.has(key(m.channel, m.body))) continue;
+    if (!match || seen.has(key(m.channel, m.body, m.receivedAt))) continue;
     items.push({ id: m.id, channel: m.channel, sender: m.sender, subject: m.subject, body: m.body, at: m.receivedAt, attachments: m.attachments || [], standalone: true });
   }
   // Uitgaande WhatsApp-berichten uit de wachtrij. Twee smaken: (a) via de chat
@@ -357,8 +360,8 @@ function verzamelKlantHistorie(customer) {
     const vanKlant = (ob.customerId && ob.customerId === customer.id)
       || (custPhoneNorm.length >= 6 && matchPhone(ob.phone || '') === custPhoneNorm);
     if (!vanKlant || ob.threaded) continue;
-    if (seen.has(key('whatsapp', ob.text))) continue;
-    seen.add(key('whatsapp', ob.text));
+    if (seen.has(key('whatsapp', ob.text, ob.createdAt))) continue;
+    seen.add(key('whatsapp', ob.text, ob.createdAt));
     items.push({ id: ob.id, channel: 'whatsapp', outgoing: true, sender: ob.by || '', body: ob.text || '', at: ob.createdAt, waStatus: ob.status, waResult: ob.lastResult || '', attachments: [], standalone: true });
   }
   for (const it of items) {
@@ -386,6 +389,50 @@ app.get('/api/customers/:id/history', requireAuth, (req, res) => {
   const limit = Math.min(500, Math.max(20, Number(req.query.limit) || 300));
   res.json({ customer: { id: customer.id, name: customer.name }, items: items.slice(-limit), total: items.length });
 });
+
+// ONGELEZEN PER GESPREK (15 aug 2026). De badge in de gesprekkenlijst leunde op
+// order.unreadReplies en miste daardoor precies de gevallen die er het meest toe
+// doen: een bestaande klant ZONDER open kaart (appje na een afgeronde klus) en een
+// onbekend nummer (tel:-gesprek stond hard op 0). Elk binnenkomend bericht staat
+// hoe dan ook in db().messages, dus één leesmarkering per gesprek dekt alles:
+// ongelezen = binnengekomen berichten NA de markering (max 7 dagen terug, zodat een
+// verse installatie niet de hele historie als "nieuw" toont). Markering staat in
+// settings._chatGelezen (customerId of "tel:<nummer>"), gezet door /read.
+function telOngelezenChats() {
+  const marks = db().settings._chatGelezen || {};
+  const vloer = Date.now() - 7 * 24 * 3600000;
+  const vanaf = (sleutel) => Math.max(new Date(marks[sleutel] || 0).getTime() || 0, vloer);
+  const perNummer = new Map();
+  const perMail = new Map();
+  for (const c of db().customers || []) {
+    const p = matchPhone(c.phone || '');
+    if (p.length >= 6 && !perNummer.has(p)) perNummer.set(p, c.id);
+    const e = String(c.email || '').toLowerCase();
+    if (e && !perMail.has(e)) perMail.set(e, c.id);
+  }
+  const SYSTEEMRUIS = /^\s*\[?(e2e_notification|ciphertext|protocol|revoked|gp2|notification_template|call_log)\b/i;
+  const echtNummer = (p) => { const d = String(p).replace(/\D/g, ''); return d.length >= 6 && d.length <= 13; };
+  const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+  const teller = new Map(); // chat-id -> aantal ongelezen
+  for (const m of db().messages || []) {
+    if (m.skipped || m.bounce || !m.body) continue;
+    const t = new Date(m.receivedAt || 0).getTime();
+    if (!t || t <= vloer) continue; // ouder dan de vloer telt sowieso nooit mee
+    let chatId = '';
+    if (m.channel === 'whatsapp' && !m.group) {
+      if (SYSTEEMRUIS.test(m.body)) continue;
+      const p = matchPhone(m.fromPhone || senderPhoneFromText(m.body));
+      if (!echtNummer(p)) continue;
+      chatId = perNummer.get(p) || `tel:${p}`;
+    } else if (m.channel === 'email') {
+      const em = ((String(m.sender || '').match(EMAIL_RE) || [''])[0]).toLowerCase();
+      chatId = (em && perMail.get(em)) || '';
+    }
+    if (!chatId || t <= vanaf(chatId)) continue;
+    teller.set(chatId, (teller.get(chatId) || 0) + 1);
+  }
+  return teller;
+}
 
 // ---------- BERICHTEN-SCHERM (7 aug 2026): alle gesprekken op één plek ----------
 // Eén overzicht van alle klantgesprekken (WhatsApp + e-mail), met versturen vanuit het
@@ -453,24 +500,26 @@ app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
     else if (echtNummer(matchPhone(ob.phone || ''))) bumpOnbekend(matchPhone(ob.phone), '', ob.createdAt, ob.text, true);
   }
   const uit = [];
+  // Ongelezen per gesprek op leesmarkering (15 aug) — dekt óók klanten zonder open
+  // kaart en onbekende nummers; order.unreadReplies blijft alleen de bord-badge doen.
+  const ongelezen = telOngelezenChats();
   for (const [cid, v] of perKlant) {
     const c = db().customers.find((x) => x.id === cid);
     if (!c) continue;
     const open = (db().orders || [])
       .filter((o) => o.customerId === cid && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
       .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
-    const unread = (db().orders || []).filter((o) => o.customerId === cid).reduce((s, o) => s + (o.unreadReplies || 0), 0);
     uit.push({
       id: cid, name: c.name || 'Onbekende klant', phone: c.phone || '',
       lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
-      unread, orderId: open ? open.id : null, orderTitle: open ? (open.title || '') : '',
+      unread: ongelezen.get(cid) || 0, orderId: open ? open.id : null, orderTitle: open ? (open.title || '') : '',
     });
   }
   for (const [p, v] of onbekend) {
     uit.push({
       id: `tel:${p}`, name: v.naam || `Onbekend nummer ${p}`, phone: p,
       lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
-      unread: 0, orderId: null, orderTitle: '', nieuw: true,
+      unread: ongelezen.get(`tel:${p}`) || 0, orderId: null, orderTitle: '', nieuw: true,
     });
   }
   uit.sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
@@ -554,14 +603,26 @@ app.post('/api/chats/:id/send', requireRole('admin', 'assistent'), (req, res) =>
   res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused, orderId: open ? open.id : null });
 });
 
-// Gesprek gelezen: haalt de "nieuw bericht"-tellers van de kaarten van deze klant weg.
+// Gesprek gelezen: zet de leesmarkering van dít gesprek (customerId of "tel:<nummer>")
+// en haalt de "nieuw bericht"-tellers van de kaarten van deze klant weg. saveSoon (niet
+// quiet): de badge moet óók bij collega's direct verdwijnen; de anti-knipper-guards
+// zorgen dat schermen zonder échte wijziging niet hertekenen.
 app.post('/api/chats/:id/read', requireRole('admin', 'assistent'), (req, res) => {
+  const chatId = String(req.params.id || '');
+  db().settings._chatGelezen = db().settings._chatGelezen || {};
+  db().settings._chatGelezen[chatId] = now();
+  // Markeringen van oude gesprekken opruimen zodat het object nooit ongeremd groeit.
+  const marks = db().settings._chatGelezen;
+  const sleutels = Object.keys(marks);
+  if (sleutels.length > 400) {
+    for (const s of sleutels.sort((a, b) => String(marks[a]).localeCompare(String(marks[b]))).slice(0, sleutels.length - 400)) delete marks[s];
+  }
   let n = 0;
   for (const o of db().orders || []) {
-    if (o.customerId !== req.params.id) continue;
+    if (o.customerId !== chatId) continue;
     if (o.unreadReplies || o.customerReplied) { o.unreadReplies = 0; o.customerReplied = false; n++; }
   }
-  if (n) saveSoonQuiet(); // huishoudelijk: geen verversing van andere schermen forceren
+  saveSoon();
   res.json({ ok: true, cleared: n });
 });
 
@@ -2374,11 +2435,18 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
   try {
     for (const st of parseCloudStatuses(req.body)) {
       if (!st.id) continue;
-      const item = (db().outbox || []).find((o) => o.cloudMsgId === st.id);
+      // Matchen op ALLE bericht-id's van het item (15 aug): een item met bijlagen
+      // levert per bijlage een eigen wamid op; wie alleen het tekst-id bewaarde zag
+      // de status van de factuur-PDF nooit — "afgeleverd ✓" terwijl de PDF faalde.
+      const item = (db().outbox || []).find((o) => o.cloudMsgId === st.id || (o.cloudMsgIds || []).includes(st.id));
       if (!item) continue;
       if (st.status === 'delivered' || st.status === 'read') {
-        item.lastResult = 'afgeleverd bij de klant ✓';
-        saveSoonQuiet();
+        // "gelezen" nooit terugzetten naar "afgeleverd" (statussen komen soms door elkaar).
+        if (st.status === 'read') item.lastResult = 'gelezen door de klant ✓✓';
+        else if (!/gelezen/.test(item.lastResult || '')) item.lastResult = 'afgeleverd bij de klant ✓';
+        // saveSoon (niet quiet): het blauwe vinkje moet in een openstaand Berichten-
+        // scherm live verschijnen; de pulse ziet alleen échte versiewijzigingen.
+        saveSoon();
       } else if (st.status === 'failed') {
         const buitenVenster = st.code === 131047;
         const sjabloon = String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht').trim();
@@ -2389,6 +2457,7 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
           // Ná de respons versturen (Meta wil snel een 200 terug).
           sjabloonMetReserve(item, platteTekst).then(() => {
             item.status = 'sent';
+            item.doneAt = now();
             void db().outbox; saveSoon();
           }).catch((e2) => {
             item.status = 'failed';
@@ -2398,9 +2467,24 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
           });
           saveSoon();
         } else {
-          item.status = 'failed';
-          item.doneAt = now();
-          item.lastResult = `niet bezorgd: ${st.detail || (st.code ? `Meta-code ${st.code}` : 'onbekende reden')}`;
+          // ASYNCHRONE WEIGERING (15 aug): de belofte "weigert Meta, dan verstuurt de
+          // bridge het alsnog" gold alleen voor synchrone fouten — een weigering die
+          // pas via deze webhook binnenkwam werd stil definitief. Nu: staat de bridge
+          // nog open voor klant-DM's (bridgeGroupsOnly uit) en is het bericht jonger
+          // dan 24 uur, dan terug in de wachtrij; cloudTried staat al, dus alleen de
+          // bridge pakt hem op. Anders eerlijk mislukt.
+          const jong = Date.now() - new Date(item.createdAt || 0).getTime() < 24 * 3600000;
+          const reden = st.detail || (st.code ? `Meta-code ${st.code}` : 'onbekende reden');
+          if (!db().settings.bridgeGroupsOnly && jong && (!item.group || item.group === '__klant_dm__') && String(item.phone || '').replace(/\D/g, '').length >= 6) {
+            item.status = 'queued';
+            delete item.doneAt;
+            delete item.nextTryAt;
+            item.lastResult = `Meta weigerde (${reden}) — de bridge probeert het alsnog`;
+          } else {
+            item.status = 'failed';
+            item.doneAt = now();
+            item.lastResult = `niet bezorgd: ${reden}`;
+          }
           saveSoon();
         }
       }
@@ -3104,12 +3188,14 @@ async function sjabloonMetReserve(it, tekst) {
   try {
     const r = await sendCloudTemplate(it.phone, naam, [tekst], 'nl');
     it.cloudMsgId = r?.messages?.[0]?.id || it.cloudMsgId;
+    if (it.cloudMsgId) it.cloudMsgIds = [...new Set([...(it.cloudMsgIds || []), it.cloudMsgId])];
     it.lastResult = 'verzonden als sjabloon — wacht op bezorgbevestiging';
     return true;
   } catch (e) {
     if (e.metaCode !== 132000) throw e;
     const r2 = await sendCloudTemplate(it.phone, naam, [], 'nl');
     it.cloudMsgId = r2?.messages?.[0]?.id || it.cloudMsgId;
+    if (it.cloudMsgId) it.cloudMsgIds = [...new Set([...(it.cloudMsgIds || []), it.cloudMsgId])];
     it.lastResult = `verzonden met de VASTE sjabloontekst — je eigen tekst kon niet mee omdat het sjabloon "${naam}" geen invulveld {{1}} heeft. Zet {{1}} in het sjabloon bij Meta om je eigen tekst mee te sturen.`;
     return true;
   }
@@ -3172,23 +3258,32 @@ async function runCloudOutbox() {
         it.doneAt = now();
         continue;
       }
-      let antwoordMeta = null;
-      if (it.text) antwoordMeta = await sendCloudText(it.phone, it.text);
+      // ALLE bericht-id's bewaren (15 aug): tekst én elke bijlage krijgen bij Meta een
+      // eigen wamid. De statuswebhook matcht op al die id's — anders zag je "afgeleverd
+      // ✓" op de tekst terwijl de factuur-PDF stilletjes faalde, en kreeg een item
+      // zonder tekst (alleen media) nooit ook maar één status.
+      const ids = [];
+      if (it.text) {
+        const antwoordMeta = await sendCloudText(it.phone, it.text);
+        const mid = antwoordMeta?.messages?.[0]?.id;
+        if (mid) ids.push(mid);
+      }
       for (const m of (it.media || []).slice(0, 6)) {
         const bestand = mediaBestand(m);
         if (!bestand) continue;
         // Ondertekende link (geen ingest-token in de URL): geldig voor precies dit bestand.
         const url = `${CLOUD_UIT_ADRES()}/uploads/${bestand}?sig=${uploadSig(bestand)}`;
         const isFoto = /^image\//i.test(m.mime || '');
-        await sendCloudMedia(it.phone, {
+        const mediaMeta = await sendCloudMedia(it.phone, {
           url, filename: m.filename || m.name || 'bestand.pdf', soort: isFoto ? 'image' : 'document',
         });
+        const mid = mediaMeta?.messages?.[0]?.id;
+        if (mid) ids.push(mid);
       }
       it.status = 'sent';
       it.doneAt = now();
-      // Het bericht-id van Meta bewaren: daarmee koppelen we straks de status-update
-      // (bezorgd/mislukt) uit de webhook aan precies dit wachtrij-item.
-      it.cloudMsgId = antwoordMeta?.messages?.[0]?.id || it.cloudMsgId;
+      it.cloudMsgId = ids[0] || it.cloudMsgId;
+      it.cloudMsgIds = [...new Set([...(it.cloudMsgIds || []), ...ids])];
       it.lastResult = 'aangenomen door Meta — wacht op bezorgbevestiging';
     } catch (e) {
       // BUITEN HET 24-UURSVENSTER (Meta-code 131047): een vrij bericht mag dan niet,
@@ -3213,6 +3308,7 @@ async function runCloudOutbox() {
           it.status = 'sent';
           it.doneAt = now();
           it.cloudMsgId = sjabloonAntwoord?.messages?.[0]?.id || it.cloudMsgId;
+          if (it.cloudMsgId) it.cloudMsgIds = [...new Set([...(it.cloudMsgIds || []), it.cloudMsgId])];
           it.lastResult = 'verzonden als sjabloon (klant zat buiten het 24-uursvenster) — wacht op bezorgbevestiging';
           continue;
         } catch (e2) {
@@ -3228,6 +3324,46 @@ async function runCloudOutbox() {
     }
   }
   if (items.length) { void db().outbox; saveSoon(); } // lijst aanraken: awaits kunnen de dirty-markering hebben gewist
+}
+
+// ONDERHOUDSRONDE op de wachtrij (15 aug 2026, audit). Drie gaten gedicht:
+// 1. De 24-uursvervaltermijn voor klant-DM's leefde alleen ín GET /api/outbox en in
+//    runCloudOutbox. Bridge offline + officiële route uit (of item al cloudTried) =
+//    niemand raakt het item aan → het hing eeuwig op "wachtrij". Nu vervalt het ook
+//    dan gewoon na 24 uur.
+// 2. Een klant-DM ZONDER geldig nummer (klantrecord zonder 06) kon nooit verstuurd
+//    worden maar bleef wel eeuwig staan — en het dubbelfilter zag hem niet.
+// 3. Items die "wachten op bezorgbevestiging" terwijl de webhook die bevestiging
+//    nooit heeft gestuurd (alles van vóór het abonnement-herstel) bleven eeuwig
+//    "onderweg…" in het scherm. Na 6 uur wordt dat een eerlijk "geen bevestiging".
+function outboxOnderhoud() {
+  try {
+    let statusGewijzigd = 0; let verouderd = 0;
+    for (const it of db().outbox || []) {
+      if (it.status === 'queued' && (!it.group || it.group === '__klant_dm__')) {
+        const ouderdom = Date.now() - new Date(it.createdAt || 0).getTime();
+        if (ouderdom > 24 * 3600000) {
+          it.status = 'failed';
+          it.doneAt = now();
+          it.lastResult = 'verlopen — stond langer dan 24 uur in de wachtrij, niet alsnog verstuurd';
+          statusGewijzigd++;
+        } else if (String(it.phone || '').replace(/\D/g, '').length < 6) {
+          it.status = 'failed';
+          it.doneAt = now();
+          it.lastResult = 'geen geldig telefoonnummer bij dit bericht — vul een 06-nummer in bij de klant en verstuur opnieuw';
+          statusGewijzigd++;
+        }
+      } else if (it.status === 'sent' && /wacht op bezorgbevestiging/.test(it.lastResult || '')) {
+        const sinds = Date.now() - new Date(it.doneAt || it.createdAt || 0).getTime();
+        if (sinds > 6 * 3600000) {
+          it.lastResult = 'verstuurd — geen bezorgbevestiging ontvangen';
+          verouderd++;
+        }
+      }
+    }
+    if (statusGewijzigd) { void db().outbox; saveSoon(); }
+    else if (verouderd) { void db().outbox; saveSoonQuiet(); } // alleen tekst: stil bewaren
+  } catch (e) { console.error('[outbox-onderhoud]', e.message); }
 }
 
 // Eenmalig bij het opstarten: recente MISLUKTE groeps-berichten (monteur-dispatch,
@@ -4381,20 +4517,43 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     // vanaf ELK scherm dat er een klant zit te wachten, ook als het appje (terecht) geen
     // lead werd. Alleen zinvol voor wie het scherm mag zien.
     newChats: ['admin', 'assistent'].includes(req.user.role) ? nieuweChats() : 0,
+    // Aantal GESPREKKEN met ongelezen berichten (15 aug): dit is wat de badge op het
+    // menu-item toont — zelfde bron als de groene tellers in de lijst, dus nooit meer
+    // een badge die knippert tussen twee verschillende betekenissen.
+    chatsOngelezen: ['admin', 'assistent'].includes(req.user.role) ? chatsOngelezenTeller() : 0,
   });
 });
 
+// Gememoriseerd per wijzigingsversie: de pulse wordt elke 5 s door elk scherm
+// aangeroepen; de telling zelf hoeft alleen opnieuw als er écht iets veranderde.
+let _chatsOngelezenCache = { v: -1, n: 0 };
+function chatsOngelezenTeller() {
+  const v = changeVersion();
+  if (_chatsOngelezenCache.v !== v) {
+    let n = 0;
+    try { n = telOngelezenChats().size; } catch { n = 0; }
+    _chatsOngelezenCache = { v, n };
+  }
+  return _chatsOngelezenCache.n;
+}
+
 // Aantal binnengekomen 1-op-1 WhatsApp-berichten sinds het Berichten-scherm voor het
 // laatst is geopend (gedeelde markering; het team werkt uit dezelfde inbox).
+// Zelfde ruisfilters als de gesprekkenlijst (15 aug): een systeemmelding of een
+// LID-nummer van 17 cijfers gaf eerst een badge waar in de lijst niets bij te zien was.
 function nieuweChats() {
   const sinds = db().settings._chatsGezienOp || '';
   if (!sinds) return 0; // nog nooit geopend -> niet ALLE oude appjes als "nieuw" tellen
+  const SYSTEEMRUIS = /^\s*\[?(e2e_notification|ciphertext|protocol|revoked|gp2|notification_template|call_log)\b/i;
+  const echtNummer = (p) => { const d = String(p).replace(/\D/g, ''); return d.length >= 6 && d.length <= 13; };
   let n = 0;
   const msgs = db().messages || [];
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
     if (String(m.receivedAt || '').localeCompare(sinds) <= 0) break; // chronologisch: klaar
-    if (m.channel !== 'whatsapp' || m.group || m.skipped) continue;
+    if (m.channel !== 'whatsapp' || m.group || m.skipped || !m.body) continue;
+    if (SYSTEEMRUIS.test(m.body)) continue;
+    if (!echtNummer(matchPhone(m.fromPhone || senderPhoneFromText(m.body)))) continue;
     n++;
   }
   return n;
@@ -5035,6 +5194,9 @@ app.listen(PORT, () => {
   startAutomations({ runStatusScan: runStatusScanJob });
   // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.
   setInterval(() => { runCloudOutbox().catch((e) => console.error('[wa-cloud]', e.message)); }, 20 * 1000);
+  // Wachtrij-onderhoud: vervallen, ongeldig nummer, verouderde "wacht op bevestiging".
+  outboxOnderhoud();
+  setInterval(outboxOnderhoud, 5 * 60 * 1000);
   // Zelftest bij het opstarten: controleert token/nummer én repareert automatisch het
   // ontvangst-abonnement (subscribed_apps) — dan hoeft niemand daarvoor op een knop te
   // drukken en herstelt elke deploy de koppeling vanzelf.

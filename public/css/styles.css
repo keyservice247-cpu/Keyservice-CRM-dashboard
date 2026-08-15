@@ -977,6 +977,8 @@ table tbody tr:hover { background: var(--panel-2); }
 .chat-pane .wa-blue { color: #53bdeb; }
 .chat-pane .wa-fail { color: #e02b2b; font-weight: 700; letter-spacing: 0; }
 .chat-pane .chat-meta { font-size: 11.5px; margin-bottom: 2px; opacity: .85; }
+/* Reden van een mislukte verzending: zichtbaar ónder de bubbel (hover bestaat niet op mobiel). */
+.chat-pane .wa-foutregel { color: var(--danger); opacity: 1; margin-top: 2px; max-width: 78%; margin-left: auto; justify-content: flex-end; text-align: right; }
 .chat-pane .cp-head { background: var(--panel); }
 .cp-avatar {
   width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;

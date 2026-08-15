@@ -264,11 +264,13 @@ async function startLiveUpdates() {
       const badge = $('#inboxBadge');
       if (badge) { badge.textContent = p.pendingReviews; badge.hidden = p.pendingReviews === 0; }
       const bn = $('#bnInboxBadge'); if (bn) { bn.textContent = p.pendingReviews; bn.hidden = p.pendingReviews === 0; }
-      // Nieuwe klantappjes: teller bij "Berichten", ook als je op een ander scherm zit.
+      // Berichten-badge = aantal GESPREKKEN met ongelezen berichten (zelfde bron als de
+      // groene tellers in de lijst; voorheen streden twee tellers met elkaar om dit vak).
+      const ong = p.chatsOngelezen ?? p.newChats ?? 0;
       const cb = $('#chatBadge');
-      if (cb) { cb.textContent = p.newChats || 0; cb.hidden = !p.newChats; }
+      if (cb) { cb.textContent = ong; cb.hidden = !ong; }
       const bnc = $('#bnChatBadge');
-      if (bnc) { bnc.textContent = p.newChats || 0; bnc.hidden = !p.newChats; }
+      if (bnc) { bnc.textContent = ong; bnc.hidden = !ong; }
       // Mailbox bijna vol? Rood lampje in de zijbalk (verdwijnt vanzelf na opruimen).
       const mw = $('#mailboxWarn');
       if (mw) {
@@ -299,6 +301,8 @@ async function refreshWaStatus() {
   if (!el) return;
   try {
     const s = await api('/api/whatsapp/status');
+    // Gedeeld met o.a. de verbindingstest-tabel: is de bridge levend of niet.
+    window._waBridgeOnline = s.configured ? !!s.online : null;
     if (!s.configured) { el.hidden = true; return; } // nooit gekoppeld: niks tonen
     el.hidden = false;
     if (s.online) {
@@ -372,18 +376,17 @@ async function loadChats(fromPulse) {
     const p = $('#chatPane'); if (p) { p.innerHTML = '<div class="cp-empty muted">Kies een gesprek</div>'; delete p.dataset.chat; }
   }
   $('#chatsLayout')?.classList.toggle('active-chat', !!_chatActive);
-  if (!fromPulse) {
-    api('/api/chats/seen', 'POST').catch(() => {});
-    const cb = $('#chatBadge'); if (cb) { cb.textContent = '0'; cb.hidden = true; }
-    const bnc = $('#bnChatBadge'); if (bnc) { bnc.textContent = '0'; bnc.hidden = true; }
-  }
+  if (!fromPulse) api('/api/chats/seen', 'POST').catch(() => {});
   let list;
   try { list = await api('/api/chats'); } catch { return; }
   if (!Array.isArray(list)) return;
   _chatList = list;
-  const totaalOngelezen = list.reduce((s, c) => s + (c.unread || 0), 0);
+  // Zelfde betekenis als de pulse-badge: aantal gesprekken met iets ongelezens.
+  const ongelezenChats = list.filter((c) => c.unread > 0).length;
   const badge = $('#chatBadge');
-  if (badge) { badge.textContent = totaalOngelezen; badge.hidden = totaalOngelezen === 0; }
+  if (badge) { badge.textContent = ongelezenChats; badge.hidden = ongelezenChats === 0; }
+  const bnc = $('#bnChatBadge');
+  if (bnc) { bnc.textContent = ongelezenChats; bnc.hidden = ongelezenChats === 0; }
   const listHtml = list.length ? list.map((c) => `
     <button type="button" class="chat-item ${c.id === _chatActive ? 'active' : ''}" data-cid="${esc(c.id)}">
       <div class="ci-top"><span class="ci-name">${esc(c.name)}</span><span class="muted small">${c.lastAt ? fmtDate(c.lastAt) : ''}</span></div>
@@ -406,7 +409,9 @@ async function openChat(cid) {
   _lastChatMsgsHtml = '';
   $('#chatsLayout')?.classList.add('active-chat');
   $$('.chat-item').forEach((b) => b.classList.toggle('active', b.dataset.cid === cid));
-  if (!cid.startsWith('tel:')) api(`/api/chats/${cid}/read`, 'POST').catch(() => {});
+  // Ook tel:-gesprekken hebben nu een leesmarkering (15 aug); na het lezen de lijst
+  // verversen zodat de groene teller meteen verdwijnt in plaats van bij de volgende pulse.
+  api(`/api/chats/${encodeURIComponent(cid)}/read`, 'POST').then(() => loadChats(true)).catch(() => {});
   renderChatPane(true);
 }
 function sluitChat() {
@@ -435,10 +440,14 @@ async function renderChatPane(scrollDown) {
     if (!t.outgoing) return '';
     if (t.waStatus === 'failed') return '<span class="wa-tick wa-fail" title="Niet bezorgd">!</span>';
     if (t.waStatus === 'queued') return '<span class="wa-tick" title="Staat klaar voor verzending">◷</span>';
-    if (/afgeleverd/i.test(t.waResult || '')) return '<span class="wa-tick wa-blue" title="Afgeleverd bij de klant">✓✓</span>';
+    if (/afgeleverd|gelezen/i.test(t.waResult || '')) return '<span class="wa-tick wa-blue" title="Afgeleverd bij de klant">✓✓</span>';
     if (t.waStatus === 'sent') return '<span class="wa-tick" title="Verstuurd">✓</span>';
     return '';
   };
+  // Mislukt? De reden hoort ZICHTBAAR onder de bubbel — niet alleen in een
+  // hover-tekst die op de telefoon niet bestaat.
+  const foutregel = (t) => (t.outgoing && t.waStatus === 'failed' && t.waResult)
+    ? `<div class="chat-meta wa-foutregel">${esc(String(t.waResult).slice(0, 160))}</div>` : '';
   const klok = (at) => { const d = new Date(at || 0); return isNaN(d) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const msgsHtml = msgs.length ? msgs.map((t) => {
     const q = splitQuoted(t.body || '');
@@ -447,7 +456,7 @@ async function renderChatPane(scrollDown) {
     const label = t.orderTitle ? `<div class="chat-meta"><a href="#" class="cp-orderlink" data-oid="${esc(t.orderId)}">${icon('tag', 11)} ${esc(t.orderTitle.slice(0, 44))}</a></div>` : '';
     const kanaal = (!uit && t.channel === 'email') ? `<div class="chat-meta">${sourceIcon('email')} via e-mail</div>` : '';
     const bubble = `<div class="chat-bubble" title="${esc((t.sender || '') + (t.waResult ? ' — ' + t.waResult : ''))}">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}<span class="wa-meta">${klok(t.at)} ${tikjes(t)}</span></div>`;
-    return `<div class="chat-msg ${uit ? 'out' : 'in'}">${label}${kanaal}${bubble}</div>`;
+    return `<div class="chat-msg ${uit ? 'out' : 'in'}">${label}${kanaal}${bubble}${foutregel(t)}</div>`;
   }).join('') : '<div class="muted small" style="padding:14px">Nog geen berichten met deze klant.</div>';
 
   const bindMsgs = () => {
@@ -3846,11 +3855,17 @@ async function loadSettings() {
       if (i.status === 'failed') return '<span class="inv-st verlopen">MISLUKT</span>';
       if (i.status !== 'sent') return esc(i.status);
       const r = String(i.lastResult || '');
+      if (/gelezen/i.test(r)) return '<span class="inv-st betaald">gelezen ✓✓</span>';
       if (/afgeleverd/i.test(r)) return '<span class="inv-st betaald">afgeleverd ✓</span>';
+      if (/geen bezorgbevestiging/i.test(r)) return '<span class="inv-st verzonden" title="Meta nam hem aan maar heeft de bezorging nooit bevestigd">verstuurd (onbevestigd)</span>';
       if (/wacht op bezorgbevestiging|aangenomen/i.test(r)) return '<span class="inv-st verzonden" title="Meta heeft hem aangenomen; bezorging nog niet bevestigd">onderweg…</span>';
       return '<span class="inv-st betaald">verstuurd ✓</span>';
     };
-    $('#wt-status').innerHTML = items.length ? `<table><thead><tr><th>Tijd</th><th>Naar</th><th>Status</th><th>Door</th></tr></thead><tbody>${items.map((i) => `<tr><td class="muted small">${esc(fmtDate(i.createdAt))}</td><td>${esc(i.to)}</td><td>${chip(i)}${i.lastResult ? `<div class="muted small">${esc(i.lastResult)}</div>` : ''}</td><td class="muted small">${esc(i.by)}</td></tr>`).join('')}</tbody></table>` : '<span class="muted small">Nog geen berichten in de wachtrij.</span>';
+    // Ligt de bridge stil terwijl er wachtrij-items zijn? Zeg dat er dan gewoon bij —
+    // een neutrale "wachtrij"-chip wekt anders de indruk dat het vanzelf goedkomt.
+    const bridgeStil = window._waBridgeOnline === false && items.some((i) => i.status === 'queued');
+    const stilBalk = bridgeStil ? '<div class="muted small" style="color:var(--danger);margin-bottom:6px">De bridge (wegwerpnummer) ligt stil — wachtrij-items voor groepen versturen nu niet. Koppel de bridge op de VPS opnieuw.</div>' : '';
+    $('#wt-status').innerHTML = stilBalk + (items.length ? `<table><thead><tr><th>Tijd</th><th>Naar</th><th>Status</th><th>Door</th></tr></thead><tbody>${items.map((i) => `<tr><td class="muted small">${esc(fmtDate(i.createdAt))}</td><td>${esc(i.to)}</td><td>${chip(i)}${i.lastResult ? `<div class="muted small">${esc(i.lastResult)}</div>` : ''}</td><td class="muted small">${esc(i.by)}</td></tr>`).join('')}</tbody></table>` : '<span class="muted small">Nog geen berichten in de wachtrij.</span>');
   };
 
   // --- Groep-koppelingen (id -> naam) ---

@@ -201,6 +201,32 @@ const wachtrijBev = (await api('GET', '/api/whatsapp/outbox-status?full=1')).jso
 ok('klant mét e-mailadres krijgt TOCH een WhatsApp-bevestiging in de wachtrij',
   wachtrijBev.some((o) => (o.text || '').includes('Bevestiging appje')), JSON.stringify(wachtrijBev.map((o) => o.text).slice(0, 5)));
 
+console.log('\n== Ongelezen ZONDER open kaart + tel:-gesprek (15 aug) ==');
+// Het gemelde geval: klant met alleen AFGERONDE kaarten appt → moet gewoon een groene
+// teller geven (leunde eerst op order.unreadReplies en bleef dus 0). En een onbekend
+// nummer (tel:-gesprek) had een hardcoded 0 — ook dat telt nu echt.
+await api('PATCH', `/api/orders/${gesprek.orderId}`, { status: 'afgerond' });
+await api('POST', `/api/chats/${gesprek.id}/read`, {}); // schone start voor deze klant
+await api('POST', '/api/ingest/whatsapp', {
+  name: 'Chat Klant', body: 'Kunt u nog een reservesleutel bijmaken?\nTelefoon: +31655512399', externalId: 'chat-naklus-1',
+}, true);
+const chatsNa = await api('GET', '/api/chats');
+const gNa = (chatsNa.json || []).find((c) => c.id === gesprek.id);
+ok('appje ná afgeronde kaart telt als ongelezen', (gNa?.unread || 0) >= 1, JSON.stringify(gNa?.unread));
+const pulsNa = await api('GET', '/api/pulse');
+ok('pulse telt gesprekken met ongelezen (menubadge)', (pulsNa.json?.chatsOngelezen || 0) >= 1, JSON.stringify(pulsNa.json?.chatsOngelezen));
+await api('POST', `/api/chats/${gesprek.id}/read`, {});
+const chatsNa2 = await api('GET', '/api/chats');
+ok('na lezen: teller weer op nul', ((chatsNa2.json || []).find((c) => c.id === gesprek.id)?.unread || 0) === 0);
+// tel:-gesprek (Piet Onbekend, eerder in deze test binnengekomen): teller + lezen.
+const chatsT = await api('GET', '/api/chats');
+const telChat = (chatsT.json || []).find((c) => String(c.id).startsWith('tel:') && (c.phone || '').includes('688877766'));
+ok('tel:-gesprek heeft een échte ongelezen-teller', (telChat?.unread || 0) >= 1, JSON.stringify(telChat));
+const leesT = await api('POST', `/api/chats/${encodeURIComponent(telChat.id)}/read`, {});
+ok('tel:-gesprek lezen lukt', leesT.status === 200, JSON.stringify(leesT.json));
+const chatsT2 = await api('GET', '/api/chats');
+ok('tel:-teller na lezen op nul', ((chatsT2.json || []).find((c) => c.id === telChat.id)?.unread || 0) === 0);
+
 console.log('\n== Rechten: monteur komt er niet in ==');
 // Vers monteur-account aanmaken en daarmee proberen.
 await api('POST', '/api/users', { name: 'Monteur Test', email: 'monteurtest@keyservice.nl', password: 'monteur123', role: 'monteur' });
