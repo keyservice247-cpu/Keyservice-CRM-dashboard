@@ -468,7 +468,24 @@ terugknop; scherm begint op mobiel ALTIJD met de lijst. Techniek:
   — symptoom: Meta's test-webhook komt aan maar echte berichten niet.
   sjabloonMetReserve: fout 132000 (sjabloon zonder {{1}}) → nogmaals zonder invulling
   + eerlijke uitleg in lastResult.
-- Tests: test/chat-test.mjs (40 assertions, PORT=3127) + browser-assertions
+- **Ongelezen-tellers + statusflow (15 aug, audit):** ongelezen per gesprek via
+  leesmarkering `settings._chatGelezen` (customerId of "tel:<nr>", gezet door
+  POST /api/chats/:id/read; telOngelezenChats telt binnengekomen berichten ná de
+  markering, vloer 7 dagen) — dekt óók klant zonder open kaart en tel:-gesprekken
+  (order.unreadReplies doet alléén nog de bord-badge). Menubadge = pulse
+  `chatsOngelezen` (gememoiseerd per changeVersion) = zelfde getal als de lijst.
+  Cloud-status: ALLE wamids per outbox-item bewaard (cloudMsgIds — bijlage-status
+  matcht nu; item zonder tekst krijgt ook een id), "gelezen ✓✓" apart van
+  "afgeleverd ✓" (nooit terug omlaag), delivered/read via saveSoon (blauw vinkje
+  live), asynchrone Meta-weigering → terug in de wachtrij voor de bridge (alleen
+  als bridgeGroupsOnly UIT, jonger dan 24u), foutreden zichtbaar ónder de bubbel
+  (.wa-foutregel). outboxOnderhoud (5 min): klant-DM's >24u vervallen ook mét
+  stilliggende bridge, DM zonder geldig nummer → eerlijk failed, sent-items >6u
+  zonder bevestiging → "verstuurd — geen bezorgbevestiging ontvangen" (chip
+  "verstuurd (onbevestigd)"). Verbindingstest-tabel waarschuwt als de bridge stil
+  ligt (window._waBridgeOnline). Historie-dedup sleutelt nu óók op dag — identiek
+  bericht van maanden later verdwijnt niet meer uit het gesprek.
+- Tests: test/chat-test.mjs (49 assertions, PORT=3127) + browser-assertions
   (desktop + iPhone-formaat, echt versturen, live-update mét getypte tekst).
 
 ## SNELHEIDSREM OP DE UITGAANDE WACHTRIJ (6 aug 2026) — NIET verzwakken
