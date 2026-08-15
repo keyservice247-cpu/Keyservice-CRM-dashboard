@@ -10,6 +10,9 @@
 //   WHATSAPP_CLOUD_TOKEN     permanent access token van de Meta-app
 //   WHATSAPP_PHONE_ID        het "Phone number ID" van het geregistreerde nummer
 //   WHATSAPP_APP_SECRET      app secret — nodig om binnenkomende webhooks te controleren
+//   WHATSAPP_WABA_ID         (optioneel) het "WhatsApp Business Account ID" — zet de
+//                            zelftest-reparatie van het ontvangst-abonnement op zeker,
+//                            zonder afhankelijk te zijn van Meta's token-detectie
 //
 // BELANGRIJK VOOR DE KOSTEN EN DE REGELS: binnen 24 uur na een bericht van de klant mag
 // je vrij terugschrijven (gratis). Daarbuiten moet het een vooraf goedgekeurd SJABLOON
@@ -173,18 +176,35 @@ export async function cloudSelftest() {
     // token zelf (debug_token), daarna koppelen we de app aan elk account.
     try {
       const kop = { authorization: `Bearer ${process.env.WHATSAPP_CLOUD_TOKEN}` };
-      const dbg = await fetch(`${API}/debug_token?input_token=${encodeURIComponent(process.env.WHATSAPP_CLOUD_TOKEN)}`, { headers: kop })
-        .then((r) => r.json()).catch(() => null);
       const wabas = new Set();
-      for (const gs of dbg?.data?.granular_scopes || []) {
-        if (/whatsapp_business/.test(gs.scope || '')) (gs.target_ids || []).forEach((x) => wabas.add(String(x)));
+      // EERSTE WEG (15 aug, deterministisch): staat WHATSAPP_WABA_ID in Render, dan is
+      // dát het account — geen detectie nodig. De waarde staat letterlijk op
+      // developers.facebook.com → app → WhatsApp → API-instelling, direct onder het
+      // Phone number ID ("WhatsApp Business Account ID"). Toevoegen na dagen
+      // token-gepuzzel: Meta's eigen detectiewegen hieronder blijken per
+      // account-opzet wisselend leeg te zijn.
+      if (process.env.WHATSAPP_WABA_ID) wabas.add(String(process.env.WHATSAPP_WABA_ID).trim());
+      // TWEEDE WEG: WABA-id's uit het token zelf. debug_token wil eigenlijk een
+      // APP-token als afzender; die bouwen we uit het app-id (op te vragen met het
+      // gewone token) + het app secret. Lukt dat niet, dan met het gewone token.
+      let dbg = null;
+      if (!wabas.size) {
+        const app = await fetch(`${API}/app?fields=id`, { headers: kop }).then((r) => r.json()).catch(() => null);
+        const dbgKop = (app?.id && process.env.WHATSAPP_APP_SECRET)
+          ? { authorization: `Bearer ${app.id}|${process.env.WHATSAPP_APP_SECRET}` } : kop;
+        dbg = await fetch(`${API}/debug_token?input_token=${encodeURIComponent(process.env.WHATSAPP_CLOUD_TOKEN)}`, { headers: dbgKop })
+          .then((r) => r.json()).catch(() => null);
+        for (const gs of dbg?.data?.granular_scopes || []) {
+          if (/whatsapp_business/.test(gs.scope || '')) (gs.target_ids || []).forEach((x) => wabas.add(String(x)));
+        }
       }
-      // TWEEDE WEG (12 aug): een beheerder-systeemgebruiker met portfolio-brede rechten
+      // DERDE WEG (12 aug): een beheerder-systeemgebruiker met portfolio-brede rechten
       // heeft vaak GEEN target_ids in het token (rechten gelden dan op alles). Dan
       // vragen we de portfolio's van de gebruiker op en per portfolio de WhatsApp-
       // accounts — zo vinden we het account alsnog, zonder nieuw token.
+      let bizzen = null;
       if (!wabas.size) {
-        const bizzen = await fetch(`${API}/me/businesses?limit=10`, { headers: kop }).then((r) => r.json()).catch(() => null);
+        bizzen = await fetch(`${API}/me/businesses?limit=10`, { headers: kop }).then((r) => r.json()).catch(() => null);
         for (const biz of bizzen?.data || []) {
           for (const rand of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
             const lijst = await fetch(`${API}/${biz.id}/${rand}?limit=10`, { headers: kop }).then((r) => r.json()).catch(() => null);
@@ -196,7 +216,11 @@ export async function cloudSelftest() {
       if (!wabas.size) {
         // Zonder account-lijst valt er niets te repareren — en dan komen echte
         // klantberichten dus nooit binnen, terwijl Meta's testknop wél werkt.
-        uit.abonnement.push({ account: '—', status: `GEEN WhatsApp-account via het token gevonden (debug_token: ${dbg?.error?.message || dbg?.data ? 'geen target_ids' : 'geen antwoord'}). Wijs in Bedrijfsinstellingen → Systeemgebruikers het WhatsApp-account met je nummer toe met "Volledige controle" en maak een NIEUW token.` });
+        // Toon de ÉCHTE antwoorden van Meta (stond hier eerst een samenvatting die
+        // de foutmelding wegdrukte door verkeerde haakjes: a || b ? c : d).
+        const dbgUitleg = dbg?.error?.message ? `fout: ${dbg.error.message}` : (dbg?.data ? 'geen target_ids' : 'geen antwoord');
+        const bizUitleg = bizzen?.error?.message ? `fout: ${bizzen.error.message}` : `${(bizzen?.data || []).length} portfolio's`;
+        uit.abonnement.push({ account: '—', status: `GEEN WhatsApp-account via het token gevonden (debug_token: ${dbgUitleg}; portfolio's: ${bizUitleg}). SIMPELSTE OPLOSSING: zet in Render de extra variabele WHATSAPP_WABA_ID — de waarde staat op developers.facebook.com → jouw app → WhatsApp → API-instelling, onder het Phone number ID ("WhatsApp-Business-account-ID").` });
       }
       for (const waba of wabas) {
         const sub = await fetch(`${API}/${waba}/subscribed_apps`, { headers: kop }).then((r) => r.json()).catch(() => null);
