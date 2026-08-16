@@ -509,7 +509,9 @@ terugknop; scherm begint op mobiel ALTIJD met de lijst. Techniek:
   db().mailUit, max 500). Ongelezen: eigen MENSELIJK antwoord telt als gelezen
   (kaart-reply/chat/mailUit; automatiseringen — afzender "Keyservice (…)" of
   autoReply-vlag — tellen bewust NIET). MONTEUR mag Berichten in: alleen klanten
-  van eigen opdrachten, geen tel:-gesprekken, en ALLEEN MEELEZEN (16 aug, besluit
+  van eigen LOPENDE opdrachten (afgerond/geannuleerd/archief → gesprek verdwijnt
+  weer uit zijn lijst; met alle kaarten erbij zag hij de halve
+  bedrijfsgeschiedenis), geen tel:-gesprekken, en ALLEEN MEELEZEN (16 aug, besluit
   eigenaar): zelf typen geeft 403 — versturen kan uitsluitend via de vaste
   kaart-knoppen (Onderweg, Factuur/Offerte, Review); zijn /read schrijft een EIGEN
   markering (settings._chatGelezenMonteur) en raakt team-badge/unreadReplies niet;

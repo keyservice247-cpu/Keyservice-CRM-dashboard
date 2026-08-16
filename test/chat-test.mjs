@@ -279,13 +279,23 @@ cookie = adminCookie;
 // eigenaar — klantcommunicatie in eigen woorden blijft bij kantoor; de monteur
 // verstuurt alleen via de vaste kaart-knoppen).
 await api('POST', '/api/users', { name: 'Monteur Gekoppeld', email: 'monteur2@keyservice.nl', password: 'monteur123', role: 'monteur', monteurId: mont.json.id });
-await api('PATCH', `/api/orders/${gesprek.orderId}`, { monteurId: mont.json.id });
+// De kaart stond eerder in de test op afgerond — voor de monteur telt alleen een
+// LOPENDE opdracht, dus eerst weer openzetten.
+await api('PATCH', `/api/orders/${gesprek.orderId}`, { monteurId: mont.json.id, status: 'nieuw' });
 cookie = '';
 await api('POST', '/api/login', { email: 'monteur2@keyservice.nl', password: 'monteur123' });
 const m2Chats = await api('GET', '/api/chats');
-ok('gekoppelde monteur ZIET het gesprek van zijn klant', (m2Chats.json || []).some((c) => c.id === gesprek.id), JSON.stringify((m2Chats.json || []).map((c) => c.id)));
+ok('gekoppelde monteur ZIET het gesprek van zijn lopende klus', (m2Chats.json || []).some((c) => c.id === gesprek.id), JSON.stringify((m2Chats.json || []).map((c) => c.id)));
 const m2Stuur = await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'eigen tekstje' });
 ok('gekoppelde monteur mag NIET zelf typen (vaste knoppen wél)', m2Stuur.status === 403 && /knoppen|kaart/i.test(m2Stuur.json?.error || ''), JSON.stringify(m2Stuur.json));
+cookie = adminCookie;
+// Klus afgerond -> het gesprek verdwijnt weer uit zijn lijst (16 aug, melding
+// eigenaar: monteur zag de halve bedrijfsgeschiedenis aan oude klussen).
+await api('PATCH', `/api/orders/${gesprek.orderId}`, { status: 'afgerond' });
+cookie = '';
+await api('POST', '/api/login', { email: 'monteur2@keyservice.nl', password: 'monteur123' });
+const m2Chats2 = await api('GET', '/api/chats');
+ok('na afronden: gesprek WEG uit de monteur-lijst', !(m2Chats2.json || []).some((c) => c.id === gesprek.id), JSON.stringify((m2Chats2.json || []).map((c) => c.id)));
 cookie = adminCookie;
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);

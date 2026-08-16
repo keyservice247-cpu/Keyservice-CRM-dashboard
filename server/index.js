@@ -625,8 +625,14 @@ app.post('/api/chats/nummer/:phone/send', requireRole('admin', 'assistent'), (re
 // admin/assistent — daar zit lead-verkeer in dat niet bij één monteur hoort.
 function monteurChatKlanten(req) {
   if (req.user.role !== 'monteur') return null; // null = alles mag
+  // ALLEEN LOPENDE opdrachten (16 aug, melding eigenaar): met álle kaarten erbij zag
+  // een monteur de gesprekshistorie van maanden aan oude klussen — de halve
+  // bedrijfsgeschiedenis. Nu telt een klant alleen mee zolang er een OPEN kaart van
+  // déze monteur is; is de klus afgerond of gearchiveerd, dan verdwijnt het gesprek
+  // vanzelf weer uit zijn lijst.
   return new Set((db().orders || [])
-    .filter((o) => o.monteurId && o.monteurId === req.user.monteurId && o.customerId)
+    .filter((o) => o.monteurId && o.monteurId === req.user.monteurId && o.customerId
+      && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
     .map((o) => o.customerId));
 }
 
