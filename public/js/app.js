@@ -1257,12 +1257,22 @@ function splitQuoted(body) {
 // half afgesneden). Ze staan nu op een eigen regel over de volle breedte van de
 // strook, met bestandsnaam erbij, zodat je ze gewoon kunt afspelen.
 // Sommige oudere bijlages hebben alleen een mime en geen kind — daarom beide checken.
+// Kapotte foto-tegel (15 aug): een HEIC-foto (iPhone-formaat) of een inmiddels
+// opgeruimd bestand toonde een leeg blokje met vraagteken. HEIC kan een browser
+// niet tekenen → nette bestands-tegel; laadt een gewone foto niet → zelfde terugval.
+window.attImgKapot = (img) => {
+  const a = img.closest('a'); if (!a) return;
+  a.classList.remove('att-img'); a.classList.add('att-file');
+  a.innerHTML = `${icon('file', 22)}<span>foto — tik om te openen</span>`;
+};
 function attachmentsHTML(atts) {
   if (!atts || !atts.length) return '<div class="muted small">Nog geen foto’s of bestanden.</div>';
   const isKind = (a, soort) => a.kind === soort || new RegExp('^' + soort + '/').test(a.mime || '');
   return atts.map((a) => {
     const naam = a.filename || '';
-    if (isKind(a, 'image')) return `<a class="att att-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(naam)}"><img src="${esc(a.url)}" loading="lazy"></a>`;
+    const heic = /\.hei[cf]($|\?)/i.test(naam || a.url || '') || /hei[cf]/i.test(a.mime || '');
+    if (isKind(a, 'image') && heic) return `<a class="att att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(naam)}">${icon('image', 22)}<span>foto (iPhone-formaat)</span></a>`;
+    if (isKind(a, 'image')) return `<a class="att att-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(naam)}"><img src="${esc(a.url)}" loading="lazy" onerror="attImgKapot(this)"></a>`;
     // GEEN witruimte/regeleinden tussen deze tags: in de gesprekshistorie staat de
     // strook in een chat-bubbel met white-space:pre-wrap, en dan wordt elke regel
     // afbreking als lege regel getekend (gemeten: 527px i.p.v. 257px per bericht).
