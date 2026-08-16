@@ -500,7 +500,9 @@ async function renderChatPane(scrollDown) {
     : (laatsteIn?.channel === 'email' && heeftMail) ? 'email'
     : heeftTel ? 'whatsapp'
     : heeftMail ? 'email' : '';
-  const kanSturen = isTelChat || heeftTel || heeftMail;
+  // Monteur leest mee maar typt niet zelf — versturen gaat via de kaart-knoppen.
+  const magTypen = state.me?.role !== 'monteur';
+  const kanSturen = magTypen && (isTelChat || heeftTel || heeftMail);
   const initiaal = String(info.name || h.customer?.name || '?').trim().charAt(0).toUpperCase() || '?';
   const kanaalKnopHtml = (!isTelChat && heeftTel && heeftMail)
     ? `<button type="button" class="cp-kanaal" id="cpKanaal" title="Wissel tussen WhatsApp en e-mail"></button>`
@@ -516,7 +518,9 @@ async function renderChatPane(scrollDown) {
     <div class="cp-send">
       ${kanSturen
         ? `${kanaalKnopHtml}<textarea id="cpText" rows="1"></textarea><button class="btn cp-sendbtn" id="cpSend" title="Versturen">${icon('reply', 16)}</button>`
-        : '<div class="muted small">Deze klant heeft geen telefoonnummer of e-mailadres — vul dat eerst in bij de klantgegevens.</div>'}
+        : (magTypen
+          ? '<div class="muted small">Deze klant heeft geen telefoonnummer of e-mailadres — vul dat eerst in bij de klantgegevens.</div>'
+          : '<div class="muted small">Meelezen — versturen gaat via de knoppen op de kaart (Onderweg, Factuur/Offerte, Review).</div>')}
     </div>`;
   pane.dataset.chat = _chatActive;
   _lastChatMsgsHtml = msgsHtml;

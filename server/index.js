@@ -638,6 +638,13 @@ app.post('/api/chats/:id/send', requireRole('admin', 'assistent', 'monteur'), as
   if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
   const mijnKlanten = monteurChatKlanten(req);
   if (mijnKlanten && !mijnKlanten.has(customer.id)) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
+  // MONTEUR = MEELEZEN, NIET VRIJ TYPEN (16 aug, besluit eigenaar): klantcommunicatie
+  // in eigen woorden blijft bij admin/assistent. De monteur verstuurt alleen de vaste
+  // berichten via de kaart-knoppen (Onderweg, Factuur/Offerte, Review) — die routes
+  // hebben hun eigen rechten en vaste teksten.
+  if (req.user.role === 'monteur') {
+    return res.status(403).json({ error: 'Meelezen mag; zelf berichten typen loopt via kantoor. Versturen kan met de vaste knoppen op de kaart: Onderweg, Factuur/Offerte of Review.' });
+  }
   const text = String(req.body?.text || '').trim().slice(0, 4000);
   if (!text) return res.status(400).json({ error: 'Typ eerst een bericht' });
   const kanaal = req.body?.kanaal === 'email' ? 'email' : 'whatsapp';

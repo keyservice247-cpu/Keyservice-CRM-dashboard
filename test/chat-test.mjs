@@ -275,6 +275,18 @@ ok('monteur zonder gekoppelde klanten: lege lijst (niet andermans gesprekken)', 
 ok('monteur: versturen naar andermans klant geweigerd', (await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'x' })).status === 403);
 ok('monteur: onbekende nummers (tel:) blijven verborgen', !(mChats.json || []).some((c) => String(c.id).startsWith('tel:')));
 cookie = adminCookie;
+// Monteur MÉT gekoppelde klant: meelezen mag, zelf typen niet (16 aug, besluit
+// eigenaar — klantcommunicatie in eigen woorden blijft bij kantoor; de monteur
+// verstuurt alleen via de vaste kaart-knoppen).
+await api('POST', '/api/users', { name: 'Monteur Gekoppeld', email: 'monteur2@keyservice.nl', password: 'monteur123', role: 'monteur', monteurId: mont.json.id });
+await api('PATCH', `/api/orders/${gesprek.orderId}`, { monteurId: mont.json.id });
+cookie = '';
+await api('POST', '/api/login', { email: 'monteur2@keyservice.nl', password: 'monteur123' });
+const m2Chats = await api('GET', '/api/chats');
+ok('gekoppelde monteur ZIET het gesprek van zijn klant', (m2Chats.json || []).some((c) => c.id === gesprek.id), JSON.stringify((m2Chats.json || []).map((c) => c.id)));
+const m2Stuur = await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'eigen tekstje' });
+ok('gekoppelde monteur mag NIET zelf typen (vaste knoppen wél)', m2Stuur.status === 403 && /knoppen|kaart/i.test(m2Stuur.json?.error || ''), JSON.stringify(m2Stuur.json));
+cookie = adminCookie;
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
