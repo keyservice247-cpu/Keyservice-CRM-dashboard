@@ -528,7 +528,13 @@ Dat is exact het patroon waarvoor WhatsApp op 2 aug het nummer blokkeerde. Drie
 vangrails, alle drie in `GET /api/outbox` (aan de bron, niet in de bridge):
 1. **Verlopen klantberichten vervallen** (>24u in de wachtrij → status failed met
    uitleg). Een appje van gisteren is niet meer relevant. GROEPS-items houden hun
-   ruimere herkansing van 36u — een opdracht mag nooit stil verloren gaan.
+   ruimere herkansing van 36u — een opdracht mag nooit stil verloren gaan. Sinds
+   16 aug vervalt een GROEPS-item ouder dan 36u óók in outboxOnderhoud (elke 5
+   min): de oude grens zat alleen in het bridge-terugmeldpad, dus een stilgelegen
+   bridge vond bij terugkomst een stuwmeer aan oeroude meldingen (9 dagen!).
+   NOODREM = ALLEEN WEGWERPNUMMER (16 aug): whatsappPaused legt uitsluitend de
+   bridge stil; cloudSendAan() kijkt er bewust NIET meer naar — de officiële route
+   (klantberichten) loopt door tijdens een pauze.
 2. **Dubbelen eruit**: zelfde ontvanger + identieke tekst → alleen de eerste gaat weg.
 3. **Snelheidsrem**: hooguit 2 berichten per ronde en minimaal 20 s tussen rondes
    (`db()._outboxLaatsteRonde`). Bij normaal gebruik merk je hier niets van; alleen een

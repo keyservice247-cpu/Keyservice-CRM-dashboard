@@ -3543,9 +3543,9 @@ async function loadSettings() {
         <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
       </div>
     </div>
-    <div data-sg="koppel" class="info-card" style="margin-bottom:18px;border-left:4px solid var(--danger)"> <h3>${icon('whatsapp', 15)} WhatsApp-verzending pauzeren (noodrem)</h3>
-      <p class="muted small">Is het WhatsApp-nummer (tijdelijk) geblokkeerd? Zet dit vinkje AAN: het CRM geeft de bridge dan een lege wachtrij, zodat er geen enkel bericht meer uitgaat. Berichten die klaarstonden blijven bewaard en gaan vanzelf alsnog uit zodra je de pauze weer uitzet. Ontvangen blijft gewoon werken.</p>
-      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-pause" style="width:auto" ${s.whatsappPaused ? 'checked' : ''}> Alle uitgaande WhatsApp-berichten pauzeren</label>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px;border-left:4px solid var(--danger)"> <h3>${icon('whatsapp', 15)} Wegwerpnummer pauzeren (noodrem)</h3>
+      <p class="muted small">Is het <strong>wegwerpnummer</strong> (tijdelijk) geblokkeerd? Zet dit vinkje AAN: de bridge krijgt dan een lege wachtrij, zodat er via dat nummer niets meer uitgaat (groeps- en monteursberichten). Wat klaarstond blijft bewaard en gaat vanzelf alsnog uit zodra je de pauze uitzet. <strong>De officiële WhatsApp-route (klantberichten, facturen, bevestigingen) loopt gewoon door</strong> — die staat los van dit nummer. Ontvangen blijft ook gewoon werken.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-pause" style="width:auto" ${s.whatsappPaused ? 'checked' : ''}> Uitgaande berichten via het wegwerpnummer pauzeren</label>
     </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} Officiële WhatsApp (Meta) voor klantberichten</h3>
       <p class="muted small">Stuurt facturen, offertes, review-verzoeken en bevestigingen naar de <strong>klant</strong> via het officiële WhatsApp Business-platform van Meta, in plaats van via het wegwerpnummer. Groepsberichten (DRS, monteurs) blijven altijd via de bridge lopen — de officiële route kan geen bestaande groepen binnen. Weigert Meta een bericht (bijvoorbeeld omdat de klant langer dan 24 uur niets stuurde), dan blijft het gewoon in de wachtrij staan en verstuurt de bridge het alsnog: er kan niets verloren gaan.</p>

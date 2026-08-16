@@ -614,7 +614,9 @@ app.post('/api/chats/nummer/:phone/send', requireRole('admin', 'assistent'), (re
   if (db().outbox.length > 1000) db().outbox.length = 1000;
   logActivity(req.user.name, 'WhatsApp-bericht via Berichten (onbekend nummer)', `${p}: ${text.slice(0, 60)}`);
   saveSoon();
-  res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused, orderId: null });
+  // "paused" alleen melden als dit bericht ook écht blijft liggen: met de officiële
+  // route aan gaat een klant-DM gewoon uit, ook al staat de bridge-noodrem aan.
+  res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused && !cloudSendAan(), orderId: null });
 });
 
 // MONTEUR IN BERICHTEN (15 aug, verzoek eigenaar): een monteur mag het scherm nu wél
@@ -723,7 +725,7 @@ app.post('/api/chats/:id/send', requireRole('admin', 'assistent', 'monteur'), as
   }
   logActivity(req.user.name, 'WhatsApp-bericht via Berichten', `${customer.name || phoneRaw}: ${text.slice(0, 60)}`);
   saveSoon();
-  res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused, orderId: open ? open.id : null });
+  res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused && !cloudSendAan(), orderId: open ? open.id : null });
 });
 
 // Gesprek gelezen: zet de leesmarkering van dít gesprek (customerId of "tel:<nummer>")
@@ -3306,7 +3308,11 @@ app.post('/api/orders/:id/merge-suggestion', requireRole('admin', 'assistent'), 
 const CLOUD_UIT_ADRES = () => (process.env.APP_URL || 'https://keyservice-crm.onrender.com').replace(/\/+$/, '');
 
 function cloudSendAan() {
-  return !!(cloudConfigured() && db().settings.whatsappCloudSend && !db().settings.whatsappPaused);
+  // De pauzeknop (noodrem) geldt BEWUST alleen voor het wegwerpnummer/de bridge
+  // (16 aug, verzoek eigenaar): die knop bestaat voor een blokkade van dat nummer.
+  // De officiële Meta-route heeft daar niets mee te maken en loopt gewoon door —
+  // anders staan ook facturen en afspraakbevestigingen stil terwijl er niets mis is.
+  return !!(cloudConfigured() && db().settings.whatsappCloudSend);
 }
 
 
@@ -3500,6 +3506,20 @@ function outboxOnderhoud() {
           it.status = 'failed';
           it.doneAt = now();
           it.lastResult = 'geen geldig telefoonnummer bij dit bericht — vul een 06-nummer in bij de klant en verstuur opnieuw';
+          statusGewijzigd++;
+        }
+      } else if (it.status === 'queued' && it.group && it.group !== '__klant_dm__') {
+        // GROEPS-items verouderen óók (16 aug): de 36-uurs herkansing stond alleen in
+        // het bridge-terugmeldpad, dat bij een stilliggende bridge nooit draait. Toen
+        // de bridge na 9 dagen terugkwam, stond er dus een stuwmeer aan oeroude
+        // CRM-meldingen en dispatch-herkansingen klaar om de groepen in te stromen —
+        // precies het stortvloed-patroon van 2 aug. Ouder dan 36 uur = niet meer
+        // relevant en vervalt eerlijk (zelfde grens als de bestaande herkansing).
+        const ouderdom = Date.now() - new Date(it.createdAt || 0).getTime();
+        if (ouderdom > 36 * 3600000) {
+          it.status = 'failed';
+          it.doneAt = now();
+          it.lastResult = 'verlopen — stond langer dan 36 uur in de wachtrij (bridge lag stil), niet alsnog verstuurd';
           statusGewijzigd++;
         }
       } else if (it.status === 'sent' && /wacht op bezorgbevestiging/.test(it.lastResult || '')) {
