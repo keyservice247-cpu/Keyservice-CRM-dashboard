@@ -53,6 +53,15 @@ de regressie meegroeit.
   anders zoekt de bridge zijn sessiemap in de verkeerde map.
   LET OP bij console-instructies: `pm2 logs` blijft draaien; wat je daarna typt wordt
   alleen als tekst getoond en NIET uitgevoerd. Vermeld Ctrl+C dus altijd expliciet.
+  DE HETZNER-WEBCONSOLE VERMINKT TEKENS bij plakken/typen: `_ + =` sneuvelen, en
+  `&&` komt eruit als `77` (bewezen 16 aug: `cd /root/ksbridge 77 git pull` →
+  "cd: too many arguments"). Geef commando's dus ALTIJD als losse regels, nooit
+  met `&&` aan elkaar. Bij een vastgelopen `git pull` eerst `git stash` (geen
+  speciale tekens) i.p.v. `git checkout -- <pad>`.
+  KOPPELCODE-REM: vraagt de bridge te vaak een code ("Kon geen koppelcode
+  aanvragen"), dan zit WhatsApp 15 min op de rem. Dat is GEEN blokkade van het
+  nummer — gewoon wachten en niet herstarten, want elke herstart vraagt een
+  nieuwe code en verlengt de rem.
 - **Render env vars:** INGEST_TOKEN, ANTHROPIC_API_KEY (Claude Haiku), IMAP_* (TransIP ontvangen),
   SMTP_* (TransIP versturen), WHATSAPP_VERIFY_TOKEN, DATA_DIR=/var/data, SESSION_SECRET.
 - **Bridge .env / hardcoded:** DASHBOARD_URL, INGEST_TOKEN, PAIR_NUMBER (31685352477) en token
