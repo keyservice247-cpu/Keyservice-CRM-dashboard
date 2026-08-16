@@ -61,7 +61,13 @@ de regressie meegroeit.
   KOPPELCODE-REM: vraagt de bridge te vaak een code ("Kon geen koppelcode
   aanvragen"), dan zit WhatsApp 15 min op de rem. Dat is GEEN blokkade van het
   nummer — gewoon wachten en niet herstarten, want elke herstart vraagt een
-  nieuwe code en verlengt de rem.
+  nieuwe code en verlengt de rem. NOOIT MEER EEN CODES-LUS (16 aug, bridge v3):
+  zodra de bridge in dit proces ooit `authenticated`/`ready` was (ooitGekoppeld),
+  vraagt hij NOOIT meer uit zichzelf een code aan — een qr-gebeurtenis is dan een
+  hapering en de bewaarde sessie herstelt vanzelf (log hooguit 1×/5 min). Vóór de
+  eerste koppeling: max 3 codes per proces met oplopende wachttijd (30s/2min/5min),
+  daarna alleen nog QR. Herhaald code-aanvragen is precies het geautomatiseerde
+  gedrag waar WhatsApp een nummer voor blokkeert — niet verzwakken.
 - **Render env vars:** INGEST_TOKEN, ANTHROPIC_API_KEY (Claude Haiku), IMAP_* (TransIP ontvangen),
   SMTP_* (TransIP versturen), WHATSAPP_VERIFY_TOKEN, DATA_DIR=/var/data, SESSION_SECRET.
 - **Bridge .env / hardcoded:** DASHBOARD_URL, INGEST_TOKEN, PAIR_NUMBER (31685352477) en token

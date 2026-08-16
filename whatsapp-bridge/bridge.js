@@ -88,6 +88,20 @@ const PAIR_NUMBER = (process.env.PAIR_NUMBER || HARDCODED_PAIR_NUMBER || '').rep
 // zonder de bridge te herstarten. Nu vragen we bij elke ronde een verse code aan.
 let laatsteCodeOp = 0;
 let codeGeblokkeerd = false;   // WhatsApp weigert (tijdelijk) codes -> QR blijft zichtbaar
+// NOOIT MEER EEN CODES-LUS (16 aug 2026). Bij een hapering kon de bridge om de 30
+// seconden een verse koppelcode aanvragen. WhatsApp zet daar een rem op ("te vaak
+// achter elkaar gevraagd") en het is precies het soort geautomatiseerde herhaling
+// waar een nummer voor geblokkeerd wordt. Twee harde grenzen:
+//  1. ZIJN WE OOIT GEKOPPELD GEWEEST in dit proces, dan vragen we NOOIT meer een
+//     code aan. Een qr-gebeurtenis is dan een tijdelijke hapering — de bewaarde
+//     sessie herstelt vanzelf. Is de sessie écht dood, dan volgt auth_failure,
+//     wordt de map gewist en start het proces opnieuw (dan mag het weer).
+//  2. Hooguit 3 codes per procesduur, met oplopende wachttijd (30s → 2min → 5min).
+//     Daarna alleen nog de QR, zonder één enkele extra aanvraag.
+let ooitGekoppeld = false;
+let aantalCodes = 0;
+const CODE_LIMIET = 3;
+const CODE_WACHT = [30000, 120000, 300000];
 
 // De koppelcode ook NAAR HET CRM sturen. Reden (6 aug 2026): opnieuw koppelen kon
 // alleen via de Hetzner-webconsole, en daar valt niets uit te kopiëren, verloopt de code
@@ -104,11 +118,21 @@ async function meldKoppelcode({ code = '', qr = '', fout = '' }) {
 }
 
 client.on('qr', async (qr) => {
-  // Als er een telefoonnummer is opgegeven: vraag een (nieuwe) koppelcode aan.
-  // De rem van 30 seconden voorkomt dat een snelle reeks qr-gebeurtenissen de log
-  // volgooit met codes die je toch niet op tijd kunt intikken.
-  if (PAIR_NUMBER && Date.now() - laatsteCodeOp > 30000) {
+  // Al eens gekoppeld geweest? Dan NOOIT een nieuwe code aanvragen (zie boven).
+  if (ooitGekoppeld) {
+    // Hooguit één regel per 5 minuten: bij een hapering komen deze gebeurtenissen
+    // in reeksen binnen en anders loopt de log vol met dezelfde melding.
+    if (Date.now() - laatsteCodeOp > 300000) {
+      laatsteCodeOp = Date.now();
+      console.log('[koppelen] Hapering in de verbinding — de bewaarde sessie wordt gebruikt, GEEN nieuwe koppelcode aangevraagd.');
+    }
+    return;
+  }
+  // Nog niet gekoppeld: hooguit CODE_LIMIET codes, met oplopende wachttijd.
+  const wacht = CODE_WACHT[Math.min(aantalCodes, CODE_WACHT.length - 1)];
+  if (PAIR_NUMBER && aantalCodes < CODE_LIMIET && Date.now() - laatsteCodeOp > wacht) {
     laatsteCodeOp = Date.now();
+    aantalCodes++;
     try {
       const code = await client.requestPairingCode(PAIR_NUMBER);
       const pretty = code.match(/.{1,4}/g)?.join('-') || code;
@@ -128,15 +152,17 @@ client.on('qr', async (qr) => {
       // wegvallen: dat is op zo'n moment de enige manier om nog te koppelen.
       console.error('Kon geen koppelcode aanvragen:', e.message);
       console.error('Meestal betekent dit: te vaak achter elkaar een code gevraagd.');
-      console.error('Wacht 15 minuten, of koppel nu via de QR-code hieronder.\n');
+      console.error('Wacht 15 minuten, of koppel nu via de QR-code hieronder.');
+      console.error('(De bridge vraagt uit zichzelf GEEN nieuwe codes meer aan.)\n');
+      aantalCodes = CODE_LIMIET; // niet blijven proberen — dat verlengt alleen de rem
       codeGeblokkeerd = true;
       meldKoppelcode({ qr, fout: 'WhatsApp geeft nu geen koppelcode — te vaak achter elkaar gevraagd. Wacht een half uur en probeer opnieuw, of scan hiernaast de QR.' });
     }
   }
   // Met een nummer ingesteld koppelen we normaal via de CODE; het QR-blok zou de log
-  // dan alleen maar vervuilen en de code uit beeld duwen. Lukt de code niet, dan komt
-  // de QR juist wél in beeld — anders sta je met lege handen.
-  if (PAIR_NUMBER && !codeGeblokkeerd) return;
+  // dan alleen maar vervuilen en de code uit beeld duwen. Lukt de code niet (of is de
+  // limiet op), dan komt de QR juist wél in beeld — anders sta je met lege handen.
+  if (PAIR_NUMBER && !codeGeblokkeerd && aantalCodes < CODE_LIMIET) return;
   // Anders: toon de QR (tekst + scanbare afbeelding-link).
   console.log('\nScan deze QR-code met WhatsApp op je iPhone:');
   console.log('(WhatsApp -> Instellingen -> Gekoppelde apparaten -> Apparaat koppelen)\n');
@@ -152,12 +178,17 @@ client.on('qr', async (qr) => {
 // storing), leest groepsnamen via een reparatie-route, valt terug op 1-op-1 naar de
 // monteur als een groep echt niet lukt, en stuurt het groeps-id mee naar het CRM
 // zodat dat de koppeling id→naam automatisch leert.
-const BRIDGE_VERSION = 2;
+const BRIDGE_VERSION = 3;
 
-client.on('authenticated', () => console.log('Gekoppeld — sessie opgeslagen, geen QR meer nodig bij herstart.'));
+client.on('authenticated', () => {
+  ooitGekoppeld = true;   // vanaf nu nooit meer uit onszelf een koppelcode aanvragen
+  console.log('Gekoppeld — sessie opgeslagen, geen QR meer nodig bij herstart.');
+});
 client.on('ready', async () => {
   console.log(`\nBridge actief (v${BRIDGE_VERSION}). Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
+  ooitGekoppeld = true;
   codeGeblokkeerd = false;
+  aantalCodes = 0;
   meldKoppelcode({});   // koppeling gelukt -> melding in het CRM opruimen
   startHeartbeat();
   startOutbox();
