@@ -485,7 +485,23 @@ terugknop; scherm begint op mobiel ALTIJD met de lijst. Techniek:
   "verstuurd (onbevestigd)"). Verbindingstest-tabel waarschuwt als de bridge stil
   ligt (window._waBridgeOnline). Historie-dedup sleutelt nu óók op dag — identiek
   bericht van maanden later verdwijnt niet meer uit het gesprek.
-- Tests: test/chat-test.mjs (49 assertions, PORT=3127) + browser-assertions
+- **Kanaalbewust antwoorden + monteur-toegang (16 aug):** de verstuurbalk heeft een
+  KANAAL-knop (WhatsApp/e-mail; standaard = kanaal van het laatste klantbericht) —
+  een mailgesprek wordt nooit stiekem een appje. kanaal 'email' in POST
+  /api/chats/:id/send = echte SMTP-reply met In-Reply-To (berichten zonder
+  Message-ID zoals formulier-leads worden overgeslagen bij het threaden), gelogd op
+  de nieuwste OPEN kaart (anders nieuwste gesloten; helemaal geen kaart →
+  db().mailUit, max 500). Ongelezen: eigen MENSELIJK antwoord telt als gelezen
+  (kaart-reply/chat/mailUit; automatiseringen — afzender "Keyservice (…)" of
+  autoReply-vlag — tellen bewust NIET). MONTEUR mag Berichten in: alleen klanten
+  van eigen opdrachten, geen tel:-gesprekken; zijn /read schrijft een EIGEN
+  markering (settings._chatGelezenMonteur) en raakt team-badge/unreadReplies niet;
+  pulse-teller per monteur gememoiseerd. Verder: zoekbalk op Facturen (naam/nummer/
+  telefoon genormaliseerd), push-zelfherstel bij app-start (syncPush; localStorage
+  ksPushUit respecteert bewust-uit) + GET /api/push/status toont server-toestellen,
+  HEIC/verdwenen foto's krijgen een nette bestands-tegel, Berichten op mobiel
+  voluit (view-head weg, grotere bubbels/tikdoelen).
+- Tests: test/chat-test.mjs (57 assertions, PORT=3127) + browser-assertions
   (desktop + iPhone-formaat, echt versturen, live-update mét getypte tekst).
 
 ## SNELHEIDSREM OP DE UITGAANDE WACHTRIJ (6 aug 2026) — NIET verzwakken

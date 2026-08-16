@@ -4508,6 +4508,8 @@ async function syncPush() {
   try {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     if (Notification.permission !== 'granted') return;
+    // Bewust uitgezet? Dan NIET stil weer aanzetten (review-audit 15 aug).
+    if (localStorage.getItem('ksPushUit') === '1') return;
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
@@ -4552,6 +4554,7 @@ async function loadPush() {
 
 async function enablePush() {
   try {
+    localStorage.removeItem('ksPushUit');
     const perm = await Notification.requestPermission();
     if (perm !== 'granted') { toast('Meldingen niet toegestaan', true); return; }
     const reg = await navigator.serviceWorker.ready;
@@ -4565,6 +4568,7 @@ async function enablePush() {
 
 async function disablePush() {
   try {
+    localStorage.setItem('ksPushUit', '1'); // syncPush mag hem niet stil weer aanzetten
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
     if (sub) { await api('/api/push/unsubscribe', 'POST', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }

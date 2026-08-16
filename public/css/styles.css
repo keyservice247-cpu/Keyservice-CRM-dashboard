@@ -950,7 +950,8 @@ table tbody tr:hover { background: var(--panel-2); }
   /* VOLUIT OP MOBIEL (15 aug, verzoek eigenaar): geen kop, geen randen, geen
      verloren ruimte — het scherm ÍS het gesprek, zoals in WhatsApp zelf. */
   #view-chats .view-head { display: none; }
-  .chats-layout { margin: -16px -14px 0; gap: 0; }
+  /* -10px boven: de mobiele breakpoint zet .content op padding-top 10px (niet 16). */
+  .chats-layout { margin: -10px -14px 0; gap: 0; }
   .chat-list, .chat-pane {
     border: none; border-radius: 0; min-height: 0;
     max-height: none; height: calc(100dvh - 122px - env(safe-area-inset-bottom, 0px));

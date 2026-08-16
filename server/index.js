@@ -405,8 +405,16 @@ app.get('/api/customers/:id/history', requireAuth, (req, res) => {
 // ongelezen = binnengekomen berichten NA de markering (max 7 dagen terug, zodat een
 // verse installatie niet de hele historie als "nieuw" toont). Markering staat in
 // settings._chatGelezen (customerId of "tel:<nummer>"), gezet door /read.
-function telOngelezenChats() {
-  const marks = db().settings._chatGelezen || {};
+function telOngelezenChats(extraMarks) {
+  // extraMarks (15 aug): eigen leesmarkeringen van een MONTEUR — die tellen alleen
+  // mee voor zíjn badge (nieuwste markering wint) en raken de teamweergave nooit.
+  let marks = db().settings._chatGelezen || {};
+  if (extraMarks) {
+    marks = { ...marks };
+    for (const [k, v] of Object.entries(extraMarks)) {
+      if (!marks[k] || String(v).localeCompare(String(marks[k])) > 0) marks[k] = v;
+    }
+  }
   const vloer = Date.now() - 7 * 24 * 3600000;
   const echtNummer = (p) => { const d = String(p).replace(/\D/g, ''); return d.length >= 6 && d.length <= 13; };
   const perNummer = new Map();
@@ -429,7 +437,15 @@ function telOngelezenChats() {
   };
   for (const o of [...(db().orders || []), ...(db().trash || [])]) {
     if (!o.customerId) continue;
-    for (const t of o.thread || []) if (t.outgoing && t.channel !== 'systeem') bumpUit(o.customerId, t.at);
+    for (const t of o.thread || []) {
+      if (!t.outgoing || t.channel === 'systeem') continue;
+      // AUTOMATISCHE berichten tellen NIET als gelezen (review-audit 15 aug): een
+      // afspraakherinnering of review-verzoek om 18:00 mag de badge van een échte
+      // klantvraag van 14:00 niet stil wegvegen. Automatiseringen zetten allemaal
+      // afzender "Keyservice (…)"; een mens heet "Naam" of "Naam (Keyservice)".
+      if (t.autoReply || /^Keyservice\s*\(/i.test(String(t.sender || ''))) continue;
+      bumpUit(o.customerId, t.at);
+    }
   }
   for (const ob of db().outbox || []) {
     if (ob.group && ob.group !== '__klant_dm__') continue;
@@ -533,7 +549,7 @@ app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) =
   const uit = [];
   // Ongelezen per gesprek op leesmarkering (15 aug) — dekt óók klanten zonder open
   // kaart en onbekende nummers; order.unreadReplies blijft alleen de bord-badge doen.
-  const ongelezen = telOngelezenChats();
+  const ongelezen = telOngelezenChats(monteurEigenMarks(req));
   for (const [cid, v] of perKlant) {
     if (mijnKlanten && !mijnKlanten.has(cid)) continue; // monteur: alleen eigen klanten
     const c = db().customers.find((x) => x.id === cid);
@@ -639,7 +655,9 @@ app.post('/api/chats/:id/send', requireRole('admin', 'assistent', 'monteur'), as
     const msgsAll = db().messages || [];
     for (let i = msgsAll.length - 1; i >= 0; i--) {
       const m = msgsAll[i];
-      if (m.channel !== 'email') continue;
+      // !externalId: een websiteformulier-lead heeft geen Message-ID en kan dus niet
+      // threaden — dan door naar het eerstvolgende bericht dat dat wél kan.
+      if (m.channel !== 'email' || !m.externalId) continue;
       const em = ((String(m.sender || '').match(EMAIL_RE_SENDER) || [''])[0]).toLowerCase();
       if (em && em === toAddr) { lastIn = m; break; }
     }
@@ -651,7 +669,10 @@ app.post('/api/chats/:id/send', requireRole('admin', 'assistent', 'monteur'), as
     try {
       const sent = await sendMail({ to, subject, text: mailTekst, inReplyTo: lastIn?.externalId || undefined, afzender: afzenderVan(req) });
       appendSentMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER || '', to, subject, text: mailTekst }).catch(() => {});
-      const kaart = nieuwsteKaart(false); // nieuwste kaart, óók afgerond — daar hoort het gesprek bij
+      // Eerst de nieuwste OPEN kaart (daar wacht de klant), pas anders een gesloten —
+      // anders belandt het antwoord op een afgeronde kaart terwijl de open kaart op
+      // het bord de "klant reageerde"-melding houdt (review-audit 15 aug).
+      const kaart = nieuwsteKaart(true) || nieuwsteKaart(false);
       if (kaart) {
         kaart.thread = kaart.thread || [];
         kaart.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (Keyservice)`, subject, body: text, at: now(), messageId: sent?.messageId || undefined, sentTo: to });
@@ -706,6 +727,17 @@ app.post('/api/chats/:id/read', requireRole('admin', 'assistent', 'monteur'), (r
   const chatId = String(req.params.id || '');
   const mijnKlanten = monteurChatKlanten(req);
   if (mijnKlanten && !mijnKlanten.has(chatId)) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
+  // MONTEUR leest voor ZICHZELF (review-audit 15 aug): zijn klik mag de badge van de
+  // assistente niet wegvegen. Eigen markering per monteur; team-markering en de
+  // bord-tellers (unreadReplies) blijven dan onaangeraakt.
+  if (req.user.role === 'monteur') {
+    db().settings._chatGelezenMonteur = db().settings._chatGelezenMonteur || {};
+    const mijn = db().settings._chatGelezenMonteur[req.user.monteurId || req.user.id] || {};
+    mijn[chatId] = now();
+    db().settings._chatGelezenMonteur[req.user.monteurId || req.user.id] = mijn;
+    saveSoon();
+    return res.json({ ok: true, cleared: 0 });
+  }
   db().settings._chatGelezen = db().settings._chatGelezen || {};
   db().settings._chatGelezen[chatId] = now();
   // Markeringen van oude gesprekken opruimen zodat het object nooit ongeremd groeit.
@@ -722,6 +754,12 @@ app.post('/api/chats/:id/read', requireRole('admin', 'assistent', 'monteur'), (r
   saveSoon();
   res.json({ ok: true, cleared: n });
 });
+
+// Eigen leesmarkeringen van deze monteur (of null voor admin/assistent).
+function monteurEigenMarks(req) {
+  if (req.user.role !== 'monteur') return null;
+  return (db().settings._chatGelezenMonteur || {})[req.user.monteurId || req.user.id] || {};
+}
 
 // KLANTDOSSIER: alles van één klant op één scherm — gegevens, alle kaarten (ook
 // gearchiveerd), alle facturen/offertes en de omzet-totalen. Monteur alleen eigen.
@@ -4630,12 +4668,23 @@ app.get('/api/pulse', requireAuth, (req, res) => {
   });
 });
 
+// Gememoriseerd per monteur + wijzigingsversie (review-audit 15 aug): de pulse komt
+// elke 5 s van elk open scherm — zonder cache scant iedere monteur-tab continu alle
+// kaarten, berichten en de outbox. Zelfde bescherming als de admin-teller.
+const _monteurOngelezenCache = new Map(); // monteurId -> { v, n }
 function monteurChatsOngelezen(req) {
   try {
+    const sleutel = req.user.monteurId || req.user.id;
+    const v = changeVersion();
+    const cached = _monteurOngelezenCache.get(sleutel);
+    if (cached && cached.v === v) return cached.n;
     const mijn = monteurChatKlanten(req);
-    if (!mijn || !mijn.size) return 0;
     let n = 0;
-    for (const [chatId] of telOngelezenChats()) if (mijn.has(chatId)) n++;
+    if (mijn && mijn.size) {
+      for (const [chatId] of telOngelezenChats(monteurEigenMarks(req))) if (mijn.has(chatId)) n++;
+    }
+    _monteurOngelezenCache.set(sleutel, { v, n });
+    if (_monteurOngelezenCache.size > 50) _monteurOngelezenCache.clear();
     return n;
   } catch { return 0; }
 }

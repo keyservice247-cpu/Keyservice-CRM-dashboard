@@ -241,6 +241,19 @@ await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'De reservesleutel li
 const chatsE2 = await api('GET', '/api/chats');
 ok('na ons eigen antwoord: badge weg zonder extra klik', ((chatsE2.json || []).find((c) => c.id === gesprek.id)?.unread || 0) === 0, JSON.stringify((chatsE2.json || []).find((c) => c.id === gesprek.id)?.unread));
 
+console.log('\n== Automatisch bericht veegt de badge NIET weg (review-audit 15 aug) ==');
+// Klantvraag om 14:00 + afspraakherinnering/bevestiging om 18:00 → vraag blijft ongelezen.
+await api('POST', '/api/ingest/whatsapp', {
+  name: 'Bevestiging Klant', body: 'Kunnen jullie iets eerder komen?\nTelefoon: +31644332211', externalId: 'chat-auto-1',
+}, true);
+const bevChat = ((await api('GET', '/api/chats')).json || []).find((c) => (c.phone || '').includes('644332211'));
+ok('klantvraag telt als ongelezen', (bevChat?.unread || 0) >= 1, JSON.stringify(bevChat?.unread));
+// Nieuwe afspraak zetten -> automatische bevestiging (outgoing thread-entry "Keyservice (afspraakbevestiging)").
+await api('PATCH', `/api/orders/${bevKlant.json.id}`, { appointmentAt: new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 16) });
+await new Promise((r) => setTimeout(r, 600));
+const bevChat2 = ((await api('GET', '/api/chats')).json || []).find((c) => (c.phone || '').includes('644332211'));
+ok('na automatische bevestiging: vraag NOG STEEDS ongelezen', (bevChat2?.unread || 0) >= 1, JSON.stringify(bevChat2?.unread));
+
 console.log('\n== Kanaalkeuze: e-mail wordt nooit stiekem WhatsApp ==');
 // Zonder SMTP hoort de e-mailkeuze een nette uitleg te geven — nooit stil een appje sturen.
 const mailPoging = await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'Dit hoort per mail te gaan', kanaal: 'email' });
