@@ -945,10 +945,24 @@ table tbody tr:hover { background: var(--panel-2); }
   /* Mobiel: óf de lijst, óf het gesprek — nooit allebei geplet naast elkaar. */
   .chats-layout.active-chat .chat-list { display: none; }
   .chats-layout:not(.active-chat) .chat-pane { display: none; }
-  .chat-list { max-height: calc(100vh - 210px); }
-  .chat-pane { max-height: calc(100dvh - 200px); min-height: 320px; }
   .cp-back { display: inline-flex; }
   .cp-send .btn { min-height: 44px; }
+  /* VOLUIT OP MOBIEL (15 aug, verzoek eigenaar): geen kop, geen randen, geen
+     verloren ruimte — het scherm ÍS het gesprek, zoals in WhatsApp zelf. */
+  #view-chats .view-head { display: none; }
+  .chats-layout { margin: -16px -14px 0; gap: 0; }
+  .chat-list, .chat-pane {
+    border: none; border-radius: 0; min-height: 0;
+    max-height: none; height: calc(100dvh - 122px - env(safe-area-inset-bottom, 0px));
+  }
+  .chat-item { padding: 13px 16px; }
+  .chat-item .ci-name { font-size: 16px; }
+  .chat-item .ci-last { font-size: 14px; }
+  .chat-unread { font-size: 12.5px; padding: 2px 8px; }
+  .chat-pane .chat-msg { max-width: 88%; }
+  .chat-pane .chat-bubble { font-size: 15.5px; padding: 8px 11px 9px; }
+  .cp-msgs { padding: 10px; }
+  .cp-head { padding: 8px 10px; }
 }
 
 /* ---------- Berichten in WhatsApp-stijl (12 aug 2026) ---------- */
@@ -993,5 +1007,13 @@ table tbody tr:hover { background: var(--panel-2); }
 }
 .cp-sendbtn:hover { background: #029678; border-color: #029678; color: #fff; }
 .cp-send textarea { border-radius: 22px; padding: 11px 16px; }
+/* Kanaal-knop in de verstuurbalk: toont waar het bericht heen gaat (WhatsApp/e-mail). */
+.cp-kanaal {
+  flex-shrink: 0; align-self: center; border: 1.5px solid #00a884; color: #00a884;
+  background: transparent; border-radius: 999px; padding: 7px 12px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.cp-kanaal.mail, .cp-kanaal.vast { border-color: var(--accent); color: var(--accent); }
+span.cp-kanaal { cursor: default; }
 /* Ongelezen-stip in de lijst, WhatsApp-groen */
 .chat-unread { background: #25d366; color: #075e54; }

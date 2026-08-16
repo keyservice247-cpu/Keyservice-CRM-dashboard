@@ -189,7 +189,9 @@ function hasPerm(key) {
     $$('.perm-write').forEach((el) => (el.hidden = true));
     // Monteur ziet alleen zijn eigen werk: Opdrachten + Agenda + eigen Facturen
     // (+ Inbox als de beheerder dat recht heeft aangezet).
-    const monteurAllowed = ['board', 'agenda', 'invoices'];
+    // Berichten mag sinds 15 aug óók voor de monteur — de server geeft hem alleen
+    // gesprekken van zijn eigen klanten (en geen onbekende nummers).
+    const monteurAllowed = ['board', 'agenda', 'invoices', 'chats'];
     if (hasPerm('inbox')) monteurAllowed.push('inbox');
     $$('.nav-item, .bn-item').forEach((el) => { if (!monteurAllowed.includes(el.dataset.view)) el.hidden = true; });
   }
@@ -198,6 +200,7 @@ function hasPerm(key) {
   bindButtons();
   // Monteur start op zijn opdrachten (Overzicht is voor hem verborgen).
   if (me.user.role === 'monteur') goView('board');
+  syncPush(); // dood push-abonnement stil herstellen (fire-and-forget)
   await refreshAll();
   // Terugkomst van de Google Agenda-koppeling.
   try {
@@ -454,7 +457,7 @@ async function renderChatPane(scrollDown) {
     const uit = !!t.outgoing;
     // Kaart-label alleen als het bericht bij een kaart hoort — klein, boven de bubbel.
     const label = t.orderTitle ? `<div class="chat-meta"><a href="#" class="cp-orderlink" data-oid="${esc(t.orderId)}">${icon('tag', 11)} ${esc(t.orderTitle.slice(0, 44))}</a></div>` : '';
-    const kanaal = (!uit && t.channel === 'email') ? `<div class="chat-meta">${sourceIcon('email')} via e-mail</div>` : '';
+    const kanaal = (t.channel === 'email') ? `<div class="chat-meta" ${uit ? 'style="justify-content:flex-end"' : ''}>${sourceIcon('email')} via e-mail</div>` : '';
     const bubble = `<div class="chat-bubble" title="${esc((t.sender || '') + (t.waResult ? ' — ' + t.waResult : ''))}">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}<span class="wa-meta">${klok(t.at)} ${tikjes(t)}</span></div>`;
     return `<div class="chat-msg ${uit ? 'out' : 'in'}">${label}${kanaal}${bubble}${foutregel(t)}</div>`;
   }).join('') : '<div class="muted small" style="padding:14px">Nog geen berichten met deze klant.</div>';
@@ -486,8 +489,22 @@ async function renderChatPane(scrollDown) {
   }
 
   // Ander gesprek (of eerste keer): alles opbouwen.
-  const kanSturen = String(info.phone || '').replace(/\D/g, '').length >= 6;
+  // KANAALKEUZE (15 aug): een gesprek dat via e-mail liep mag nooit stiekem een
+  // WhatsApp-appje worden. Standaard = het kanaal van het LAATSTE klantbericht;
+  // met beide contactgegevens kun je wisselen via de kanaal-knop in de balk.
+  const heeftTel = String(info.phone || '').replace(/\D/g, '').length >= 6;
+  const heeftMail = /@/.test(String(info.email || ''));
+  const isTelChat = _chatActive.startsWith('tel:');
+  const laatsteIn = [...msgs].reverse().find((t) => !t.outgoing);
+  let kanaal = isTelChat ? 'whatsapp'
+    : (laatsteIn?.channel === 'email' && heeftMail) ? 'email'
+    : heeftTel ? 'whatsapp'
+    : heeftMail ? 'email' : '';
+  const kanSturen = isTelChat || heeftTel || heeftMail;
   const initiaal = String(info.name || h.customer?.name || '?').trim().charAt(0).toUpperCase() || '?';
+  const kanaalKnopHtml = (!isTelChat && heeftTel && heeftMail)
+    ? `<button type="button" class="cp-kanaal" id="cpKanaal" title="Wissel tussen WhatsApp en e-mail"></button>`
+    : (!isTelChat && kanaal === 'email') ? '<span class="cp-kanaal vast">e-mail</span>' : '';
   pane.innerHTML = `
     <div class="cp-head">
       <button type="button" class="btn btn-sm cp-back" id="cpBack" title="Terug naar de lijst">←</button>
@@ -498,8 +515,8 @@ async function renderChatPane(scrollDown) {
     <div class="cp-msgs" id="cpMsgs">${msgsHtml}</div>
     <div class="cp-send">
       ${kanSturen
-        ? `<textarea id="cpText" placeholder="Typ een bericht" rows="1"></textarea><button class="btn cp-sendbtn" id="cpSend" title="Versturen">${icon('reply', 16)}</button>`
-        : '<div class="muted small">Deze klant heeft geen telefoonnummer — vul die eerst in bij de klantgegevens om te kunnen appen.</div>'}
+        ? `${kanaalKnopHtml}<textarea id="cpText" rows="1"></textarea><button class="btn cp-sendbtn" id="cpSend" title="Versturen">${icon('reply', 16)}</button>`
+        : '<div class="muted small">Deze klant heeft geen telefoonnummer of e-mailadres — vul dat eerst in bij de klantgegevens.</div>'}
     </div>`;
   pane.dataset.chat = _chatActive;
   _lastChatMsgsHtml = msgsHtml;
@@ -509,19 +526,30 @@ async function renderChatPane(scrollDown) {
   $('#cpBack')?.addEventListener('click', sluitChat);
   const kaartKnop = $('#cpCard');
   if (kaartKnop) kaartKnop.onclick = async () => { state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(info.orderId); };
+  // Kanaal-knop + passende invoerhint. De knop toont ALTIJD waar het bericht heen gaat.
+  const zetKanaalUi = () => {
+    const veldEl = $('#cpText');
+    if (veldEl) veldEl.placeholder = kanaal === 'email' ? 'Typ een e-mail…' : 'Typ een bericht';
+    const kb = $('#cpKanaal');
+    if (kb) { kb.textContent = kanaal === 'email' ? 'e-mail' : 'WhatsApp'; kb.classList.toggle('mail', kanaal === 'email'); }
+  };
+  zetKanaalUi();
+  const kanaalKnop = $('#cpKanaal');
+  if (kanaalKnop && kanaalKnop.tagName === 'BUTTON') kanaalKnop.onclick = () => { kanaal = kanaal === 'email' ? 'whatsapp' : 'email'; zetKanaalUi(); };
   const stuur = $('#cpSend');
   if (stuur) stuur.onclick = async () => {
-    const veld = $('#cpText');
-    const text = (veld?.value || '').trim();
+    const veldNu = $('#cpText');
+    const text = (veldNu?.value || '').trim();
     if (!text) return;
     stuur.disabled = true;
     try {
-      const sendUrl = _chatActive.startsWith('tel:')
+      const sendUrl = isTelChat
         ? `/api/chats/nummer/${encodeURIComponent(_chatActive.slice(4))}/send`
         : `/api/chats/${_chatActive}/send`;
-      const r = await api(sendUrl, 'POST', { text });
-      if (veld) veld.value = '';
-      if (r.paused) toast('In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit', true);
+      const r = await api(sendUrl, 'POST', isTelChat ? { text } : { text, kanaal });
+      if (veldNu) veldNu.value = '';
+      if (r.kanaal === 'email') toast('E-mail verstuurd');
+      else if (r.paused) toast('In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit', true);
       await renderChatPane(true);
     } catch (err) { toast(err.message, true); }
     finally { const k = $('#cpSend'); if (k) k.disabled = false; }
@@ -3063,6 +3091,19 @@ function renderInvoices() {
   else if (f === 'offerte') items = all.filter((i) => i.type === 'offerte');
   else if (f === 'verlopen') items = all.filter(isOverdue);
   else if (f !== 'all') items = all.filter((i) => i.status === f);
+  // ZOEKEN (15 aug): op klantnaam, factuurnummer, kaarttitel, e-mail of telefoon —
+  // telefoon genormaliseerd (+31 ↔ 06), zodat elk formaat gewoon gevonden wordt.
+  const q = ($('#invSearch')?.value || '').trim().toLowerCase();
+  if (q) {
+    const qDigits = q.replace(/\D/g, '').replace(/^(0031|31)/, '0');
+    items = items.filter((i) => {
+      const hooi = `${i.number || ''} ${i.customerName || ''} ${i.orderTitle || ''} ${i.customerEmail || ''} ${i.sentTo || ''}`.toLowerCase();
+      if (hooi.includes(q)) return true;
+      if (!qDigits || qDigits.length < 4) return false;
+      const tel = String(i.customerPhone || '').replace(/\D/g, '').replace(/^(0031|31)/, '0');
+      return tel.includes(qDigits);
+    });
+  }
   const open = all.filter((i) => i.type !== 'offerte' && i.status === 'verzonden').reduce((s, i) => s + (i.totalIncl || 0), 0);
   const paid = all.filter((i) => i.type !== 'offerte' && i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
   const overdueCount = all.filter(isOverdue).length;
@@ -4447,6 +4488,26 @@ function urlBase64ToUint8Array(base64) {
   return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
 }
 
+// ZELFHERSTEL (15 aug, "meldingen doen het ineens niet meer"): een push-abonnement
+// kan stil sterven — telefoon opnieuw ingesteld, browserdata gewist, abonnement
+// verlopen en door de server opgeruimd. Daarom bij elke start van de app: staat de
+// toestemming op "granted", meld het toestel dan opnieuw aan bij de server (idempotent).
+// Bestaat er lokaal geen abonnement meer, maak het dan stil opnieuw aan (zonder popup —
+// de toestemming staat immers al).
+async function syncPush() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { publicKey } = await api('/api/push/key');
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    }
+    await api('/api/push/subscribe', 'POST', sub.toJSON());
+  } catch { /* stil: meldingen zijn een extraatje, nooit de app blokkeren */ }
+}
+
 async function loadPush() {
   const box = $('#pushPanel'); if (!box) return;
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -4460,8 +4521,12 @@ async function loadPush() {
     active = !!sub;
   } catch { /* negeren */ }
   const denied = Notification.permission === 'denied';
+  // Wat de SERVER weet is de waarheid: die moet toestellen hebben om aan te leveren.
+  const srv = await api('/api/push/status').catch(() => null);
+  const srvRegel = srv ? `Aangemeld bij de server: <strong>${srv.devices}</strong> toestel${srv.devices === 1 ? '' : 'len'}${srv.devices === 0 ? ' — <span class="error">niemand krijgt nu meldingen; zet ze hieronder (weer) aan</span>' : ''}` : '';
   box.innerHTML = `
-    <div style="margin-bottom:8px">Status op dit toestel: <strong>${active ? 'aan' : 'uit'}</strong>${denied ? ' — <span class="error">meldingen geblokkeerd in je browserinstellingen</span>' : ''}</div>
+    <div style="margin-bottom:4px">Status op dit toestel: <strong>${active ? 'aan' : 'uit'}</strong>${denied ? ' — <span class="error">meldingen geblokkeerd in je browserinstellingen</span>' : ''}</div>
+    ${srvRegel ? `<div class="muted small" style="margin-bottom:8px">${srvRegel}</div>` : ''}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${active
         ? '<button class="btn" id="push-off">Meldingen uitzetten</button><button class="btn btn-sm" id="push-test">Stuur testmelding</button>'
@@ -4840,6 +4905,7 @@ function bindButtons() {
   $('#trashSearch')?.addEventListener('input', renderTrash);
   $('#agendaScope')?.addEventListener('change', renderAgenda);
   $('#invFilter')?.addEventListener('change', renderInvoices);
+  $('#invSearch')?.addEventListener('input', renderInvoices);
   $('#newInvoiceBtn')?.addEventListener('click', () => openNewInvoiceFlow('factuur'));
   $('#newQuoteBtn')?.addEventListener('click', () => openNewInvoiceFlow('offerte'));
   $('#finMonth')?.addEventListener('change', loadFinance);

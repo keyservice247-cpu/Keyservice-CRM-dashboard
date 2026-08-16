@@ -371,6 +371,13 @@ function verzamelKlantHistorie(customer) {
       it.waResult = st.lastResult;
     }
   }
+  // Losse uitgaande e-mails uit Berichten (klant zonder kaart) — anders is ons eigen
+  // antwoord onzichtbaar in het gesprek.
+  for (const mu of db().mailUit || []) {
+    if (mu.customerId !== customer.id) continue;
+    if (seen.has(key('email', mu.body, mu.at))) continue;
+    items.push({ id: mu.id, channel: 'email', outgoing: true, sender: mu.by || '', subject: mu.subject || '', body: mu.body || '', at: mu.at, attachments: [], standalone: true });
+  }
   items.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
   return items;
 }
@@ -401,7 +408,7 @@ app.get('/api/customers/:id/history', requireAuth, (req, res) => {
 function telOngelezenChats() {
   const marks = db().settings._chatGelezen || {};
   const vloer = Date.now() - 7 * 24 * 3600000;
-  const vanaf = (sleutel) => Math.max(new Date(marks[sleutel] || 0).getTime() || 0, vloer);
+  const echtNummer = (p) => { const d = String(p).replace(/\D/g, ''); return d.length >= 6 && d.length <= 13; };
   const perNummer = new Map();
   const perMail = new Map();
   for (const c of db().customers || []) {
@@ -410,8 +417,29 @@ function telOngelezenChats() {
     const e = String(c.email || '').toLowerCase();
     if (e && !perMail.has(e)) perMail.set(e, c.id);
   }
+  // ONS EIGEN ANTWOORD TELT ALS GELEZEN (15 aug, melding eigenaar): wie op een kaart
+  // via e-mail antwoordde zag daarna tóch een groene badge op datzelfde gesprek —
+  // want alleen het openen van het Berichten-scherm zette de leesmarkering. Nu telt
+  // elk uitgaand MENSELIJK antwoord (kaart-reply, chat, losse mail) als "gelezen tot
+  // dat moment". Automatische berichten (bevestigingen, herinneringen) tellen niet.
+  const laatsteUit = new Map(); // chat-id -> tijdstip (ms) van ons laatste antwoord
+  const bumpUit = (cid, at) => {
+    const t = new Date(at || 0).getTime();
+    if (t && t > (laatsteUit.get(cid) || 0)) laatsteUit.set(cid, t);
+  };
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    if (!o.customerId) continue;
+    for (const t of o.thread || []) if (t.outgoing && t.channel !== 'systeem') bumpUit(o.customerId, t.at);
+  }
+  for (const ob of db().outbox || []) {
+    if (ob.group && ob.group !== '__klant_dm__') continue;
+    if (!/^(chat|testbericht)\s*\(/.test(String(ob.by || ''))) continue; // alleen door een mens getypt
+    const cid = ob.customerId || (echtNummer(matchPhone(ob.phone || '')) ? `tel:${matchPhone(ob.phone)}` : '');
+    if (cid) bumpUit(cid, ob.createdAt);
+  }
+  for (const mu of db().mailUit || []) bumpUit(mu.customerId, mu.at);
+  const vanaf = (sleutel) => Math.max(new Date(marks[sleutel] || 0).getTime() || 0, laatsteUit.get(sleutel) || 0, vloer);
   const SYSTEEMRUIS = /^\s*\[?(e2e_notification|ciphertext|protocol|revoked|gp2|notification_template|call_log)\b/i;
-  const echtNummer = (p) => { const d = String(p).replace(/\D/g, ''); return d.length >= 6 && d.length <= 13; };
   const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
   const teller = new Map(); // chat-id -> aantal ongelezen
   for (const m of db().messages || []) {
@@ -441,7 +469,8 @@ function telOngelezenChats() {
 // de officiële route bezorgt het bericht zoals altijd. Er bestaat geen apart verzendpad.
 // Alleen admin + assistent (de assistente is de hoofdgebruiker; monteurs hebben hun
 // eigen kaart-weergave en horen niet in álle klantgesprekken te kunnen kijken).
-app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
+app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) => {
+  const mijnKlanten = monteurChatKlanten(req); // null = admin/assistent: alles
   const perKlant = new Map(); // customerId -> samenvatting
   const bump = (cid, at, body, uitgaand) => {
     if (!cid) return;
@@ -499,23 +528,27 @@ app.get('/api/chats', requireRole('admin', 'assistent'), (req, res) => {
     if (c) bump(c.id, ob.createdAt, ob.text, true);
     else if (echtNummer(matchPhone(ob.phone || ''))) bumpOnbekend(matchPhone(ob.phone), '', ob.createdAt, ob.text, true);
   }
+  // Losse uitgaande e-mails (via Berichten verstuurd aan een klant zonder kaart).
+  for (const mu of db().mailUit || []) bump(mu.customerId, mu.at, mu.body, true);
   const uit = [];
   // Ongelezen per gesprek op leesmarkering (15 aug) — dekt óók klanten zonder open
   // kaart en onbekende nummers; order.unreadReplies blijft alleen de bord-badge doen.
   const ongelezen = telOngelezenChats();
   for (const [cid, v] of perKlant) {
+    if (mijnKlanten && !mijnKlanten.has(cid)) continue; // monteur: alleen eigen klanten
     const c = db().customers.find((x) => x.id === cid);
     if (!c) continue;
     const open = (db().orders || [])
       .filter((o) => o.customerId === cid && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
       .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
     uit.push({
-      id: cid, name: c.name || 'Onbekende klant', phone: c.phone || '',
+      id: cid, name: c.name || 'Onbekende klant', phone: c.phone || '', email: c.email || '',
       lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
       unread: ongelezen.get(cid) || 0, orderId: open ? open.id : null, orderTitle: open ? (open.title || '') : '',
     });
   }
-  for (const [p, v] of onbekend) {
+  // Onbekende nummers (tel:) niet voor de monteur — dat is lead-verkeer van het team.
+  if (!mijnKlanten) for (const [p, v] of onbekend) {
     uit.push({
       id: `tel:${p}`, name: v.naam || `Onbekend nummer ${p}`, phone: p,
       lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
@@ -568,20 +601,82 @@ app.post('/api/chats/nummer/:phone/send', requireRole('admin', 'assistent'), (re
   res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused, orderId: null });
 });
 
-// Versturen: bericht in de beveiligde wachtrij + zichtbaar op de nieuwste open kaart.
-app.post('/api/chats/:id/send', requireRole('admin', 'assistent'), (req, res) => {
+// MONTEUR IN BERICHTEN (15 aug, verzoek eigenaar): een monteur mag het scherm nu wél
+// gebruiken, maar ziet en beantwoordt UITSLUITEND klanten van zijn eigen opdrachten
+// (zelfde AVG-grens als het klantdossier). Onbekende nummers (tel:) blijven voor
+// admin/assistent — daar zit lead-verkeer in dat niet bij één monteur hoort.
+function monteurChatKlanten(req) {
+  if (req.user.role !== 'monteur') return null; // null = alles mag
+  return new Set((db().orders || [])
+    .filter((o) => o.monteurId && o.monteurId === req.user.monteurId && o.customerId)
+    .map((o) => o.customerId));
+}
+
+// Versturen: kanaalbewust (15 aug). Een gesprek dat via E-MAIL liep mag nooit stiekem
+// een WhatsApp-appje worden (en andersom kiest de gebruiker bewust). kanaal 'whatsapp'
+// (default) = beveiligde wachtrij; kanaal 'email' = échte reply via SMTP met threading
+// (zelfde aanpak als Beantwoorden op de kaart), gelogd op de nieuwste kaart van de
+// klant — of, als die er niet is, in db().mailUit zodat het gesprek compleet blijft.
+app.post('/api/chats/:id/send', requireRole('admin', 'assistent', 'monteur'), async (req, res) => {
   const customer = db().customers.find((c) => c.id === req.params.id);
   if (!customer) return res.status(404).json({ error: 'Klant niet gevonden' });
+  const mijnKlanten = monteurChatKlanten(req);
+  if (mijnKlanten && !mijnKlanten.has(customer.id)) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
   const text = String(req.body?.text || '').trim().slice(0, 4000);
   if (!text) return res.status(400).json({ error: 'Typ eerst een bericht' });
+  const kanaal = req.body?.kanaal === 'email' ? 'email' : 'whatsapp';
+  const nieuwsteKaart = (statusFilter) => (db().orders || [])
+    .filter((o) => o.customerId === customer.id && (!statusFilter || (!o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))))
+    .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+  if (kanaal === 'email') {
+    if (!smtpConfigured()) return res.status(503).json({ error: 'E-mail versturen is nog niet ingesteld (SMTP).' });
+    const to = String(customer.email || '').trim();
+    if (!to || !/@/.test(to)) return res.status(400).json({ error: 'Deze klant heeft geen e-mailadres. Vul dat eerst in bij de klantgegevens, of kies WhatsApp.' });
+    // Threading: antwoord op het laatste inkomende bericht van dit adres (exacte match).
+    const toAddr = to.toLowerCase();
+    const EMAIL_RE_SENDER = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+    let lastIn = null;
+    const msgsAll = db().messages || [];
+    for (let i = msgsAll.length - 1; i >= 0; i--) {
+      const m = msgsAll[i];
+      if (m.channel !== 'email') continue;
+      const em = ((String(m.sender || '').match(EMAIL_RE_SENDER) || [''])[0]).toLowerCase();
+      if (em && em === toAddr) { lastIn = m; break; }
+    }
+    const subject = lastIn?.subject
+      ? (/^\s*(re|antw)\s*:/i.test(lastIn.subject) ? lastIn.subject : `Re: ${lastIn.subject}`)
+      : 'Bericht van Key service 24/7';
+    const sig = getEmailSignature(afzenderVan(req));
+    const mailTekst = sig ? `${text}\n\n${sig}` : text;
+    try {
+      const sent = await sendMail({ to, subject, text: mailTekst, inReplyTo: lastIn?.externalId || undefined, afzender: afzenderVan(req) });
+      appendSentMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER || '', to, subject, text: mailTekst }).catch(() => {});
+      const kaart = nieuwsteKaart(false); // nieuwste kaart, óók afgerond — daar hoort het gesprek bij
+      if (kaart) {
+        kaart.thread = kaart.thread || [];
+        kaart.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (Keyservice)`, subject, body: text, at: now(), messageId: sent?.messageId || undefined, sentTo: to });
+        kaart.lastReplyAt = now();
+        kaart.customerReplied = false;
+        kaart.unreadReplies = 0;
+        kaart.updatedAt = now();
+      } else {
+        db().mailUit = db().mailUit || [];
+        db().mailUit.push({ id: id('mu'), customerId: customer.id, to, subject, body: text, at: now(), by: req.user.name, messageId: sent?.messageId || undefined });
+        if (db().mailUit.length > 500) db().mailUit.splice(0, db().mailUit.length - 500);
+      }
+      logActivity(req.user.name, 'e-mail via Berichten', `${customer.name || to}: ${text.slice(0, 60)}`);
+      saveSoon();
+      return res.json({ ok: true, kanaal: 'email', orderId: kaart ? kaart.id : null });
+    } catch (e) {
+      return res.status(500).json({ error: `E-mail versturen mislukt: ${String(e.message || '').slice(0, 140)}` });
+    }
+  }
   const phoneRaw = String(customer.phone || '').trim();
   const digits = phoneRaw.replace(/\D/g, '');
   if (digits.length < 6 || digits.length > 13) {
-    return res.status(400).json({ error: 'Deze klant heeft geen geldig telefoonnummer. Vul eerst een 06-nummer in bij de klantgegevens.' });
+    return res.status(400).json({ error: 'Deze klant heeft geen geldig telefoonnummer. Vul eerst een 06-nummer in bij de klantgegevens, of kies E-mail.' });
   }
-  const open = (db().orders || [])
-    .filter((o) => o.customerId === customer.id && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
-    .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+  const open = nieuwsteKaart(true);
   const item = {
     id: id('out'), kind: 'whatsapp_customer', phone: phoneRaw, group: '__klant_dm__',
     text, customerId: customer.id, orderId: open ? open.id : undefined,
@@ -607,8 +702,10 @@ app.post('/api/chats/:id/send', requireRole('admin', 'assistent'), (req, res) =>
 // en haalt de "nieuw bericht"-tellers van de kaarten van deze klant weg. saveSoon (niet
 // quiet): de badge moet óók bij collega's direct verdwijnen; de anti-knipper-guards
 // zorgen dat schermen zonder échte wijziging niet hertekenen.
-app.post('/api/chats/:id/read', requireRole('admin', 'assistent'), (req, res) => {
+app.post('/api/chats/:id/read', requireRole('admin', 'assistent', 'monteur'), (req, res) => {
   const chatId = String(req.params.id || '');
+  const mijnKlanten = monteurChatKlanten(req);
+  if (mijnKlanten && !mijnKlanten.has(chatId)) return res.status(403).json({ error: 'Geen toegang tot deze klant' });
   db().settings._chatGelezen = db().settings._chatGelezen || {};
   db().settings._chatGelezen[chatId] = now();
   // Markeringen van oude gesprekken opruimen zodat het object nooit ongeremd groeit.
@@ -2912,6 +3009,13 @@ app.post('/api/push/test', requireAuth, async (req, res) => {
   const out = await sendPush({ title: 'Keyservice CRM', body: 'Testmelding — meldingen werken!', url: '/' });
   res.json(out);
 });
+// Hoeveel toestellen kent de SERVER? (15 aug) Een browser-abonnement kan stil sterven
+// (telefoon opnieuw ingesteld, browserdata gewist, verlopen) — dan zegt jouw toestel
+// "aan" terwijl de server niemand meer heeft om aan te leveren. Dit maakt dat zichtbaar.
+app.get('/api/push/status', requireAuth, (req, res) => {
+  const list = Array.isArray(db().pushSubs) ? db().pushSubs : [];
+  res.json({ devices: list.length, mine: list.filter((s) => s.userId && s.userId === req.user.id).length });
+});
 
 // Nu meteen een off-site back-up naar de mail sturen (test / handmatig).
 app.post('/api/backup/mail', requireRole('admin'), async (req, res) => {
@@ -4176,7 +4280,7 @@ app.get('/api/invoices', requireAuth, (req, res) => {
     // baseert (instelbaar) i.p.v. een vaste 7 dagen in de frontend.
     const dueAt = i.type !== 'offerte' && i.sentAt
       ? new Date(new Date(i.sentAt).getTime() + payDays * 86400000).toISOString() : null;
-    return { ...i, customerName: c.name || '', customerEmail: c.email || '', orderTitle: o.title || '', dueAt };
+    return { ...i, customerName: c.name || '', customerEmail: c.email || '', customerPhone: c.phone || '', orderTitle: o.title || '', dueAt };
   }));
 });
 
@@ -4519,10 +4623,22 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     newChats: ['admin', 'assistent'].includes(req.user.role) ? nieuweChats() : 0,
     // Aantal GESPREKKEN met ongelezen berichten (15 aug): dit is wat de badge op het
     // menu-item toont — zelfde bron als de groene tellers in de lijst, dus nooit meer
-    // een badge die knippert tussen twee verschillende betekenissen.
-    chatsOngelezen: ['admin', 'assistent'].includes(req.user.role) ? chatsOngelezenTeller() : 0,
+    // een badge die knippert tussen twee verschillende betekenissen. Monteur (15 aug):
+    // zelfde teller, maar alleen over zijn eigen klanten.
+    chatsOngelezen: ['admin', 'assistent'].includes(req.user.role) ? chatsOngelezenTeller()
+      : (req.user.role === 'monteur' ? monteurChatsOngelezen(req) : 0),
   });
 });
+
+function monteurChatsOngelezen(req) {
+  try {
+    const mijn = monteurChatKlanten(req);
+    if (!mijn || !mijn.size) return 0;
+    let n = 0;
+    for (const [chatId] of telOngelezenChats()) if (mijn.has(chatId)) n++;
+    return n;
+  } catch { return 0; }
+}
 
 // Gememoriseerd per wijzigingsversie: de pulse wordt elke 5 s door elk scherm
 // aangeroepen; de telling zelf hoeft alleen opnieuw als er écht iets veranderde.

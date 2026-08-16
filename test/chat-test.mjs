@@ -218,7 +218,10 @@ ok('pulse telt gesprekken met ongelezen (menubadge)', (pulsNa.json?.chatsOngelez
 await api('POST', `/api/chats/${gesprek.id}/read`, {});
 const chatsNa2 = await api('GET', '/api/chats');
 ok('na lezen: teller weer op nul', ((chatsNa2.json || []).find((c) => c.id === gesprek.id)?.unread || 0) === 0);
-// tel:-gesprek (Piet Onbekend, eerder in deze test binnengekomen): teller + lezen.
+// tel:-gesprek: ná ons eerdere antwoord (dat telt als gelezen) stuurt Piet iets nieuws.
+await api('POST', '/api/ingest/whatsapp', {
+  name: 'Piet Onbekend', body: 'Oke doe maar, wanneer kunt u?\nTelefoon: +31688877766', externalId: 'chat-onb-2',
+}, true);
 const chatsT = await api('GET', '/api/chats');
 const telChat = (chatsT.json || []).find((c) => String(c.id).startsWith('tel:') && (c.phone || '').includes('688877766'));
 ok('tel:-gesprek heeft een échte ongelezen-teller', (telChat?.unread || 0) >= 1, JSON.stringify(telChat));
@@ -227,15 +230,37 @@ ok('tel:-gesprek lezen lukt', leesT.status === 200, JSON.stringify(leesT.json));
 const chatsT2 = await api('GET', '/api/chats');
 ok('tel:-teller na lezen op nul', ((chatsT2.json || []).find((c) => c.id === telChat.id)?.unread || 0) === 0);
 
-console.log('\n== Rechten: monteur komt er niet in ==');
-// Vers monteur-account aanmaken en daarmee proberen.
+console.log('\n== Eigen antwoord telt als gelezen (15 aug) ==');
+// Wie zelf antwoordt hoeft het gesprek niet ook nog te "openen" — de badge hoort dan weg.
+await api('POST', '/api/ingest/whatsapp', {
+  name: 'Chat Klant', body: 'Nog een vraag over de sleutel\nTelefoon: +31655512399', externalId: 'chat-eigen-1',
+}, true);
+const chatsE1 = await api('GET', '/api/chats');
+ok('nieuw appje telt eerst als ongelezen', ((chatsE1.json || []).find((c) => c.id === gesprek.id)?.unread || 0) >= 1);
+await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'De reservesleutel ligt klaar, u kunt hem morgen ophalen.' });
+const chatsE2 = await api('GET', '/api/chats');
+ok('na ons eigen antwoord: badge weg zonder extra klik', ((chatsE2.json || []).find((c) => c.id === gesprek.id)?.unread || 0) === 0, JSON.stringify((chatsE2.json || []).find((c) => c.id === gesprek.id)?.unread));
+
+console.log('\n== Kanaalkeuze: e-mail wordt nooit stiekem WhatsApp ==');
+// Zonder SMTP hoort de e-mailkeuze een nette uitleg te geven — nooit stil een appje sturen.
+const mailPoging = await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'Dit hoort per mail te gaan', kanaal: 'email' });
+ok('kanaal e-mail zonder SMTP -> nette uitleg (geen stil WhatsApp-appje)', mailPoging.status === 503 && /SMTP|E-mail/i.test(mailPoging.json?.error || ''), JSON.stringify(mailPoging.json));
+const wachtrijNaMail = (await api('GET', '/api/whatsapp/outbox-status?full=1')).json || [];
+ok('de e-mailpoging staat NIET in de WhatsApp-wachtrij', !wachtrijNaMail.some((o) => /hoort per mail/i.test(o.text || '')));
+
+console.log('\n== Rechten: monteur ziet alleen eigen klanten ==');
+// Monteur mag sinds 15 aug in Berichten, maar UITSLUITEND met klanten van zijn eigen
+// opdrachten — geen andermans gesprekken, geen onbekende nummers (lead-verkeer).
 await api('POST', '/api/users', { name: 'Monteur Test', email: 'monteurtest@keyservice.nl', password: 'monteur123', role: 'monteur' });
 const adminCookie = cookie;
 cookie = '';
 const ml = await api('POST', '/api/login', { email: 'monteurtest@keyservice.nl', password: 'monteur123' });
 ok('monteur kan inloggen', ml.status === 200);
-ok('monteur: gesprekkenlijst geweigerd', (await api('GET', '/api/chats')).status === 403);
-ok('monteur: versturen geweigerd', (await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'x' })).status === 403);
+const mChats = await api('GET', '/api/chats');
+ok('monteur: gesprekkenlijst bereikbaar', mChats.status === 200 && Array.isArray(mChats.json));
+ok('monteur zonder gekoppelde klanten: lege lijst (niet andermans gesprekken)', (mChats.json || []).length === 0, JSON.stringify((mChats.json || []).map((c) => c.id)));
+ok('monteur: versturen naar andermans klant geweigerd', (await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'x' })).status === 403);
+ok('monteur: onbekende nummers (tel:) blijven verborgen', !(mChats.json || []).some((c) => String(c.id).startsWith('tel:')));
 cookie = adminCookie;
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
