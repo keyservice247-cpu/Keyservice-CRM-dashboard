@@ -1737,8 +1737,23 @@ app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
     if (!primary.appointmentAt && other.appointmentAt) primary.appointmentAt = other.appointmentAt;
     if (!primary.price && other.price) primary.price = other.price;
     if (other.notes) primary.notes = `${primary.notes ? primary.notes + '\n' : ''}${other.notes}`;
-    db().orders.splice(i, 1);
+    // NAAR DE PRULLENBAK, niet hard weg (17 aug, Vught-casus): een samengevoegde
+    // bronkaart verdween definitief — wie per ongeluk op Samenvoegen tikte was de
+    // kaart kwijt en vond niets terug in de prullenbak. Nu is hij daar gewoon terug
+    // te halen, met een notitie waar de inhoud heen is.
+    const [bron] = db().orders.splice(i, 1);
+    bron.deletedAt = now();
+    bron.deletedBy = `samengevoegd met "${(primary.title || primaryId).slice(0, 60)}" door ${req.user.name}`;
+    // De bestanden horen nu bij de hoofdkaart — de bron-verwijzingen leegmaken,
+    // anders zou het opruimen van de prullenbak bestanden wissen die de hoofdkaart
+    // nog gebruikt.
+    bron.attachments = [];
+    db().trash.unshift(bron);
     merged++;
+  }
+  if (db().trash.length > 500) {
+    const old = db().trash.splice(500);
+    old.forEach((o) => (o.attachments || []).forEach((a) => deleteFile(a.file)));
   }
   // historie netjes op tijd sorteren
   primary.thread.sort((a, b) => (a.at || '').localeCompare(b.at || ''));
