@@ -158,6 +158,20 @@ ok('naar Overige (geen pending lead)', s8.json?.status === 'overige', JSON.strin
 ok('geen team-melding in wachtrij', (await outboxQ()).length === outboxBefore8);
 ok('geen klant aangemaakt uit leveranciersmail', (await customers()).length === custBefore8);
 
+// ---------- Scenario 8b: DRS-opdracht met "factuur" in de opmerking (17 aug, Hagemans-casus) ----------
+// Een échte doorzending uit de opdracht-groep (naam+adres+postcode+telefoon) belandde
+// in Overige omdat "factuur DRS" in de opmerking het NOT_ORDER-woordfilter triggerde.
+// WET: opdracht-groep + volledige klantgegevens = ALTIJD Te controleren.
+console.log('\n== 8b. DRS-doorzending met "factuur DRS" in opmerking -> Te controleren ==');
+const s8b = await api('POST', '/api/ingest/whatsapp', {
+  group: 'raf breda', name: 'Kim Slotenmaker DRS',
+  body: 'Hallo Abdel Rafour. We sturen je de volgende klant. Graag z.s.m. contact opnemen.:\n\nDatum: 17 augustus 2026\nNaam: De heer C.L. Hagemans\nAdres: Gerard Dousingel, 16\nWoonplaats: 3351 JG - Papendrecht\nTelefoon: 0642497310\nOpmerkingen: buitensluiting sinds gisteravond mandaat 250,- factuur DRS',
+  externalId: 'sc8b',
+}, true);
+// 'pending' (drempel uit) of 'auto_approved' (drempel aan) — allebei goed; het
+// enige verboden antwoord is 'overige'.
+ok('DRS-opdracht met factuur-woord -> aanvraag (nooit Overige)', ['pending', 'auto_approved'].includes(s8b.json?.status), JSON.stringify(s8b.json));
+
 // ---------- Scenario 9: websiteformulier -> wél lead ----------
 console.log('\n== 9. Websiteformulier -> wel lead (ongewijzigd) ==');
 const s9 = await api('POST', '/api/ingest/form?token=' + TOKEN, {

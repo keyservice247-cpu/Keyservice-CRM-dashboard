@@ -716,6 +716,14 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   const hasIntakeData = !!(suggestion.customerPhone && (suggestion.customerAddress || hasPostcode));
   const otherGroupButOrder = fromOtherGroup && hasIntakeData;
   const blockAsChatter = fromOtherGroup && !hasIntakeData;
+  // OPDRACHT-GROEP MET VOLLEDIGE KLANTGEGEVENS = ALTIJD een aanvraag (17 aug 2026).
+  // Een echte DRS-doorzending (naam + adres + telefoon) belandde in Overige omdat er
+  // "factuur DRS" in de opmerking stond — het woordfilter (NOT_ORDER_WORDS: "factuur")
+  // won dan van alles. Absurd: een bericht MET klantgegevens uit een ANDERE groep werd
+  // wél als opdracht herkend (otherGroupButOrder), maar uit de opdracht-groep zelf
+  // niet. Deterministisch, geen AI-oordeel nodig. Eigen rapporten (isEigenRapport/
+  // looksReport) winnen hier nog steeds van — die check staat eerder in de keten.
+  const orderGroupIntake = channel === 'whatsapp' && !!group && isWhatsappOrderGroup(group) && hasIntakeData;
   // De AI mag overrulen: zegt hij expliciet 'geen opdracht' (incasso/leverancier/
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
@@ -750,7 +758,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
   suggestion.relevant = (looksSupplier && !onsVerkeer) ? false
     : emailIntake ? true
     : (aiSaysNotOrder || looksMarketing || looksReport || isEigenRapport) ? false
-    : (blockAsChatter ? false : (otherGroupButOrder ? true : rel.relevant));
+    : (blockAsChatter ? false : ((otherGroupButOrder || orderGroupIntake) ? true : rel.relevant));
   // Website-formulieren (offerte/contact), ook als ze via FormSubmit worden doorgestuurd
   // vanaf een noreply-adres, zijn ALTIJD een echte aanvraag. Herken de kenmerkende
   // FormSubmit-/formuliertekst en behandel als lead (niet de activatie-mail van FormSubmit).
@@ -781,6 +789,7 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     : looksMarketing
     ? 'Reclame/marketing of nieuwsbrief (bv. Bing/Microsoft/advertenties) — naar Overige.'
     : blockAsChatter ? `Collega-bericht uit groep "${group}" zonder duidelijke klantgegevens — naar Overige.`
+    : orderGroupIntake ? `Opdracht-groep "${group}" met volledige klantgegevens (telefoon + adres) — als opdracht voorgesteld.`
     : otherGroupButOrder ? `Klantgegevens (telefoon + adres) herkend in groep "${group}" — als opdracht voorgesteld.`
     : aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
 

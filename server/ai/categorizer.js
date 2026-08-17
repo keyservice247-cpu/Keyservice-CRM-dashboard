@@ -43,11 +43,15 @@ function pick(text, re) {
 
 // Bepaalt of een bericht een echte werk-aanvraag is of "ruis" (geklets, bedankjes,
 // losse reacties). Geeft { relevant: bool, reason }. Vooral voor drukke groepen.
-const WORK_WORDS = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|deur|raam|kozijn|sloten|inbra|buitengesloten|kapot|klemt|defect|stuk|vervang|repareer|reparatie|monteur|offerte|prijs|kosten|wat kost|afspraak|inplannen|langskomen|adres|woonplaats|spoed|loopwagen|rail|beslag|hang|scharnier|montage|installat)/i;
+const WORK_WORDS = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|deur|raam|kozijn|sloten|inbra|buitengesloten|buitensluit|kapot|klemt|defect|stuk|vervang|repareer|reparatie|monteur|offerte|prijs|kosten|wat kost|afspraak|inplannen|langskomen|adres|woonplaats|spoed|loopwagen|rail|beslag|hang|scharnier|montage|installat)/i;
 // STERKE slotenmaker-aanvraag: concrete fysieke termen. Deze wegen zwaarder dan de
 // "geen-opdracht"-filter, zodat een echte klantaanvraag nooit als ruis wegvalt —
 // ook al staat er toevallig een woord als "offerte" of "aanbieding" in.
-const STRONG_WORK = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|kozijn|sloten|inbra|buitengesloten|loopwagen|rail|beslag|scharnier|deur|raam|montage|installat|reparatie|repareer|monteur|kapot|klemt|defect|vervang)/i;
+// "buitensluit" dekt óók "buitensluiting" — het DRS-woord voor buitengesloten
+// (17 aug: een 98%-zekere DRS-opdracht belandde in Overige omdat alleen
+// "buitengesloten" in de lijst stond en "factuur DRS" in de opmerking het
+// NOT_ORDER-filter triggerde).
+const STRONG_WORK = /(slot|sleutel|cilinder|schuifpui|hefschuifpui|kozijn|sloten|inbra|buitengesloten|buitensluit|loopwagen|rail|beslag|scharnier|deur|raam|montage|installat|reparatie|repareer|monteur|kapot|klemt|defect|vervang)/i;
 const CHATTER_ONLY = /^(ok|oké|oke|oke[ëe]|top|prima|bedankt|dankje|dank je|dankjewel|thanks|thx|ja|nee|goed|mooi|super|perfect|duidelijk|👍|🙏|😂|😅|🙂|❤️|\?+|\.+|haha+|hihi+|proficiat|gefeliciteerd|goedemorgen|goedemiddag|goedenavond|hoi|hallo|hey|doei|tot ziens|fijne dag|welkom)[\s!.,👍🙏🙂😂😅❤️]*$/i;
 // Sterke signalen dat het GEEN klantopdracht is (incasso/leverancier/reclame/admin).
 // LET OP: "offerte van" is hier bewust NIET opgenomen — klanten vragen juist een
