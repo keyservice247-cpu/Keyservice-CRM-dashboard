@@ -850,10 +850,13 @@ function bindSourceSelect(sel) {
 }
 
 // ---------- Board ----------
+// Eén filterlijst voor bron én monteur (17 aug, verzoek eigenaar): DRS-opdrachten,
+// eigen Keyservice-opdrachten (website/mail/telefoon), of per monteur.
 function fillMonteurFilter() {
   const sel = $('#boardMonteurFilter');
-  sel.innerHTML = '<option value="">Alle monteurs</option>' +
-    state.monteurs.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
+  sel.innerHTML = '<option value="">Alle opdrachten</option>' +
+    '<optgroup label="Bron"><option value="src:drs">DRS-opdrachten</option><option value="src:eigen">Keyservice-opdrachten</option></optgroup>' +
+    (state.monteurs.length ? `<optgroup label="Monteur">${state.monteurs.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</optgroup>` : '');
 }
 
 async function loadBoard() {
@@ -939,7 +942,10 @@ function filteredOrders() {
   return state.orders.filter((o) => {
     if (state.channel === 'email' && orderChannel(o) !== 'email') return false;
     if (state.channel === 'whatsapp' && orderChannel(o) !== 'whatsapp') return false;
-    if (mont && o.monteurId !== mont) return false;
+    // Bron-keuzes (src:…) of een specifieke monteur uit dezelfde lijst.
+    if (mont === 'src:drs' && !o.isDrs) return false;
+    if (mont === 'src:eigen' && o.isDrs) return false;
+    if (mont && !mont.startsWith('src:') && o.monteurId !== mont) return false;
     if (bereik) {
       const t = new Date(o.createdAt || 0).getTime();
       if (!(t >= bereik[0] && t < bereik[1])) return false;
