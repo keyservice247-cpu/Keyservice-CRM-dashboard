@@ -1075,13 +1075,24 @@ app.post('/api/customers', requirePerm('customers'), (req, res) => {
   res.json(c);
 });
 
-app.patch('/api/customers/:id', requirePerm('customers'), (req, res) => {
+// MONTEUR mag contactgegevens bijwerken van klanten van ZIJN EIGEN opdrachten
+// (17 aug, verzoek eigenaar): hij kon geen e-mailadres toevoegen om een factuur te
+// sturen ("Geen rechten voor deze functie"). Geen vol 'customers'-recht nodig —
+// dat zou hem álle klanten laten beheren. Zelfde AVG-grens als het dossier.
+app.patch('/api/customers/:id', requireAuth, (req, res) => {
+  const magAlles = can(req.user, 'customers');
+  if (!magAlles) {
+    const vanEigenOpdracht = req.user.role === 'monteur'
+      && db().orders.some((o) => o.customerId === req.params.id && o.monteurId && o.monteurId === req.user.monteurId);
+    if (!vanEigenOpdracht) return res.status(403).json({ error: 'Geen rechten voor deze functie — vraag de beheerder' });
+  }
   const c = db().customers.find((x) => x.id === req.params.id);
   if (!c) return res.status(404).json({ error: 'Niet gevonden' });
   for (const k of ['name', 'phone', 'email', 'address', 'type', 'notes']) {
     if (k in (req.body || {})) c[k] = req.body[k];
   }
   if ('campaignOptOut' in (req.body || {})) c.campaignOptOut = !!req.body.campaignOptOut;
+  logActivity(req.user.name, 'klantgegevens bijgewerkt', `${c.name || c.id}`);
   saveSoon();
   res.json(c);
 });

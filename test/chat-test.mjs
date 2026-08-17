@@ -296,6 +296,12 @@ cookie = '';
 await api('POST', '/api/login', { email: 'monteur2@keyservice.nl', password: 'monteur123' });
 const m2Chats2 = await api('GET', '/api/chats');
 ok('na afronden: gesprek WEG uit de monteur-lijst', !(m2Chats2.json || []).some((c) => c.id === gesprek.id), JSON.stringify((m2Chats2.json || []).map((c) => c.id)));
+// Klantgegevens (17 aug): monteur mag contactgegevens van ZIJN klant bijwerken
+// (e-mail toevoegen om een factuur te sturen) — andermans klanten niet.
+const m2Patch = await api('PATCH', `/api/customers/${gesprek.id}`, { email: 'chatklant@example.nl' });
+ok('monteur mag e-mail van eigen klant toevoegen', m2Patch.status === 200 && m2Patch.json?.email === 'chatklant@example.nl', JSON.stringify(m2Patch.json));
+const m2PatchVreemd = await api('PATCH', `/api/customers/${znId}`, { email: 'hack@example.nl' });
+ok('monteur mag andermans klant NIET bewerken', m2PatchVreemd.status === 403, JSON.stringify(m2PatchVreemd.json));
 cookie = adminCookie;
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
