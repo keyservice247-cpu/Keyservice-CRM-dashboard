@@ -40,7 +40,7 @@ import { ensureSeed } from './seed.js';
 import { amsterdamParts } from './week.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
-  findCustomerStrong, senderPhoneFromText, matchPhone,
+  findCustomerStrong, senderPhoneFromText, matchPhone, queueCrmWhatsappAlert,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
@@ -3567,6 +3567,26 @@ function outboxOnderhoud() {
   } catch (e) { console.error('[outbox-onderhoud]', e.message); }
 }
 
+// SCHIJFRUIMTE-BEWAKING (18 aug, verzoek eigenaar: "niet dat de opslag vol zit en ik
+// niks doorheb"). Elke 6 uur een meting; zakt de vrije ruimte onder de 500 MB, dan
+// gaat er max 1x per dag een push + team-melding uit met het klikpad om op te ruimen.
+// De mailbox heeft al z'n eigen bewaking (rood lampje in de zijbalk vanaf 90% vol).
+function schijfBewaking() {
+  try {
+    const DATA = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+    let freeMb = null;
+    try { const st = fs.statfsSync(DATA); freeMb = Math.round((st.bavail * st.bsize) / 1048576); } catch { return; }
+    if (freeMb === null || freeMb >= 500) return;
+    const vandaag = new Date().toISOString().slice(0, 10);
+    if (db()._laatsteSchijfAlarmDag === vandaag) return;
+    db()._laatsteSchijfAlarmDag = vandaag;
+    sendPush({ title: '⚠ Schijfruimte bijna vol', body: `Nog maar ${freeMb} MB vrij op de server. Ruim op via Instellingen → Systeem (Foto's & video's beheren, back-ups opruimen).`, url: '/' }).catch(() => {});
+    queueCrmWhatsappAlert(`⚠ CRM: schijfruimte bijna vol — nog ${freeMb} MB vrij. Ruim op via Instellingen → Systeem (Foto's & video's beheren).`);
+    logActivity('systeem', 'schijfruimte-alarm', `${freeMb} MB vrij`);
+    saveSoonQuiet();
+  } catch { /* bewaking mag nooit iets anders breken */ }
+}
+
 // Eenmalig bij het opstarten: recente MISLUKTE groeps-berichten (monteur-dispatch,
 // terugkoppeling, CRM-meldingen) terug in de wachtrij zetten. Tijdens de WhatsApp-
 // storing zijn die ten onrechte als definitief mislukt gemarkeerd; zodra de bridge
@@ -4706,10 +4726,17 @@ app.post('/api/learn-filter', requireRole('admin'), async (req, res) => {
 
 // Lichte "is er iets veranderd?"-check voor live-updates. Het dashboard pollt
 // dit elke paar seconden en ververst alleen als de versie veranderd is.
+// APP-VERSIE (18 aug): een PWA op het beginscherm herlaadt zichzelf nooit — wie de
+// app dagen open laat staan draait code van dagen geleden ("mijn filters zijn er
+// niet", "de prullenbak doet raar"). De server geeft z'n opstartmoment mee; ziet
+// de pagina een ander opstartmoment dan waarmee hij begon, dan ververst hij
+// zichzelf op een veilig moment (geen open kaart-venster, geen getypte tekst).
+const APP_BOOT_VERSIE = now();
 app.get('/api/pulse', requireAuth, (req, res) => {
   const mq = db()._mailboxQuota;
   res.json({
     v: changeVersion(),
+    appV: APP_BOOT_VERSIE,
     pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
     // Mailbox-vulgraad (alleen meegeven als bijna vol — anders blijft het stil).
     mailboxPct: (mq && mq.supported && mq.pct >= 90) ? mq.pct : null,
@@ -5118,7 +5145,7 @@ app.get('/api/agenda', requireAuth, (req, res) => {
       return {
         id: o.id, title: o.title, at: o.appointmentAt, endAt: o.appointmentEndAt || null, status: o.status, statusLabel: labels[o.status] || o.status,
         customer: c.name || '', phone: c.phone || '', address: c.address || '',
-        monteur: m ? m.name : '', source: o.source || '', isDrs,
+        monteur: m ? m.name : '', monteurId: o.monteurId || null, source: o.source || '', isDrs,
       };
     })
     .sort((a, b) => new Date(a.at) - new Date(b.at));
@@ -5421,6 +5448,9 @@ app.listen(PORT, () => {
   // Wachtrij-onderhoud: vervallen, ongeldig nummer, verouderde "wacht op bevestiging".
   outboxOnderhoud();
   setInterval(outboxOnderhoud, 5 * 60 * 1000);
+  // Schijfruimte in de gaten houden (alarm bij <500 MB vrij, max 1x/dag).
+  setTimeout(schijfBewaking, 30000);
+  setInterval(schijfBewaking, 6 * 60 * 60 * 1000);
   // Zelftest bij het opstarten: controleert token/nummer én repareert automatisch het
   // ontvangst-abonnement (subscribed_apps) — dan hoeft niemand daarvoor op een knop te
   // drukken en herstelt elke deploy de koppeling vanzelf.

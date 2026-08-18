@@ -249,6 +249,17 @@ de regressie meegroeit.
   Start (GET /api/search?q=, min 2 tekens): klanten/kaarten/facturen/berichten
   in één veld, telefoon genormaliseerd (+31↔06), klik opent dossier/kaart/
   factuur/bericht-modal; monteur alleen eigen data en géén berichten.
+- **Zelf-verversende PWA + bewaking (18 aug):** /api/pulse geeft `appV` (server-
+  opstartmoment) mee; ziet een open scherm na een deploy een andere waarde, dan
+  herlaadt het zichzelf op een veilig moment (geen open modal/chat-tekst/selectie)
+  — een beginscherm-PWA draaide anders dagenlang oude code ("mijn filters zijn er
+  niet"). Bord-filter = bron (DRS/Keyservice) + per monteur in één lijst
+  (src:drs/src:eigen/monteurId); agenda-filter idem (all/drs/eigen/m:<id>,
+  vulAgendaScope). Samenvoegen stuurt de bronkaart naar de PRULLENBAK (met
+  verwijzing) i.p.v. hard weg — bijlage-verwijzingen verhuizen naar de hoofdkaart.
+  schijfBewaking (6-uurlijks): <500 MB vrij → push + team-melding, max 1x/dag.
+  Monteur mag contactgegevens van klanten van eigen opdrachten bijwerken (PATCH
+  /api/customers/:id zonder vol 'customers'-recht).
 - **Bord periode-filter (28 jul):** keuzelijst op Opdrachten/E-mail/WhatsApp-bord
   ("Vandaag/Gisteren/Deze week/Vorige week/Deze maand binnengekomen"): filtert op
   order.createdAt over ÁLLE kolommen (ook afgerond/geannuleerd/offerte); bij actieve

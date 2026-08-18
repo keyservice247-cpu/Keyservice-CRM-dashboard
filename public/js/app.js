@@ -263,6 +263,23 @@ async function startLiveUpdates() {
     try {
       const p = await api('/api/pulse');
       if (!p) return;
+      // ZELF-VERVERSING (18 aug): draait de server inmiddels een nieuwere versie
+      // (deploy geweest), dan herlaadt de app zichzelf — maar alleen op een veilig
+      // moment: geen open venster, geen getypte chat-tekst, geen lopende selectie.
+      // Een PWA op het beginscherm herlaadt anders NOOIT en toont dagenlang oude code.
+      if (p.appV) {
+        if (!window._appV) window._appV = p.appV;
+        else if (window._appV !== p.appV && !window._appReloading) {
+          const modalOpen = !$('#modalRoot')?.hidden;
+          const chatTekst = ($('#cpText')?.value || '').trim();
+          if (!modalOpen && !chatTekst && !boardSel.size) {
+            window._appReloading = true;
+            toast('Nieuwe versie van het CRM — het scherm ververst zich even…');
+            setTimeout(() => location.reload(), 1500);
+            return;
+          }
+        }
+      }
       // Inbox-badge meteen bijwerken.
       const badge = $('#inboxBadge');
       if (badge) { badge.textContent = p.pendingReviews; badge.hidden = p.pendingReviews === 0; }
@@ -2909,10 +2926,25 @@ async function loadAgenda() {
   state.orders = orders; // zodat het openen van een kaart de volledige opdracht heeft
   renderAgenda();
 }
+// Het agenda-filter kent naast Alles/DRS/Keyservice ook elke monteur (17 aug,
+// verzoek eigenaar: "de agenda van Youssef apart kunnen zien").
+function vulAgendaScope() {
+  const sel = $('#agendaScope');
+  if (!sel || sel.dataset.gevuld === JSON.stringify((state.monteurs || []).map((m) => m.id))) return;
+  const huidig = sel.value;
+  sel.innerHTML = '<option value="all">Alle afspraken</option>'
+    + '<option value="drs">Alleen DRS</option><option value="eigen">Alleen Keyservice</option>'
+    + ((state.monteurs || []).length ? `<optgroup label="Monteur">${state.monteurs.map((m) => `<option value="m:${m.id}">${esc(m.name)}</option>`).join('')}</optgroup>` : '');
+  sel.dataset.gevuld = JSON.stringify((state.monteurs || []).map((m) => m.id));
+  if ([...sel.options].some((o) => o.value === huidig)) sel.value = huidig;
+}
 function renderAgenda() {
+  vulAgendaScope();
   const scope = $('#agendaScope')?.value || 'all';
   let items = state._agenda || [];
   if (scope === 'drs') items = items.filter((a) => a.isDrs);
+  else if (scope === 'eigen') items = items.filter((a) => !a.isDrs);
+  else if (scope.startsWith('m:')) items = items.filter((a) => a.monteurId === scope.slice(2));
   const wrap = $('#agendaList');
   // BELANGRIJK: één afspraak met een onleesbare datum mag NOOIT de hele agenda leeg
   // maken. We slaan zulke afspraken over (en tellen ze) i.p.v. te crashen op toISOString().
