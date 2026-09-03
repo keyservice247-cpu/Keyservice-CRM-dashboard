@@ -151,6 +151,9 @@ async function poll({ host, port, user, pass }) {
     try {
       await mainClient.connect();
       await processInbox(mainClient, simpleParser, since); // hoofdaccount -> mailbox '' (ongewijzigd)
+      // Geslaagde ronde vastleggen: de systeemcheck + watchdog slaan alarm als dit
+      // langer dan 3 uur uitblijft (verlopen wachtwoord = stil geen leads meer).
+      try { db()._imapLaatstOk = now(); } catch { /* nooit blokkeren */ }
       await processSent(mainClient, simpleParser, since).catch((e) => console.error('  IMAP (Verzonden):', e.message));
     } catch (e) {
       // Valt het hoofdaccount uit, dan behouden we exact de oude logregel; de extra

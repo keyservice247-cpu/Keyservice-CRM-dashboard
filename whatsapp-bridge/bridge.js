@@ -379,7 +379,19 @@ function toChatId(phone) {
 function startOutbox() {
   console.log(`[outbox] poller actief — checkt ${DASHBOARD_URL}/api/outbox elke 8s`);
   let warned = false;
+  // Nooit twee rondes tegelijk (audit 18 aug): duurde het versturen (6 foto's) langer
+  // dan 8 seconden, dan haalde de volgende ronde dezelfde wachtrij nog eens op en
+  // ging een bericht dubbel de deur uit. Het CRM claimt items nu óók 2 minuten, maar
+  // deze vlag houdt het aan de bron al tegen.
+  let bezig = false;
   const tick = async () => {
+    if (bezig) return;
+    bezig = true;
+    try {
+      await tickRonde();
+    } finally { bezig = false; }
+  };
+  const tickRonde = async () => {
     try {
       const resp = await fetch(`${DASHBOARD_URL}/api/outbox`, { headers: { 'x-ingest-token': INGEST_TOKEN } });
       if (!resp.ok) {

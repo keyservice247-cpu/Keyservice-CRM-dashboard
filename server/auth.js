@@ -18,9 +18,14 @@ export function verifyPassword(password, stored) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// Sessies verlopen na 30 dagen en verlopen exemplaren worden opgeruimd (audit 18
+// aug): eerder bleef een gelekt cookie eeuwig geldig en groeide de lijst onbegrensd.
+const SESSIE_DAGEN = 30;
 export function createSession(userId) {
   const token = crypto.randomBytes(32).toString('hex');
-  db().sessions.push({ token, userId, createdAt: now() });
+  const nu = Date.now();
+  db().sessions = (db().sessions || []).filter((s) => !s.expiresAt || new Date(s.expiresAt).getTime() > nu);
+  db().sessions.push({ token, userId, createdAt: now(), expiresAt: new Date(nu + SESSIE_DAGEN * 86400000).toISOString() });
   saveSoon();
   return token;
 }
@@ -36,6 +41,7 @@ export function userFromToken(token) {
   if (!token) return null;
   const session = db().sessions.find((s) => s.token === token);
   if (!session) return null;
+  if (session.expiresAt && new Date(session.expiresAt).getTime() < Date.now()) return null; // verlopen
   return db().users.find((u) => u.id === session.userId) || null;
 }
 
@@ -103,6 +109,10 @@ export function can(user, key) {
   return !!(ROLE_PERM_DEFAULTS[user.role] || {})[key];
 }
 export function requirePerm(key) {
+  // Bij het OPSTARTEN afdwingen dat de sleutel bestaat (audit 18 aug): een typfout
+  // zoals 'invoices' i.p.v. 'invoicesAll' gaf maandenlang stil 403 voor iedereen
+  // behalve admin. Nu weigert de server te starten met een duidelijke fout.
+  if (!PERM_KEYS.includes(key)) throw new Error(`requirePerm('${key}'): onbekend recht — kies uit ${PERM_KEYS.join(', ')}`);
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Niet ingelogd' });
     if (!can(req.user, key)) return res.status(403).json({ error: 'Geen rechten voor deze functie — vraag de beheerder' });

@@ -72,6 +72,18 @@ async function checkIMAP() {
       if (parts.length) return { ok: true, configured: true, detail: `Actief (${process.env.IMAP_HOST}) · ${parts.join(' · ')}` };
     }
   } catch { /* quotum niet opvraagbaar — val terug op de simpele melding */ }
+  // ECHT MEEKIJKEN (audit 18 aug): "ingesteld" is niet hetzelfde als "werkt". De
+  // poller zet na elke geslaagde ronde een tijdstempel; blijft die langer dan 3 uur
+  // uit terwijl de server al zo lang draait, dan komt er géén mail meer binnen — en
+  // dat moet rood zijn, anders verdwijnen leads dagenlang stil.
+  try {
+    const { db } = await import('./db.js');
+    const laatst = db()._imapLaatstOk ? new Date(db()._imapLaatstOk).getTime() : 0;
+    const draaitSinds = Number(process.uptime()) * 1000;
+    if (draaitSinds > 3 * 3600000 && Date.now() - laatst > 3 * 3600000) {
+      return { ok: false, configured: true, detail: `E-mail ONTVANGEN werkt niet: al ${laatst ? Math.round((Date.now() - laatst) / 3600000) + ' uur' : 'sinds de start'} geen geslaagde mailronde (${process.env.IMAP_HOST}). Controleer het IMAP-wachtwoord in Render.` };
+    }
+  } catch { /* nooit de check zelf laten omvallen */ }
   return { ok: true, configured: true, detail: `Actief (${process.env.IMAP_HOST})` };
 }
 

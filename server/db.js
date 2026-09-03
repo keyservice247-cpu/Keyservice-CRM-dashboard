@@ -274,6 +274,10 @@ function applyChanges(ch) {
 
 // Welke lijsten moeten we deze ronde vergelijken? Alleen de aangeraakte — behalve bij
 // de eerste ronde, een controleronde of een terugzet-actie: dan alles.
+// Alles als gewijzigd markeren: de volgende schrijfronde is dan volledig (gebruikt
+// bij het afsluiten, zodat een half afgebroken chunk-ronde nooit data kwijtraakt).
+export function markAllDirty() { touchAll = true; }
+
 function teControleren() {
   if (touchAll) { touchAll = false; touched = new Set(); return { record: RECORD_COLLS.slice(), overig: null }; }
   const aangeraakt = [...touched];

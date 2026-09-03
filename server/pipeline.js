@@ -261,6 +261,10 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     (overrides.status && normalizeStatus(overrides.status) !== normalizeStatus(s.status))
     || (typeof overrides.title === 'string' && overrides.title.trim() && overrides.title.trim() !== String(s.title || '').trim())
     || !!overrides.monteurId
+    // Een herschreven omschrijving of gecorrigeerd adres is óók een bewuste eigen kaart
+    // (audit 18 aug): die correcties gingen anders verloren in het stille samenvoegen.
+    || (typeof overrides.description === 'string' && overrides.description.trim() && overrides.description.trim() !== String(s.problem || '').trim())
+    || (typeof overrides.customerAddress === 'string' && overrides.customerAddress.trim() && overrides.customerAddress.trim() !== String(s.customerAddress || '').trim())
   );
   // Ander adres dan de open kaart? Dan is het vrijwel zeker een ANDERE klus — Regel 1.
   const otherAddress = !!(intake.address && addressDiffers((openOrder && openOrder.intake && openOrder.intake.address) || customer.address, intake.address));

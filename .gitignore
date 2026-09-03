@@ -11,3 +11,7 @@ data/backups/
 whatsapp-bridge/pending-forwards.json
 whatsapp-bridge/.wwebjs_auth/
 whatsapp-bridge/.wwebjs_cache/
+
+# Database en archieven nooit in git (echte klantdata, sessietokens)
+data/db.sqlite*
+data/archives/

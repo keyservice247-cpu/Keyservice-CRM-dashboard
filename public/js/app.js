@@ -54,15 +54,30 @@ function sourceIcon(label) {
 }
 
 async function api(path, method = 'GET', body) {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { 'content-type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (res.status === 401) { window.location.href = '/'; return; }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Er ging iets mis');
-  return data;
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body ? { 'content-type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    // Geen verbinding (mobiel bereik weg, server herstart): geen Engelse "Failed to
+    // fetch" meer, maar een eerlijke melding — en de aanroeper weet dat er NIETS is
+    // opgeslagen (audit 18 aug, "soms een foutmelding bij statuswissel").
+    throw new Error('Geen verbinding — de wijziging is niet opgeslagen. Probeer het zo opnieuw.');
+  }
+  // Sessie verlopen: naar het inlogscherm. De aanroeper mag dan niet doorlopen met
+  // "undefined" (gaf een Engelse JS-fout in de rode balk) — deze belofte lost nooit
+  // op; de pagina navigeert toch weg.
+  if (res.status === 401) { window.location.href = '/'; return new Promise(() => {}); }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    if (data && data.error) throw new Error(data.error);
+    // Geen JSON terug (bv. 502 tijdens een herstart van de server): eerlijk zeggen.
+    throw new Error(res.status >= 500 ? 'De server is even niet bereikbaar (herstart?) — probeer het over een halve minuut opnieuw.' : 'Er ging iets mis');
+  }
+  return data ?? {};
 }
 
 function toast(msg, isError = false) {
@@ -193,7 +208,9 @@ function hasPerm(key) {
     // gesprekken van zijn eigen klanten (en geen onbekende nummers).
     const monteurAllowed = ['board', 'agenda', 'invoices', 'chats'];
     if (hasPerm('inbox')) monteurAllowed.push('inbox');
-    $$('.nav-item, .bn-item').forEach((el) => { if (!monteurAllowed.includes(el.dataset.view)) el.hidden = true; });
+    // Knoppen zonder data-view (zoals Zoeken in de onderbalk) blijven staan — die
+    // verdwenen eerst mee omdat 'undefined' nooit in de lijst zit (audit 18 aug).
+    $$('.nav-item, .bn-item').forEach((el) => { if (el.dataset.view && !monteurAllowed.includes(el.dataset.view)) el.hidden = true; });
   }
 
   bindNav();
@@ -279,6 +296,12 @@ async function startLiveUpdates() {
             return;
           }
         }
+      }
+      // Kolommen gewijzigd door een collega (hernoemd/toegevoegd)? Kolomlijst verversen,
+      // anders geeft slepen naar de nieuwe kolom "Ongeldige status" (audit 18 aug).
+      if (p.metaV) {
+        if (!window._metaV) window._metaV = p.metaV;
+        else if (window._metaV !== p.metaV) { window._metaV = p.metaV; refreshMeta().then(() => { if (state.view === 'board') loadBoard(); }).catch(() => {}); }
       }
       // Inbox-badge meteen bijwerken.
       const badge = $('#inboxBadge');
@@ -871,9 +894,12 @@ function bindSourceSelect(sel) {
 // eigen Keyservice-opdrachten (website/mail/telefoon), of per monteur.
 function fillMonteurFilter() {
   const sel = $('#boardMonteurFilter');
+  // Een monteur ziet toch alleen zijn eigen kaarten: collega's in de lijst waren dode
+  // opties die een leeg bord opleverden.
+  const toonMonteurs = state.me?.role !== 'monteur' && (state.monteurs || []).length;
   sel.innerHTML = '<option value="">Alle opdrachten</option>' +
     '<optgroup label="Bron"><option value="src:drs">DRS-opdrachten</option><option value="src:eigen">Keyservice-opdrachten</option></optgroup>' +
-    (state.monteurs.length ? `<optgroup label="Monteur">${state.monteurs.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</optgroup>` : '');
+    (toonMonteurs ? `<optgroup label="Monteur">${state.monteurs.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</optgroup>` : '');
 }
 
 async function loadBoard() {
@@ -1051,17 +1077,34 @@ function renderBoard() {
     col.addEventListener('dragleave', () => col.closest('.column').classList.remove('drag-over'));
     col.addEventListener('drop', async (e) => {
       e.preventDefault();
+      // Meteen vrijgeven (audit 18 aug): renderBoard() hieronder vervangt het gesleepte
+      // element, waardoor 'dragend' soms nooit vuurt en _dragging voorgoed op true
+      // bleef — dan stopte de 5-seconden-verversing en veroudert het bord onbeperkt.
+      window._dragging = false;
       col.closest('.column').classList.remove('drag-over');
       const id = e.dataTransfer.getData('text/plain');
       const newStatus = col.dataset.status;
       const order = state.orders.find((o) => o.id === id);
-      if (order && order.status !== newStatus) {
-        order.status = newStatus;
-        renderBoard();
-        const moved = $(`.card[data-id="${id}"]`); if (moved) moved.classList.add('just-moved');
-        try { await api(`/api/orders/${id}`, 'PATCH', { status: newStatus }); toast('Status bijgewerkt'); await loadBoard(); flash(`.card[data-id="${id}"]`); }
-        catch (err) { toast(err.message, true); loadBoard(); }
+      if (!order) {
+        // Kaart staat niet (meer) in het geheugen: verouderd bord. Niet stil niks doen.
+        toast('Deze kaart is intussen gewijzigd — het bord wordt ververst');
+        loadBoard();
+        return;
       }
+      if (order.status === newStatus) return;
+      // Monteur + kolom met verplichte notitie: niet tegen een 400 aanlopen, maar de
+      // kaart openen met de cursor in het notitieveld (zelfde regel als in de modal).
+      if (state.me.role === 'monteur' && ['offerte_verzonden', 'afgerond', 'geannuleerd'].includes(newStatus) && !(order.notes || '').trim()) {
+        toast('Vul eerst een korte notitie in (wat is er gedaan/afgesproken) — de kaart gaat nu open');
+        openOrderModal(id);
+        setTimeout(() => { const s = $('#f-status'); if (s) s.value = newStatus; $('#f-notes')?.focus(); }, 300);
+        return;
+      }
+      order.status = newStatus;
+      renderBoard();
+      const moved = $(`.card[data-id="${id}"]`); if (moved) moved.classList.add('just-moved');
+      try { await api(`/api/orders/${id}`, 'PATCH', { status: newStatus }); toast('Status bijgewerkt'); await loadBoard(); flash(`.card[data-id="${id}"]`); }
+      catch (err) { toast(err.message, true); loadBoard(); }
     });
   });
 
@@ -1125,13 +1168,22 @@ window.addEventListener('resize', () => { if (state.view === 'board' && state.or
 // patroon als de prullenbak. Zo is een per ongeluk geveegde kaart nooit een probleem.
 function advanceStatus(id, dir = 1) {
   const o = state.orders.find((x) => x.id === id); if (!o) return;
+  if (o._bezig) return; // tweede veeg terwijl de eerste nog onderweg is: negeren
   const keys = (state.meta.statuses || []).map((s) => s.key);
   const i = keys.indexOf(o.status);
   const j = i + dir;
-  if (i < 0 || j < 0 || j >= keys.length) { toast(dir > 0 ? 'Al in de laatste kolom' : 'Al in de eerste kolom', true); loadBoard(); return; }
+  // Aan de rand van het bord is GEEN fout — dus geen rode balk (audit 18 aug).
+  if (i < 0 || j < 0 || j >= keys.length) { toast(dir > 0 ? 'Staat al in de laatste kolom' : 'Staat al in de eerste kolom'); loadBoard(); return; }
   const next = keys[j];
+  if (state.me.role === 'monteur' && ['offerte_verzonden', 'afgerond', 'geannuleerd'].includes(next) && !(o.notes || '').trim()) {
+    toast('Vul eerst een korte notitie in — de kaart gaat nu open');
+    openOrderModal(id);
+    setTimeout(() => { const s = $('#f-status'); if (s) s.value = next; $('#f-notes')?.focus(); }, 300);
+    return;
+  }
   const vorige = o.status;   // vóór de wijziging vastleggen — hier zet de undo-knop 'm op terug
   o.status = next;
+  o._bezig = true;
   api(`/api/orders/${id}`, 'PATCH', { status: next })
     .then(() => {
       loadBoard();
@@ -1141,7 +1193,8 @@ function advanceStatus(id, dir = 1) {
         loadBoard();
       });
     })
-    .catch((e) => { toast(e.message, true); loadBoard(); });
+    .catch((e) => { toast(e.message, true); loadBoard(); })
+    .finally(() => { o._bezig = false; });
 }
 
 // Swipe-acties op kaarten (alleen mobiel): rechts = volgende kolom, links = vorige kolom.
@@ -1318,7 +1371,13 @@ function fmtDateShort(s) {
 }
 
 function statusOptionsHTML(selected) {
-  return (state.meta.statuses || []).map((s) => `<option value="${esc(s.key)}" ${selected === s.key ? 'selected' : ''}>${esc(s.label)}</option>`).join('');
+  const lijst = state.meta.statuses || [];
+  let html = lijst.map((s) => `<option value="${esc(s.key)}" ${selected === s.key ? 'selected' : ''}>${esc(s.label)}</option>`).join('');
+  // Huidige status niet (meer) in de kolommenlijst (kolom hernoemd/verwijderd, of
+  // verouderde meta)? Dan als eigen optie tonen — anders viel de keuze stil terug op
+  // de eerste kolom en verzette één klik op Opslaan de kaart ongemerkt naar "Nieuw".
+  if (selected && !lijst.some((s) => s.key === selected)) html = `<option value="${esc(selected)}" selected>${esc(selected)} (onbekende kolom)</option>` + html;
+  return html;
 }
 
 // ---------- Order modal ----------
@@ -1393,12 +1452,12 @@ function openOrderModal(id, pool) {
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
     ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}</div>` : ''}
     ${o && o.customerIncomplete ? `<div class="sug-banner sug-warn">${icon('user', 13)} <strong>Klant onbekend — aanvullen.</strong> Er is geen echte klantnaam in het bericht gevonden (de afzender is nooit automatisch de klant). Vul hieronder de klantgegevens aan.</div>` : ''}
-    ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open kaart <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. <span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span></div>` : ''}
-    ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de kaart gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from || '—')}"</span> → <strong>"${esc(sg.to)}"</strong> <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span></div>`).join('')}</div>` : ''}
+    ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open kaart <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. ${canWrite ? `<span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span>` : ''}</div>` : ''}
+    ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de kaart gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from || '—')}"</span> → <strong>"${esc(sg.to)}"</strong>${canWrite ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label>
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
-      <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}" ${isMonteur ? 'disabled' : ''}></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" ${isMonteur ? 'disabled' : ''}></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" ${isMonteur ? 'disabled' : ''} placeholder="e-mailadres klant"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}" ${isMonteur ? 'disabled' : ''}></label> </div>`}
+      <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}"></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" placeholder="e-mailadres klant (nodig voor de factuur)"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}"></label> </div>${o.customer?.phone ? `<div class="muted small" style="margin:-4px 0 10px"><a href="tel:${esc(String(o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 12)} Bel ${esc(o.customer.phone)}</a></div>` : ''}`}
     <div class="form-sec">${icon('calendar', 13)} Planning &amp; status</div> <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''}${o && o.googleSyncError ? `<div class="muted small" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--danger);background:var(--danger-soft, rgba(220,53,69,.08))"><strong>Niet in Google Agenda.</strong> ${esc(o.googleSyncError)} — ga naar Instellingen → Koppelingen en klik "Controleer &amp; herstel nu".</div>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <div class="form-sec">${icon('message', 13)} Intern</div> <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     ${o ? `
@@ -1421,7 +1480,7 @@ function openOrderModal(id, pool) {
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && o.customer?.address ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.customer.address)}" title="Navigeer naar het klantadres">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o ? `<button class="btn" id="f-onweg" title="Stuur de klant een mail + appje dat de monteur nu onderweg is">${icon('pin', 14)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && (o.intake?.address || o.customer?.address) ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}" title="Navigeer naar het adres van déze aanvraag">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o ? `<button class="btn" id="f-onweg" title="Stuur de klant een mail + appje dat de monteur nu onderweg is">${icon('pin', 14)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Sluiten</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   bindSourceSelect($('#modal [data-source]'));
   // Suggestie-knoppen (lead-instroom wetten): de mens beslist, het systeem nooit.
@@ -1532,7 +1591,7 @@ function openOrderModal(id, pool) {
       toast('Bericht verwijderd uit historie');
     } catch (err) { toast(err.message, true); }
   });
-  if (o) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
+  if (o && $('#f-reply')) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
   // "Zet in Google Agenda": gebruikt de actuele velden in het formulier op het moment van klikken.
   if (o) { const g = $('#f-gcal'); if (g) g.onclick = (e) => {
     const appt = $('#f-appt')?.value;
@@ -1607,10 +1666,17 @@ function openOrderModal(id, pool) {
     }
     const payload = {
       status: $('#f-status').value,
-      appointmentAt: $('#f-appt').value || null,
-      appointmentEndAt: $('#f-appt-end') ? ($('#f-appt-end').value || null) : null,
       notes: $('#f-notes').value,
     };
+    // Afspraakvelden ALLEEN meesturen als ze echt gewijzigd zijn (audit 18 aug): de
+    // server ziet een meegestuurde afspraak als "afspraak gezet" en draaide dan bij
+    // elke gewone opslag opnieuw de bevestiging + monteur-dispatch.
+    const apptNu = $('#f-appt').value || null;
+    const apptWas = o?.appointmentAt ? o.appointmentAt.slice(0, 16) : null;
+    if (!o || apptNu !== apptWas) payload.appointmentAt = apptNu;
+    const apptEindNu = $('#f-appt-end') ? ($('#f-appt-end').value || null) : null;
+    const apptEindWas = o?.appointmentEndAt ? o.appointmentEndAt.slice(0, 16) : null;
+    if (!o || apptEindNu !== apptEindWas) payload.appointmentEndAt = apptEindNu;
     if (canWrite) {
       payload.title = $('#f-title').value;
       payload.monteurId = $('#f-monteur').value || null;
@@ -1624,9 +1690,12 @@ function openOrderModal(id, pool) {
         // Klantgegevens op de kaart bewerkt? Dan gaan die naar het klantrecord ÉN
         // naar order.intake — zodat "Stuur naar monteur" altijd de verbeterde
         // gegevens gebruikt (nooit meer de oude AI-extractie).
-        if (canWrite && o.customer) {
+        // Ook de MONTEUR mag de contactgegevens van zijn eigen klant bijwerken (server
+        // staat dat sinds 17 aug toe) — hij moet een e-mailadres kunnen invullen om te
+        // factureren. Alleen de intake-kopie op de kaart blijft aan kantoor.
+        if (o.customer) {
           const cp = { name: $('#f-ccname')?.value, phone: $('#f-ccphone')?.value, email: $('#f-ccemail')?.value, address: $('#f-ccaddress')?.value };
-          payload.intake = { name: cp.name, phone: cp.phone, email: cp.email, address: cp.address };
+          if (canWrite) payload.intake = { name: cp.name, phone: cp.phone, email: cp.email, address: cp.address };
           // Het klantrecord kan apart mislukken (bv. geen recht op Klanten, of een
           // serverfout). Die fout werd hier stil weggegooid en het scherm zei tóch
           // "Opgeslagen" — de gebruiker dacht dat de gegevens klopten terwijl ze weg
@@ -1685,7 +1754,9 @@ async function loadInbox(append = false) {
   if (bulkBar && state.me.role !== 'monteur') bulkBar.hidden = reviews.length === 0;
   // Op de prullenbak-weergave verbergen we approve/afwijs-acties; toon evt. 'legen'.
   const inTrash = filter === 'rejected';
-  ['#bulkApproveBtn', '#bulkApprovePct', '#bulkRejectBtn', '#rejectAllOverigeBtn', '#rejectAllPendingBtn'].forEach((sel) => { const e = $(sel); if (e) e.style.display = inTrash ? 'none' : (sel.includes('Overige') ? (filter === 'overige' ? '' : 'none') : sel.includes('Pending') ? (filter === 'pending' ? '' : 'none') : ''); });
+  // "Accepteer boven drempel" werkt alleen op Te controleren — dus ook alleen dáár
+  // tonen (op Overige leek de knop niets te doen terwijl hij elders kaarten maakte).
+  ['#bulkApproveBtn', '#bulkApprovePct', '#bulkRejectBtn', '#rejectAllOverigeBtn', '#rejectAllPendingBtn'].forEach((sel) => { const e = $(sel); if (e) e.style.display = inTrash ? 'none' : (sel.includes('Overige') ? (filter === 'overige' ? '' : 'none') : (sel.includes('Pending') || sel.includes('Approve')) ? (filter === 'pending' ? '' : 'none') : ''); });
   if ($('#emptyRejectedBtn')) $('#emptyRejectedBtn').style.display = (inTrash && hasPerm('hardDelete')) ? '' : 'none';
   if ($('#selectAll')) $('#selectAll').checked = false;
   updateBulkCount();
@@ -2378,7 +2449,7 @@ function openInvoiceModal(o, type = 'factuur') {
   api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [], bundles = [] }) => {
     renderInvoiceEditor({
       inv: invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept', type },
-      customer: o.customer || {}, contextTitle: o.title, werkbon: o.werkbon || null, priceList, bundles,
+      customer: o.customer || {}, order: o, contextTitle: o.title, werkbon: o.werkbon || null, priceList, bundles,
       save: (body) => api(`/api/orders/${o.id}/invoice`, 'POST', { ...body, type }),
       after: () => loadBoard(),
     });
@@ -2388,7 +2459,7 @@ function openInvoiceModal(o, type = 'factuur') {
 function openStandaloneInvoice(invId) {
   api(`/api/invoices/${invId}`).then(({ invoice, customer, order, priceList = [], bundles = [] }) => {
     renderInvoiceEditor({
-      inv: invoice, customer: customer || {}, contextTitle: order?.title || (customer?.name || ''), werkbon: order?.werkbon || null, priceList, bundles,
+      inv: invoice, customer: customer || {}, order: order || null, contextTitle: order?.title || (customer?.name || ''), werkbon: order?.werkbon || null, priceList, bundles,
       save: (body) => api(`/api/invoices/${invoice.id}`, 'PATCH', body),
       after: () => { if (state._invoices) loadInvoices(); },
     });
@@ -2906,10 +2977,16 @@ function renderStatusScan(out) {
     const items = $$('.ss-apply');
     if (!items.length) return;
     if (!confirm(`${items.length} statuswijziging(en) in één keer toepassen?`)) return;
-    let ok = 0; const done = [];
-    for (const b of items) { try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to }); ok++; done.push(b.dataset.id); } catch { /* skip */ } }
+    let ok = 0; let mislukt = 0; let laatsteFout = ''; const done = [];
+    for (const b of items) {
+      // Zelfde velden als de losse knop: anders mist de "Toch niet"-terugdraaiknop juist hier.
+      try { await api(`/api/orders/${b.dataset.id}`, 'PATCH', { status: b.dataset.to, aiSuggested: true, aiEvidence: b.dataset.ev || '' }); ok++; done.push(b.dataset.id); }
+      catch (err) { mislukt++; laatsteFout = err.message || ''; }
+    }
     await api('/api/assistant/status-scan/applied', 'POST', { orderIds: done }).catch(() => {});
-    toast(`${ok} opdracht(en) bijgewerkt`);
+    // Eerlijk: nooit groen "0 bijgewerkt" als alles mislukte.
+    if (mislukt) toast(`${ok} bijgewerkt, ${mislukt} mislukt${laatsteFout ? ': ' + laatsteFout : ''}`, true);
+    else toast(`${ok} opdracht(en) bijgewerkt`);
     pollStatusScan(); loadBoard();
   };
   $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
@@ -2934,7 +3011,7 @@ function vulAgendaScope() {
   const huidig = sel.value;
   sel.innerHTML = '<option value="all">Alle afspraken</option>'
     + '<option value="drs">Alleen DRS</option><option value="eigen">Alleen Keyservice</option>'
-    + ((state.monteurs || []).length ? `<optgroup label="Monteur">${state.monteurs.map((m) => `<option value="m:${m.id}">${esc(m.name)}</option>`).join('')}</optgroup>` : '');
+    + ((state.me?.role !== 'monteur' && (state.monteurs || []).length) ? `<optgroup label="Monteur">${state.monteurs.map((m) => `<option value="m:${m.id}">${esc(m.name)}</option>`).join('')}</optgroup>` : '');
   sel.dataset.gevuld = JSON.stringify((state.monteurs || []).map((m) => m.id));
   if ([...sel.options].some((o) => o.value === huidig)) sel.value = huidig;
 }
@@ -3149,7 +3226,7 @@ function renderInvoices() {
   if (q) {
     const qDigits = q.replace(/\D/g, '').replace(/^(0031|31)/, '0');
     items = items.filter((i) => {
-      const hooi = `${i.number || ''} ${i.customerName || ''} ${i.orderTitle || ''} ${i.customerEmail || ''} ${i.sentTo || ''}`.toLowerCase();
+      const hooi = `${i.number || ''} ${i.customerName || ''} ${i.orderTitle || ''} ${i.customerEmail || ''} ${i.sentTo || ''} ${i.customerAddress || ''}`.toLowerCase();
       if (hooi.includes(q)) return true;
       if (!qDigits || qDigits.length < 4) return false;
       const tel = String(i.customerPhone || '').replace(/\D/g, '').replace(/^(0031|31)/, '0');
@@ -5040,9 +5117,10 @@ function bindButtons() {
     if (!ids.length || !status) return;
     const label = statusLabel(status);
     if (!confirm(`${ids.length} kaart(en) op "${label}" zetten?`)) return;
-    let ok = 0;
-    for (const id of ids) { try { await api(`/api/orders/${id}`, 'PATCH', { status }); ok++; } catch { /* skip */ } }
-    toast(`${ok} kaart(en) → ${label}`);
+    let ok = 0; let mislukt = 0; let laatsteFout = '';
+    for (const id of ids) { try { await api(`/api/orders/${id}`, 'PATCH', { status }); ok++; } catch (err) { mislukt++; laatsteFout = err.message || ''; } }
+    if (mislukt) toast(`${ok} kaart(en) → ${label}, ${mislukt} mislukt${laatsteFout ? ': ' + laatsteFout : ''}`, true);
+    else toast(`${ok} kaart(en) → ${label}`);
     clearBoardSel();
     loadBoard();
   });
@@ -5169,7 +5247,7 @@ function navItems() {
   if (!monteur) nav.push({ label: 'Overzicht', view: 'overview', ic: 'activity' });
   nav.push({ label: 'Opdrachten', view: 'board', ic: 'list' });
   if (hasPerm('inbox')) nav.push({ label: 'Inbox / AI', view: 'inbox', ic: 'mail' });
-  if (!monteur) nav.push({ label: 'Berichten', view: 'chats', ic: 'whatsapp' });
+  nav.push({ label: 'Berichten', view: 'chats', ic: 'whatsapp' }); // ook monteur (meelezen, eigen klanten)
   nav.push({ label: 'Agenda', view: 'agenda', ic: 'calendar' });
   if (hasPerm('customers')) nav.push({ label: 'Klanten & leads', view: 'customers', ic: 'users' }, { label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
   nav.push({ label: 'Facturen', view: 'invoices', ic: 'file' });

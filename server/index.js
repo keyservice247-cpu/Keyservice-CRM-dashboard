@@ -12,7 +12,7 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Onafgehandelde fout (genegeerd, app blijft draaien):', err?.message || err);
 });
-import { db, id, now, save, saveSoon, saveSoonQuiet, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup, snapshotJson, storageEngine } from './db.js';
+import { db, id, now, save, saveSoon, saveSoonQuiet, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup, snapshotJson, storageEngine, markAllDirty } from './db.js';
 
 // Nette afsluiting: bij een deploy/herstart stuurt Render (of Ctrl+C lokaal) een
 // signaal. Flush dan de laatste, nog niet weggeschreven wijzigingen naar schijf
@@ -22,7 +22,10 @@ function gracefulShutdown(sig) {
   if (_shuttingDown) return;
   _shuttingDown = true;
   console.log(`[afsluiten] ${sig} ontvangen — laatste opslag flushen…`);
-  try { save(); } catch (e) { console.error('[afsluiten] opslaan mislukt:', e.message); }
+  // VOLLEDIG wegschrijven (audit 18 aug): liep er net een schrijfronde in stukjes, dan
+  // was de "aangeraakt"-lijst al geleegd en schreef save() niets meer — stil verlies
+  // van de laatste wijzigingen bij elke deploy.
+  try { markAllDirty(); save(); } catch (e) { console.error('[afsluiten] opslaan mislukt:', e.message); }
   // Terugvalpunt bijwerken: na een herstart/deploy is de JSON-kopie dus actueel.
   try { snapshotJson(); } catch (e) { console.error('[afsluiten] momentopname mislukt:', e.message); }
   process.exit(0);
@@ -82,6 +85,23 @@ ensureSeed();
 ensureSettings();
 
 const app = express();
+// ASYNC-VANGNET (audit 18 aug): Express 4 vangt geen promise-fouten. Een async route
+// die gooide (AI-fout, Google invalid_grant) liet de browser/bridge eeuwig hangen
+// zonder antwoord. Elke handler wordt hier ingepakt zodat een fout altijd bij de
+// afsluitende JSON-foutafhandelaar terechtkomt.
+for (const m of ['get', 'post', 'patch', 'put', 'delete']) {
+  const orig = app[m].bind(app);
+  app[m] = (pad, ...hs) => orig(pad, ...hs.map((h) => (typeof h === 'function' && h.length < 4)
+    ? (req, res, next) => { try { const r = h(req, res, next); if (r && typeof r.catch === 'function') r.catch(next); } catch (e) { next(e); } }
+    : h));
+}
+if (!process.env.SESSION_SECRET) console.error('LET OP: SESSION_SECRET ontbreekt — sessies en klantlinks draaien op een publiek bekend terugval-geheim. Zet de variabele in Render.');
+// Elke uitgaande fetch (AI, Google, Meta) krijgt een harde tijdslimiet: één hangende
+// verbinding blokkeerde anders een heel uur aan automatiseringen (audit 18 aug).
+{
+  const _fetch = globalThis.fetch;
+  globalThis.fetch = (url, opts = {}) => _fetch(url, { ...opts, signal: opts.signal || AbortSignal.timeout(120000) });
+}
 app.set('trust proxy', 1); // achter de Render-proxy: herkent HTTPS via x-forwarded-proto
 // Basale beveiligingsheaders op elk antwoord: geen MIME-sniffing, geen clickjacking.
 app.use((req, res, next) => {
@@ -125,6 +145,8 @@ function loginBlockedFor(ip) {
 }
 function noteLoginFail(ip) {
   const nowMs = Date.now();
+  // Oude tellers opruimen zodat de lijst nooit ongeremd groeit (verspreide brute-force).
+  if (_loginAttempts.size > 500) for (const [k, r] of _loginAttempts) if (nowMs - r.first > 15 * 60000 && r.blockedUntil < nowMs) _loginAttempts.delete(k);
   let rec = _loginAttempts.get(ip);
   if (!rec || nowMs - rec.first > 15 * 60000) rec = { count: 0, first: nowMs, blockedUntil: 0 };
   rec.count++;
@@ -415,7 +437,9 @@ function telOngelezenChats(extraMarks) {
       if (!marks[k] || String(v).localeCompare(String(marks[k])) > 0) marks[k] = v;
     }
   }
-  const vloer = Date.now() - 7 * 24 * 3600000;
+  // 30 dagen (was 7): een vraag die een week bleef liggen verdween anders juist uit de
+  // teller — precies de vraag die het hardst opvolging nodig heeft (audit 18 aug).
+  const vloer = Date.now() - 30 * 24 * 3600000;
   const echtNummer = (p) => { const d = String(p).replace(/\D/g, ''); return d.length >= 6 && d.length <= 13; };
   const perNummer = new Map();
   const perMail = new Map();
@@ -1624,7 +1648,13 @@ app.post('/api/orders/paste', requirePerm('orders'), (req, res) => {
 
 app.patch('/api/orders/:id', requireAuth, (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
-  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!order) {
+    // Eerlijk zeggen WAAR de kaart is (audit 18 aug): een verouderd bord gaf "Niet
+    // gevonden" terwijl de kaart in de prullenbak stond of was samengevoegd.
+    const inTrash = (db().trash || []).find((o) => o.id === req.params.id);
+    if (inTrash) return res.status(404).json({ error: `Deze kaart staat in de prullenbak${inTrash.deletedBy ? ` (${inTrash.deletedBy})` : ''} — haal hem eerst terug.` });
+    return res.status(404).json({ error: 'Deze kaart bestaat niet meer — het bord wordt ververst.' });
+  }
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const b = req.body || {};
 
@@ -2580,6 +2610,10 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
     console.error('[wa-cloud] webhook GEWEIGERD — handtekening klopt niet');
     return res.sendStatus(403);
   }
+  // METEEN 200 (audit 18 aug): Meta stuurt het bericht opnieuw als het antwoord langer
+  // dan ~20 s duurt — en de AI-classificatie kan dat. Zo ontstonden dubbele kaarten
+  // en dubbele dispatch. De verwerking loopt hieronder gewoon door.
+  res.sendStatus(200);
   try {
     for (const m of parseCloudWebhook(req.body)) {
       // Media (foto/pdf/spraak) ophalen en als bijlage opslaan, net als bij de bridge.
@@ -2660,13 +2694,13 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
             item.status = 'failed';
             item.doneAt = now();
             item.lastResult = `niet bezorgd: ${reden}`;
+            factuurVerzendingMislukt(item, reden);
           }
           saveSoon();
         }
       }
     }
   } catch (e) { console.error('[wa-cloud] status verwerken mislukt:', e.message); }
-  res.sendStatus(200); // Meta verwacht altijd 200, anders blijft hij herhalen
 });
 
 // --- Verificatie van de webhook (Meta doet eerst een GET) ---
@@ -3523,6 +3557,24 @@ async function runCloudOutbox() {
 // 3. Items die "wachten op bezorgbevestiging" terwijl de webhook die bevestiging
 //    nooit heeft gestuurd (alles van vóór het abonnement-herstel) bleven eeuwig
 //    "onderweg…" in het scherm. Na 6 uur wordt dat een eerlijk "geen bevestiging".
+// FACTUUR/OFFERTE VIA WHATSAPP MISLUKT (audit 18 aug): de factuur stond al op
+// "verzonden" (met lopende betaaltermijn en automatische herinneringen) terwijl het
+// appje nooit aankwam. Gaat het wachtrij-item definitief mis, dan gaat de factuur
+// terug naar concept — tenzij hij óók per e-mail is verstuurd — met een melding.
+function factuurVerzendingMislukt(item, reden) {
+  try {
+    if (!item.invoiceId) return;
+    const inv = (db().invoices || []).find((i) => i.id === item.invoiceId);
+    if (!inv || inv.status !== 'verzonden' || inv.sentTo) return; // per mail óók verstuurd: laten staan
+    inv.status = 'concept';
+    delete inv.sentAt; delete inv.lastSentAt; delete inv.sentToPhone;
+    const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+    if (order) { order.thread = order.thread || []; order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem', body: `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number} is NIET bezorgd via WhatsApp (${reden}) — status teruggezet naar concept. Verstuur opnieuw of kies e-mail.`, at: now() }); }
+    logActivity('systeem', 'factuur-verzending mislukt', `${inv.number}: ${reden}`);
+    sendPush({ title: `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number} niet bezorgd`, body: `WhatsApp-verzending mislukt (${reden}). Teruggezet naar concept — verstuur opnieuw of per e-mail.`, url: '/' }).catch(() => {});
+  } catch (e) { console.error('[factuur-terugzet]', e.message); }
+}
+
 function outboxOnderhoud() {
   try {
     let statusGewijzigd = 0; let verouderd = 0;
@@ -3533,11 +3585,13 @@ function outboxOnderhoud() {
           it.status = 'failed';
           it.doneAt = now();
           it.lastResult = 'verlopen — stond langer dan 24 uur in de wachtrij, niet alsnog verstuurd';
+          factuurVerzendingMislukt(it, 'verlopen in de wachtrij');
           statusGewijzigd++;
         } else if (String(it.phone || '').replace(/\D/g, '').length < 6) {
           it.status = 'failed';
           it.doneAt = now();
           it.lastResult = 'geen geldig telefoonnummer bij dit bericht — vul een 06-nummer in bij de klant en verstuur opnieuw';
+          factuurVerzendingMislukt(it, 'geen geldig telefoonnummer');
           statusGewijzigd++;
         }
       } else if (it.status === 'queued' && it.group && it.group !== '__klant_dm__') {
@@ -3651,8 +3705,10 @@ app.post('/api/orders/:id/send-monteur', requireRole('admin', 'assistent'), (req
   const monteurId = req.body?.monteurId || order.monteurId;
   const monteur = db().monteurs.find((m) => m.id === monteurId);
   if (!monteur) return res.status(400).json({ error: 'Kies een monteur' });
-  // koppel de monteur ook aan de opdracht als dat nog niet zo is
-  if (!order.monteurId) order.monteurId = monteur.id;
+  // HANDMATIG gekozen monteur = de nieuwe eigenaar van de kaart (audit 18 aug): bij een
+  // herdispatch (Youssef ziek → Abdel) bleef monteurId anders op de oude staan, zodat
+  // Abdel het appje kreeg maar de kaart niet in zíjn CRM zag (geen werkbon/factuur).
+  order.monteurId = monteur.id;
   const r = queueToMonteur(order, monteur, req.user.name);
   if (r.error) return res.status(400).json({ error: r.error });
   // Aangevinkte foto's meesturen: de bridge stuurt ze ná de opdrachttekst naar
@@ -3751,6 +3807,12 @@ app.get('/api/outbox', checkIngestToken, (req, res) => {
   items = items.slice(0, PER_RONDE);
   if (items.length) {
     db()._outboxLaatsteRonde = now();
+    // CLAIM (audit 18 aug, kritiek): een uitgegeven item blijft 'queued' tot de bridge
+    // /done meldt. Duurt het versturen (6 foto's) langer dan de 20-secondenrem, of
+    // haalt de /done-melding de server niet, dan kreeg de bridge hetzelfde item
+    // NOGMAALS — de klant/groep twee keer hetzelfde bericht: exact het spam-patroon
+    // van 2 aug. Nu: 2 minuten geclaimd; meldt de bridge niets, dan pas opnieuw.
+    for (const it of items) it.nextTryAt = new Date(Date.now() + 120 * 1000).toISOString();
     saveSoonQuiet();
     if (teveel) console.log(`[outbox] wachtrij afgeknepen: ${PER_RONDE} verstuurd, rest volgt over ${MIN_SECONDEN_TUSSEN}s`);
   }
@@ -3918,7 +3980,12 @@ app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {
   order.updatedAt = now();
   logActivity(req.user.name, 'onderweg-bericht verstuurd', `${order.title} — via ${sent.join(' + ')}`);
   saveSoon();
-  res.json({ ok: true, sent, summary: `Klant geïnformeerd via ${sent.join(' + ')}` });
+  // Eerlijk: een WhatsApp-appje staat in de WACHTRIJ; staat de bridge-pauze aan zonder
+  // officiële route, dan gaat er nu niets uit — dat moet de monteur weten.
+  const blijftLiggen = sent.includes('WhatsApp') && db().settings.whatsappPaused && !cloudSendAan();
+  res.json({ ok: true, sent, summary: blijftLiggen
+    ? `E-mail verstuurd; het appje staat in de wachtrij maar de PAUZEKNOP staat aan — de klant krijgt het appje nu NIET`
+    : `Klant geïnformeerd via ${sent.join(' + ')}` });
 });
 
 // Werkbon opslaan op de kaart (uitgevoerd werk, materialen, handtekening als bijlage-id).
@@ -3946,7 +4013,9 @@ function canTouchInvoice(req, inv) {
   if (can(req.user, 'invoicesAll')) return true; // recht "alle facturen zien" aangezet
   if (inv.createdById && inv.createdById === req.user.id) return true;
   const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
-  return !!(order && order.monteurId === req.user.monteurId);
+  // order.monteurId && …: zonder die guard matchte null === null en las een monteur
+  // zonder gekoppeld record élke factuur van niet-toegewezen kaarten (audit 18 aug).
+  return !!(order && order.monteurId && order.monteurId === req.user.monteurId);
 }
 const findInv = (invId) => (db().invoices || []).find((i) => i.id === invId);
 
@@ -4010,7 +4079,10 @@ app.post('/api/invoices', requireAuth, (req, res) => {
 // REVIEW VRAGEN vanaf een verzonden factuur. De klus is af en betaald/gefactureerd —
 // dit is het natuurlijke moment. Werkt los van de automatische ronde, zodat je 'm ook
 // kunt sturen als die uit staat (of uit staat voor deze monteur).
-app.post('/api/invoices/:id/review-request', requirePerm('invoices'), async (req, res) => {
+// requireAuth + canTouchInvoice (audit 18 aug): hier stond requirePerm('invoices') —
+// een recht dat niet bestaat, waardoor assistente én monteur altijd 403 kregen en
+// er structureel geen reviews werden gevraagd.
+app.post('/api/invoices/:id/review-request', requireAuth, async (req, res) => {
   const inv = (db().invoices || []).find((i) => i.id === req.params.id);
   if (!inv) return res.status(404).json({ error: 'Factuur niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
@@ -4232,6 +4304,7 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
       id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
       text: tekst, orderId: inv.orderId || undefined, status: 'queued', createdAt: now(),
       by: isQuote ? 'offerte-whatsapp' : 'factuur-whatsapp',
+      invoiceId: inv.id, // koppeling: mislukt/vervalt dit item, dan gaat de factuur terug naar concept
       media: [{ url: saved.url, name: saved.filename, mime: 'application/pdf', file: saved.file }],
       // Korte klantlink naar de bon-pagina: gaat mee in het sjabloon i.p.v. de lange
       // uploads-link, en werkt zonder login. De PDF wordt daar altijd vers opgebouwd.
@@ -4310,7 +4383,6 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
       logActivity(req.user.name, 'kaart naar Offerte verzonden', `${order.title} (offerte ${inv.number})`);
     }
     inv.sentTo = to;
-    inv.sendCount = (inv.sendCount || 0) + 1;
     if (order) {
       order.thread = order.thread || [];
       order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (${inv.type})`, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number}`, body, at: now() });
@@ -4397,7 +4469,7 @@ app.get('/api/invoices', requireAuth, (req, res) => {
     // baseert (instelbaar) i.p.v. een vaste 7 dagen in de frontend.
     const dueAt = i.type !== 'offerte' && i.sentAt
       ? new Date(new Date(i.sentAt).getTime() + payDays * 86400000).toISOString() : null;
-    return { ...i, customerName: c.name || '', customerEmail: c.email || '', customerPhone: c.phone || '', orderTitle: o.title || '', dueAt };
+    return { ...i, customerName: c.name || '', customerEmail: c.email || '', customerPhone: c.phone || '', customerAddress: c.address || '', orderTitle: o.title || '', dueAt };
   }));
 });
 
@@ -4737,6 +4809,9 @@ app.get('/api/pulse', requireAuth, (req, res) => {
   res.json({
     v: changeVersion(),
     appV: APP_BOOT_VERSIE,
+    // Kolommen gewijzigd (hernoemd/toegevoegd) door een collega? Dan moet elk open
+    // scherm z'n kolomlijst verversen — anders gaf slepen "Ongeldige status".
+    metaV: getStatusKeys().join('|'),
     pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
     // Mailbox-vulgraad (alleen meegeven als bijna vol — anders blijft het stil).
     mailboxPct: (mq && mq.supported && mq.pct >= 90) ? mq.pct : null,
@@ -5177,7 +5252,9 @@ app.get('/api/stats', requireAuth, (req, res) => {
 });
 
 // Snel statusoverzicht ("scan"): wie heeft gereageerd, wie wacht op ons, enz.
-app.get('/api/digest', requireAuth, (req, res) => {
+// Alleen kantoor (audit 18 aug): de scan toont titels + klanten van ÁLLE opdrachten
+// — voor een monteur lekte dat de hele bedrijfspijplijn.
+app.get('/api/digest', requireRole('admin', 'assistent'), (req, res) => {
   const active = db().orders.filter((o) => !o.archivedWeek);
   const labels = getStatusLabels();
   const byStatus = {};
@@ -5374,6 +5451,13 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, req.user ? 'index.html' : 'login.html'));
 });
 app.use(express.static(PUBLIC_DIR));
+// Afsluitende foutafhandelaar: ALTIJD JSON (het scherm toonde anders "Er ging iets
+// mis" op een HTML-foutpagina), mét de echte reden in het logboek van de server.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error(`[route-fout] ${req.method} ${req.path}:`, err?.message || err);
+  res.status(err?.status || 500).json({ error: err?.status === 413 ? 'Bestand te groot.' : `Er ging iets mis op de server: ${String(err?.message || 'onbekende fout').slice(0, 160)}` });
+});
 
 app.listen(PORT, () => {
   console.log(`\n  Keyservice CRM draait op  http://localhost:${PORT}`);

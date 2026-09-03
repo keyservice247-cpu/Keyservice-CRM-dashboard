@@ -90,7 +90,10 @@ export async function maybeSendAppointmentConfirm(order) {
     const cfg = getAppointmentMsg();
     if (!cfg.emailEnabled && !cfg.whatsappEnabled) return;
     if (!order.appointmentAt || ['afgerond', 'geannuleerd'].includes(order.status)) return;
-    if (order.apptMsg && order.apptMsg.confirmedFor === order.appointmentAt) return; // al bevestigd
+    // Op TIJDSTIP vergelijken, niet op tekst: de kaart-modal kapt af op 16 tekens, waardoor
+    // dezelfde afspraak bij elke opslag opnieuw werd bevestigd (audit 18 aug).
+    const zelfdeTijd = (a, b) => a && b && new Date(a).getTime() === new Date(b).getTime();
+    if (order.apptMsg && zelfdeTijd(order.apptMsg.confirmedFor, order.appointmentAt)) return; // al bevestigd
     const c = custOf(order);
     const vars = apptVars(order, c);
     let sent = false;
@@ -151,7 +154,11 @@ export async function maybeSendAppointmentCancel(order, prevAppt, opts = {}) {
         order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (annulering)', subject, body, at: now() });
         sent = true;
       } catch (e) { console.error('[annulering] e-mail mislukt:', e.message); }
-    } else if ((opts.notify || cfg.whatsappEnabled) && c.phone) {
+    }
+    // ALTIJD óók WhatsApp (audit 18 aug): dit was een 'else if' — bij een mailfout ging
+    // er helemaal niets uit en stond de klant voor niets thuis. Zelfde regel als de
+    // bevestiging en de herinnering.
+    if ((opts.notify || cfg.whatsappEnabled) && c.phone) {
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: body, orderId: order.id, status: 'queued', createdAt: now(), by: 'afspraak-annulering' });
       order.thread = order.thread || [];
       order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (annulering)', body, at: now() });
@@ -357,13 +364,13 @@ async function runWatchdog() {
   // netwerk-hikje (bv. "fetch failed" richting de AI van een paar seconden) geen
   // mail meer geeft — een échte storing wél. AI krijgt de langste marge (blips zijn
   // daar het vaakst), database/SMTP een kortere (die willen we sneller weten).
-  const GRACE_MIN = { ai: 6, smtp: 4, database: 3 };
-  const LABEL = { smtp: 'e-mail versturen', ai: 'de AI', database: 'de database' };
-  const LABEL_UP = { smtp: 'E-mail versturen', ai: 'De AI', database: 'De database' };
+  const GRACE_MIN = { ai: 6, smtp: 4, database: 3, imap: 30 };
+  const LABEL = { smtp: 'e-mail versturen', ai: 'de AI', database: 'de database', imap: 'e-mail ontvangen' };
+  const LABEL_UP = { smtp: 'E-mail versturen', ai: 'De AI', database: 'De database', imap: 'E-mail ontvangen' };
   const h = lastHealth();
   if (h) {
     s._healthBadSince = s._healthBadSince || {};
-    for (const key of ['smtp', 'ai', 'database']) {
+    for (const key of ['smtp', 'ai', 'database', 'imap']) {
       const part = h[key];
       if (!part) continue;
       const d = healthAlarmDecision({ bad: part.ok === false, badSince: s._healthBadSince[key], alerted: !!s._alerts[key], graceMin: GRACE_MIN[key] || 5, nowMs: Date.now() });
@@ -956,7 +963,15 @@ export function runAttachmentCleanup() {
 // ---------- Starter ----------
 export function startAutomations({ runStatusScan } = {}) {
   _runStatusScan = runStatusScan || null;
+  // Overlap-guard (audit 18 aug): één trage ronde mag niet samenvallen met de volgende
+  // — anders zetten twee rondes tegelijk dezelfde dagvlaggen en sturen ze dubbel.
+  let hourlyBezig = false; let fastBezig = false;
   const hourly = async () => {
+    if (hourlyBezig) { console.warn('[automatiseringen] uurronde loopt nog — deze overgeslagen'); return; }
+    hourlyBezig = true;
+    try { await hourlyRonde(); } finally { hourlyBezig = false; }
+  };
+  const hourlyRonde = async () => {
     try { await runAppointmentReminders(); } catch (e) { console.error('[herinneringen]', e.message); }
     try { await runReviewRequests(); } catch (e) { console.error('[reviews]', e.message); }
     try { await runNightlyScan(); } catch (e) { console.error('[auto-scan]', e.message); }
@@ -972,8 +987,12 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runGoogleCalendarSweep(); } catch (e) { console.error('[google-vangnet]', e.message); }
   };
   const fast = async () => {
-    try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }
-    try { await runWatchdog(); } catch (e) { console.error('[watchdog]', e.message); }
+    if (fastBezig) return;
+    fastBezig = true;
+    try {
+      try { await runSnoozeChecks(); } catch (e) { console.error('[snooze]', e.message); }
+      try { await runWatchdog(); } catch (e) { console.error('[watchdog]', e.message); }
+    } finally { fastBezig = false; }
   };
   setTimeout(hourly, 45 * 1000);
   setInterval(hourly, 60 * 60 * 1000);   // elk uur
