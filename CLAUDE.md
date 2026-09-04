@@ -260,6 +260,26 @@ de regressie meegroeit.
   schijfBewaking (6-uurlijks): <500 MB vrij → push + team-melding, max 1x/dag.
   Monteur mag contactgegevens van klanten van eigen opdrachten bijwerken (PATCH
   /api/customers/:id zonder vol 'customers'-recht).
+- **Audit 18 aug (4 opus-agents, 55 bevindingen, 39 direct gefixt):** statuswissel
+  eerlijk (api() vertaalt verbindings-/herstartfouten, 401 = nooit-oplossende
+  belofte, PATCH 404 noemt de prullenbak, rand-veeg neutraal, `_dragging` reset
+  in drop, bulk/AI-toepassen tellen mislukkingen, afspraakvelden alleen mee als
+  gewijzigd, onbekende kolom zichtbaar, pulse `metaV` → refreshMeta); monteur
+  (Snel antwoord/suggestieknoppen alleen kantoor, klantvelden bewerkbaar + tel:-
+  link, Zoek-knop/Berichten terug, navigeer op intake-adres, factuur-editor krijgt
+  `order` mee, /api/digest alleen kantoor, handmatige dispatch zet monteurId,
+  canTouchInvoice null-guard, filters zonder dode collega-opties); assistente
+  (review-request requireAuth+canTouchInvoice — `requirePerm` gooit nu bij boot op
+  een onbekende sleutel; dubbele sendCount weg; annulering óók WhatsApp;
+  `factuurVerzendingMislukt` zet factuur terug naar concept als het WhatsApp-item
+  faalt/vervalt, tenzij ook gemaild; bulk-approve alleen op pending; facturen-
+  zoek op adres; ongelezen-vloer 30d; humanChanged kent description/adres);
+  techniek (GET /api/outbox claimt items 2 min via nextTryAt + bridge tick-slot,
+  async-wrapper op alle routes + JSON-foutafhandelaar als laatste middleware,
+  globale fetch-timeout 120s, hourly/fast overlap-guards, Meta-webhook antwoordt
+  direct 200, sessies expiresAt 30d, markAllDirty() bij afsluiten, IMAP
+  `_imapLaatstOk` → health rood + watchdog 'imap', db.sqlite uit git, login-
+  teller prune). Rapport met 26 beslispunten als artifact (deel 2).
 - **Bord periode-filter (28 jul):** keuzelijst op Opdrachten/E-mail/WhatsApp-bord
   ("Vandaag/Gisteren/Deze week/Vorige week/Deze maand binnengekomen"): filtert op
   order.createdAt over ÁLLE kolommen (ook afgerond/geannuleerd/offerte); bij actieve
