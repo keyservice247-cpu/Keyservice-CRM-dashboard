@@ -190,6 +190,15 @@ function migrateJsonToSqlite(src) {
 // met wat er op schijf staat. Alleen verschillen worden weggeschreven.
 function collectChanges(colls, alles = false, overigeSleutels = null) {
   const ups = [], dels = [], metas = [], delMetas = [], delColls = [];
+  // Eén keer alle bekende sleutels per collectie groeperen (punt 21): de scan naar
+  // verdwenen records liep anders per collectie over ÁLLE records van álle collecties.
+  const bekendPerColl = new Map();
+  for (const key of written.keys()) {
+    const sp = key.indexOf(' '); if (sp < 0) continue;
+    const c = key.slice(0, sp);
+    let lijst = bekendPerColl.get(c); if (!lijst) { lijst = []; bekendPerColl.set(c, lijst); }
+    lijst.push(key);
+  }
   for (const coll of colls) {
     const arr = Array.isArray(data[coll]) ? data[coll].slice() : [];
     // Veiligheidsklep: records zonder id (of dubbele ids) kunnen niet per record
@@ -220,8 +229,7 @@ function collectChanges(colls, alles = false, overigeSleutels = null) {
     }
     // Verdwenen records (verwijderd/naar prullenbak verplaatst) ook echt weghalen.
     const prefix = `${coll} `;
-    for (const key of written.keys()) {
-      if (!key.startsWith(prefix)) continue;
+    for (const key of bekendPerColl.get(coll) || []) {
       const rid = key.slice(prefix.length);
       if (!ids.has(rid)) dels.push([coll, rid, key]);
     }
@@ -325,6 +333,26 @@ async function persistChunked() {
 // Volledige momentopname als db.json wegschrijven. Dit is het TERUGVALPUNT: zet je
 // STORAGE=json, dan start het systeem hiervandaan. Draait elke 10 minuten en vóór
 // elke back-up, dus je verliest bij terugvallen hooguit een paar minuten.
+// Niet-blokkerende momentopname (voor de periodieke timer): schrijft in de achtergrond,
+// verwisselt het bestand pas als het compleet is. Alleen als er iets veranderde.
+let _laatsteSnapshotVersie = -1;
+export async function snapshotJsonAsync() {
+  if (!data) return false;
+  if (changeCounter === _laatsteSnapshotVersie) return true; // niets veranderd
+  ensureDir();
+  const tmp = `${DB_FILE}.tmp`;
+  try {
+    const json = JSON.stringify(data, null, 2);
+    await fs.promises.writeFile(tmp, json);
+    await fs.promises.rename(tmp, DB_FILE);
+    _laatsteSnapshotVersie = changeCounter;
+    return true;
+  } catch (e) {
+    console.error('[MOMENTOPNAME] db.json bijwerken mislukt:', e.message);
+    try { await fs.promises.unlink(tmp); } catch { /* best-effort */ }
+    return false;
+  }
+}
 export function snapshotJson() {
   if (!data) return false;
   ensureDir();
@@ -599,7 +627,9 @@ export function startBackups() {
   setInterval(() => backupNow('periodiek'), hours * 3600 * 1000);
   if (engine === 'sqlite') {
     setTimeout(() => snapshotJson(), 30 * 1000);
-    setInterval(() => snapshotJson(), 10 * 60 * 1000);
+    // Elke 10 minuten NIET-blokkerend (punt 21): de synchrone variant legde de server
+    // bij 20 MB een paar honderd ms stil; die blijft alleen voor afsluiten/back-up.
+    setInterval(() => { snapshotJsonAsync().catch(() => {}); }, 10 * 60 * 1000);
     // Vangnet: elke minuut één VOLLEDIGE vergelijking van alle records. Normaal
     // schrijven we alleen aangeraakte lijsten weg (razendsnel); deze ronde garandeert
     // dat er hoe dan ook nooit iets achterblijft, ook niet bij een onverwacht pad.

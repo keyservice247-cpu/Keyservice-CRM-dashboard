@@ -436,7 +436,25 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
 
 // Verwerk een binnenkomend bericht: ontdubbelen -> opslaan -> AI categoriseren
 // -> review aanmaken -> eventueel automatisch goedkeuren bij hoge zekerheid.
-export async function ingestMessage({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '', inReplyTo = '', fromPhone = '' }) {
+// IN-FLIGHT-SLOT (punt 25): hetzelfde bericht (zelfde externalId) mag niet twee keer
+// TEGELIJK verwerkt worden — de gewone ontdubbeling kijkt pas ná de AI-stap, en in
+// die seconden kon een herhaalde levering er nog langs. Het slot gaat altijd weer
+// open (finally), ook als de verwerking mislukt — anders zou een échte herlevering
+// na een AI-fout verloren gaan.
+const _inVerwerking = new Set();
+export async function ingestMessage(args) {
+  const key = args && args.externalId ? String(args.externalId) : '';
+  if (key) {
+    if (_inVerwerking.has(key)) {
+      const existing = db().messages.find((m) => m.externalId === key);
+      return { message: existing || null, review: null, duplicate: true };
+    }
+    _inVerwerking.add(key);
+  }
+  try { return await ingestMessageKern(args); }
+  finally { if (key) _inVerwerking.delete(key); }
+}
+async function ingestMessageKern({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '', inReplyTo = '', fromPhone = '' }) {
   // Stuurt de bridge naam ÉN groeps-id mee? Dan die koppeling meteen leren (self-healing:
   // valt de naam later weg door een WhatsApp-storing, dan kent het CRM de groep al).
   if (groupId && group) learnGroupAlias(groupId, group);
@@ -905,6 +923,19 @@ export async function ingestMessage({ channel, sender, subject, body, group, gro
     createdAt: now(),
   };
   db().reviews.push(review);
+
+  // AFMELDEN VOOR DE CAMPAGNE (punt 16): de voettekst vraagt om "afmelden" te antwoorden
+  // — dat woord staat ook in het niet-opdracht-filter, dus zo'n antwoord belandde in
+  // Overige zonder dat het vinkje ooit werd gezet. Nu automatisch verwerkt.
+  if (channel === 'email' && fromEmail && /^\s*(re:\s*)?afmelden\b/i.test(`${subject || ''}`.trim()) || (channel === 'email' && fromEmail && /^\s*afmelden\b/i.test(String(body || '').trim()))) {
+    const kl = findCustomerStrong({ email: fromEmail });
+    if (kl && !kl.campaignOptOut) { kl.campaignOptOut = true; logActivity('systeem', 'campagne-afmelding verwerkt', kl.name || fromEmail); }
+  }
+  // MAIL VAN EEN BEKENDE KLANT IN "GEEN AANVRAAG" (punt 13): niet geruisloos — een
+  // verkeerd ingedeelde klantmail is precies wat je wél wilt zien.
+  if (review.status === 'overige' && channel === 'email' && fromEmail && findCustomerStrong({ email: fromEmail })) {
+    notifyPush('Mail van bekende klant bij "Geen aanvraag"', `${sender || fromEmail} — ${String(subject || body || '').replace(/\s+/g, ' ').slice(0, 70)}. Check even of dit toch een vraag is.`);
+  }
 
   const threshold = autoApproveThreshold();
   // WET (Regel 5, verfijnd 27 jul op verzoek Abdel): aanvragen uit de OPDRACHT-

@@ -90,6 +90,18 @@ function toast(msg, isError = false) {
 }
 
 // Toast met een "Ongedaan maken"-knop die een actie terugdraait. Verdwijnt na ms (default 8s).
+// Toast met een eigen actieknop (bv. "Kaart openen").
+function toastActie(msg, label, fn, ms = 9000) {
+  const t = $('#toast');
+  t.className = 'toast';
+  t.innerHTML = `<span>${esc(msg)}</span><button type="button" class="toast-undo">${esc(label)}</button>`;
+  t.hidden = false;
+  clearTimeout(toast._t);
+  const close = () => { t.hidden = true; t.textContent = ''; };
+  toast._t = setTimeout(close, ms);
+  const btn = $('.toast-undo', t);
+  if (btn) btn.onclick = async () => { clearTimeout(toast._t); close(); try { await fn(); } catch (e) { toast(e.message, true); } };
+}
 function toastUndo(msg, undoFn, ms = 8000) {
   const t = $('#toast');
   t.className = 'toast';
@@ -211,6 +223,8 @@ function hasPerm(key) {
     // Knoppen zonder data-view (zoals Zoeken in de onderbalk) blijven staan — die
     // verdwenen eerst mee omdat 'undefined' nooit in de lijst zit (audit 18 aug).
     $$('.nav-item, .bn-item').forEach((el) => { if (el.dataset.view && !monteurAllowed.includes(el.dataset.view)) el.hidden = true; });
+    // Facturen in de onderbalk (punt 4): zijn dagafsluiting hoort op één tik te zitten.
+    const bnInv = $('#bnInvoices'); if (bnInv) bnInv.hidden = false;
   }
 
   bindNav();
@@ -409,8 +423,9 @@ async function loadChats(fromPulse) {
   if (!wrap) return;
   if (!wrap.dataset.init) {
     wrap.dataset.init = '1';
-    wrap.innerHTML = `<div class="chats-layout" id="chatsLayout"><aside id="chatList" class="chat-list"></aside><section id="chatPane" class="chat-pane"><div class="cp-empty muted">Kies links een gesprek</div></section></div>`;
+    wrap.innerHTML = `<div id="chatStatusBar" class="chat-statusbar" hidden></div><div class="chats-layout" id="chatsLayout"><aside id="chatList" class="chat-list"></aside><section id="chatPane" class="chat-pane"><div class="cp-empty muted">Kies links een gesprek</div></section></div>`;
   }
+  if (!fromPulse) renderChatStatus();
   // Op de TELEFOON begint het scherm altijd met de lijst: het open gesprek van de
   // vorige keer zou anders de hele lijst verbergen en je weet niet meer waar je bent.
   // Op desktop (twee kolommen) blijft het open gesprek juist netjes staan.
@@ -446,6 +461,38 @@ async function loadChats(fromPulse) {
     $$('.chat-item', listEl).forEach((b) => b.onclick = () => openChat(b.dataset.cid));
   }
   if (_chatActive) renderChatPane(!fromPulse);
+}
+// Statusbalk boven Berichten (punt 9): bridge, officiële route, wachtrij en de
+// pauzeknop — zichtbaar en bedienbaar voor wie de gevolgen draagt (ook de assistente).
+async function renderChatStatus() {
+  const bar = $('#chatStatusBar'); if (!bar || state.me.role === 'monteur') return;
+  let s; try { s = await api('/api/whatsapp/status'); } catch { return; }
+  const magPauze = ['admin', 'assistent'].includes(state.me.role);
+  bar.innerHTML = `
+    <span><span class="dot ${s.online ? 'ok' : ''}"></span>Wegwerpnummer (groepen): ${s.online ? 'actief' : (s.configured ? 'ligt stil' : 'niet gekoppeld')}</span>
+    <span><span class="dot ${s.cloud ? 'ok' : ''}"></span>Officiële WhatsApp (klanten): ${s.cloud ? 'aan' : 'uit'}</span>
+    ${s.wachtrij ? `<span>Wachtrij: <strong>${s.wachtrij}</strong></span>` : ''}
+    ${s.paused ? '<span style="color:var(--danger);font-weight:600">PAUZE AAN — groepsberichten gaan niet uit</span>' : ''}
+    ${magPauze ? `<button type="button" class="btn btn-sm" id="chatPauseBtn">${s.paused ? 'Pauze uitzetten' : 'Wegwerpnummer pauzeren'}</button>` : ''}`;
+  bar.hidden = false;
+  const pb = $('#chatPauseBtn');
+  if (pb) pb.onclick = async () => {
+    const naar = !s.paused;
+    if (naar && !confirm('Wegwerpnummer pauzeren? Groeps- en monteursberichten blijven dan in de wachtrij staan tot je de pauze uitzet. Klantberichten via de officiële route lopen door.')) return;
+    try { await api('/api/whatsapp/pause', 'POST', { paused: naar }); toast(naar ? 'Pauze aan' : 'Pauze uit — wachtrij loopt weer'); renderChatStatus(); }
+    catch (err) { toast(err.message, true); }
+  };
+}
+// Onbeantwoorde klantvragen op Start (punt 10).
+async function vulOnbeantwoord() {
+  const el = $('#onbeantwoordBlok'); if (!el) return;
+  let lijst; try { lijst = await api('/api/chats/onbeantwoord?uren=2'); } catch { return; }
+  if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="info-card" style="margin-bottom:18px;border-left:4px solid var(--danger)">
+    <h3 style="margin:0 0 6px">${icon('message', 15)} Wacht op antwoord (${lijst.length})</h3>
+    <div class="muted small" style="margin-bottom:8px">Klantvragen waar langer dan 2 uur niet op is gereageerd — los van gelezen of ongelezen.</div>
+    <ul class="ov-list">${lijst.slice(0, 8).map((x) => `<li data-chat="${esc(x.chatId)}"><strong>${esc(x.naam)}</strong> <span class="muted">· ${x.urenWachtend}u · ${esc(x.kanaal === 'email' ? 'e-mail' : 'WhatsApp')}</span><br><span class="muted small">${esc(x.tekst)}</span></li>`).join('')}${lijst.length > 8 ? `<li class="muted small">+ ${lijst.length - 8} meer…</li>` : ''}</ul></div>`;
+  $$('li[data-chat]', el).forEach((li) => li.onclick = () => { goView('chats'); setTimeout(() => openChat(li.dataset.chat), 500); });
 }
 async function openChat(cid) {
   _chatActive = cid;
@@ -723,6 +770,7 @@ async function loadOverview() {
   const first = (state.me.name || '').trim().split(' ')[0] || '';
   $('#overviewHi').textContent = first ? `Hoi ${first}` : 'Overzicht';
   $('#overviewDate').textContent = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  setTimeout(vulOnbeantwoord, 400); // nadat het overzicht is getekend
   const card = (num, label, view, cls = '', col = '') => `<button class="kpi-card ${cls}" data-go="${view}"${col ? ` data-col="${esc(col)}"` : ''}><span class="kpi-num">${num}</span><span class="kpi-label">${esc(label)}</span></button>`;
   const wa = d.whatsapp || {};
   const list = (arr, empty) => arr.length
@@ -733,6 +781,7 @@ async function loadOverview() {
       <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${state.me.role === 'monteur' ? '' : ', bericht'}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
       <div id="gsResults" hidden></div>
     </div>
+    ${state.me.role === 'monteur' ? '' : '<div id="onbeantwoordBlok"></div>'}
     ${state.me.role === 'monteur' ? '' : `
     <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -1022,7 +1071,14 @@ function renderBoard() {
   const perKeuze = $('#boardPeriodFilter')?.value || '';
   const perLabels = { vandaag: 'vandaag', gisteren: 'gisteren', week: 'deze week', vorigeweek: 'vorige week', maand: 'deze maand' };
   const perBar = perKeuze ? `<div class="board-period-bar">${icon('clock', 13)} Je ziet alleen aanvragen die <strong>${perLabels[perKeuze] || perKeuze}</strong> zijn binnengekomen — over alle kolommen, ook al verwerkt (${orders.length}). <button type="button" class="chip" id="bp-clear">Filter uit</button></div>` : '';
-  const nieuweHtml = perBar +
+  // Lege staat voor de monteur (punt 6): "geen werk" of "niet gekoppeld" moet je kunnen zien.
+  let leegNote = '';
+  if (state.me.role === 'monteur' && !orders.length) {
+    leegNote = state.me.monteurId
+      ? '<div class="board-leeg"><strong>Nog geen opdrachten aan jou toegewezen.</strong> Zodra kantoor een klus naar jou stuurt, verschijnt hij hier én als appje in je groep.</div>'
+      : '<div class="board-leeg"><strong>Je account is nog niet gekoppeld aan een monteur.</strong> Daardoor zie je geen opdrachten. Vraag kantoor om je account bij Gebruikers aan jouw monteur-record te koppelen.</div>';
+  }
+  const nieuweHtml = perBar + leegNote +
     `<div class="board-row board-primary">${primary.map(colHTML).join('')}</div>` +
     (secondary.length ? `<div class="board-row board-secondary"><div class="board-sec-label">Afgehandeld</div><div class="board-sec-cols">${secondary.map(colHTML).join('')}</div></div>` : '');
   // NIET OPNIEUW TEKENEN als er letterlijk niets veranderd is. Het bord werd tot nu toe
@@ -1094,7 +1150,7 @@ function renderBoard() {
       if (order.status === newStatus) return;
       // Monteur + kolom met verplichte notitie: niet tegen een 400 aanlopen, maar de
       // kaart openen met de cursor in het notitieveld (zelfde regel als in de modal).
-      if (state.me.role === 'monteur' && ['offerte_verzonden', 'afgerond', 'geannuleerd'].includes(newStatus) && !(order.notes || '').trim()) {
+      if (state.me.role === 'monteur' && noteRequiredKeys().includes(newStatus) && !(order.notes || '').trim()) {
         toast('Vul eerst een korte notitie in (wat is er gedaan/afgesproken) — de kaart gaat nu open');
         openOrderModal(id);
         setTimeout(() => { const s = $('#f-status'); if (s) s.value = newStatus; $('#f-notes')?.focus(); }, 300);
@@ -1175,7 +1231,7 @@ function advanceStatus(id, dir = 1) {
   // Aan de rand van het bord is GEEN fout — dus geen rode balk (audit 18 aug).
   if (i < 0 || j < 0 || j >= keys.length) { toast(dir > 0 ? 'Staat al in de laatste kolom' : 'Staat al in de eerste kolom'); loadBoard(); return; }
   const next = keys[j];
-  if (state.me.role === 'monteur' && ['offerte_verzonden', 'afgerond', 'geannuleerd'].includes(next) && !(o.notes || '').trim()) {
+  if (state.me.role === 'monteur' && noteRequiredKeys().includes(next) && !(o.notes || '').trim()) {
     toast('Vul eerst een korte notitie in — de kaart gaat nu open');
     openOrderModal(id);
     setTimeout(() => { const s = $('#f-status'); if (s) s.value = next; $('#f-notes')?.focus(); }, 300);
@@ -1370,6 +1426,12 @@ function fmtDateShort(s) {
   return d.toLocaleString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+// Kolommen met verplichte monteur-notitie: uit de instelbare kolommen (vlag
+// noteRequired) met de bekende sleutels als standaard — zelfde regel als de server.
+function noteRequiredKeys() {
+  const std = ['offerte_verzonden', 'afgerond', 'geannuleerd'];
+  return (state.meta?.statuses || []).filter((s) => s.noteRequired === true || (s.noteRequired !== false && std.includes(s.key))).map((s) => s.key);
+}
 function statusOptionsHTML(selected) {
   const lijst = state.meta.statuses || [];
   let html = lijst.map((s) => `<option value="${esc(s.key)}" ${selected === s.key ? 'selected' : ''}>${esc(s.label)}</option>`).join('');
@@ -1428,14 +1490,22 @@ function openMergeModal(primary) {
   modal(`
     <h2>Kaarten samenvoegen</h2>
     <p class="muted small">Alles wat je aanvinkt gaat op in deze kaart: <strong>${esc(primary.title)}</strong> (${esc(primary.customer?.name || '')}). Gesprekshistorie en foto's worden gecombineerd; de andere kaarten verdwijnen.</p>
-    ${sameCustomer.length ? `<div class="muted small" style="margin:8px 0 4px">Zelfde klant (aangeraden):</div>${sameCustomer.map((o) => row(o, true)).join('')}` : '<div class="muted small">Geen andere kaarten van dezelfde klant gevonden.</div>'}
+    ${sameCustomer.length ? `<div class="muted small" style="margin:8px 0 4px">Zelfde klant — vink aan wat er echt bij hoort:</div>${sameCustomer.map((o) => row(o, false)).join('')}` : '<div class="muted small">Geen andere kaarten van dezelfde klant gevonden.</div>'}
     ${rest.length ? `<details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Andere kaarten tonen (${rest.length})</summary>${rest.slice(0, 40).map((o) => row(o, false)).join('')}</details>` : ''}
     <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="mg-cancel">Annuleren</button> <button class="btn btn-primary" id="mg-save">Samenvoegen</button> </div></div>`);
   $('#mg-cancel').onclick = () => openOrderModal(primary.id);
   $('#mg-save').onclick = async () => {
     const ids = $$('.mg-pick:checked').map((c) => c.value);
     if (!ids.length) return toast('Selecteer minstens één kaart', true);
-    try { await api('/api/orders/merge', 'POST', { primaryId: primary.id, mergeIds: ids }); closeModal(); toast(`${ids.length} kaart(en) samengevoegd`); loadBoard(); }
+    // Andere klant erbij? Dan expliciet bevestigen (punt 12) — anders belandt de
+    // gesprekshistorie van klant B onder klant A.
+    const vreemd = ids.map((i) => state.orders.find((o) => o.id === i)).filter((o) => o && o.customerId && primary.customerId && o.customerId !== primary.customerId);
+    let force = false;
+    if (vreemd.length) {
+      if (!confirm(`LET OP: ${vreemd.length} gekozen kaart(en) horen bij een ANDERE klant (${vreemd.map((o) => o.customer?.name || '?').join(', ')}). Hun gesprekshistorie komt dan onder ${primary.customer?.name || 'deze klant'} te staan.\n\nToch samenvoegen?`)) return;
+      force = true;
+    }
+    try { await api('/api/orders/merge', 'POST', { primaryId: primary.id, mergeIds: ids, force }); closeModal(); toast(`${ids.length} kaart(en) samengevoegd — de bronkaarten staan in de prullenbak`); loadBoard(); }
     catch (err) { toast(err.message, true); }
   };
 }
@@ -1451,6 +1521,14 @@ function openOrderModal(id, pool) {
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
     ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}</div>` : ''}
+    ${o && isMonteur ? `<div class="snelbalk">
+      ${(o.intake?.phone || o.customer?.phone) ? `<a class="btn sb" href="tel:${esc(String(o.intake?.phone || o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 15)} Bellen</a><a class="btn sb" target="_blank" rel="noopener" href="https://wa.me/${esc(String(o.intake?.phone || o.customer.phone).replace(/\D/g, '').replace(/^0/, '31'))}">${icon('whatsapp', 15)} Appen</a>` : ''}
+      ${(o.intake?.address || o.customer?.address) ? `<a class="btn sb" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}">${icon('pin', 15)} Navigeer</a>` : ''}
+      <button type="button" class="btn sb" data-sb="f-werkbon">${icon('tag', 15)} Werkbon${o.werkbon ? ' ✓' : ''}</button>
+      <button type="button" class="btn sb" data-sb="f-invoice">${icon('mail', 15)} Factuur</button>
+      <button type="button" class="btn sb" data-sb="f-onweg">${icon('pin', 15)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>
+      ${o.status !== 'afgerond' ? `<button type="button" class="btn sb sb-afgerond" id="sb-afgerond">✓ Afgerond</button>` : ''}
+    </div>` : ''}
     ${o && o.customerIncomplete ? `<div class="sug-banner sug-warn">${icon('user', 13)} <strong>Klant onbekend — aanvullen.</strong> Er is geen echte klantnaam in het bericht gevonden (de afzender is nooit automatisch de klant). Vul hieronder de klantgegevens aan.</div>` : ''}
     ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open kaart <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. ${canWrite ? `<span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span>` : ''}</div>` : ''}
     ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de kaart gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from || '—')}"</span> → <strong>"${esc(sg.to)}"</strong>${canWrite ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
@@ -1605,8 +1683,27 @@ function openOrderModal(id, pool) {
   if (o && $('#f-werkbon')) $('#f-werkbon').onclick = () => openWerkbonModal(o);
   if (o && $('#f-invoice')) $('#f-invoice').onclick = () => openInvoiceModal(o);
   if (o && $('#f-quote')) $('#f-quote').onclick = () => openInvoiceModal(o, 'offerte');
+  // Snelbalk (monteur, punt 1 + 2): de knoppen bovenaan doen hetzelfde als die onderaan.
+  $$('.snelbalk [data-sb]').forEach((b) => b.onclick = () => $(`#${b.dataset.sb}`)?.click());
+  const sbAf = $('#sb-afgerond');
+  if (sbAf && o) sbAf.onclick = () => {
+    const sel = $('#f-status'); if (!sel) return;
+    if (![...sel.options].some((x) => x.value === 'afgerond')) return toast('Kolom "Afgerond" bestaat niet (meer)', true);
+    sel.value = 'afgerond';
+    if (!($('#f-notes').value || '').trim()) { toast('Vul eerst een korte notitie in (wat is er gedaan) — dan pas Afgerond'); $('#f-notes')?.focus(); return; }
+    $('#f-save')?.click();
+  };
+  // Notitie-hint bij de statuskeuze zelf (punt 8) — niet pas bij Opslaan.
+  if (o && isMonteur && $('#f-status')) $('#f-status').addEventListener('change', () => {
+    if (noteRequiredKeys().includes($('#f-status').value) && !($('#f-notes').value || '').trim()) { toast('Voor deze kolom is een notitie nodig — vul hierboven kort in wat er is gedaan/afgesproken'); $('#f-notes')?.focus(); }
+  });
   if (o && $('#f-onweg')) $('#f-onweg').onclick = async () => {
-    if (!confirm(`Klant laten weten dat de monteur nu onderweg is?${o.onderwegAt ? ' (Er is al eerder een onderweg-bericht gestuurd.)' : ''}`)) return;
+    // Vooraf laten zien via welk kanaal het gaat (punt 7) — en stoppen als er niets is.
+    const tel = (o.intake?.phone || o.customer?.phone || '').replace(/\D/g, '');
+    const mail = (o.intake?.email || o.customer?.email || '').trim();
+    if (tel.length < 6 && !mail) { toast('Deze klant heeft geen telefoonnummer én geen e-mailadres — vul dat eerst in bij de klantgegevens.', true); return; }
+    const via = [tel.length >= 6 ? `WhatsApp naar ${o.intake?.phone || o.customer?.phone}` : '', mail ? `e-mail naar ${mail}` : ''].filter(Boolean).join(' + ');
+    if (!confirm(`Klant laten weten dat de monteur nu onderweg is?\n\nGaat via: ${via}${o.onderwegAt ? '\n(Er is al eerder een onderweg-bericht gestuurd.)' : ''}`)) return;
     try { const r = await api(`/api/orders/${o.id}/onderweg`, 'POST', {}); toast(r.summary || 'Onderweg-bericht verstuurd'); closeModal(); loadBoard(); }
     catch (err) { toast(err.message, true); }
   };
@@ -1658,7 +1755,7 @@ function openOrderModal(id, pool) {
   $('#f-cancel').onclick = closeModal;
   $('#f-save').onclick = async () => {
     // Monteur: verplichte notitie voordat een opdracht naar offerte/afgerond/geannuleerd gaat.
-    const noteRequired = ['offerte_verzonden', 'afgerond', 'geannuleerd'];
+    const noteRequired = noteRequiredKeys();
     if (isMonteur && o && $('#f-status').value !== o.status && noteRequired.includes($('#f-status').value) && !($('#f-notes').value || '').trim()) {
       toast('Vul eerst een notitie in (wat is er gedaan/afgesproken) voordat je deze status kiest.', true);
       $('#f-notes')?.focus();
@@ -1747,6 +1844,14 @@ async function loadInbox(append = false) {
   const resp = await api(`/api/reviews?status=${filter}&limit=${INBOX_PAGE}&offset=${offset}`);
   const reviews = resp.items || [];
   const total = resp.total || reviews.length;
+  // Eigen teller op "Geen aanvraag" (punt 13): zichtbaar in de keuzelijst, ook vanaf
+  // Te controleren — zo verdwijnt een verkeerd ingedeelde klantmail niet geruisloos.
+  if (!append) {
+    api('/api/reviews?status=overige&limit=1').then((r) => {
+      const opt = $('#inboxFilter option[value="overige"]');
+      if (opt) opt.textContent = `Geen aanvraag (geklets, leveranciers)${r?.total ? ` · ${r.total}` : ''}`;
+    }).catch(() => {});
+  }
   state._inboxOffset = offset + reviews.length;
   const list = $('#reviewList');
   const bulkBar = $('#bulkBar');
@@ -1757,7 +1862,7 @@ async function loadInbox(append = false) {
   // "Accepteer boven drempel" werkt alleen op Te controleren — dus ook alleen dáár
   // tonen (op Overige leek de knop niets te doen terwijl hij elders kaarten maakte).
   ['#bulkApproveBtn', '#bulkApprovePct', '#bulkRejectBtn', '#rejectAllOverigeBtn', '#rejectAllPendingBtn'].forEach((sel) => { const e = $(sel); if (e) e.style.display = inTrash ? 'none' : (sel.includes('Overige') ? (filter === 'overige' ? '' : 'none') : (sel.includes('Pending') || sel.includes('Approve')) ? (filter === 'pending' ? '' : 'none') : ''); });
-  if ($('#emptyRejectedBtn')) $('#emptyRejectedBtn').style.display = (inTrash && hasPerm('hardDelete')) ? '' : 'none';
+  if ($('#emptyRejectedBtn')) $('#emptyRejectedBtn').style.display = (inTrash && hasPerm('inbox')) ? '' : 'none';
   if ($('#selectAll')) $('#selectAll').checked = false;
   updateBulkCount();
   if (!append && !reviews.length) {
@@ -1765,7 +1870,7 @@ async function loadInbox(append = false) {
     list.innerHTML = filter === 'rejected'
       ? '<div class="empty">De inbox-prullenbak is leeg.</div>'
       : filter === 'overige'
-      ? '<div class="empty">Geen overige berichten (geklets).</div>'
+      ? '<div class="empty">Niets bij "Geen aanvraag" — geen geklets of leveranciersmail.</div>'
       : '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>';
     return;
   }
@@ -1805,7 +1910,7 @@ function reviewHTML(r) {
   return `
     <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open kaart: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
-      ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('hardDelete') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
+      ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('inbox') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
 }
 
@@ -1827,7 +1932,7 @@ function bindReview(r) {
   if (!$('.r-approve', el)) return; // afgewezen-weergave: geen verdere knoppen
   $('.r-approve', el).onclick = async () => {
     try {
-      await api(`/api/reviews/${r.id}/approve`, 'POST', {
+      const r2 = await api(`/api/reviews/${r.id}/approve`, 'POST', {
         status: $('.r-status', el).value,
         customerName: $('.r-cname', el).value,
         customerPhone: $('.r-cphone', el).value,
@@ -1837,7 +1942,14 @@ function bindReview(r) {
         source: $('[data-source]', el).value,
         monteurId: $('.r-monteur', el).value || null,
       });
-      toast('Opdracht aangemaakt'); loadInbox(); refreshInboxBadge();
+      // Eerlijk melden wat er gebeurde (punt 11): binnen het samenvoegvenster is de
+      // aanvraag aan een BESTAANDE kaart gehangen — geen nieuwe kaart op het bord.
+      const gehangen = r2?.review?.mergedIntoOrder;
+      const kaartId = gehangen || r2?.order?.id;
+      const openKaart = () => { goView('board'); setTimeout(() => openOrderModal(kaartId), 700); };
+      if (gehangen) toastActie(`Toegevoegd aan bestaande kaart "${(r2.order?.title || '').slice(0, 40)}" (zelfde klant, binnen het samenvoegvenster)`, 'Kaart openen', openKaart);
+      else toastActie('Opdracht aangemaakt', 'Kaart openen', openKaart);
+      loadInbox(); refreshInboxBadge();
     } catch (err) { toast(err.message, true); }
   };
   $('.r-reject', el).onclick = () => openRejectModal(r);
@@ -2424,7 +2536,7 @@ function openWerkbonModal(o) {
   cv.addEventListener('mousedown', start); cv.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
   cv.addEventListener('touchstart', start, { passive: false }); cv.addEventListener('touchmove', move, { passive: false }); cv.addEventListener('touchend', end);
   $('#wb-clear').onclick = () => { ctx.clearRect(0, 0, cv.width, cv.height); drew = false; };
-  $('#wb-cancel').onclick = closeModal;
+  $('#wb-cancel').onclick = () => openOrderModal(o.id);
   $('#wb-save').onclick = async () => {
     try {
       let signatureAttachmentId = '';
@@ -2436,7 +2548,8 @@ function openWerkbonModal(o) {
       }
       const updatedOrder = await api(`/api/orders/${o.id}/werkbon`, 'POST', { work: $('#wb-work').value, materials: $('#wb-mat').value, signatureAttachmentId });
       const idx = state.orders.findIndex((x) => x.id === o.id); if (idx >= 0) state.orders[idx] = updatedOrder;
-      toast('Werkbon opgeslagen'); closeModal(); loadBoard();
+      // Terug naar de KAART (punt 3): de factuur is de volgende stap, niet het bord.
+      toast('Werkbon opgeslagen — nu de factuur?'); openOrderModal(o.id); loadBoard();
     } catch (err) { toast(err.message, true); }
   };
 }
@@ -2543,7 +2656,7 @@ function renderInvoiceEditor(ctx) {
     <div class="row"> <label>Korting <select id="inv-disc-type" ${locked ? 'disabled' : ''}><option value="" ${!inv.discount ? 'selected' : ''}>Geen korting</option><option value="pct" ${inv.discount?.type === 'pct' ? 'selected' : ''}>Percentage (%)</option><option value="bedrag" ${inv.discount?.type === 'bedrag' ? 'selected' : ''}>Vast bedrag (excl. btw)</option></select></label>
       <label>Kortingswaarde <input id="inv-disc-val" type="number" min="0" step="0.01" value="${esc(String(inv.discount?.value ?? ''))}" placeholder="bv. 10" ${locked ? 'disabled' : ''}></label> </div>
     ${locked ? (inv.signature ? `<div style="margin:10px 0"><div class="muted small">Handtekening voor akkoord:</div><img src="${esc(inv.signature)}" alt="handtekening" style="max-width:200px;border:1px solid var(--line-soft, #e5e7eb);border-radius:6px;background:#fff"></div>` : '') : `
-    <details class="pl-collapse" style="margin:12px 0"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('edit', 13)} Handtekening voor akkoord${inv.signature ? ' — gezet ✓' : ' (optioneel)'}</summary>
+    <details class="pl-collapse" style="margin:12px 0" ${state.me?.role === 'monteur' ? 'open' : ''}><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('edit', 13)} Handtekening voor akkoord${inv.signature ? ' — gezet ✓' : ' (optioneel)'}</summary>
       <p class="muted small" style="margin:6px 0">Laat de klant hier tekenen; de handtekening komt op de PDF als bewijs van akkoord. Werkt ook zonder werkbon.</p>
       <canvas id="inv-sig" width="360" height="120" style="border:1px solid var(--line-soft, #cbd5e1);border-radius:8px;background:#fff;touch-action:none;max-width:100%;cursor:crosshair"></canvas>
       <div style="margin-top:6px"><button type="button" class="btn btn-sm" id="inv-sig-clear">Wissen</button><span class="muted small" id="inv-sig-status" style="margin-left:8px">${inv.signature ? 'Er staat al een handtekening — teken opnieuw om te vervangen, of Wissen om te verwijderen.' : ''}</span></div>
@@ -3135,7 +3248,7 @@ async function loadControl() {
   const ai = stats.ai;
   const pct = settings.aiAutoApproveThreshold ? Math.round(settings.aiAutoApproveThreshold * 100) : 0;
   $('#controlPanel').innerHTML = `
-    <div class="stat-grid"> <div class="stat"><div class="num">${ai.mode === 'ai' ? 'AI' : 'Demo'}</div><div class="lbl">Categorisatie-modus</div></div> <div class="stat"><div class="num">${ai.handled}</div><div class="lbl">Berichten verwerkt</div></div> <div class="stat"><div class="num">${ai.accuracy === null ? '—' : ai.accuracy + '%'}</div><div class="lbl">Juist ingedeeld (na controle)</div></div> <div class="stat"><div class="num">${ai.corrected}</div><div class="lbl">Door mens gecorrigeerd</div></div> <div class="stat"><div class="num">${stats.pendingReviews}</div><div class="lbl">Wacht op controle</div></div> </div> <div class="info-card" style="max-width:680px"> <h3>Controle-instelling</h3> <p class="muted small">Hoe zeker moet de AI zijn voordat een bericht <strong>automatisch</strong> een opdracht wordt (zonder handmatige controle)? Zet op 0% om <strong>alles</strong> handmatig te controleren (veiligst).</p> <label>Drempel voor automatisch goedkeuren: <strong id="threshLbl">${pct}%</strong> <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}"></label> <button class="btn btn-primary" id="saveThreshold">Opslaan</button> </div> ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : '<p class="muted small" style="margin-top:14px">Slimme AI (Claude) is actief.</p>'}
+    <div class="stat-grid"> <div class="stat"><div class="num">${ai.mode === 'ai' ? 'AI' : 'Demo'}</div><div class="lbl">Categorisatie-modus</div></div> <div class="stat"><div class="num">${ai.handled}</div><div class="lbl">Berichten verwerkt</div></div> <div class="stat"><div class="num">${ai.accuracy === null ? '—' : ai.accuracy + '%'}</div><div class="lbl">Juist ingedeeld (na controle)</div></div> <div class="stat"><div class="num">${ai.corrected}</div><div class="lbl">Door mens gecorrigeerd</div></div> <div class="stat"><div class="num">${stats.pendingReviews}</div><div class="lbl">Wacht op controle</div></div> </div> <div class="info-card" style="max-width:680px"> <h3>Automatisch goedkeuren (zonder controle)</h3> <p class="muted small">Hoe zeker moet de AI zijn voordat een aanvraag <strong>vanzelf</strong> een kaart wordt en naar de monteur gaat — zonder dat iemand kijkt? Geldt <strong>alleen</strong> voor opdracht-groepen (DRS) en het eigen websiteformulier; losse appjes en e-mails gaan altijd eerst langs een mens. Zet op 0% om alles handmatig te controleren. <em>Dit staat los van de knop "Accepteer boven drempel" in de Inbox — die keurt eenmalig de lijst goed die je op dat moment ziet.</em></p> <label>Vanzelf goedkeuren vanaf: <strong id="threshLbl">${pct}%</strong> <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}"></label> <button class="btn btn-primary" id="saveThreshold">Opslaan</button> </div> ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : '<p class="muted small" style="margin-top:14px">Slimme AI (Claude) is actief.</p>'}
     <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Wekelijkse agenda inklappen</h3> <p class="muted small">Gebeurt automatisch elke zondag na 23:59. Opdrachten van de afgelopen week worden ingeklapt onder een agenda-bundel — behalve openstaande/nieuwe opdrachten en afspraken die ná die week vallen. Je kunt het ook nu handmatig uitvoeren.</p> <button class="btn" id="runArchive">${icon('box', 14)} Nu de afgelopen week inklappen</button> </div> <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Systeemcheck</h3> <p class="muted small">Test of e-mail (ontvangen/versturen) en de AI nog werken. Draait ook automatisch elke 6 uur.</p> <div id="healthList">Laden…</div> <button class="btn" id="runHealth" style="margin-top:10px">${icon('refresh', 14)} Nu opnieuw testen</button> </div> <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Afwijzingen & feedback (waar de AI van leert)</h3> <p class="muted small">De laatste afwijzingen met reden. De AI krijgt deze mee om dezelfde fouten te vermijden.</p> <div id="feedbackList" class="feedback-list">Laden…</div> </div> `;
   loadFeedbackList();
   loadHealth();
@@ -5039,6 +5152,7 @@ function bindButtons() {
   $('#agendaScope')?.addEventListener('change', renderAgenda);
   $('#invFilter')?.addEventListener('change', renderInvoices);
   $('#invSearch')?.addEventListener('input', renderInvoices);
+  $('#attachMgrBtn')?.addEventListener('click', openAttachmentManager); // punt 18: ook buiten Instellingen
   $('#newInvoiceBtn')?.addEventListener('click', () => openNewInvoiceFlow('factuur'));
   $('#newQuoteBtn')?.addEventListener('click', () => openNewInvoiceFlow('offerte'));
   $('#finMonth')?.addEventListener('change', loadFinance);

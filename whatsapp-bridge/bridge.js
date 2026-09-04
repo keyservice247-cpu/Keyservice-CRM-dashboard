@@ -178,7 +178,7 @@ client.on('qr', async (qr) => {
 // storing), leest groepsnamen via een reparatie-route, valt terug op 1-op-1 naar de
 // monteur als een groep echt niet lukt, en stuurt het groeps-id mee naar het CRM
 // zodat dat de koppeling id→naam automatisch leert.
-const BRIDGE_VERSION = 3;
+const BRIDGE_VERSION = 4;
 
 client.on('authenticated', () => {
   ooitGekoppeld = true;   // vanaf nu nooit meer uit onszelf een koppelcode aanvragen
@@ -192,6 +192,7 @@ client.on('ready', async () => {
   meldKoppelcode({});   // koppeling gelukt -> melding in het CRM opruimen
   startHeartbeat();
   startOutbox();
+  startZelfUpdate();
   // Reparatie voor de WhatsApp-storing (LID-migratie, zomer 2026): vang de lees-fout
   // op groeps-chats af zodat getChats()/getChat() weer bruikbaar zijn. Moet na elke
   // (her)verbinding opnieuw, want WhatsApp-web wordt dan opnieuw geladen.
@@ -273,6 +274,35 @@ client.on('disconnected', (r) => {
 // dus geen heartbeat meer, waardoor de zijbalk rood wordt en het uitval-alarm afgaat
 // i.p.v. dat alles groen lijkt terwijl er niets meer binnenkomt.
 let heartbeatTimer = null;
+// ZELF-UPDATE (18 aug 2026): de bridge draait op een losse VPS en haalde nieuwe code
+// alleen op als iemand in de Hetzner-console `git pull` typte. Nu kijkt hij zelf elke
+// 6 uur (en 2 minuten na de start) of er iets nieuws in de repository staat. Zo ja:
+// netjes afsluiten — pm2 start hem direct opnieuw met de nieuwe code. De WhatsApp-
+// sessie staat op schijf en overleeft dat gewoon (geen nieuwe koppelcode).
+function startZelfUpdate() {
+  const repoDir = path.resolve(__dirname, '..');
+  if (!fs.existsSync(path.join(repoDir, '.git'))) { console.log('[update] geen git-repo gevonden — zelf-update uit'); return; }
+  const check = async () => {
+    try {
+      const { execFile } = await import('node:child_process');
+      const uit = await new Promise((resolve) => execFile('git', ['pull', '--ff-only', '--quiet'], { cwd: repoDir, timeout: 60000 }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') })));
+      if (uit.err) { console.error('[update] git pull mislukt:', (uit.stderr || uit.err.message).trim().slice(0, 200)); return; }
+      const na = await new Promise((resolve) => execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir }, (e, so) => resolve(e ? '' : String(so).trim())));
+      if (na && na !== startCommit) {
+        console.log(`[update] nieuwe versie opgehaald (${startCommit.slice(0, 7)} → ${na.slice(0, 7)}) — herstart via pm2, sessie blijft bewaard.`);
+        setTimeout(() => process.exit(0), 1500);
+      }
+    } catch (e) { console.error('[update] controle mislukt:', e.message); }
+  };
+  setTimeout(check, 2 * 60 * 1000);
+  setInterval(check, 6 * 60 * 60 * 1000);
+}
+let startCommit = '';
+try {
+  const { execFileSync } = await import('node:child_process');
+  startCommit = String(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path.resolve(__dirname, '..') })).trim();
+} catch { /* geen git: zelf-update doet dan niets */ }
+
 let notConnectedCount = 0;
 let lastIncomingAt = null; // laatst ONTVANGEN WhatsApp-bericht (voor diagnose in het CRM)
 function startHeartbeat() {

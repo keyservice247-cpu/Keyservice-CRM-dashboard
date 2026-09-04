@@ -18,6 +18,7 @@ import { lastHealth } from './health.js';
 import { getFinanceSettings, weeklyReportData, bookRecurringDue, runFinanceAutoSync } from './finance.js';
 import { checkMailboxQuota } from './connectors/email-imap.js';
 import { queueCrmWhatsappAlert } from './pipeline.js';
+import { onbeantwoordeGesprekken } from './gesprekken.js';
 
 const custOf = (o) => db().customers.find((c) => c.id === o.customerId) || {};
 const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? ''));
@@ -605,6 +606,11 @@ export async function sendMorningBriefing({ isTest = false } = {}) {
     else if (open) acts.push(`${open} statusvoorstel(len) uit het dagrapport klaar (AI Assistent → Statusscan)`);
   }
   if (d.unanswered) acts.push(`${d.unanswered} klantreactie(s) nog onbeantwoord`);
+  // Tijd-gebaseerd (punt 10): overleeft dat iemand een gesprek opende zonder te antwoorden.
+  try {
+    const ob = onbeantwoordeGesprekken(2);
+    if (ob.length) acts.push(`${ob.length} klantvraag/-vragen langer dan 2 uur ZONDER antwoord: ${ob.slice(0, 3).map((x) => `${x.naam} (${x.urenWachtend}u)`).join(', ')}${ob.length > 3 ? ` +${ob.length - 3}` : ''}`);
+  } catch { /* nooit de briefing laten omvallen */ }
   if (d.pendingLeads) acts.push(`${d.pendingLeads} nieuwe lead(s) te controleren in de inbox`);
   if (d.quoteStale) acts.push(`${d.quoteStale} verzonden offerte(s) al 4+ dagen zonder reactie`);
   if (d.overdueCount) acts.push(`${d.overdueCount} factuur/facturen VERLOPEN (samen ${eur(d.overdueTotal)})`);

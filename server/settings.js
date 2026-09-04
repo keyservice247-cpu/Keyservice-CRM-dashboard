@@ -665,6 +665,13 @@ export function getStatuses() {
 export function getStatusKeys() {
   return getStatuses().map((s) => s.key);
 }
+// Kolommen waarvoor een MONTEUR eerst een notitie moet invullen (punt 26): gekoppeld
+// aan de instelbare kolommen i.p.v. een losse lijst — hernoem je een kolom, dan blijft
+// de vangrail staan via de vlag noteRequired; de bekende sleutels gelden als standaard.
+const NOTE_REQUIRED_DEFAULT = ['offerte_verzonden', 'afgerond', 'geannuleerd'];
+export function noteRequiredStatusKeys() {
+  return getStatuses().filter((s) => s.noteRequired === true || (s.noteRequired !== false && NOTE_REQUIRED_DEFAULT.includes(s.key))).map((s) => s.key);
+}
 export function getStatusLabels() {
   const out = {};
   getStatuses().forEach((s) => { out[s.key] = s.label; });

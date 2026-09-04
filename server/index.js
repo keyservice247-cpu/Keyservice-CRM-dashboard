@@ -9,8 +9,13 @@ import { fileURLToPath } from 'node:url';
 process.on('unhandledRejection', (reason) => {
   console.error('Onafgehandelde promise-fout (genegeerd, app blijft draaien):', reason?.message || reason);
 });
+// Onverwachte synchrone fout: NIET doorgaan met mogelijk halve data in het geheugen
+// (punt 23). Eerst netjes alles wegschrijven, dan stoppen — Render start binnen een
+// minuut opnieuw met een consistente staat. Een crash-loop wordt zichtbaar in de
+// Render-log; beter dan dagenlang stil doordraaien met kapotte data.
 process.on('uncaughtException', (err) => {
-  console.error('Onafgehandelde fout (genegeerd, app blijft draaien):', err?.message || err);
+  console.error('ONVERWACHTE FOUT — server wordt netjes herstart:', err?.stack || err?.message || err);
+  try { gracefulShutdown('uncaughtException'); } catch { process.exit(1); }
 });
 import { db, id, now, save, saveSoon, saveSoonQuiet, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup, snapshotJson, storageEngine, markAllDirty } from './db.js';
 
@@ -46,6 +51,7 @@ import {
   findCustomerStrong, senderPhoneFromText, matchPhone, queueCrmWhatsappAlert,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
+import { onbeantwoordeGesprekken } from './gesprekken.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
@@ -74,6 +80,7 @@ import {
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
   getHtmlSignature, getWeeklyAiCheck, syncBundlesToPriceList, getGoogleSync,
+  noteRequiredStatusKeys,
 } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -205,6 +212,10 @@ app.post('/api/me/password', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Nieuw wachtwoord moet minimaal 6 tekens zijn' });
   }
   req.user.passwordHash = hashPassword(newPassword);
+  // Alle ANDERE sessies van deze gebruiker afmelden (punt 24): een verloren of oud
+  // ingelogd toestel blijft anders gewoon geldig. Het huidige toestel blijft ingelogd.
+  const huidig = (req.headers.cookie || '').split(';').map((s) => s.trim()).find((s) => s.startsWith('sid='))?.slice(4) || '';
+  db().sessions = (db().sessions || []).filter((s) => s.userId !== req.user.id || s.token === huidig);
   saveSoon();
   logActivity(req.user.name, 'wachtwoord gewijzigd');
   res.json({ ok: true });
@@ -574,13 +585,19 @@ app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) =
   // Ongelezen per gesprek op leesmarkering (15 aug) — dekt óók klanten zonder open
   // kaart en onbekende nummers; order.unreadReplies blijft alleen de bord-badge doen.
   const ongelezen = telOngelezenChats(monteurEigenMarks(req));
+  // Eén keer indexeren i.p.v. per gesprek de hele kaartenlijst doorlopen (punt 21).
+  const klantIndex = new Map((db().customers || []).map((c) => [c.id, c]));
+  const openPerKlant = new Map();
+  for (const o of db().orders || []) {
+    if (!o.customerId || o.archivedWeek || ['afgerond', 'geannuleerd'].includes(o.status)) continue;
+    const cur = openPerKlant.get(o.customerId);
+    if (!cur || String(o.updatedAt || o.createdAt || '').localeCompare(String(cur.updatedAt || cur.createdAt || '')) > 0) openPerKlant.set(o.customerId, o);
+  }
   for (const [cid, v] of perKlant) {
     if (mijnKlanten && !mijnKlanten.has(cid)) continue; // monteur: alleen eigen klanten
-    const c = db().customers.find((x) => x.id === cid);
+    const c = klantIndex.get(cid);
     if (!c) continue;
-    const open = (db().orders || [])
-      .filter((o) => o.customerId === cid && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
-      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+    const open = openPerKlant.get(cid);
     uit.push({
       id: cid, name: c.name || 'Onbekende klant', phone: c.phone || '', email: c.email || '',
       lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
@@ -654,9 +671,13 @@ function monteurChatKlanten(req) {
   // bedrijfsgeschiedenis. Nu telt een klant alleen mee zolang er een OPEN kaart van
   // déze monteur is; is de klus afgerond of gearchiveerd, dan verdwijnt het gesprek
   // vanzelf weer uit zijn lijst.
+  // Afgeronde klussen blijven nog 14 dagen zichtbaar (punt 5): dan kan hij bij het
+  // factureren nog even teruglezen wat er met de klant is afgesproken.
+  const recent = Date.now() - 14 * 86400000;
   return new Set((db().orders || [])
     .filter((o) => o.monteurId && o.monteurId === req.user.monteurId && o.customerId
-      && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
+      && !o.archivedWeek
+      && (!['afgerond', 'geannuleerd'].includes(o.status) || new Date(o.updatedAt || o.createdAt || 0).getTime() > recent))
     .map((o) => o.customerId));
 }
 
@@ -1146,10 +1167,14 @@ app.post('/api/campaign/send', requireRole('admin', 'assistent'), async (req, re
     const c = db().customers.find((x) => x.id === cid);
     const em = String(c?.email || '').toLowerCase().trim();
     if (!c || !em || c.campaignOptOut || seenAddr.has(em)) { skipped++; continue; }
+    // HERVATBAAR (punt 16): dezelfde campagne (zelfde onderwerp) binnen 24 uur nogmaals
+    // draaien slaat wie hem al kreeg over — een afgebroken batch kan dus gewoon opnieuw.
+    if (c.lastCampaignSubject === subj && c.lastCampaignAt && Date.now() - new Date(c.lastCampaignAt).getTime() < 86400000) { skipped++; continue; }
     seenAddr.add(em);
     try {
       await sendMail({ to: c.email, subject: subj, text: tpl.replace(/\{naam\}/g, c.name || 'klant') + CAMPAIGN_FOOTER });
       c.lastCampaignAt = now();
+      c.lastCampaignSubject = subj;
       sent++;
     } catch (e) { failed.push({ name: c.name || '', error: String(e.message || '').slice(0, 100) }); }
     await new Promise((r) => setTimeout(r, 400)); // nette verzendsnelheid (geen spam-gedrag)
@@ -1680,7 +1705,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
   // Verplichte notitie: een monteur moet eerst een notitie/omschrijving invullen voordat
   // hij een opdracht naar Offerte verzonden, Afgerond of Geannuleerd verplaatst.
-  const NOTE_REQUIRED_STATUSES = ['offerte_verzonden', 'afgerond', 'geannuleerd'];
+  const NOTE_REQUIRED_STATUSES = noteRequiredStatusKeys();
   if (req.user.role === 'monteur' && b.status && b.status !== order.status && NOTE_REQUIRED_STATUSES.includes(b.status)) {
     const noteAfter = (('notes' in b ? b.notes : order.notes) || '').trim();
     if (!noteAfter) return res.status(400).json({ error: 'Vul eerst een notitie/omschrijving in (wat is er gedaan/afgesproken) voordat je de opdracht op deze status zet.' });
@@ -1753,6 +1778,11 @@ app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
   }
   primary.thread = primary.thread || [];
   primary.attachments = primary.attachments || [];
+  // Andere klant samenvoegen alleen met expliciete bevestiging (force) — punt 12.
+  const vreemd = mergeIds.map((mid) => db().orders.find((o) => o.id === mid)).filter((o) => o && o.customerId && primary.customerId && o.customerId !== primary.customerId);
+  if (vreemd.length && !req.body?.force) {
+    return res.status(409).json({ error: `${vreemd.length} kaart(en) horen bij een andere klant — bevestig het samenvoegen expliciet.`, andereKlant: true });
+  }
   let merged = 0;
   for (const mid of mergeIds) {
     if (mid === primaryId) continue;
@@ -2128,7 +2158,10 @@ app.post('/api/reviews/:id/restore', requirePerm('inbox'), (req, res) => {
 });
 
 // Afgewezen bericht DEFINITIEF verwijderen (alleen admin).
-app.delete('/api/reviews/:id', requirePerm('hardDelete'), (req, res) => {
+// Afgewezen berichten definitief opruimen mag met het Inbox-recht (punt 17): het is
+// geen klantdata maar afgewezen ruis, en anders groeide de assistente-prullenbak
+// eindeloos zonder dat zij hem kon legen.
+app.delete('/api/reviews/:id', requirePerm('inbox'), (req, res) => {
   const i = db().reviews.findIndex((x) => x.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   db().reviews.splice(i, 1);
@@ -2137,7 +2170,7 @@ app.delete('/api/reviews/:id', requirePerm('hardDelete'), (req, res) => {
 });
 
 // Hele inbox-prullenbak legen (alleen admin).
-app.post('/api/reviews/empty-rejected', requirePerm('hardDelete'), (req, res) => {
+app.post('/api/reviews/empty-rejected', requirePerm('inbox'), (req, res) => {
   const before = db().reviews.length;
   db().reviews = db().reviews.filter((r) => r.status !== 'rejected');
   saveSoon();
@@ -2178,8 +2211,11 @@ app.post('/api/feedback/clear-all', requirePerm('hardDelete'), (req, res) => {
 function checkIngestToken(req, res, next) {
   const expected = process.env.INGEST_TOKEN;
   if (!expected) return res.status(503).json({ error: 'INGEST_TOKEN niet ingesteld op de server' });
-  const got = req.get('x-ingest-token') || req.query.token;
-  if (got !== expected) return res.status(401).json({ error: 'Ongeldig ingest-token' });
+  // Alleen via de header (punt 22): een token in de URL belandt in server- en
+  // proxy-logs. Vergelijking in constante tijd. De bridge stuurt al overal de header.
+  const got = String(req.get('x-ingest-token') || '');
+  const a = Buffer.from(got); const b = Buffer.from(String(expected));
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Ongeldig ingest-token' });
   next();
 }
 
@@ -2308,7 +2344,24 @@ app.get('/api/whatsapp/status', requireAuth, (req, res) => {
     state: db().settings.whatsappState || null,
     lastIncomingAt: lastIn,
     lastIncomingAgeMin: lastIn ? Math.round((Date.now() - new Date(lastIn).getTime()) / 60000) : null,
+    // Voor de statusbalk in Berichten (punt 9): pauzeknop + officiële route.
+    paused: !!db().settings.whatsappPaused,
+    cloud: cloudSendAan(),
+    wachtrij: (db().outbox || []).filter((o) => o.status === 'queued').length,
   });
+});
+// Pauzeknop ook voor de ASSISTENTE (punt 9): zij draagt de gevolgen van de wachtrij,
+// maar had geen toegang tot Instellingen. Alleen dit ene vinkje, niets anders.
+app.post('/api/whatsapp/pause', requireRole('admin', 'assistent'), (req, res) => {
+  db().settings.whatsappPaused = !!req.body?.paused;
+  logActivity(req.user.name, db().settings.whatsappPaused ? 'WhatsApp-pauze AAN' : 'WhatsApp-pauze UIT', 'via Berichten');
+  saveSoon();
+  res.json({ ok: true, paused: db().settings.whatsappPaused });
+});
+// Onbeantwoorde klantvragen (punt 10): tijd-gebaseerd, los van gelezen/ongelezen.
+app.get('/api/chats/onbeantwoord', requireRole('admin', 'assistent'), (req, res) => {
+  const uren = Math.max(1, Number(req.query.uren) || 2);
+  res.json(onbeantwoordeGesprekken(uren));
 });
 
 app.post('/api/ingest/email', checkIngestToken, async (req, res) => {
@@ -2427,7 +2480,18 @@ function parseMultipartForm(req) {
   });
 }
 
+// Lichte rem op het websiteformulier (punt 24): max 20 inzendingen per 10 minuten per
+// IP. Een echte klant haalt dat nooit; een script wel.
+const _formTeller = new Map();
 app.post('/api/ingest/form', async (req, res) => {
+  {
+    const ip = req.ip || 'onbekend'; const nuMs = Date.now();
+    if (_formTeller.size > 1000) for (const [k, r] of _formTeller) if (nuMs - r.first > 600000) _formTeller.delete(k);
+    let rec = _formTeller.get(ip);
+    if (!rec || nuMs - rec.first > 600000) rec = { first: nuMs, n: 0 };
+    rec.n++; _formTeller.set(ip, rec);
+    if (rec.n > 20) return res.status(429).json({ error: 'Te veel inzendingen achter elkaar — probeer het over een paar minuten opnieuw.' });
+  }
   formCors(req, res);
   // Multipart (met bijlages) of gewone JSON — beide met dezelfde veldnamen. De
   // bestaande JSON-flow van de websites blijft exact zoals hij was.
@@ -4009,8 +4073,10 @@ app.post('/api/orders/:id/werkbon', requireAuth, (req, res) => {
 // Rechten op een factuur/offerte: kantoor overal bij; monteur alleen bij zijn eigen
 // opdrachten of records die hij zelf heeft aangemaakt (losse facturen/offertes).
 function canTouchInvoice(req, inv) {
-  if (req.user.role !== 'monteur') return true;
-  if (can(req.user, 'invoicesAll')) return true; // recht "alle facturen zien" aangezet
+  // Het recht "alle facturen zien" doet nu écht iets (punt 17): staat het uit, dan
+  // alleen zelf aangemaakte records — ook voor een assistente.
+  if (can(req.user, 'invoicesAll')) return true;
+  if (req.user.role !== 'monteur') return !!(inv.createdById && inv.createdById === req.user.id);
   if (inv.createdById && inv.createdById === req.user.id) return true;
   const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
   // order.monteurId && …: zonder die guard matchte null === null en las een monteur
@@ -4235,7 +4301,11 @@ app.get('/api/invoices/:id/pdf', requireAuth, async (req, res) => {
 // De klant krijgt in WhatsApp een KORTE link naar deze pagina: logo, nummer en een
 // grote downloadknop. Geen login nodig; de handtekening in de link hoort bij precies
 // één document. De PDF wordt altijd vers opgebouwd, dus hij klopt ook na wijzigingen.
-const bonSig = (invId) => crypto.createHmac('sha256', process.env.SESSION_SECRET || 'ks-upload')
+// Apart geheim voor klantlinks (punt 22): verandert het sessie-geheim ooit, dan
+// blijven verstuurde factuurlinks werken. Valt terug op SESSION_SECRET zodat
+// bestaande links geldig blijven tot LINK_SECRET bewust wordt gezet.
+const LINK_SECRET = () => process.env.LINK_SECRET || process.env.SESSION_SECRET || 'ks-upload';
+const bonSig = (invId) => crypto.createHmac('sha256', LINK_SECRET())
   .update(`bon:${invId}`).digest('hex').slice(0, 24);
 function bonToegang(req) {
   const inv = (db().invoices || []).find((i) => i.id === req.params.id);
@@ -5413,7 +5483,7 @@ app.get('/api/activity', requireAuth, (req, res) => {
 // zonder dat het ingest-token in de link staat. De handtekening hoort bij precies
 // één bestand (raden van andere bestandsnamen levert niets op) en de namen zelf
 // zijn al willekeurig.
-const uploadSig = (file) => crypto.createHmac('sha256', process.env.SESSION_SECRET || 'ks-upload')
+const uploadSig = (file) => crypto.createHmac('sha256', LINK_SECRET())
   .update(String(file)).digest('hex').slice(0, 32);
 const allowUploadAccess = (req, res, next) => {
   const tok = req.headers['x-ingest-token'] || req.query.token;

@@ -22,7 +22,12 @@ export function pruneOldMessages(days = 90) {
   const msgs = d.messages || [];
   if (msgs.length < 500) return { archived: 0, remaining: msgs.length }; // pas opschonen als het echt oploopt
   const cutoff = Date.now() - days * 86400000;
-  const needed = new Set((d.reviews || []).filter((r) => r.status === 'pending' || r.status === 'overige').map((r) => r.messageId).filter(Boolean));
+  // 'overige' (geklets/leveranciersmail) alleen de laatste 60 dagen vasthouden — anders
+  // groeide de berichtenlijst onbegrensd en remde elk scherm mee (punt 20).
+  const overigeGrens = Date.now() - 60 * 86400000;
+  const needed = new Set((d.reviews || [])
+    .filter((r) => r.status === 'pending' || (r.status === 'overige' && new Date(r.createdAt || 0).getTime() > overigeGrens))
+    .map((r) => r.messageId).filter(Boolean));
   const keep = []; const archive = [];
   for (const m of msgs) {
     const t = m.receivedAt ? new Date(m.receivedAt).getTime() : (m.at ? new Date(m.at).getTime() : Date.now());

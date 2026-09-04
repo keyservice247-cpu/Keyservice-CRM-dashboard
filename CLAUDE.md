@@ -280,6 +280,30 @@ de regressie meegroeit.
   direct 200, sessies expiresAt 30d, markAllDirty() bij afsluiten, IMAP
   `_imapLaatstOk` → health rood + watchdog 'imap', db.sqlite uit git, login-
   teller prune). Rapport met 26 beslispunten als artifact (deel 2).
+- **26 beslispunten gebouwd (18 aug, "doe alles"):** MONTEUR: snelbalk bovenaan de
+  kaart (Bellen/Appen via wa.me/Navigeer/Werkbon/Factuur/Onderweg/✓ Afgerond met
+  notitie-check), werkbon → terug naar de kaart, Facturen in de onderbalk
+  (#bnInvoices), gesprek 14 d zichtbaar na afronden, lege-staat-tekst + "account
+  niet gekoppeld", Onderweg-precheck met kanaal, handtekening-blok open, notitie-
+  hint bij statuskeuze. ASSISTENTE: statusbalk in Berichten (bridge/officieel/
+  wachtrij + pauzeknop via POST /api/whatsapp/pause, admin+assistent), tijd-
+  gebaseerde onbeantwoord-lijst (server/gesprekken.js onbeantwoordeGesprekken,
+  GET /api/chats/onbeantwoord, blok op Start + ochtendbriefing), goedkeur-toast
+  "Toegevoegd aan bestaande kaart X" met Kaart-openen-knop (review.mergedIntoOrder),
+  samenvoegen: suggesties niet voorgevinkt + andere klant vereist force (409),
+  "Geen aanvraag"-label met teller + push bij mail van bekende klant daar,
+  drempel-teksten gescheiden, campagne hervatbaar (lastCampaignSubject, 24 u) +
+  "afmelden"-antwoord → campaignOptOut, invoicesAll werkt echt, inbox-prullenbak
+  opruimen op 'inbox'-recht, Foto's & bestanden-knop op Klanten. TECHNIEK:
+  test/rollen-test.mjs (38: assistente/monteur-zonder-koppeling/prullenbak/
+  samenvoegen/werkbon-bescherming), Overige-berichten >60 d worden opgeruimd
+  (archive.js), /api/chats geïndexeerd, db.js deletie-scan per collectie +
+  snapshotJsonAsync (10-min timer), ingest-token alleen header + timingSafeEqual,
+  LINK_SECRET (valt terug op SESSION_SECRET), uncaughtException → gracefulShutdown,
+  sessies van de gebruiker gewist bij wachtwoordwijziging, formulier-rem 20/10 min,
+  in-flight-slot op externalId (ingestMessage-wrapper), noteRequiredStatusKeys()
+  (settings.js) i.p.v. losse lijst. BRIDGE v3.2: zelf-update (git pull elke 6 u →
+  exit → pm2 herstart, sessie blijft) — Hetzner-console nooit meer nodig.
 - **Bord periode-filter (28 jul):** keuzelijst op Opdrachten/E-mail/WhatsApp-bord
   ("Vandaag/Gisteren/Deze week/Vorige week/Deze maand binnengekomen"): filtert op
   order.createdAt over ÁLLE kolommen (ook afgerond/geannuleerd/offerte); bij actieve

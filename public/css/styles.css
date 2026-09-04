@@ -1008,6 +1008,19 @@ table tbody tr:hover { background: var(--panel-2); }
 }
 .cp-sendbtn:hover { background: #029678; border-color: #029678; color: #fff; }
 .cp-send textarea { border-radius: 22px; padding: 11px 16px; }
+/* Snelbalk bovenaan de kaart voor de monteur: de handelingen waarvoor hij de kaart opent. */
+.snelbalk { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; padding: 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+.snelbalk .btn.sb { flex: 1 1 calc(33% - 8px); min-height: 46px; justify-content: center; font-size: 15px; font-weight: 600; }
+.snelbalk .sb-afgerond { background: var(--ok, #1b7f4c); border-color: var(--ok, #1b7f4c); color: #fff; }
+/* Statusbalk boven Berichten: bridge, officiële route, pauzeknop, wachtrij. */
+.chat-statusbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+.chat-statusbar .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); margin-right: 5px; }
+.chat-statusbar .dot.ok { background: #25d366; }
+.chat-statusbar .btn { min-height: 30px; padding: 4px 10px; font-size: 13px; }
+@media (max-width: 820px) { .chat-statusbar { padding: 8px 12px 0; } }
+/* Lege staat op het bord voor de monteur. */
+.board-leeg { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; color: var(--muted); }
+.board-leeg strong { color: var(--ink); }
 /* Kanaal-knop in de verstuurbalk: toont waar het bericht heen gaat (WhatsApp/e-mail). */
 .cp-kanaal {
   flex-shrink: 0; align-self: center; border: 1.5px solid #00a884; color: #00a884;
