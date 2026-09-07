@@ -290,7 +290,14 @@ const chatPast = await page.evaluate(() => {
   return p && p.getBoundingClientRect().right <= window.innerWidth + 1;
 });
 ok('mobiel: gesprek valt binnen het scherm', chatPast === true);
+// STRENG (18 aug, melding eigenaar): de verstuurbalk moet ÍN het scherm staan zonder
+// scrollen — de statusbalk duwde hem er op de telefoon onderuit. Eerst de asynchrone
+// statusbalk laten laden, dan meten tegen de viewport-hoogte.
+await page.waitForTimeout(800);
+const cpBox = await page.evaluate(() => { const el = document.querySelector('#cpText'); if (!el) return null; const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, vh: window.innerHeight }; });
 ok('mobiel: verstuur-balk bereikbaar', await page.locator('#cpText').isVisible());
+ok('mobiel: verstuur-balk staat ZONDER scrollen in beeld', !!cpBox && cpBox.bottom <= cpBox.vh && cpBox.top >= 0, JSON.stringify(cpBox));
+ok('mobiel: statusbalk verborgen zolang een gesprek open is', await page.evaluate(() => { const b = document.querySelector('#chatStatusBar'); return !b || b.hidden || b.offsetHeight === 0; }));
 await page.click('#cpBack');
 await page.waitForTimeout(600);
 ok('mobiel: terugknop -> lijst terug', await page.locator('#chatList').isVisible());

@@ -434,6 +434,7 @@ async function loadChats(fromPulse) {
     const p = $('#chatPane'); if (p) { p.innerHTML = '<div class="cp-empty muted">Kies een gesprek</div>'; delete p.dataset.chat; }
   }
   $('#chatsLayout')?.classList.toggle('active-chat', !!_chatActive);
+  syncChatStatusBar();
   if (!fromPulse) api('/api/chats/seen', 'POST').catch(() => {});
   let list;
   try { list = await api('/api/chats'); } catch { return; }
@@ -468,13 +469,14 @@ async function renderChatStatus() {
   const bar = $('#chatStatusBar'); if (!bar || state.me.role === 'monteur') return;
   let s; try { s = await api('/api/whatsapp/status'); } catch { return; }
   const magPauze = ['admin', 'assistent'].includes(state.me.role);
+  // Compact: op mobiel één regel ("● groepen ● klanten · Pauzeren"), op desktop voluit.
   bar.innerHTML = `
-    <span><span class="dot ${s.online ? 'ok' : ''}"></span>Wegwerpnummer (groepen): ${s.online ? 'actief' : (s.configured ? 'ligt stil' : 'niet gekoppeld')}</span>
-    <span><span class="dot ${s.cloud ? 'ok' : ''}"></span>Officiële WhatsApp (klanten): ${s.cloud ? 'aan' : 'uit'}</span>
-    ${s.wachtrij ? `<span>Wachtrij: <strong>${s.wachtrij}</strong></span>` : ''}
-    ${s.paused ? '<span style="color:var(--danger);font-weight:600">PAUZE AAN — groepsberichten gaan niet uit</span>' : ''}
-    ${magPauze ? `<button type="button" class="btn btn-sm" id="chatPauseBtn">${s.paused ? 'Pauze uitzetten' : 'Wegwerpnummer pauzeren'}</button>` : ''}`;
-  bar.hidden = false;
+    <span title="Wegwerpnummer / bridge (groepen)"><span class="dot ${s.online ? 'ok' : ''}"></span><span class="lang">Wegwerpnummer (groepen): </span>${s.online ? 'groepen actief' : (s.configured ? 'groepen: bridge ligt stil' : 'groepen: niet gekoppeld')}</span>
+    <span title="Officiële WhatsApp (klanten)"><span class="dot ${s.cloud ? 'ok' : ''}"></span><span class="lang">Officiële WhatsApp (klanten): </span>klanten ${s.cloud ? 'aan' : 'uit'}</span>
+    ${s.wachtrij ? `<span>wachtrij <strong>${s.wachtrij}</strong></span>` : ''}
+    ${s.paused ? '<span style="color:var(--danger);font-weight:600">PAUZE AAN</span>' : ''}
+    ${magPauze ? `<button type="button" class="btn btn-sm" id="chatPauseBtn">${s.paused ? 'Pauze uit' : 'Pauzeren'}</button>` : ''}`;
+  syncChatStatusBar();
   const pb = $('#chatPauseBtn');
   if (pb) pb.onclick = async () => {
     const naar = !s.paused;
@@ -482,6 +484,14 @@ async function renderChatStatus() {
     try { await api('/api/whatsapp/pause', 'POST', { paused: naar }); toast(naar ? 'Pauze aan' : 'Pauze uit — wachtrij loopt weer'); renderChatStatus(); }
     catch (err) { toast(err.message, true); }
   };
+}
+// Statusbalk alleen tonen als hij niet in de weg zit: op de telefoon nooit boven een
+// OPEN gesprek (dan duwde hij de verstuurbalk onder de onderbalk uit beeld).
+function syncChatStatusBar() {
+  const bar = $('#chatStatusBar'); if (!bar) return;
+  if (!bar.innerHTML.trim() || state.me.role === 'monteur') { bar.hidden = true; return; }
+  const mobiel = window.matchMedia('(max-width: 820px)').matches;
+  bar.hidden = mobiel && !!_chatActive;
 }
 // Onbeantwoorde klantvragen op Start (punt 10).
 async function vulOnbeantwoord() {
@@ -502,6 +512,7 @@ async function openChat(cid) {
   // Ook tel:-gesprekken hebben nu een leesmarkering (15 aug); na het lezen de lijst
   // verversen zodat de groene teller meteen verdwijnt in plaats van bij de volgende pulse.
   api(`/api/chats/${encodeURIComponent(cid)}/read`, 'POST').then(() => loadChats(true)).catch(() => {});
+  syncChatStatusBar();
   renderChatPane(true);
 }
 function sluitChat() {
@@ -510,6 +521,7 @@ function sluitChat() {
   $('#chatsLayout')?.classList.remove('active-chat');
   const pane = $('#chatPane');
   if (pane) { pane.innerHTML = '<div class="cp-empty muted">Kies links een gesprek</div>'; delete pane.dataset.chat; }
+  syncChatStatusBar();
   loadChats();
 }
 async function renderChatPane(scrollDown) {

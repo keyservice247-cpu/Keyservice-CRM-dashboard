@@ -1017,7 +1017,15 @@ table tbody tr:hover { background: var(--panel-2); }
 .chat-statusbar .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); margin-right: 5px; }
 .chat-statusbar .dot.ok { background: #25d366; }
 .chat-statusbar .btn { min-height: 30px; padding: 4px 10px; font-size: 13px; }
-@media (max-width: 820px) { .chat-statusbar { padding: 8px 12px 0; } }
+/* MOBIEL: één subtiele regel van vaste hoogte (34px), alleen boven de LIJST — de
+   verstuurbalk moet altijd in beeld blijven, dus de lijst-hoogte rekent hem mee. */
+@media (max-width: 820px) {
+  .chat-statusbar { height: 34px; margin: 0; padding: 0 14px; gap: 6px 12px; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; font-size: 12px; border-bottom: 1px solid var(--line-soft); background: var(--panel); }
+  .chat-statusbar > span { overflow: hidden; text-overflow: ellipsis; }
+  .chat-statusbar .btn { min-height: 24px; padding: 2px 8px; font-size: 12px; margin-left: auto; flex-shrink: 0; }
+  .chat-statusbar .lang { display: none; }
+  .chat-list { height: calc(100dvh - 156px - env(safe-area-inset-bottom, 0px)); }
+}
 /* Lege staat op het bord voor de monteur. */
 .board-leeg { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; color: var(--muted); }
 .board-leeg strong { color: var(--ink); }
