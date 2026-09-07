@@ -802,16 +802,26 @@ async function runNightlyScan() {
 // weigert inkomende klantmail — dat willen we vóór zijn, niet achteraf ontdekken.
 async function runMailboxQuotaCheck() {
   const rec = await checkMailboxQuota();
-  if (!rec || !rec.supported) return;
-  const full = (rec.boxes || []).filter((b) => b.supported && b.pct >= 90);
-  if (!full.length) return;
+  if (!rec) return;
   const today = new Date().toISOString().slice(0, 10);
+  // Niet meetbaar? Dan is dat zélf een risico: één keer per dag zichtbaar maken i.p.v. stil.
+  const nietMeetbaar = (rec.boxes || []).filter((b) => !b.supported);
+  if (nietMeetbaar.length && db()._mailboxQuota && db()._mailboxQuota.warnedUnsupportedOn !== today) {
+    db()._mailboxQuota.warnedUnsupportedOn = today;
+    logActivity('systeem', 'mailbox-vulgraad niet meetbaar', nietMeetbaar.map((b) => `${b.user}${b.error ? ` (${String(b.error).slice(0, 60)})` : ''}`).join(' · '));
+  }
+  // Grens 85% (was 90): dan is er nog tijd om op te ruimen vóór mails geweigerd worden.
+  const full = (rec.boxes || []).filter((b) => b.supported && b.pct >= 85);
+  if (!full.length) return;
   if (db()._mailboxQuota && db()._mailboxQuota.alertedOn === today) return; // al gemeld vandaag
   db()._mailboxQuota.alertedOn = today;
   saveSoon();
   const list = full.map((b) => `${b.user}: ${b.pct}% vol (${b.usedMB}/${b.limitMB} MB)`).join(' · ');
   const txt = `⚠️ CRM: mailbox bijna VOL — ${list}. Ruim op of vergroot het quotum — anders mislukken bevestigingen/antwoorden en wordt inkomende klantmail geweigerd!`;
   logActivity('systeem', 'mailbox bijna vol', list);
+  // PUSH ÉN WhatsApp (7 sep 2026): het team-appje loopt via de bridge — lag die stil,
+  // dan kwam er helemaal niets aan. De pushmelding komt altijd op de telefoon.
+  sendPush({ title: '⚠ Mailbox bijna vol', body: `${list}. Ruim op via webmail.transip.nl (Verzonden + Prullenbak legen).`, url: '/' }).catch(() => {});
   queueCrmWhatsappAlert(txt);
   console.log('[mailbox-quotum]', txt);
 }

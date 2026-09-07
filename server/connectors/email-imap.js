@@ -487,10 +487,18 @@ function quotaWatchAccounts() {
   if (process.env.IMAP_USER && process.env.IMAP_PASSWORD) {
     list.push({ user: process.env.IMAP_USER, pass: process.env.IMAP_PASSWORD });
   }
-  for (const pair of String(process.env.IMAP_EXTRA_ACCOUNTS || '').split(',')) {
-    const t = pair.trim();
-    const i = t.indexOf(':');
-    if (i > 0) list.push({ user: t.slice(0, i).trim(), pass: t.slice(i + 1).trim() });
+  // ALLE postbussen die het CRM leest bewaken (7 sep 2026): de extra postbussen uit
+  // IMAP_INGEST_ACCOUNTS (bv. die van de assistente) werden hier nooit gemeten —
+  // haar mailbox liep vol zonder één melding.
+  for (const bron of [process.env.IMAP_EXTRA_ACCOUNTS, process.env.IMAP_INGEST_ACCOUNTS]) {
+    for (const pair of String(bron || '').split(',')) {
+      const t = pair.trim();
+      const i = t.indexOf(':');
+      if (i > 0) {
+        const user = t.slice(0, i).trim();
+        if (!list.some((a) => a.user.toLowerCase() === user.toLowerCase())) list.push({ user, pass: t.slice(i + 1).trim() });
+      }
+    }
   }
   return list;
 }

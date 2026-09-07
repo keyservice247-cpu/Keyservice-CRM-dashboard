@@ -4884,8 +4884,8 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     metaV: getStatusKeys().join('|'),
     pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
     // Mailbox-vulgraad (alleen meegeven als bijna vol — anders blijft het stil).
-    mailboxPct: (mq && mq.supported && mq.pct >= 90) ? mq.pct : null,
-    mailboxBox: (mq && mq.supported && mq.pct >= 90 && mq.worstUser) ? String(mq.worstUser).split('@')[0] + '@' : null,
+    mailboxPct: (mq && mq.supported && mq.pct >= 85) ? mq.pct : null,
+    mailboxBox: (mq && mq.supported && mq.pct >= 85 && mq.worstUser) ? String(mq.worstUser).split('@')[0] + '@' : null,
     // Nieuwe 1-op-1 klantberichten sinds je Berichten voor het laatst opende. Zo zie je
     // vanaf ELK scherm dat er een klant zit te wachten, ook als het appje (terecht) geen
     // lead werd. Alleen zinvol voor wie het scherm mag zien.

@@ -67,7 +67,10 @@ async function checkIMAP() {
     if (q && q.supported) {
       const parts = (q.boxes || []).filter((b) => b.supported)
         .map((b) => `${b.user} ${b.pct}% vol (${b.usedMB}/${b.limitMB} MB)`);
-      const full = (q.boxes || []).filter((b) => b.supported && b.pct >= 90);
+      // Postbussen waarvan de vulgraad NIET te meten is óók noemen — anders lijkt
+      // "alles groen" terwijl een mailbox ongemerkt volloopt.
+      for (const b of (q.boxes || []).filter((x) => !x.supported)) parts.push(`${b.user}: vulgraad niet meetbaar${b.error ? ` (${String(b.error).slice(0, 50)})` : ''}`);
+      const full = (q.boxes || []).filter((b) => b.supported && b.pct >= 85);
       if (full.length) return { ok: false, configured: true, detail: `MAILBOX BIJNA VOL: ${parts.join(' · ')} — ruim op, anders mislukken mails!` };
       if (parts.length) return { ok: true, configured: true, detail: `Actief (${process.env.IMAP_HOST}) · ${parts.join(' · ')}` };
     }
