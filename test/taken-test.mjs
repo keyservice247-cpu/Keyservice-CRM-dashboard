@@ -115,6 +115,31 @@ await login('monteur-taak@keyservice.nl', 'monteur123');
 ok('monteur: geen toegang tot taken', (await api('GET', '/api/taken')).status === 403);
 cookie = adminCookie;
 
+console.log('\n== Bijlages op een taak ==');
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const bt = await api('POST', '/api/taken', { titel: 'Taak met bonnetje' });
+const up1 = await api('POST', `/api/taken/${bt.json.id}/bijlage`, { filename: 'bon.png', mime: 'image/png', dataBase64: PNG });
+ok('bijlage uploaden', up1.status === 200 && up1.json?.bijlagen?.length === 1 && up1.json.bijlagen[0].url?.startsWith('/uploads/'), JSON.stringify(up1.json?.bijlagen));
+const bestand = up1.json?.bijlagen?.[0];
+ok('bijlage draagt uploader + hash', bestand?.uploadedBy === 'Beheerder' && !!bestand?.hash);
+const up2 = await api('POST', `/api/taken/${bt.json.id}/bijlage`, { filename: 'bon-kopie.png', mime: 'image/png', dataBase64: PNG });
+ok('identiek bestand wordt niet dubbel gehangen (dubbel=true, blijft 1)', up2.json?.dubbel === true && up2.json?.bijlagen?.length === 1);
+ok('leeg bestand geweigerd', (await api('POST', `/api/taken/${bt.json.id}/bijlage`, { filename: 'x.png', mime: 'image/png' })).status === 400);
+ok('bestand is via /uploads te openen (ingelogd)', (await fetch(BASE + bestand.url, { headers: { cookie } })).status === 200);
+ok('bijlage-teller staat in de lijst', (await api('GET', '/api/taken')).json.find((t) => t.id === bt.json.id)?.bijlagen?.length === 1);
+const del1 = await api('DELETE', `/api/taken/${bt.json.id}/bijlage/${bestand.id}`);
+ok('bijlage verwijderen', del1.status === 200 && del1.json?.bijlagen?.length === 0);
+ok('bestand is van schijf', (await fetch(BASE + bestand.url, { headers: { cookie } })).status === 404);
+ok('onbekende bijlage: 404', (await api('DELETE', `/api/taken/${bt.json.id}/bijlage/att_nep`)).status === 404);
+const up3 = await api('POST', `/api/taken/${bt.json.id}/bijlage`, { filename: 'schets.png', mime: 'image/png', dataBase64: PNG });
+ok('taak verwijderen ruimt bijlage-bestanden op', (await api('DELETE', `/api/taken/${bt.json.id}`)).status === 200 && (await fetch(BASE + up3.json.bijlagen[0].url, { headers: { cookie } })).status === 404);
+// Gedeelde privé-taak: de collega mag ook bijlages toevoegen.
+const gedeeldB = await api('POST', '/api/taken', { titel: 'Gedeeld met bijlage', categorie: 'prive', gedeeldMet: [assistent?.id] });
+await login('assistente-taak@keyservice.nl', 'assist123');
+ok('collega voegt bijlage toe aan gedeelde privé-taak', (await api('POST', `/api/taken/${gedeeldB.json.id}/bijlage`, { filename: 'foto.png', mime: 'image/png', dataBase64: PNG })).json?.bijlagen?.length === 1);
+ok('collega kan NIET uploaden op een niet-gedeelde privé-taak (404)', (await api('POST', `/api/taken/${nietGedeeld.json.id}/bijlage`, { filename: 'foto.png', mime: 'image/png', dataBase64: PNG })).status === 404);
+cookie = adminCookie;
+
 console.log('\n== Verwijderen ==');
 ok('verwijderen', (await api('DELETE', `/api/taken/${nieuw.json.id}`)).status === 200);
 ok('is weg', !(await api('GET', '/api/taken')).json.some((t) => t.id === nieuw.json.id));

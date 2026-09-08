@@ -520,6 +520,7 @@ function taakKaartHTML(t) {
         ${taakDeadlineChip(t)}
         ${t.customerId || t.orderId ? `<span class="tk-tag tk-link">${icon('tag', 11)} ${esc(t.koppelLabel || 'gekoppeld')}</span>` : ''}
         ${t.categorie === 'prive' && (t.gedeeldMetNamen || []).length ? `<span class="tk-tag tk-gedeeld" title="Gedeelde privé-taak">${icon('users', 11)} ${esc(t.isEigenaar ? 'gedeeld met ' + t.gedeeldMetNamen.join(', ') : 'van ' + (t.eigenaarNaam || 'collega'))}</span>` : ''}
+        ${(t.bijlagen || []).length ? `<span class="tk-tag tk-bijlage" title="Bijlages">${icon('paperclip', 11)} ${t.bijlagen.length}</span>` : ''}
       </div>
     </div>
   </div>`;
@@ -606,6 +607,15 @@ function renderTaken() {
   $$('.tk-dl-item', wrap).forEach((el) => el.onclick = () => openTaakModal(el.dataset.open));
   if (!_takenCache.length) wrap.insertAdjacentHTML('beforeend', '<div class="muted small" style="margin-top:8px">Nog geen taken. Typ hierboven je eerste taak.</div>');
 }
+// Bijlage-strook van een taak: de gewone tegels (foto/video/bestand) + per bijlage
+// een regel met naam en verwijderknop — kaarten hebben die knop niet, taken wel
+// omdat een taak vaak wisselende werkbestanden draagt (bonnetje, schets, PDF).
+function taakBijlagenHTML(t) {
+  const atts = t.bijlagen || [];
+  if (!atts.length) return '<div class="muted small">Nog geen foto’s of bestanden. Tik op + Toevoegen.</div>';
+  return `<div class="attach-grid">${attachmentsHTML(atts)}</div>
+    <div class="tk-att-lijst">${atts.map((a) => `<div class="tk-att-regel"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc((a.filename || 'bestand').slice(0, 48))}</a><span class="muted small">${a.size ? Math.max(1, Math.round(a.size / 1024)) + ' kB' : ''}${a.uploadedBy ? ' · ' + esc(a.uploadedBy) : ''}</span><button type="button" class="btn btn-sm tk-att-del" data-att="${esc(a.id)}" title="Verwijderen">×</button></div>`).join('')}</div>`;
+}
 async function openTaakModal(id) {
   const t = _takenCache.find((x) => x.id === id); if (!t) return;
   // Koppel-opties: klanten (uit cache of ophalen) en kaarten (bord).
@@ -647,9 +657,44 @@ async function openTaakModal(id) {
       <label>Koppel aan kaart ${sel('tk-kaart', [['', '— geen —'], ...kaarten.map((o) => [o.id, o.title.slice(0, 60)])], t.orderId || '')}</label>
     </div>
     <label>Notities <textarea id="tk-notities" rows="3" placeholder="Eigen aantekeningen">${esc(t.notities || '')}</textarea></label>
+    <div class="attach"><div class="thread-head">${icon('paperclip', 15)} Foto's &amp; bestanden<span id="tk-attcount">${(t.bijlagen || []).length ? ` (${t.bijlagen.length})` : ''}</span>
+        <button class="btn btn-sm" id="tk-addfile" type="button" style="margin-left:auto">+ Toevoegen</button> <input type="file" id="tk-fileinput" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt" multiple hidden></div>
+      <div id="tk-attwrap">${taakBijlagenHTML(t)}</div></div>
     <p class="muted small">Aangemaakt ${esc(fmtDateShort(t.aangemaaktOp))} door ${esc(t.eigenaarNaam || '')}${t.afgerondOp ? ` · afgerond ${esc(fmtDateShort(t.afgerondOp))}` : ''}</p>
     <div class="modal-actions">${eigenaar || t.categorie !== 'prive' ? '<button class="btn" id="tk-delete" style="color:var(--danger)">Verwijderen</button>' : '<span></span>'}<div class="right"><button class="btn" id="tk-cancel">Annuleren</button><button class="btn btn-primary" id="tk-save">Opslaan</button></div></div>`);
   $('#tk-cancel').onclick = closeModal;
+  // Bijlages: uploaden (zelfde base64-pad als kaarten) en verwijderen; werkt de
+  // kaart op de achtergrond bij zodat de teller klopt.
+  const koppelBijlagen = () => {
+    $$('.tk-att-del', $('#tk-attwrap')).forEach((b) => b.onclick = async () => {
+      if (!confirm('Bijlage verwijderen?')) return;
+      try { const upd = await api(`/api/taken/${t.id}/bijlage/${b.dataset.att}`, 'DELETE'); Object.assign(t, upd); $('#tk-attwrap').innerHTML = taakBijlagenHTML(t); $('#tk-attcount').textContent = t.bijlagen.length ? ` (${t.bijlagen.length})` : ''; koppelBijlagen(); loadTaken(); }
+      catch (err) { toast(err.message, true); }
+    });
+  };
+  koppelBijlagen();
+  const tkFile = $('#tk-fileinput');
+  $('#tk-addfile').onclick = () => tkFile.click();
+  tkFile.onchange = async () => {
+    const files = [...tkFile.files]; if (!files.length) return;
+    toast(`${files.length} bestand(en) uploaden…`);
+    let gelukt = 0, mislukt = 0, dubbel = 0, laatsteFout = '';
+    for (const file of files) {
+      try {
+        const dataBase64 = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.onerror = reject; fr.readAsDataURL(file); });
+        const upd = await api(`/api/taken/${t.id}/bijlage`, 'POST', { filename: file.name, mime: file.type, dataBase64 });
+        if (upd.dubbel) dubbel++; else gelukt++;
+        Object.assign(t, upd);
+      } catch (err) { mislukt++; laatsteFout = err.message || 'uploaden mislukt'; }
+    }
+    tkFile.value = '';
+    $('#tk-attwrap').innerHTML = taakBijlagenHTML(t); $('#tk-attcount').textContent = (t.bijlagen || []).length ? ` (${t.bijlagen.length})` : '';
+    koppelBijlagen();
+    if (mislukt) toast(gelukt ? `${gelukt} toegevoegd, ${mislukt} mislukt: ${laatsteFout}` : `Uploaden mislukt: ${laatsteFout}`, true);
+    else if (dubbel && !gelukt) toast('Deze bijlage stond er al op');
+    else toast(gelukt === 1 ? 'Toegevoegd' : `${gelukt} bestanden toegevoegd`);
+    loadTaken();
+  };
   const catSel = $('#tk-cat'); if (catSel) catSel.onchange = () => { const b = $('#tk-deelblok'); if (b) b.hidden = catSel.value !== 'prive'; };
   if ($('#tk-delete')) $('#tk-delete').onclick = async () => {
     if (!confirm('Taak verwijderen?')) return;

@@ -372,8 +372,16 @@ await page.waitForTimeout(300);
 await page.locator('#view-taken .tk-kolom-prive .tk-kaart').first().locator('.tk-body').click();
 await page.waitForTimeout(500);
 ok('taken: privé-taak toont "Delen met (optioneel)"', await page.locator('#tk-deelblok').isVisible() && /Delen met/.test(await page.locator('#tk-deelblok').textContent()));
+// Bijlage écht uploaden via het bestandsveld (1x1 PNG), tegel + regel + teller op de kaart.
+ok('taken: knop + Toevoegen (bijlages) zichtbaar', await page.locator('#tk-addfile').isVisible());
+const tkPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+await page.setInputFiles('#tk-fileinput', { name: 'bonnetje.png', mimeType: 'image/png', buffer: tkPng });
+await page.waitForTimeout(1500);
+ok('taken: bijlage staat als tegel + regel in het scherm', await page.locator('#tk-attwrap .att').count() === 1 && await page.locator('#tk-attwrap .tk-att-regel').count() === 1);
+ok('taken: bijlage-teller in de kop', (await page.locator('#tk-attcount').textContent()).trim() === '(1)');
 await page.click('#tk-cancel');
-await page.waitForTimeout(300);
+await page.waitForTimeout(600);
+ok('taken: kaart toont paperclip-teller', await page.locator('#view-taken .tk-kolom-prive .tk-kaart').first().locator('.tk-bijlage').count() === 1);
 noErr('Taken-scherm');
 // Vandaag-blok op Start + badge in de zijbalk.
 await page.evaluate(() => goView('overview'));

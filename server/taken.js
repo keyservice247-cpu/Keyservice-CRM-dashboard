@@ -79,6 +79,7 @@ export function nieuweTaak(body, user) {
     customerId: b.customerId ? String(b.customerId) : null,
     notities: String(b.notities || '').trim().slice(0, 4000),
     gedeeldMet: idLijst(b.gedeeldMet, user),
+    bijlagen: [],
     eigenaarId: user.id,
     eigenaarNaam: user.name || '',
     aangemaaktOp: now(),
@@ -156,7 +157,7 @@ export function seedTaken() {
   if (lijst.length) { s._takenSeedV1 = now(); saveSoon(); return 0; }
   const admin = (db().users || []).find((u) => u.role === 'admin') || { id: 'admin', name: 'Abdel' };
   const mk = (t) => ({
-    id: id('taak'), omschrijving: '', deadline: null, status: 'open', orderId: null, customerId: null, notities: '', gedeeldMet: [],
+    id: id('taak'), omschrijving: '', deadline: null, status: 'open', orderId: null, customerId: null, notities: '', gedeeldMet: [], bijlagen: [],
     eigenaarId: admin.id, eigenaarNaam: admin.name || 'Abdel', aangemaaktOp: now(), afgerondOp: null, ...t,
   });
   lijst.push(

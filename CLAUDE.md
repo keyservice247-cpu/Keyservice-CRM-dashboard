@@ -399,13 +399,19 @@ de regressie meegroeit.
   minus jezelf). Een gedeelde taak mag de collega OVERNEMEN (bewerken/afvinken),
   maar alleen de eigenaar wijzigt de deel-kring (anders stil genegeerd) en
   verwijdert (anders 403). Uitvoer draagt isEigenaar + gedeeldMetNamen; kaart
-  toont "gedeeld met X" / "van X". "Vandaag"-blok op Start
+  toont "gedeeld met X" / "van X". BIJLAGES (wens eigenaar 8 sep): foto's/PDF's/
+  bestanden op een taak (`t.bijlagen`, POST /api/taken/:id/bijlage {filename,mime,
+  dataBase64} + DELETE /api/taken/:id/bijlage/:attId; zelfde saveBuffer-opslag
+  als kaarten, inhoud-hash-dedup → `dubbel:true`, max 30/taak, uploader op de
+  bijlage). Iedereen die de taak ziet (eigenaar of gedeeld) mag toevoegen en
+  weghalen; taak verwijderen ruimt de bestanden van schijf op. Staan bewust NIET
+  in "Foto's & video's beheren" (dat blijft kaarten + inbox). "Vandaag"-blok op Start
   (GET /api/taken/vandaag, max 5: hoge urgentie of deadline ≤14 dagen, ≤3 dagen
   eerst) + teller-badge op het menu-item. Opslag: db().taken (meta-lijst).
   Endpoints: GET/POST /api/taken, PATCH/DELETE /api/taken/:id, POST
   /api/taken/:id/klaar {klaar}. Elf starttaken worden ÉÉN keer ingeladen
   (settings._takenSeedV1, eigenaar = eerste admin; Youssef-taak deadline 1 nov).
-  Mobiel: één kolom. Test: test/taken-test.mjs (45, PORT=3133) + 18 browser-asserties.
+  Mobiel: één kolom. Test: test/taken-test.mjs (57, PORT=3133) + 22 browser-asserties.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

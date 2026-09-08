@@ -2401,9 +2401,41 @@ app.post('/api/taken/:id/klaar', requireRole('admin', 'assistent'), (req, res) =
   saveSoon();
   res.json(taakUit(t, req.user));
 });
+// Bijlages op een taak (foto/PDF/bestand): zelfde opslag + inhoud-dedup als de
+// kaart-bijlages. Iedereen die de taak mag zien (eigenaar of gedeeld) mag toevoegen
+// en weghalen; bestanden gaan mee weg als de taak verwijderd wordt.
+app.post('/api/taken/:id/bijlage', requireRole('admin', 'assistent'), (req, res) => {
+  const t = taakVanReq(req, res); if (!t) return;
+  const { filename, mime, dataBase64 } = req.body || {};
+  if (!dataBase64) return res.status(400).json({ error: 'Geen bestand ontvangen' });
+  let buffer;
+  try { buffer = Buffer.from(String(dataBase64).split(',').pop(), 'base64'); }
+  catch { return res.status(400).json({ error: 'Ongeldig bestand' }); }
+  const saved = saveBuffer(buffer, { mime, filename });
+  if (!saved) return res.status(400).json({ error: 'Bestand te groot of leeg (max 25 MB)' });
+  saved.uploadedBy = req.user.name;
+  if (!Array.isArray(t.bijlagen)) t.bijlagen = [];
+  if (t.bijlagen.some((a) => a.hash && a.hash === saved.hash)) { deleteFile(saved.file); return res.json({ ...taakUit(t, req.user), dubbel: true }); }
+  if (t.bijlagen.length >= 30) { deleteFile(saved.file); return res.status(400).json({ error: 'Maximaal 30 bijlages per taak' }); }
+  t.bijlagen.push(saved);
+  logActivity(req.user.name, 'taak-bijlage toegevoegd', `${t.titel}: ${saved.filename}`);
+  saveSoon();
+  res.json(taakUit(t, req.user));
+});
+app.delete('/api/taken/:id/bijlage/:attId', requireRole('admin', 'assistent'), (req, res) => {
+  const t = taakVanReq(req, res); if (!t) return;
+  const att = (t.bijlagen || []).find((a) => a.id === req.params.attId);
+  if (!att) return res.status(404).json({ error: 'Bijlage niet gevonden' });
+  deleteFile(att.file);
+  t.bijlagen = t.bijlagen.filter((a) => a.id !== att.id);
+  logActivity(req.user.name, 'taak-bijlage verwijderd', `${t.titel}: ${att.filename}`);
+  saveSoon();
+  res.json(taakUit(t, req.user));
+});
 app.delete('/api/taken/:id', requireRole('admin', 'assistent'), (req, res) => {
   const t = taakVanReq(req, res); if (!t) return;
   if (t.categorie === 'prive' && !isEigenaar(t, req.user)) return res.status(403).json({ error: 'Alleen de eigenaar kan een gedeelde privé-taak verwijderen' });
+  for (const a of t.bijlagen || []) { try { deleteFile(a.file); } catch { /* bestand al weg */ } }
   db().taken = takenLijst().filter((x) => x.id !== t.id);
   logActivity(req.user.name, 'taak verwijderd', t.titel);
   saveSoon();
