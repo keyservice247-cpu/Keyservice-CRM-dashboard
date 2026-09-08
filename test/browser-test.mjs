@@ -333,6 +333,54 @@ ok('uitlog-/accountknoppen aanwezig', zij.uitloggenZichtbaar === true);
 await page.setViewportSize({ width: 1280, height: 800 });
 noErr('Zijbalk op laag scherm');
 
+// ---------- Taken-module (8 sep 2026) ----------
+// Twee kolommen (Zakelijk/Privé), snel-toevoegen, afvinken, filterchips, deadline-
+// blok, Vandaag-blok op Start. Geen AI, geen lead-instroom. Faalt bij elke JS-fout.
+clear();
+await page.evaluate(() => goView('taken'));
+await page.waitForTimeout(1200);
+ok('taken: scherm zichtbaar met twee kolommen', await page.locator('#view-taken .tk-kolom').count() === 2);
+ok('taken: tellers open/urgent/klaar', await page.locator('#view-taken .tk-tile').count() === 3);
+ok('taken: starttaken staan op het bord', await page.locator('#view-taken .tk-kaart').count() >= 11);
+ok('taken: deadline-blok met Youssef-taak', (await page.locator('#view-taken .tk-dl-item').allTextContents()).some((t) => /Youssef/.test(t)));
+ok('taken: zeven filterchips', await page.locator('#view-taken .tk-chip').count() === 7);
+await page.fill('#tkSnelTitel', 'Browsertest taak');
+await page.press('#tkSnelTitel', 'Enter');
+await page.waitForTimeout(1000);
+const tkNieuw = page.locator('#view-taken .tk-kaart', { hasText: 'Browsertest taak' });
+ok('taken: snel toevoegen (Enter) plaatst de taak in Zakelijk', await tkNieuw.count() === 1 && await page.locator('#view-taken .tk-kolom-zakelijk .tk-kaart', { hasText: 'Browsertest taak' }).count() === 1);
+const openVoor = Number(await page.locator('#view-taken .tk-tile').first().locator('.num').textContent());
+await tkNieuw.locator('.tk-toggle').check();
+await page.waitForTimeout(1000);
+ok('taken: afvinken vervaagt de kaart en zakt onderaan', await page.locator('#view-taken .tk-kaart.tk-klaar', { hasText: 'Browsertest taak' }).count() === 1);
+const openNa = Number(await page.locator('#view-taken .tk-tile').first().locator('.num').textContent());
+ok('taken: teller open gaat één omlaag', openNa === openVoor - 1, `${openVoor} -> ${openNa}`);
+await page.click('#view-taken .tk-chip[data-f="prive"]');
+await page.waitForTimeout(300);
+ok('taken: filter Privé maakt de Zakelijk-kolom leeg', await page.locator('#view-taken .tk-kolom-zakelijk .tk-kaart').count() === 0 && await page.locator('#view-taken .tk-kolom-prive .tk-kaart').count() >= 5);
+await page.click('#view-taken .tk-chip[data-f="alles"]');
+await page.waitForTimeout(300);
+await page.locator('#view-taken .tk-kaart', { hasText: 'Browsertest taak' }).locator('.tk-body').click();
+await page.waitForTimeout(500);
+ok('taken: bewerkscherm opent met titel', await page.locator('#tk-titel').inputValue() === 'Browsertest taak');
+await page.click('#tk-cancel');
+await page.waitForTimeout(300);
+noErr('Taken-scherm');
+// Vandaag-blok op Start + badge in de zijbalk.
+await page.evaluate(() => goView('overview'));
+await page.waitForTimeout(1500);
+const tkVandaag = await page.locator('#takenVandaagBlok li[data-taak]').count();
+ok('taken: Vandaag-blok op Start gevuld (max 5)', tkVandaag > 0 && tkVandaag <= 5, String(tkVandaag));
+ok('taken: menu-badge toont aantal', !(await page.locator('#takenBadge').isHidden()));
+// Mobiel: één kolom, menu-item aanwezig.
+await page.setViewportSize({ width: 390, height: 844 });
+await page.evaluate(() => goView('taken'));
+await page.waitForTimeout(1000);
+const tkMob = await page.evaluate(() => { const k = document.querySelectorAll('#view-taken .tk-kolom'); if (k.length < 2) return null; const a = k[0].getBoundingClientRect(), b = k[1].getBoundingClientRect(); return { onderElkaar: b.top >= a.bottom - 1, breedte: a.right <= window.innerWidth + 1 }; });
+ok('taken: mobiel één kolom onder elkaar, binnen het scherm', !!tkMob && tkMob.onderElkaar && tkMob.breedte, JSON.stringify(tkMob));
+await page.setViewportSize({ width: 1280, height: 800 });
+noErr('Taken (mobiel)');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

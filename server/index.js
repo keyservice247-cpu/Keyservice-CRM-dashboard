@@ -52,6 +52,7 @@ import {
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken } from './gesprekken.js';
+import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken } from './taken.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
@@ -2358,6 +2359,51 @@ app.post('/api/whatsapp/pause', requireRole('admin', 'assistent'), (req, res) =>
   saveSoon();
   res.json({ ok: true, paused: db().settings.whatsappPaused });
 });
+// ---------- TAKEN (8 sep 2026) — handmatig, deterministisch, geen AI, geen lead-koppeling ----------
+// Alleen kantoor (admin + assistent). Privé-taken ziet uitsluitend de eigenaar.
+const taakVanReq = (req, res) => {
+  const t = takenLijst().find((x) => x.id === req.params.id);
+  if (!t || !zichtbaarVoor(t, req.user)) { res.status(404).json({ error: 'Taak niet gevonden' }); return null; }
+  if (t.categorie === 'prive' && t.eigenaarId !== req.user.id) { res.status(403).json({ error: 'Privé-taak van iemand anders' }); return null; }
+  return t;
+};
+const taakUit = (t) => ({ ...t, dagen: dagenTot(t.deadline) });
+app.get('/api/taken/vandaag', requireRole('admin', 'assistent'), (req, res) => {
+  res.json(vandaagLijst(req.user, Math.max(1, Math.min(10, Number(req.query.max) || 5))));
+});
+app.get('/api/taken', requireRole('admin', 'assistent'), (req, res) => {
+  const zichtbaar = takenLijst().filter((t) => zichtbaarVoor(t, req.user));
+  res.json(sorteerTaken(filterTaken(zichtbaar, req.query || {}, req.user)).map(taakUit));
+});
+app.post('/api/taken', requireRole('admin', 'assistent'), (req, res) => {
+  const t = nieuweTaak(req.body, req.user);
+  takenLijst().unshift(t);
+  logActivity(req.user.name, 'taak aangemaakt', t.titel);
+  saveSoon();
+  res.json(taakUit(t));
+});
+app.patch('/api/taken/:id', requireRole('admin', 'assistent'), (req, res) => {
+  const t = taakVanReq(req, res); if (!t) return;
+  werkTaakBij(t, req.body);
+  saveSoon();
+  res.json(taakUit(t));
+});
+app.post('/api/taken/:id/klaar', requireRole('admin', 'assistent'), (req, res) => {
+  const t = taakVanReq(req, res); if (!t) return;
+  const klaar = req.body?.klaar !== false;
+  zetStatus(t, klaar ? 'klaar' : 'open');
+  logActivity(req.user.name, klaar ? 'taak afgerond' : 'taak heropend', t.titel);
+  saveSoon();
+  res.json(taakUit(t));
+});
+app.delete('/api/taken/:id', requireRole('admin', 'assistent'), (req, res) => {
+  const t = taakVanReq(req, res); if (!t) return;
+  db().taken = takenLijst().filter((x) => x.id !== t.id);
+  logActivity(req.user.name, 'taak verwijderd', t.titel);
+  saveSoon();
+  res.json({ ok: true });
+});
+
 // Onbeantwoorde klantvragen (punt 10): tijd-gebaseerd, los van gelezen/ongelezen.
 app.get('/api/chats/onbeantwoord', requireRole('admin', 'assistent'), (req, res) => {
   const uren = Math.max(1, Number(req.query.uren) || 2);
@@ -5588,6 +5634,7 @@ app.listen(PORT, () => {
   // klopt weer, ook op bestaande kaarten), dan mislukte groeps-berichten opnieuw in de
   // wachtrij, dan gemiste opdrachten alsnog automatisch naar de monteur.
   healGroupIdNames();
+  try { seedTaken(); } catch (e) { console.error('[taken] starttaken:', e.message); }
   requeueRecentFailedGroupItems();
   maybeCatchUpDispatch();
   startEmailPoller();

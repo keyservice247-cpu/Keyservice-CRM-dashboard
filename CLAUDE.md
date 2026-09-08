@@ -383,6 +383,23 @@ de regressie meegroeit.
   (invalid_grant → disconnectReason, calendarAlarmDecision) → direct melding +
   herstelmelding; komende afspraken met googleSyncError → 1 melding/dag. Test:
   test/google-test.mjs (10 assertions, zonder server).
+- **TAKEN-module (8 sep 2026, server/taken.js):** eigen menu-item "Taken" (admin +
+  assistent; monteur bewust NIET, 403) — een simpele to-do-lijst voor de eigenaar en
+  de assistente, ZONDER AI en ZONDER koppeling met de lead-instroom. Twee kolommen
+  Zakelijk/Privé, tellers open/urgent/klaar, filterchips (Alles/Zakelijk/Privé/Hoge
+  urgentie/Korte/Lange/Toegewezen aan mij — 'mij' matcht op VOORNAAM van de
+  ingelogde gebruiker), 1-klik afvinken (kaart vervaagt en zakt naar onderen, blijft
+  zichtbaar), deadline-blok met teller (≤3 dagen rood, ≤14 oranje; `dagen` =
+  kalenderdagen, komt van de server), snel-toevoegen (Enter; standaard
+  zakelijk+middel), bewerkscherm met koppeling aan klant/kaart + notities.
+  ZICHTBAARHEID: privé = alleen de maker (eigenaarId), zakelijk = het hele kantoor;
+  andermans privé-taak geeft 404 (bestaat niet voor jou). "Vandaag"-blok op Start
+  (GET /api/taken/vandaag, max 5: hoge urgentie of deadline ≤14 dagen, ≤3 dagen
+  eerst) + teller-badge op het menu-item. Opslag: db().taken (meta-lijst).
+  Endpoints: GET/POST /api/taken, PATCH/DELETE /api/taken/:id, POST
+  /api/taken/:id/klaar {klaar}. Elf starttaken worden ÉÉN keer ingeladen
+  (settings._takenSeedV1, eigenaar = eerste admin; Youssef-taak deadline 1 nov).
+  Mobiel: één kolom. Test: test/taken-test.mjs (34, PORT=3133) + 15 browser-asserties.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

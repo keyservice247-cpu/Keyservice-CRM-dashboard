@@ -493,6 +493,174 @@ function syncChatStatusBar() {
   const mobiel = window.matchMedia('(max-width: 820px)').matches;
   bar.hidden = mobiel && !!_chatActive;
 }
+// ---------- TAKEN (8 sep 2026) — handmatig, geen AI, geen lead-koppeling ----------
+const TAAK_URG = { hoog: 'Hoge urgentie', middel: 'Middel', laag: 'Lage urgentie' };
+const TAAK_DUUR = { kort: 'Kort', middel: 'Middel', lang: 'Lang' };
+let _takenFilter = 'alles';
+let _takenCache = [];
+function taakDeadlineChip(t) {
+  if (t.dagen === null || t.dagen === undefined) return '';
+  const d = t.dagen;
+  const cls = d <= 3 ? 'tk-dl-rood' : (d <= 14 ? 'tk-dl-oranje' : 'tk-dl');
+  const tekst = d < 0 ? `${Math.abs(d)} dag${Math.abs(d) === 1 ? '' : 'en'} te laat` : d === 0 ? 'vandaag' : `nog ${d} dag${d === 1 ? '' : 'en'}`;
+  const dt = new Date(t.deadline + 'T00:00:00');
+  return `<span class="tk-tag ${cls}" title="Deadline ${dt.toLocaleDateString('nl-NL')}">${icon('clock', 11)} ${esc(tekst)}</span>`;
+}
+function taakKaartHTML(t) {
+  const klaar = t.status === 'klaar';
+  return `<div class="tk-kaart tk-${esc(t.urgentie)} ${klaar ? 'tk-klaar' : ''}" data-id="${esc(t.id)}">
+    <label class="tk-check" title="${klaar ? 'Heropenen' : 'Afvinken'}"><input type="checkbox" class="tk-toggle" data-id="${esc(t.id)}" ${klaar ? 'checked' : ''}></label>
+    <div class="tk-body">
+      <div class="tk-titel">${esc(t.titel)}</div>
+      ${t.omschrijving ? `<div class="tk-omschr">${esc(t.omschrijving)}</div>` : ''}
+      <div class="tk-tags">
+        <span class="tk-tag tk-urg-${esc(t.urgentie)}">${TAAK_URG[t.urgentie] || t.urgentie}</span>
+        <span class="tk-tag">${TAAK_DUUR[t.duur] || t.duur}</span>
+        ${(t.toegewezen || []).length ? `<span class="tk-tag tk-wie">${esc(t.toegewezen.join(' + '))}</span>` : ''}
+        ${taakDeadlineChip(t)}
+        ${t.customerId || t.orderId ? `<span class="tk-tag tk-link">${icon('tag', 11)} ${esc(t.koppelLabel || 'gekoppeld')}</span>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+async function loadTaken() {
+  const wrap = $('#takenWrap'); if (!wrap) return;
+  const d = $('#takenDatum'); if (d) d.textContent = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  let lijst; try { lijst = await api('/api/taken'); } catch (err) { wrap.innerHTML = `<div class="empty">${esc(err.message)}</div>`; return; }
+  _takenCache = Array.isArray(lijst) ? lijst : [];
+  // Koppel-labels (klant/kaart) opzoeken zonder extra server-rondes waar het kan.
+  for (const t of _takenCache) {
+    if (t.orderId) { const o = (state.orders || []).find((x) => x.id === t.orderId); if (o) t.koppelLabel = o.title.slice(0, 40); }
+    if (!t.koppelLabel && t.customerId) { const c = (state._klantenCache || []).find((x) => x.id === t.customerId); if (c) t.koppelLabel = c.name; }
+  }
+  renderTaken();
+}
+function renderTaken() {
+  const wrap = $('#takenWrap'); if (!wrap) return;
+  const alles = _takenCache;
+  const mijNaam = String(state.me.name || '').trim().split(/\s+/)[0].toLowerCase();
+  const isMij = (t) => (t.toegewezen || []).some((n) => String(n).trim().split(/\s+/)[0].toLowerCase() === mijNaam);
+  const f = _takenFilter;
+  const zichtbaar = alles.filter((t) => f === 'alles' ? true
+    : f === 'zakelijk' ? t.categorie === 'zakelijk'
+    : f === 'prive' ? t.categorie === 'prive'
+    : f === 'hoog' ? t.urgentie === 'hoog'
+    : f === 'kort' ? t.duur === 'kort'
+    : f === 'lang' ? t.duur === 'lang'
+    : f === 'mij' ? isMij(t) : true);
+  const open = alles.filter((t) => t.status !== 'klaar');
+  const urgent = open.filter((t) => t.urgentie === 'hoog' || (t.dagen !== null && t.dagen !== undefined && t.dagen <= 3));
+  const klaar = alles.filter((t) => t.status === 'klaar');
+  const chips = [['alles', 'Alles'], ['zakelijk', 'Zakelijk'], ['prive', 'Privé'], ['hoog', 'Hoge urgentie'], ['kort', 'Korte taken'], ['lang', 'Lange taken'], ['mij', 'Toegewezen aan mij']];
+  const metDeadline = open.filter((t) => t.deadline).sort((a, b) => a.dagen - b.dagen);
+  const deadlineBlok = metDeadline.length ? `<div class="tk-deadlines">${metDeadline.slice(0, 4).map((t) => `
+      <div class="tk-dl-item ${t.dagen <= 3 ? 'rood' : (t.dagen <= 14 ? 'oranje' : '')}" data-open="${esc(t.id)}">
+        <div class="tk-dl-kop">${esc(t.titel)}</div>
+        <div class="tk-dl-groot">${t.dagen < 0 ? `${Math.abs(t.dagen)} dagen te laat` : t.dagen === 0 ? 'vandaag' : `nog ${t.dagen} dag${t.dagen === 1 ? '' : 'en'}`}</div>
+        <div class="tk-dl-datum">${new Date(t.deadline + 'T00:00:00').toLocaleDateString('nl-NL', { day: 'numeric', month: 'long' })}</div>
+      </div>`).join('')}</div>` : '';
+  const kolom = (cat, label) => {
+    const items = zichtbaar.filter((t) => t.categorie === cat);
+    return `<div class="tk-kolom tk-kolom-${cat}">
+      <div class="tk-kolom-kop"><span class="tk-dot"></span>${label} <span class="count">${items.filter((t) => t.status !== 'klaar').length}</span></div>
+      ${items.length ? items.map(taakKaartHTML).join('') : '<div class="empty">Niets in deze lijst.</div>'}
+    </div>`;
+  };
+  wrap.innerHTML = `
+    <div class="tk-top">
+      <div class="tk-tiles">
+        <div class="tk-tile"><div class="num">${open.length}</div><div class="lbl">open</div></div>
+        <div class="tk-tile tk-tile-urgent"><div class="num">${urgent.length}</div><div class="lbl">urgent</div></div>
+        <div class="tk-tile tk-tile-klaar"><div class="num">${klaar.length}</div><div class="lbl">klaar</div></div>
+      </div>
+      <form class="tk-snel" id="tkSnel" autocomplete="off">
+        <input id="tkSnelTitel" placeholder="+ taak: typ en druk op Enter" maxlength="160">
+        <div class="tk-snel-opties">
+          <span class="tk-keuze" data-k="categorie"><button type="button" class="tk-opt active" data-v="zakelijk">Zakelijk</button><button type="button" class="tk-opt" data-v="prive">Privé</button></span>
+          <span class="tk-keuze" data-k="urgentie"><button type="button" class="tk-opt tk-opt-hoog" data-v="hoog">Hoog</button><button type="button" class="tk-opt tk-opt-middel active" data-v="middel">Middel</button><button type="button" class="tk-opt tk-opt-laag" data-v="laag">Laag</button></span>
+          <button type="submit" class="btn btn-primary btn-sm">Toevoegen</button>
+        </div>
+      </form>
+    </div>
+    ${deadlineBlok}
+    <div class="tk-chips">${chips.map(([k, l]) => `<button type="button" class="chip tk-chip ${f === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}</div>
+    <div class="tk-kolommen">${kolom('zakelijk', 'Zakelijk')}${kolom('prive', 'Privé')}</div>`;
+  $$('.tk-chip', wrap).forEach((b) => b.onclick = () => { _takenFilter = b.dataset.f; renderTaken(); });
+  $$('.tk-keuze', wrap).forEach((grp) => $$('.tk-opt', grp).forEach((b) => b.onclick = () => { $$('.tk-opt', grp).forEach((x) => x.classList.toggle('active', x === b)); }));
+  $('#tkSnel').onsubmit = async (e) => {
+    e.preventDefault();
+    const titel = ($('#tkSnelTitel').value || '').trim();
+    if (!titel) return;
+    const categorie = $('.tk-keuze[data-k="categorie"] .tk-opt.active')?.dataset.v || 'zakelijk';
+    const urgentie = $('.tk-keuze[data-k="urgentie"] .tk-opt.active')?.dataset.v || 'middel';
+    try { await api('/api/taken', 'POST', { titel, categorie, urgentie }); toast('Taak toegevoegd'); await loadTaken(); $('#tkSnelTitel')?.focus(); }
+    catch (err) { toast(err.message, true); }
+  };
+  $$('.tk-toggle', wrap).forEach((c) => c.addEventListener('change', async () => {
+    const t = _takenCache.find((x) => x.id === c.dataset.id); if (!t) return;
+    try { await api(`/api/taken/${t.id}/klaar`, 'POST', { klaar: c.checked }); await loadTaken(); }
+    catch (err) { toast(err.message, true); c.checked = !c.checked; }
+  }));
+  $$('.tk-kaart .tk-body', wrap).forEach((el) => el.onclick = () => openTaakModal(el.closest('.tk-kaart').dataset.id));
+  $$('.tk-dl-item', wrap).forEach((el) => el.onclick = () => openTaakModal(el.dataset.open));
+  if (!_takenCache.length) wrap.insertAdjacentHTML('beforeend', '<div class="muted small" style="margin-top:8px">Nog geen taken. Typ hierboven je eerste taak.</div>');
+}
+async function openTaakModal(id) {
+  const t = _takenCache.find((x) => x.id === id); if (!t) return;
+  // Koppel-opties: klanten (uit cache of ophalen) en kaarten (bord).
+  if (!state._klantenCache) { try { state._klantenCache = await api('/api/customers'); } catch { state._klantenCache = []; } }
+  if (!state.orders || !state.orders.length) { try { state.orders = await api('/api/orders'); } catch { /* laat leeg */ } }
+  const klanten = (state._klantenCache || []).slice(0, 400);
+  const kaarten = (state.orders || []).slice(0, 300);
+  const sel = (naam, opties, huidig) => `<select id="${naam}">${opties.map(([v, l]) => `<option value="${esc(v)}" ${v === huidig ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  modal(`
+    <h2>${icon('tag', 16)} Taak</h2>
+    <label>Titel <input id="tk-titel" value="${esc(t.titel)}" maxlength="160"></label>
+    <label>Omschrijving <textarea id="tk-omschr" rows="3">${esc(t.omschrijving || '')}</textarea></label>
+    <div class="row">
+      <label>Categorie ${sel('tk-cat', [['zakelijk', 'Zakelijk'], ['prive', 'Privé (alleen voor mij zichtbaar)']], t.categorie)}</label>
+      <label>Urgentie ${sel('tk-urg', [['hoog', 'Hoog'], ['middel', 'Middel'], ['laag', 'Laag']], t.urgentie)}</label>
+    </div>
+    <div class="row">
+      <label>Duur ${sel('tk-duur', [['kort', 'Kort'], ['middel', 'Middel'], ['lang', 'Lang']], t.duur)}</label>
+      <label>Deadline <input id="tk-deadline" type="date" value="${esc(t.deadline || '')}"></label>
+    </div>
+    <div class="row">
+      <label>Toegewezen aan <input id="tk-wie" value="${esc((t.toegewezen || []).join(' + '))}" placeholder="bv. Abdel + Ouiam"></label>
+      <label>Status ${sel('tk-status', [['open', 'Open'], ['bezig', 'Bezig'], ['klaar', 'Klaar']], t.status)}</label>
+    </div>
+    <div class="row">
+      <label>Koppel aan klant ${sel('tk-klant', [['', '— geen —'], ...klanten.map((c) => [c.id, `${c.name || 'Klant'}${c.phone ? ' · ' + c.phone : ''}`])], t.customerId || '')}</label>
+      <label>Koppel aan kaart ${sel('tk-kaart', [['', '— geen —'], ...kaarten.map((o) => [o.id, o.title.slice(0, 60)])], t.orderId || '')}</label>
+    </div>
+    <label>Notities <textarea id="tk-notities" rows="3" placeholder="Eigen aantekeningen">${esc(t.notities || '')}</textarea></label>
+    <p class="muted small">Aangemaakt ${esc(fmtDateShort(t.aangemaaktOp))} door ${esc(t.eigenaarNaam || '')}${t.afgerondOp ? ` · afgerond ${esc(fmtDateShort(t.afgerondOp))}` : ''}</p>
+    <div class="modal-actions"><button class="btn" id="tk-delete" style="color:var(--danger)">Verwijderen</button><div class="right"><button class="btn" id="tk-cancel">Annuleren</button><button class="btn btn-primary" id="tk-save">Opslaan</button></div></div>`);
+  $('#tk-cancel').onclick = closeModal;
+  $('#tk-delete').onclick = async () => {
+    if (!confirm('Taak verwijderen?')) return;
+    try { await api(`/api/taken/${t.id}`, 'DELETE'); closeModal(); toast('Taak verwijderd'); loadTaken(); } catch (err) { toast(err.message, true); }
+  };
+  $('#tk-save').onclick = async () => {
+    const body = {
+      titel: $('#tk-titel').value, omschrijving: $('#tk-omschr').value, categorie: $('#tk-cat').value, urgentie: $('#tk-urg').value,
+      duur: $('#tk-duur').value, deadline: $('#tk-deadline').value || null, toegewezen: $('#tk-wie').value, status: $('#tk-status').value,
+      customerId: $('#tk-klant').value || null, orderId: $('#tk-kaart').value || null, notities: $('#tk-notities').value,
+    };
+    try { await api(`/api/taken/${t.id}`, 'PATCH', body); closeModal(); toast('Opgeslagen'); loadTaken(); } catch (err) { toast(err.message, true); }
+  };
+}
+// "Vandaag"-blok op Start: urgente en verlopende taken (max 5).
+async function vulTakenVandaag() {
+  const el = $('#takenVandaagBlok'); if (!el) return;
+  let lijst; try { lijst = await api('/api/taken/vandaag'); } catch { return; }
+  const badge = $('#takenBadge'); if (badge) { const n = Array.isArray(lijst) ? lijst.length : 0; badge.textContent = n; badge.hidden = !n; }
+  if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="info-card" style="margin-bottom:18px;border-left:4px solid #4a6fa5">
+    <h3 style="margin:0 0 6px">${icon('list', 15)} Vandaag — taken (${lijst.length})</h3>
+    <ul class="ov-list">${lijst.map((t) => `<li data-taak="${esc(t.id)}"><strong>${esc(t.titel)}</strong> <span class="muted">· ${TAAK_URG[t.urgentie] || t.urgentie}${t.dagen !== null && t.dagen !== undefined ? ` · ${t.dagen < 0 ? Math.abs(t.dagen) + ' dagen te laat' : t.dagen === 0 ? 'vandaag' : 'nog ' + t.dagen + ' dagen'}` : ''}</span></li>`).join('')}</ul></div>`;
+  $$('li[data-taak]', el).forEach((li) => li.onclick = () => goView('taken'));
+}
 // Onbeantwoorde klantvragen op Start (punt 10).
 async function vulOnbeantwoord() {
   const el = $('#onbeantwoordBlok'); if (!el) return;
@@ -679,7 +847,7 @@ function showView(view, tab) {
   if (anderView) window.scrollTo(0, 0);
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance, chats: loadChats };
+  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance, chats: loadChats, taken: loadTaken };
   (map[view] || (() => {}))();
 }
 
@@ -783,6 +951,7 @@ async function loadOverview() {
   $('#overviewHi').textContent = first ? `Hoi ${first}` : 'Overzicht';
   $('#overviewDate').textContent = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   setTimeout(vulOnbeantwoord, 400); // nadat het overzicht is getekend
+  setTimeout(vulTakenVandaag, 400);
   const card = (num, label, view, cls = '', col = '') => `<button class="kpi-card ${cls}" data-go="${view}"${col ? ` data-col="${esc(col)}"` : ''}><span class="kpi-num">${num}</span><span class="kpi-label">${esc(label)}</span></button>`;
   const wa = d.whatsapp || {};
   const list = (arr, empty) => arr.length
@@ -793,7 +962,7 @@ async function loadOverview() {
       <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${state.me.role === 'monteur' ? '' : ', bericht'}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
       <div id="gsResults" hidden></div>
     </div>
-    ${state.me.role === 'monteur' ? '' : '<div id="onbeantwoordBlok"></div>'}
+    ${state.me.role === 'monteur' ? '' : '<div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>'}
     ${state.me.role === 'monteur' ? '' : `
     <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -5378,6 +5547,7 @@ function navItems() {
   if (hasPerm('inbox')) nav.push({ label: 'Inbox / AI', view: 'inbox', ic: 'mail' });
   nav.push({ label: 'Berichten', view: 'chats', ic: 'whatsapp' }); // ook monteur (meelezen, eigen klanten)
   nav.push({ label: 'Agenda', view: 'agenda', ic: 'calendar' });
+  if (!monteur) nav.push({ label: 'Taken', view: 'taken', ic: 'list' });
   if (hasPerm('customers')) nav.push({ label: 'Klanten & leads', view: 'customers', ic: 'users' }, { label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
   nav.push({ label: 'Facturen', view: 'invoices', ic: 'file' });
   if (!monteur) nav.push({ label: 'AI Assistent', view: 'assistant', ic: 'sparkles' });

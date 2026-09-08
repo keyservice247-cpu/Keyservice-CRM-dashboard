@@ -24,6 +24,8 @@ node test/whatsapp-cloud-test.mjs
 # Berichten-scherm: gesprekkenlijst, versturen via de wachtrij, kaart-koppeling,
 # gelezen-teller, monteur-weigering (PORT=3127)
 node test/chat-test.mjs
+# Taken-module: aanmaken, afvinken, filteren, deadline-teller, privé/zakelijk (PORT=3133)
+node test/taken-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 
