@@ -31,11 +31,28 @@ export function dagenTot(deadline) {
   return Math.round((doel.getTime() - vandaag.getTime()) / 86400000);
 }
 
+// Privé-taak: eigenaar ziet 'm altijd; OPTIONEEL gedeeld met gekozen collega's
+// (gedeeldMet = lijst gebruikers-id's, alleen door de eigenaar te zetten). Een
+// gedeelde privé-taak mag de collega gewoon overnemen (bewerken/afvinken), maar
+// niet verwijderen of verder delen.
 export function zichtbaarVoor(t, user) {
   if (!user) return false;
-  if (t.categorie === 'prive') return t.eigenaarId === user.id;
-  return ['admin', 'assistent'].includes(user.role);
+  if (!['admin', 'assistent'].includes(user.role)) return false;
+  if (t.categorie === 'prive') return t.eigenaarId === user.id || (t.gedeeldMet || []).includes(user.id);
+  return true;
 }
+export const isEigenaar = (t, user) => !!user && t.eigenaarId === user.id;
+// Collega's waarmee gedeeld kan worden: kantoor (admin + assistent), nooit jezelf.
+export function collegas(user) {
+  return (db().users || []).filter((u) => ['admin', 'assistent'].includes(u.role) && u.id !== user?.id && !u.disabled)
+    .map((u) => ({ id: u.id, name: u.name || u.email || '', role: u.role }));
+}
+const idLijst = (v, user) => {
+  const geldig = new Set(collegas(user).map((c) => c.id));
+  return (Array.isArray(v) ? v : String(v || '').split(',')).map((s) => String(s).trim()).filter((x) => geldig.has(x)).slice(0, 20);
+};
+const naamVanUser = (uid) => { const u = (db().users || []).find((x) => x.id === uid); return u ? (u.name || u.email || '') : ''; };
+export const gedeeldMetNamen = (t) => (t.gedeeldMet || []).map(naamVanUser).filter(Boolean);
 
 // "Toegewezen aan mij": op naam (voornaam volstaat) of op gebruikers-id.
 export function aanMij(t, user) {
@@ -61,6 +78,7 @@ export function nieuweTaak(body, user) {
     orderId: b.orderId ? String(b.orderId) : null,
     customerId: b.customerId ? String(b.customerId) : null,
     notities: String(b.notities || '').trim().slice(0, 4000),
+    gedeeldMet: idLijst(b.gedeeldMet, user),
     eigenaarId: user.id,
     eigenaarNaam: user.name || '',
     aangemaaktOp: now(),
@@ -68,8 +86,10 @@ export function nieuweTaak(body, user) {
   };
 }
 
-export function werkTaakBij(t, body) {
+export function werkTaakBij(t, body, user) {
   const b = body || {};
+  // Delen alleen door de eigenaar; een collega die de taak overneemt kan de kring niet wijzigen.
+  if ('gedeeldMet' in b && isEigenaar(t, user)) t.gedeeldMet = idLijst(b.gedeeldMet, user);
   if ('titel' in b) { const v = String(b.titel || '').trim().slice(0, 160); if (!v) throw Object.assign(new Error('Titel mag niet leeg zijn'), { status: 400 }); t.titel = v; }
   if ('omschrijving' in b) t.omschrijving = String(b.omschrijving || '').trim().slice(0, 2000);
   if ('categorie' in b) t.categorie = kies(b.categorie, CATEGORIEEN, t.categorie);
@@ -136,7 +156,7 @@ export function seedTaken() {
   if (lijst.length) { s._takenSeedV1 = now(); saveSoon(); return 0; }
   const admin = (db().users || []).find((u) => u.role === 'admin') || { id: 'admin', name: 'Abdel' };
   const mk = (t) => ({
-    id: id('taak'), omschrijving: '', deadline: null, status: 'open', orderId: null, customerId: null, notities: '',
+    id: id('taak'), omschrijving: '', deadline: null, status: 'open', orderId: null, customerId: null, notities: '', gedeeldMet: [],
     eigenaarId: admin.id, eigenaarNaam: admin.name || 'Abdel', aangemaaktOp: now(), afgerondOp: null, ...t,
   });
   lijst.push(

@@ -393,13 +393,19 @@ de regressie meegroeit.
   kalenderdagen, komt van de server), snel-toevoegen (Enter; standaard
   zakelijk+middel), bewerkscherm met koppeling aan klant/kaart + notities.
   ZICHTBAARHEID: privé = alleen de maker (eigenaarId), zakelijk = het hele kantoor;
-  andermans privé-taak geeft 404 (bestaat niet voor jou). "Vandaag"-blok op Start
+  andermans privé-taak geeft 404 (bestaat niet voor jou). DELEN (optioneel, wens
+  eigenaar 8 sep): een privé-taak kan per collega gedeeld worden (`gedeeldMet` =
+  gebruikers-id's, vinkjes in het bewerkscherm, GET /api/taken/collegas = kantoor
+  minus jezelf). Een gedeelde taak mag de collega OVERNEMEN (bewerken/afvinken),
+  maar alleen de eigenaar wijzigt de deel-kring (anders stil genegeerd) en
+  verwijdert (anders 403). Uitvoer draagt isEigenaar + gedeeldMetNamen; kaart
+  toont "gedeeld met X" / "van X". "Vandaag"-blok op Start
   (GET /api/taken/vandaag, max 5: hoge urgentie of deadline ≤14 dagen, ≤3 dagen
   eerst) + teller-badge op het menu-item. Opslag: db().taken (meta-lijst).
   Endpoints: GET/POST /api/taken, PATCH/DELETE /api/taken/:id, POST
   /api/taken/:id/klaar {klaar}. Elf starttaken worden ÉÉN keer ingeladen
   (settings._takenSeedV1, eigenaar = eerste admin; Youssef-taak deadline 1 nov).
-  Mobiel: één kolom. Test: test/taken-test.mjs (34, PORT=3133) + 15 browser-asserties.
+  Mobiel: één kolom. Test: test/taken-test.mjs (45, PORT=3133) + 18 browser-asserties.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

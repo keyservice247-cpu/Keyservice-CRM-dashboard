@@ -52,7 +52,7 @@ import {
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken } from './gesprekken.js';
-import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken } from './taken.js';
+import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, gedeeldMetNamen } from './taken.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
@@ -2361,32 +2361,37 @@ app.post('/api/whatsapp/pause', requireRole('admin', 'assistent'), (req, res) =>
 });
 // ---------- TAKEN (8 sep 2026) — handmatig, deterministisch, geen AI, geen lead-koppeling ----------
 // Alleen kantoor (admin + assistent). Privé-taken ziet uitsluitend de eigenaar.
+// Een privé-taak van een ander bestaat niet voor jou (404) — tenzij de eigenaar
+// 'm met jou deelde (gedeeldMet): dan mag je 'm overnemen (bewerken/afvinken),
+// maar niet verwijderen of de deel-kring wijzigen.
 const taakVanReq = (req, res) => {
   const t = takenLijst().find((x) => x.id === req.params.id);
   if (!t || !zichtbaarVoor(t, req.user)) { res.status(404).json({ error: 'Taak niet gevonden' }); return null; }
-  if (t.categorie === 'prive' && t.eigenaarId !== req.user.id) { res.status(403).json({ error: 'Privé-taak van iemand anders' }); return null; }
   return t;
 };
-const taakUit = (t) => ({ ...t, dagen: dagenTot(t.deadline) });
+const taakUit = (t, user) => ({ ...t, dagen: dagenTot(t.deadline), isEigenaar: isEigenaar(t, user), gedeeldMetNamen: gedeeldMetNamen(t) });
 app.get('/api/taken/vandaag', requireRole('admin', 'assistent'), (req, res) => {
-  res.json(vandaagLijst(req.user, Math.max(1, Math.min(10, Number(req.query.max) || 5))));
+  res.json(vandaagLijst(req.user, Math.max(1, Math.min(10, Number(req.query.max) || 5))).map((t) => taakUit(t, req.user)));
 });
+app.get('/api/taken/collegas', requireRole('admin', 'assistent'), (req, res) => res.json(collegas(req.user)));
 app.get('/api/taken', requireRole('admin', 'assistent'), (req, res) => {
   const zichtbaar = takenLijst().filter((t) => zichtbaarVoor(t, req.user));
-  res.json(sorteerTaken(filterTaken(zichtbaar, req.query || {}, req.user)).map(taakUit));
+  res.json(sorteerTaken(filterTaken(zichtbaar, req.query || {}, req.user)).map((t) => taakUit(t, req.user)));
 });
 app.post('/api/taken', requireRole('admin', 'assistent'), (req, res) => {
   const t = nieuweTaak(req.body, req.user);
   takenLijst().unshift(t);
   logActivity(req.user.name, 'taak aangemaakt', t.titel);
   saveSoon();
-  res.json(taakUit(t));
+  res.json(taakUit(t, req.user));
 });
 app.patch('/api/taken/:id', requireRole('admin', 'assistent'), (req, res) => {
   const t = taakVanReq(req, res); if (!t) return;
-  werkTaakBij(t, req.body);
+  const voor = (t.gedeeldMet || []).join(',');
+  werkTaakBij(t, req.body, req.user);
+  if ((t.gedeeldMet || []).join(',') !== voor) logActivity(req.user.name, 'taak gedeeld', `${t.titel} → ${gedeeldMetNamen(t).join(', ') || 'niemand'}`);
   saveSoon();
-  res.json(taakUit(t));
+  res.json(taakUit(t, req.user));
 });
 app.post('/api/taken/:id/klaar', requireRole('admin', 'assistent'), (req, res) => {
   const t = taakVanReq(req, res); if (!t) return;
@@ -2394,10 +2399,11 @@ app.post('/api/taken/:id/klaar', requireRole('admin', 'assistent'), (req, res) =
   zetStatus(t, klaar ? 'klaar' : 'open');
   logActivity(req.user.name, klaar ? 'taak afgerond' : 'taak heropend', t.titel);
   saveSoon();
-  res.json(taakUit(t));
+  res.json(taakUit(t, req.user));
 });
 app.delete('/api/taken/:id', requireRole('admin', 'assistent'), (req, res) => {
   const t = taakVanReq(req, res); if (!t) return;
+  if (t.categorie === 'prive' && !isEigenaar(t, req.user)) return res.status(403).json({ error: 'Alleen de eigenaar kan een gedeelde privé-taak verwijderen' });
   db().taken = takenLijst().filter((x) => x.id !== t.id);
   logActivity(req.user.name, 'taak verwijderd', t.titel);
   saveSoon();

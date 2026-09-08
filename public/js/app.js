@@ -519,6 +519,7 @@ function taakKaartHTML(t) {
         ${(t.toegewezen || []).length ? `<span class="tk-tag tk-wie">${esc(t.toegewezen.join(' + '))}</span>` : ''}
         ${taakDeadlineChip(t)}
         ${t.customerId || t.orderId ? `<span class="tk-tag tk-link">${icon('tag', 11)} ${esc(t.koppelLabel || 'gekoppeld')}</span>` : ''}
+        ${t.categorie === 'prive' && (t.gedeeldMetNamen || []).length ? `<span class="tk-tag tk-gedeeld" title="Gedeelde privé-taak">${icon('users', 11)} ${esc(t.isEigenaar ? 'gedeeld met ' + t.gedeeldMetNamen.join(', ') : 'van ' + (t.eigenaarNaam || 'collega'))}</span>` : ''}
       </div>
     </div>
   </div>`;
@@ -612,15 +613,27 @@ async function openTaakModal(id) {
   if (!state.orders || !state.orders.length) { try { state.orders = await api('/api/orders'); } catch { /* laat leeg */ } }
   const klanten = (state._klantenCache || []).slice(0, 400);
   const kaarten = (state.orders || []).slice(0, 300);
+  // Delen van een privé-taak (optioneel): alleen de eigenaar kiest met welke
+  // collega's; een collega die 'm gedeeld kreeg mag bewerken/afvinken, niet delen/verwijderen.
+  const eigenaar = t.isEigenaar !== false;
+  let collegas = [];
+  if (eigenaar) { try { collegas = await api('/api/taken/collegas'); } catch { collegas = []; } }
+  const deelBlok = eigenaar ? `<div id="tk-deelblok" ${t.categorie === 'prive' ? '' : 'hidden'}>
+      <div class="small" style="margin:4px 0 4px;font-weight:600">Delen met (optioneel)</div>
+      ${collegas.length ? `<div class="tk-deel-lijst">${collegas.map((c) => `<label class="tk-deel-opt"><input type="checkbox" class="tk-deel" value="${esc(c.id)}" ${(t.gedeeldMet || []).includes(c.id) ? 'checked' : ''}> ${esc(c.name)} <span class="muted small">(${c.role === 'admin' ? 'beheerder' : 'assistente'})</span></label>`).join('')}</div>`
+        : '<div class="muted small">Geen collega\'s om mee te delen (alleen kantoor-accounts).</div>'}
+      <div class="muted small" style="margin-top:4px">Niet aangevinkt = alleen jij ziet deze taak. Gedeeld = die collega ziet 'm ook en kan 'm overnemen.</div>
+    </div>` : (t.categorie === 'prive' ? `<div class="muted small">Privé-taak van ${esc(t.eigenaarNaam || 'een collega')}, met jou gedeeld. Je kunt 'm bewerken en afvinken.</div>` : '');
   const sel = (naam, opties, huidig) => `<select id="${naam}">${opties.map(([v, l]) => `<option value="${esc(v)}" ${v === huidig ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
   modal(`
     <h2>${icon('tag', 16)} Taak</h2>
     <label>Titel <input id="tk-titel" value="${esc(t.titel)}" maxlength="160"></label>
     <label>Omschrijving <textarea id="tk-omschr" rows="3">${esc(t.omschrijving || '')}</textarea></label>
     <div class="row">
-      <label>Categorie ${sel('tk-cat', [['zakelijk', 'Zakelijk'], ['prive', 'Privé (alleen voor mij zichtbaar)']], t.categorie)}</label>
+      <label>Categorie ${sel('tk-cat', [['zakelijk', 'Zakelijk'], ['prive', 'Privé (alleen voor mij, tenzij gedeeld)']], t.categorie)}</label>
       <label>Urgentie ${sel('tk-urg', [['hoog', 'Hoog'], ['middel', 'Middel'], ['laag', 'Laag']], t.urgentie)}</label>
     </div>
+    ${deelBlok}
     <div class="row">
       <label>Duur ${sel('tk-duur', [['kort', 'Kort'], ['middel', 'Middel'], ['lang', 'Lang']], t.duur)}</label>
       <label>Deadline <input id="tk-deadline" type="date" value="${esc(t.deadline || '')}"></label>
@@ -635,9 +648,10 @@ async function openTaakModal(id) {
     </div>
     <label>Notities <textarea id="tk-notities" rows="3" placeholder="Eigen aantekeningen">${esc(t.notities || '')}</textarea></label>
     <p class="muted small">Aangemaakt ${esc(fmtDateShort(t.aangemaaktOp))} door ${esc(t.eigenaarNaam || '')}${t.afgerondOp ? ` · afgerond ${esc(fmtDateShort(t.afgerondOp))}` : ''}</p>
-    <div class="modal-actions"><button class="btn" id="tk-delete" style="color:var(--danger)">Verwijderen</button><div class="right"><button class="btn" id="tk-cancel">Annuleren</button><button class="btn btn-primary" id="tk-save">Opslaan</button></div></div>`);
+    <div class="modal-actions">${eigenaar || t.categorie !== 'prive' ? '<button class="btn" id="tk-delete" style="color:var(--danger)">Verwijderen</button>' : '<span></span>'}<div class="right"><button class="btn" id="tk-cancel">Annuleren</button><button class="btn btn-primary" id="tk-save">Opslaan</button></div></div>`);
   $('#tk-cancel').onclick = closeModal;
-  $('#tk-delete').onclick = async () => {
+  const catSel = $('#tk-cat'); if (catSel) catSel.onchange = () => { const b = $('#tk-deelblok'); if (b) b.hidden = catSel.value !== 'prive'; };
+  if ($('#tk-delete')) $('#tk-delete').onclick = async () => {
     if (!confirm('Taak verwijderen?')) return;
     try { await api(`/api/taken/${t.id}`, 'DELETE'); closeModal(); toast('Taak verwijderd'); loadTaken(); } catch (err) { toast(err.message, true); }
   };
@@ -647,6 +661,7 @@ async function openTaakModal(id) {
       duur: $('#tk-duur').value, deadline: $('#tk-deadline').value || null, toegewezen: $('#tk-wie').value, status: $('#tk-status').value,
       customerId: $('#tk-klant').value || null, orderId: $('#tk-kaart').value || null, notities: $('#tk-notities').value,
     };
+    if (eigenaar) body.gedeeldMet = $$('.tk-deel:checked').map((c) => c.value);
     try { await api(`/api/taken/${t.id}`, 'PATCH', body); closeModal(); toast('Opgeslagen'); loadTaken(); } catch (err) { toast(err.message, true); }
   };
 }
