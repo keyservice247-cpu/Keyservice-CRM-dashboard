@@ -80,6 +80,7 @@ export function nieuweTaak(body, user) {
     notities: String(b.notities || '').trim().slice(0, 4000),
     gedeeldMet: idLijst(b.gedeeldMet, user),
     bijlagen: [],
+    volgorde: null,
     eigenaarId: user.id,
     eigenaarNaam: user.name || '',
     aangemaaktOp: now(),
@@ -101,6 +102,7 @@ export function werkTaakBij(t, body, user) {
   if ('orderId' in b) t.orderId = b.orderId ? String(b.orderId) : null;
   if ('customerId' in b) t.customerId = b.customerId ? String(b.customerId) : null;
   if ('notities' in b) t.notities = String(b.notities || '').trim().slice(0, 4000);
+  if ('volgorde' in b) t.volgorde = Number.isFinite(Number(b.volgorde)) && b.volgorde !== null ? Number(b.volgorde) : null;
   if ('status' in b) zetStatus(t, kies(b.status, STATUSSEN, t.status));
   return t;
 }
@@ -111,18 +113,50 @@ export function zetStatus(t, status) {
   return t;
 }
 
-// Sorteren: open/bezig eerst, dan urgentie (hoog→laag), dan deadline (dichtstbij eerst).
+// Sorteren: afgerond altijd onderaan. Daarbinnen per modus:
+//   slim (standaard): urgentie (hoog→laag), dan deadline (dichtstbij eerst)
+//   handmatig: eigen volgorde (t.volgorde, gezet door slepen), rest daarna op slim
+//   deadline: dichtstbijzijnde deadline eerst (zonder deadline achteraan), dan urgentie
+//   nieuw: nieuwste eerst
 const URG_RANG = { hoog: 0, middel: 1, laag: 2 };
-export function sorteerTaken(lijst) {
-  return lijst.slice().sort((a, b) => {
-    const ka = a.status === 'klaar' ? 1 : 0; const kb = b.status === 'klaar' ? 1 : 0;
-    if (ka !== kb) return ka - kb;
-    if (ka) return String(b.afgerondOp || '').localeCompare(String(a.afgerondOp || ''));
+export const SORTEER_MODI = ['slim', 'handmatig', 'deadline', 'nieuw'];
+export function sorteerTaken(lijst, modus = 'slim') {
+  const m = SORTEER_MODI.includes(modus) ? modus : 'slim';
+  const slim = (a, b) => {
     const da = a.deadline ? dagenTot(a.deadline) : 9999; const dbb = b.deadline ? dagenTot(b.deadline) : 9999;
     if ((URG_RANG[a.urgentie] ?? 1) !== (URG_RANG[b.urgentie] ?? 1)) return (URG_RANG[a.urgentie] ?? 1) - (URG_RANG[b.urgentie] ?? 1);
     if (da !== dbb) return da - dbb;
     return String(a.aangemaaktOp || '').localeCompare(String(b.aangemaaktOp || ''));
+  };
+  return lijst.slice().sort((a, b) => {
+    const ka = a.status === 'klaar' ? 1 : 0; const kb = b.status === 'klaar' ? 1 : 0;
+    if (ka !== kb) return ka - kb;
+    if (ka) return String(b.afgerondOp || '').localeCompare(String(a.afgerondOp || ''));
+    if (m === 'handmatig') {
+      const va = Number.isFinite(a.volgorde) ? a.volgorde : Infinity; const vb = Number.isFinite(b.volgorde) ? b.volgorde : Infinity;
+      if (va !== vb) return va - vb;
+      return slim(a, b);
+    }
+    if (m === 'deadline') {
+      const da = a.deadline ? dagenTot(a.deadline) : 9999; const dbb = b.deadline ? dagenTot(b.deadline) : 9999;
+      if (da !== dbb) return da - dbb;
+      return slim(a, b);
+    }
+    if (m === 'nieuw') return String(b.aangemaaktOp || '').localeCompare(String(a.aangemaaktOp || ''));
+    return slim(a, b);
   });
+}
+
+// Eigen volgorde na slepen: de meegegeven id's (in de gewenste volgorde) krijgen
+// volgorde 10, 20, 30 … — alleen taken die deze gebruiker mag zien.
+export function zetVolgorde(ids, user) {
+  const lijst = takenLijst();
+  let n = 0;
+  (Array.isArray(ids) ? ids : []).slice(0, 500).forEach((id, i) => {
+    const t = lijst.find((x) => x.id === id);
+    if (t && zichtbaarVoor(t, user)) { t.volgorde = (i + 1) * 10; n++; }
+  });
+  return n;
 }
 
 export function filterTaken(lijst, q, user) {

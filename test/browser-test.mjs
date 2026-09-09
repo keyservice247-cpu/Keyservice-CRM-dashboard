@@ -340,7 +340,7 @@ clear();
 await page.evaluate(() => goView('taken'));
 await page.waitForTimeout(1200);
 ok('taken: scherm zichtbaar met twee kolommen', await page.locator('#view-taken .tk-kolom').count() === 2);
-ok('taken: tellers open/urgent/klaar', await page.locator('#view-taken .tk-tile').count() === 3);
+ok('taken: tellers open/bezig/urgent/klaar', await page.locator('#view-taken .tk-tile').count() === 4);
 ok('taken: starttaken staan op het bord', await page.locator('#view-taken .tk-kaart').count() >= 11);
 ok('taken: deadline-blok met Youssef-taak', (await page.locator('#view-taken .tk-dl-item').allTextContents()).some((t) => /Youssef/.test(t)));
 ok('taken: zeven filterchips', await page.locator('#view-taken .tk-chip').count() === 7);
@@ -382,6 +382,45 @@ ok('taken: bijlage-teller in de kop', (await page.locator('#tk-attcount').textCo
 await page.click('#tk-cancel');
 await page.waitForTimeout(600);
 ok('taken: kaart toont paperclip-teller', await page.locator('#view-taken .tk-kolom-prive .tk-kaart').first().locator('.tk-bijlage').count() === 1);
+// Status bezig: één tik op "Start" kleurt de hele kaart blauw; nog een tik zet 'm terug.
+const eersteZak = page.locator('#view-taken .tk-kolom-zakelijk .tk-kaart:not(.tk-klaar)').first();
+const eersteZakId = await eersteZak.getAttribute('data-id');
+await eersteZak.locator('.tk-status-knop').click();
+await page.waitForTimeout(1000);
+const bezigKaart = page.locator(`#view-taken .tk-kaart[data-id="${eersteZakId}"]`);
+ok('taken: Start-knop zet de kaart op bezig (blauwe kaart)', await bezigKaart.evaluate((el) => el.classList.contains('tk-bezig')));
+ok('taken: bezig-kaart heeft zichtbaar andere achtergrond dan een open kaart', await page.evaluate((id) => {
+  const b = document.querySelector(`.tk-kaart[data-id="${id}"]`); const o = document.querySelector('.tk-kaart:not(.tk-bezig):not(.tk-klaar)');
+  return !!b && !!o && getComputedStyle(b).backgroundColor !== getComputedStyle(o).backgroundColor;
+}, eersteZakId));
+ok('taken: teller bezig = 1', (await page.locator('#view-taken .tk-tile-bezig .num').textContent()).trim() === '1');
+await bezigKaart.locator('.tk-status-knop').click();
+await page.waitForTimeout(1000);
+ok('taken: nog een tik → terug naar open', !(await page.locator(`#view-taken .tk-kaart[data-id="${eersteZakId}"]`).evaluate((el) => el.classList.contains('tk-bezig'))));
+// Sorteren: keuzemenu + echt slepen met de muis (pointer events) binnen de kolom.
+ok('taken: sorteermenu met 4 opties', await page.locator('#tkSorteer option').count() === 4 && await page.locator('#tkSorteer').inputValue() === 'slim');
+const openZak = page.locator('#view-taken .tk-kolom-zakelijk .tk-kaart:not(.tk-klaar)');
+const idA = await openZak.nth(0).getAttribute('data-id');
+const idB = await openZak.nth(1).getAttribute('data-id');
+const gripB = openZak.nth(1).locator('.tk-grip');
+const gb = await gripB.boundingBox(); const ka = await openZak.nth(0).boundingBox();
+await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 8; i++) await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2 - ((gb.y - ka.y + 10) * i) / 8);
+await page.mouse.up();
+await page.waitForTimeout(1200);
+const naSleep = await page.locator('#view-taken .tk-kolom-zakelijk .tk-kaart:not(.tk-klaar)').evaluateAll((els) => els.map((e) => e.dataset.id));
+ok('taken: slepen zet kaart B boven kaart A', naSleep[0] === idB && naSleep[1] === idA, JSON.stringify([idA, idB, naSleep.slice(0, 2)]));
+ok('taken: na slepen staat sortering op "Eigen volgorde"', await page.locator('#tkSorteer').inputValue() === 'handmatig');
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(1500);
+await page.evaluate(() => goView('taken'));
+await page.waitForTimeout(1200);
+const naHerlaad = await page.locator('#view-taken .tk-kolom-zakelijk .tk-kaart:not(.tk-klaar)').evaluateAll((els) => els.map((e) => e.dataset.id));
+ok('taken: eigen volgorde blijft na herladen (server + onthouden keuze)', naHerlaad[0] === idB && await page.locator('#tkSorteer').inputValue() === 'handmatig', JSON.stringify(naHerlaad.slice(0, 2)));
+await page.selectOption('#tkSorteer', 'slim');
+await page.waitForTimeout(1000);
+ok('taken: terug naar Slim herstelt de urgentie-volgorde', (await page.locator('#view-taken .tk-kolom-zakelijk .tk-kaart:not(.tk-klaar)').first().getAttribute('data-id')) === idA);
 noErr('Taken-scherm');
 // Vandaag-blok op Start + badge in de zijbalk.
 await page.evaluate(() => goView('overview'));

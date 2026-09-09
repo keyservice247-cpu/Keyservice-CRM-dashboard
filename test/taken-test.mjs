@@ -69,6 +69,44 @@ ok('Vandaag-blok bevat GEEN lage-urgentie-taak met deadline over 40 dagen', !van
 await api('PATCH', `/api/taken/${snel.json.id}`, { deadline: null });
 ok('deadline weghalen -> dagen null', (await api('GET', '/api/taken')).json.find((t) => t.id === snel.json.id)?.dagen === null);
 
+console.log('\n== Status bezig ==');
+const bz = await api('PATCH', `/api/taken/${nieuw.json.id}`, { status: 'bezig' });
+ok('status bezig zetten', bz.json?.status === 'bezig' && bz.json?.afgerondOp === null);
+const tmpKlaar = await api('POST', '/api/taken', { titel: 'Tijdelijk klaar', urgentie: 'hoog' });
+await api('POST', `/api/taken/${tmpKlaar.json.id}/klaar`, { klaar: true });
+const lijstBz = (await api('GET', '/api/taken')).json;
+ok('bezig telt als open en staat vóór afgeronde taken', lijstBz.findIndex((t) => t.id === nieuw.json.id) < lijstBz.findIndex((t) => t.id === tmpKlaar.json.id));
+const alleenBezig = (await api('GET', '/api/taken?status=bezig')).json;
+ok('filter status=bezig', alleenBezig.every((t) => t.status === 'bezig') && alleenBezig.some((t) => t.id === nieuw.json.id));
+ok('bezig → afvinken → klaar', (await api('POST', `/api/taken/${nieuw.json.id}/klaar`, { klaar: true })).json?.status === 'klaar');
+ok('heropenen vanuit klaar → open (niet bezig)', (await api('POST', `/api/taken/${nieuw.json.id}/klaar`, { klaar: false })).json?.status === 'open');
+await api('DELETE', `/api/taken/${tmpKlaar.json.id}`);
+
+console.log('\n== Sorteren en eigen volgorde (slepen) ==');
+const s1 = await api('POST', '/api/taken', { titel: 'Sorteer A', urgentie: 'laag' });
+const s2 = await api('POST', '/api/taken', { titel: 'Sorteer B', urgentie: 'hoog' });
+const s3 = await api('POST', '/api/taken', { titel: 'Sorteer C', urgentie: 'middel', deadline: isoOver(1) });
+const slim = (await api('GET', '/api/taken?sorteer=slim')).json.filter((t) => /^Sorteer /.test(t.titel)).map((t) => t.titel);
+ok('slim: hoog vóór middel vóór laag', slim.join(',') === 'Sorteer B,Sorteer C,Sorteer A', slim.join(','));
+const dl = (await api('GET', '/api/taken?sorteer=deadline')).json.filter((t) => /^Sorteer /.test(t.titel)).map((t) => t.titel);
+ok('deadline: taak met deadline morgen bovenaan', dl[0] === 'Sorteer C', dl.join(','));
+const nw = (await api('GET', '/api/taken?sorteer=nieuw')).json.filter((t) => /^Sorteer /.test(t.titel)).map((t) => t.titel);
+ok('nieuw: laatst aangemaakte eerst', nw[0] === 'Sorteer C', nw.join(','));
+const vg = await api('POST', '/api/taken/volgorde', { ids: [s1.json.id, s3.json.id, s2.json.id, 'taak_nep'] });
+ok('volgorde opslaan (onbekend id genegeerd)', vg.status === 200 && vg.json?.aantal === 3, JSON.stringify(vg.json));
+const hm = (await api('GET', '/api/taken?sorteer=handmatig')).json.filter((t) => /^Sorteer /.test(t.titel)).map((t) => t.titel);
+ok('handmatig: eigen volgorde A, C, B wint van urgentie', hm.join(',') === 'Sorteer A,Sorteer C,Sorteer B', hm.join(','));
+const hmAlles = (await api('GET', '/api/taken?sorteer=handmatig')).json;
+ok('handmatig: gesorteerde taken staan vóór taken zonder eigen volgorde', hmAlles.findIndex((t) => t.id === s2.json.id) < hmAlles.findIndex((t) => t.status !== 'klaar' && (t.volgorde === null || t.volgorde === undefined)));
+const klaarHm = await api('POST', '/api/taken', { titel: 'Klaar met volgorde' });
+await api('POST', '/api/taken/volgorde', { ids: [klaarHm.json.id, s1.json.id, s3.json.id, s2.json.id] });
+await api('POST', `/api/taken/${klaarHm.json.id}/klaar`, { klaar: true });
+const hm2 = (await api('GET', '/api/taken?sorteer=handmatig')).json;
+ok('afgerond blijft onderaan, ook met eigen volgorde 10', hm2.findIndex((t) => t.id === klaarHm.json.id) > hm2.findIndex((t) => t.id === s2.json.id) && hm2.slice(hm2.findIndex((t) => t.status === 'klaar')).every((t) => t.status === 'klaar'));
+await api('DELETE', `/api/taken/${klaarHm.json.id}`);
+ok('onbekende sorteermodus valt terug op slim', (await api('GET', '/api/taken?sorteer=onzin')).status === 200);
+for (const s of [s1, s2, s3]) await api('DELETE', `/api/taken/${s.json.id}`); // opruimen, anders vervuilt dit het Vandaag-blok
+
 console.log('\n== Bewerken en koppelen ==');
 const kaart = await api('POST', '/api/orders', { customerName: 'Roger Taak', customerPhone: '0612349999', title: 'Rhenen — gesprek Roger' });
 const bew = await api('PATCH', `/api/taken/${std.json.id}`, { titel: 'Gesprek met Roger', customerId: kaart.json?.customerId, orderId: kaart.json?.id, notities: 'Punten van Amal verzamelen', urgentie: 'hoog' });

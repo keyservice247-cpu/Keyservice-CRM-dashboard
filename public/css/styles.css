@@ -1056,6 +1056,19 @@ table tbody tr:hover { background: var(--panel-2); }
 .tk-kaart { display: flex; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--tk-middel); border-radius: 10px; padding: 11px 12px; margin-bottom: 10px; }
 .tk-kaart.tk-hoog { border-left-color: var(--tk-hoog); } .tk-kaart.tk-laag { border-left-color: var(--tk-laag); }
 .tk-kaart.tk-klaar { opacity: .5; } .tk-kaart.tk-klaar .tk-titel { text-decoration: line-through; }
+/* Bezig: de hele kaart kleurt blauw, zodat open en bezig in één oogopslag verschillen. */
+.tk-kaart.tk-bezig { background: color-mix(in srgb, var(--tk-zakelijk) 14%, var(--panel)); border-color: var(--tk-zakelijk); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tk-zakelijk) 35%, transparent); }
+.tk-status-knop { font: inherit; font-size: 11px; cursor: pointer; border: 1px dashed var(--tk-zakelijk); color: var(--tk-zakelijk); background: transparent; }
+.tk-status-knop.is-bezig { background: var(--tk-zakelijk); color: #fff; border-style: solid; }
+.tk-status-knop:hover { filter: brightness(.92); }
+.tk-tile-bezig .num { color: var(--tk-zakelijk); }
+/* Sleep-greep: stippen rechts; touch-action none zodat de pagina niet meescrollt op mobiel. */
+.tk-grip { align-self: center; color: var(--muted, #9aa3ad); cursor: grab; padding: 6px 2px 6px 8px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.tk-grip:active { cursor: grabbing; }
+.tk-kaart.tk-sleept { opacity: .85; box-shadow: 0 8px 22px rgba(0,0,0,.18); transform: scale(1.01); position: relative; z-index: 3; }
+.tk-sorteer { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted, #6b7580); }
+.tk-sorteer select { font-size: 12px; padding: 4px 6px; width: auto; }
+.tk-sleephint { margin: -4px 0 8px; }
 .tk-check input { width: 20px; height: 20px; margin-top: 2px; cursor: pointer; }
 .tk-body { flex: 1; min-width: 0; cursor: pointer; }
 .tk-titel { font-weight: 600; font-size: 15px; }

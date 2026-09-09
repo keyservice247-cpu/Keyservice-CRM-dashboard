@@ -405,13 +405,23 @@ de regressie meegroeit.
   als kaarten, inhoud-hash-dedup → `dubbel:true`, max 30/taak, uploader op de
   bijlage). Iedereen die de taak ziet (eigenaar of gedeeld) mag toevoegen en
   weghalen; taak verwijderen ruimt de bestanden van schijf op. Staan bewust NIET
-  in "Foto's & video's beheren" (dat blijft kaarten + inbox). "Vandaag"-blok op Start
+  in "Foto's & video's beheren" (dat blijft kaarten + inbox). SORTEREN + SLEPEN
+  (wens eigenaar 9 sep): GET /api/taken?sorteer=slim|handmatig|deadline|nieuw
+  (SORTEER_MODI; afgerond ALTIJD onderaan), keuzemenu #tkSorteer (keuze per toestel
+  in localStorage ksTakenSorteer). Slepen = greep met stippen rechts op de kaart
+  (.tk-grip, pointer-events op het DOCUMENT — op de greep zelf raakte het loslaten
+  kwijt zodra de kaart in de DOM verplaatst was; touch-action:none voor mobiel),
+  alleen binnen de eigen kolom en alleen open/bezig; loslaten → POST
+  /api/taken/volgorde {ids} (zetVolgorde: 10,20,30…, alleen zichtbare taken) en
+  de sortering springt naar "Eigen volgorde". STATUS BEZIG: knop "▶ Start" op de
+  kaart (PATCH status bezig/open) — de hele kaart kleurt blauw (.tk-bezig), eigen
+  teller "bezig" naast open/urgent/klaar. "Vandaag"-blok op Start
   (GET /api/taken/vandaag, max 5: hoge urgentie of deadline ≤14 dagen, ≤3 dagen
   eerst) + teller-badge op het menu-item. Opslag: db().taken (meta-lijst).
   Endpoints: GET/POST /api/taken, PATCH/DELETE /api/taken/:id, POST
   /api/taken/:id/klaar {klaar}. Elf starttaken worden ÉÉN keer ingeladen
   (settings._takenSeedV1, eigenaar = eerste admin; Youssef-taak deadline 1 nov).
-  Mobiel: één kolom. Test: test/taken-test.mjs (57, PORT=3133) + 22 browser-asserties.
+  Mobiel: één kolom. Test: test/taken-test.mjs (70, PORT=3133) + 31 browser-asserties.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

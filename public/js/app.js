@@ -497,6 +497,9 @@ function syncChatStatusBar() {
 const TAAK_URG = { hoog: 'Hoge urgentie', middel: 'Middel', laag: 'Lage urgentie' };
 const TAAK_DUUR = { kort: 'Kort', middel: 'Middel', lang: 'Lang' };
 let _takenFilter = 'alles';
+// Sorteermodus (slim/handmatig/deadline/nieuw) — per toestel onthouden.
+let _takenSorteer = 'slim';
+try { _takenSorteer = localStorage.getItem('ksTakenSorteer') || 'slim'; } catch { /* geen opslag */ }
 let _takenCache = [];
 function taakDeadlineChip(t) {
   if (t.dagen === null || t.dagen === undefined) return '';
@@ -506,14 +509,17 @@ function taakDeadlineChip(t) {
   const dt = new Date(t.deadline + 'T00:00:00');
   return `<span class="tk-tag ${cls}" title="Deadline ${dt.toLocaleDateString('nl-NL')}">${icon('clock', 11)} ${esc(tekst)}</span>`;
 }
+const TK_GRIP = '<svg width="14" height="18" viewBox="0 0 14 18" fill="currentColor" aria-hidden="true"><circle cx="4" cy="3" r="1.6"/><circle cx="10" cy="3" r="1.6"/><circle cx="4" cy="9" r="1.6"/><circle cx="10" cy="9" r="1.6"/><circle cx="4" cy="15" r="1.6"/><circle cx="10" cy="15" r="1.6"/></svg>';
 function taakKaartHTML(t) {
   const klaar = t.status === 'klaar';
-  return `<div class="tk-kaart tk-${esc(t.urgentie)} ${klaar ? 'tk-klaar' : ''}" data-id="${esc(t.id)}">
+  const bezig = t.status === 'bezig';
+  return `<div class="tk-kaart tk-${esc(t.urgentie)} ${klaar ? 'tk-klaar' : ''} ${bezig ? 'tk-bezig' : ''}" data-id="${esc(t.id)}">
     <label class="tk-check" title="${klaar ? 'Heropenen' : 'Afvinken'}"><input type="checkbox" class="tk-toggle" data-id="${esc(t.id)}" ${klaar ? 'checked' : ''}></label>
     <div class="tk-body">
       <div class="tk-titel">${esc(t.titel)}</div>
       ${t.omschrijving ? `<div class="tk-omschr">${esc(t.omschrijving)}</div>` : ''}
       <div class="tk-tags">
+        ${klaar ? '' : `<button type="button" class="tk-tag tk-status-knop ${bezig ? 'is-bezig' : ''}" data-id="${esc(t.id)}" title="${bezig ? 'Terug naar open' : 'Markeer als bezig'}">${bezig ? icon('clock', 11) + ' Bezig' : '▶ Start'}</button>`}
         <span class="tk-tag tk-urg-${esc(t.urgentie)}">${TAAK_URG[t.urgentie] || t.urgentie}</span>
         <span class="tk-tag">${TAAK_DUUR[t.duur] || t.duur}</span>
         ${(t.toegewezen || []).length ? `<span class="tk-tag tk-wie">${esc(t.toegewezen.join(' + '))}</span>` : ''}
@@ -523,12 +529,13 @@ function taakKaartHTML(t) {
         ${(t.bijlagen || []).length ? `<span class="tk-tag tk-bijlage" title="Bijlages">${icon('paperclip', 11)} ${t.bijlagen.length}</span>` : ''}
       </div>
     </div>
+    ${klaar ? '' : `<div class="tk-grip" title="Sleep om te sorteren" data-id="${esc(t.id)}">${TK_GRIP}</div>`}
   </div>`;
 }
 async function loadTaken() {
   const wrap = $('#takenWrap'); if (!wrap) return;
   const d = $('#takenDatum'); if (d) d.textContent = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  let lijst; try { lijst = await api('/api/taken'); } catch (err) { wrap.innerHTML = `<div class="empty">${esc(err.message)}</div>`; return; }
+  let lijst; try { lijst = await api(`/api/taken?sorteer=${encodeURIComponent(_takenSorteer)}`); } catch (err) { wrap.innerHTML = `<div class="empty">${esc(err.message)}</div>`; return; }
   _takenCache = Array.isArray(lijst) ? lijst : [];
   // Koppel-labels (klant/kaart) opzoeken zonder extra server-rondes waar het kan.
   for (const t of _takenCache) {
@@ -551,8 +558,10 @@ function renderTaken() {
     : f === 'lang' ? t.duur === 'lang'
     : f === 'mij' ? isMij(t) : true);
   const open = alles.filter((t) => t.status !== 'klaar');
+  const bezig = alles.filter((t) => t.status === 'bezig');
   const urgent = open.filter((t) => t.urgentie === 'hoog' || (t.dagen !== null && t.dagen !== undefined && t.dagen <= 3));
   const klaar = alles.filter((t) => t.status === 'klaar');
+  const sorteerOpties = [['slim', 'Slim (urgentie + deadline)'], ['handmatig', 'Eigen volgorde (slepen)'], ['deadline', 'Deadline'], ['nieuw', 'Nieuwste eerst']];
   const chips = [['alles', 'Alles'], ['zakelijk', 'Zakelijk'], ['prive', 'Privé'], ['hoog', 'Hoge urgentie'], ['kort', 'Korte taken'], ['lang', 'Lange taken'], ['mij', 'Toegewezen aan mij']];
   const metDeadline = open.filter((t) => t.deadline).sort((a, b) => a.dagen - b.dagen);
   const deadlineBlok = metDeadline.length ? `<div class="tk-deadlines">${metDeadline.slice(0, 4).map((t) => `
@@ -571,7 +580,8 @@ function renderTaken() {
   wrap.innerHTML = `
     <div class="tk-top">
       <div class="tk-tiles">
-        <div class="tk-tile"><div class="num">${open.length}</div><div class="lbl">open</div></div>
+        <div class="tk-tile"><div class="num">${open.length - bezig.length}</div><div class="lbl">open</div></div>
+        <div class="tk-tile tk-tile-bezig"><div class="num">${bezig.length}</div><div class="lbl">bezig</div></div>
         <div class="tk-tile tk-tile-urgent"><div class="num">${urgent.length}</div><div class="lbl">urgent</div></div>
         <div class="tk-tile tk-tile-klaar"><div class="num">${klaar.length}</div><div class="lbl">klaar</div></div>
       </div>
@@ -585,9 +595,20 @@ function renderTaken() {
       </form>
     </div>
     ${deadlineBlok}
-    <div class="tk-chips">${chips.map(([k, l]) => `<button type="button" class="chip tk-chip ${f === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}</div>
+    <div class="tk-chips">${chips.map(([k, l]) => `<button type="button" class="chip tk-chip ${f === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}
+      <label class="tk-sorteer">Sorteer <select id="tkSorteer">${sorteerOpties.map(([v, l]) => `<option value="${v}" ${_takenSorteer === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    ${_takenSorteer === 'handmatig' ? '<div class="muted small tk-sleephint">Pak een kaart bij de stippen rechts en sleep hem omhoog of omlaag.</div>' : ''}
     <div class="tk-kolommen">${kolom('zakelijk', 'Zakelijk')}${kolom('prive', 'Privé')}</div>`;
   $$('.tk-chip', wrap).forEach((b) => b.onclick = () => { _takenFilter = b.dataset.f; renderTaken(); });
+  $('#tkSorteer').onchange = (e) => { zetTakenSorteer(e.target.value); loadTaken(); };
+  // Status open ⇄ bezig met één tik (de kaart kleurt blauw zolang hij bezig is).
+  $$('.tk-status-knop', wrap).forEach((b) => b.onclick = async (e) => {
+    e.stopPropagation();
+    const t = _takenCache.find((x) => x.id === b.dataset.id); if (!t) return;
+    try { await api(`/api/taken/${t.id}`, 'PATCH', { status: t.status === 'bezig' ? 'open' : 'bezig' }); await loadTaken(); }
+    catch (err) { toast(err.message, true); }
+  });
+  koppelTaakSlepen(wrap);
   $$('.tk-keuze', wrap).forEach((grp) => $$('.tk-opt', grp).forEach((b) => b.onclick = () => { $$('.tk-opt', grp).forEach((x) => x.classList.toggle('active', x === b)); }));
   $('#tkSnel').onsubmit = async (e) => {
     e.preventDefault();
@@ -606,6 +627,49 @@ function renderTaken() {
   $$('.tk-kaart .tk-body', wrap).forEach((el) => el.onclick = () => openTaakModal(el.closest('.tk-kaart').dataset.id));
   $$('.tk-dl-item', wrap).forEach((el) => el.onclick = () => openTaakModal(el.dataset.open));
   if (!_takenCache.length) wrap.insertAdjacentHTML('beforeend', '<div class="muted small" style="margin-top:8px">Nog geen taken. Typ hierboven je eerste taak.</div>');
+}
+function zetTakenSorteer(v) { _takenSorteer = v; try { localStorage.setItem('ksTakenSorteer', v); } catch { /* geen opslag */ } }
+// Slepen om te sorteren: pak de kaart bij de stippen (muis óf vinger), schuif hem
+// omhoog/omlaag binnen zijn kolom; loslaten bewaart de volgorde op de server en zet
+// de sortering op "Eigen volgorde". Afgeronde kaarten blijven onderaan en doen niet mee.
+function koppelTaakSlepen(wrap) {
+  $$('.tk-grip', wrap).forEach((grip) => {
+    grip.addEventListener('pointerdown', (e) => {
+      const kaart = grip.closest('.tk-kaart'); const kolom = kaart && kaart.closest('.tk-kolom'); if (!kaart || !kolom) return;
+      e.preventDefault();
+      try { grip.setPointerCapture(e.pointerId); } catch { /* oude browser */ }
+      kaart.classList.add('tk-sleept');
+      window._dragging = true;
+      const startY = e.clientY; let bewogen = false;
+      const move = (ev) => {
+        if (Math.abs(ev.clientY - startY) > 4) bewogen = true;
+        if (!bewogen) return;
+        if (ev.clientY > window.innerHeight - 70) window.scrollBy(0, 10); else if (ev.clientY < 90) window.scrollBy(0, -10);
+        const anderen = $$('.tk-kaart:not(.tk-klaar)', kolom).filter((k) => k !== kaart);
+        for (const ander of anderen) {
+          const r = ander.getBoundingClientRect();
+          if (ev.clientY < r.top + r.height / 2) { if (ander.previousElementSibling !== kaart) kolom.insertBefore(kaart, ander); return; }
+        }
+        const laatste = anderen[anderen.length - 1];
+        if (laatste && laatste.nextElementSibling !== kaart) laatste.after(kaart);
+      };
+      const stop = async () => {
+        document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', stop); document.removeEventListener('pointercancel', stop);
+        try { grip.releasePointerCapture(e.pointerId); } catch { /* al los */ }
+        kaart.classList.remove('tk-sleept'); window._dragging = false;
+        if (!bewogen) return;
+        const ids = $$('.tk-kaart:not(.tk-klaar)', kolom).map((k) => k.dataset.id);
+        try {
+          await api('/api/taken/volgorde', 'POST', { ids });
+          if (_takenSorteer !== 'handmatig') { zetTakenSorteer('handmatig'); toast('Sortering staat nu op "Eigen volgorde"'); }
+          await loadTaken();
+        } catch (err) { toast(err.message, true); loadTaken(); }
+      };
+      // Op het document, niet op de greep: zo komt het loslaten óók aan als de
+      // kaart intussen in de DOM verplaatst is (pointer-capture raakt dan kwijt).
+      document.addEventListener('pointermove', move); document.addEventListener('pointerup', stop); document.addEventListener('pointercancel', stop);
+    });
+  });
 }
 // Bijlage-strook van een taak: de gewone tegels (foto/video/bestand) + per bijlage
 // een regel met naam en verwijderknop — kaarten hebben die knop niet, taken wel
