@@ -182,6 +182,7 @@ export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'syst
   await sendMail({
     to, subject: `Betaalherinnering: factuur ${inv.number} — ${cfg.companyName}`,
     text: sig ? `${body}\n\n${sig}` : body,
+    automatisch: true,
     attachments: [{ filename: `factuur-${inv.number}.pdf`, content: pdf }],
   });
   inv.remindedAt = now();
@@ -236,6 +237,7 @@ export async function sendQuoteFollowup(inv, { by = 'systeem' } = {}) {
     await sendMail({
       to, subject: `Nog vragen over offerte ${inv.number}? — ${cfg.companyName}`,
       text: sig ? `${body}\n\n${sig}` : body,
+      automatisch: true,
       attachments: [{ filename: `offerte-${inv.number}.pdf`, content: pdf }],
     });
     markFollowedUp();

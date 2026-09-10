@@ -102,7 +102,7 @@ export async function maybeSendAppointmentConfirm(order) {
       const sig = getEmailSignature();
       const body = fill(cfg.emailBody, vars);
       try {
-        await sendMail({ to: c.email, subject: fill(cfg.emailSubject, vars), text: sig ? `${body}\n\n${sig}` : body });
+        await sendMail({ to: c.email, subject: fill(cfg.emailSubject, vars), text: sig ? `${body}\n\n${sig}` : body, automatisch: true });
         order.thread = order.thread || [];
         order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (afspraakbevestiging)', subject: fill(cfg.emailSubject, vars), body, at: now() });
         sent = true;
@@ -150,7 +150,7 @@ export async function maybeSendAppointmentCancel(order, prevAppt, opts = {}) {
     if ((opts.notify || cfg.emailEnabled) && c.email && smtpConfigured()) {
       const sig = getEmailSignature();
       try {
-        await sendMail({ to: c.email, subject, text: sig ? `${body}\n\n${sig}` : body });
+        await sendMail({ to: c.email, subject, text: sig ? `${body}\n\n${sig}` : body, automatisch: true });
         order.thread = order.thread || [];
         order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (annulering)', subject, body, at: now() });
         sent = true;
@@ -193,7 +193,7 @@ async function runAppointmentReminders() {
       const sig = getEmailSignature();
       const body = fill(cfg.reminderBody, vars);
       try {
-        await sendMail({ to: c.email, subject: fill(cfg.reminderEmailSubject, vars), text: sig ? `${body}\n\n${sig}` : body });
+        await sendMail({ to: c.email, subject: fill(cfg.reminderEmailSubject, vars), text: sig ? `${body}\n\n${sig}` : body, automatisch: true });
         o.thread = o.thread || []; o.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (herinnering)', subject: fill(cfg.reminderEmailSubject, vars), body, at: now() });
         sent = true;
       } catch (e) { console.error('[herinnering] e-mail mislukt:', e.message); }
@@ -246,7 +246,7 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   if (c.email) {
     try {
       const sig = getEmailSignature();
-      await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body });
+      await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body, automatisch: true });
       order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (review-verzoek)', subject: fill(cfg.subject, vars), body, at: now() });
       via.push('e-mail');
     } catch (e) { console.error('[review-verzoek] mail mislukt:', e.message); }

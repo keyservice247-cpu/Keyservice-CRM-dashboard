@@ -5,6 +5,9 @@ import { getAutoReply, getEmailSignature } from './settings.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+// Lopende kaart = niet afgerond/geannuleerd, niet in de prullenbak, niet ingeklapt.
+export const klantInBehandeling = (customerId) => (db().orders || []).some((o) => o.customerId === customerId
+  && !o.trashedAt && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
 
 export async function maybeSendAutoReply(result) {
   const cfg = getAutoReply();
@@ -29,11 +32,22 @@ export async function maybeSendAutoReply(result) {
   // bevestiging — dat hoort zo.
   const cust = db().customers.find((c) => c.email && c.email.toLowerCase() === email.toLowerCase());
   if (cust && cust.autoRepliedAt && (Date.now() - new Date(cust.autoRepliedAt).getTime()) < 3600000) { console.log(`[bevestiging] klant kreeg al een bevestiging <1 uur geleden (${email}) — overgeslagen`); return; }
+  // KLANT AL IN BEHANDELING (wens eigenaar 10 sep): heeft deze klant nog een lopende
+  // kaart (niet afgerond/geannuleerd, niet in de prullenbak of ingeklapt), dan is
+  // "bedankt voor uw aanvraag, stuur foto's" misplaatst — het team kent 'm al.
+  // De aanvraag zelf komt gewoon in de inbox; alleen de automatische mail blijft uit.
+  if (cust && klantInBehandeling(cust.id)) {
+    review.autoReplySkipped = 'klant al in behandeling (lopende kaart)';
+    logActivity('systeem', 'ontvangstbevestiging overgeslagen', `${email} — klant heeft al een lopende kaart`);
+    console.log(`[bevestiging] ${email} heeft al een lopende kaart — overgeslagen`);
+    saveSoon();
+    return;
+  }
 
   const sig = getEmailSignature();
   const text = sig ? `${cfg.body}\n\n${sig}` : cfg.body;
   try {
-    await sendMail({ to: email, subject: cfg.subject, text });
+    await sendMail({ to: email, subject: cfg.subject, text, automatisch: true });
     if (cust) cust.autoRepliedAt = now();
     // Markeer het bericht; de bevestiging komt in de historie zodra de kaart is aangemaakt.
     const msg = db().messages.find((m) => m.id === messageId);
@@ -78,7 +92,7 @@ export async function maybeSendConfirmationOnApprove(order, review) {
     if (cust.autoRepliedAt && (Date.now() - new Date(cust.autoRepliedAt).getTime()) < 3600000) return; // max 1/uur
     const sig = getEmailSignature();
     const text = sig ? `${cfg.body}\n\n${sig}` : cfg.body;
-    await sendMail({ to: email, subject: cfg.subject, text });
+    await sendMail({ to: email, subject: cfg.subject, text, automatisch: true });
     cust.autoRepliedAt = now();
     order.thread = order.thread || [];
     order.thread.push({

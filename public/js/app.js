@@ -4233,6 +4233,8 @@ async function loadSettings() {
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ar-enabled" style="width:auto" ${s.autoReply?.enabled ? 'checked' : ''}> Automatische ontvangstbevestiging aanzetten</label>
       <label>Onderwerp <input id="ar-subject" value="${esc(s.autoReply?.subject || '')}"></label>
       <label>Bericht <textarea id="ar-body" rows="6">${esc(s.autoReply?.body || '')}</textarea></label>
+      <label>Voetregel onder élke automatische klantmail <textarea id="ar-disclaimer" rows="3" placeholder="Leeg = geen voetregel">${esc(s.autoReply?.disclaimer ?? '')}</textarea></label>
+      <div class="muted small" style="margin-top:-6px;margin-bottom:8px">Staat automatisch onder de ontvangstbevestiging, afspraakbevestiging, herinneringen, follow-ups, review-verzoeken, betaalherinneringen en offerte-opvolging. Zo weet een klant die al in behandeling is dat het een automatisch bericht is. Klanten met een lopende kaart krijgen de ontvangstbevestiging sowieso niet meer.</div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoReply">Opslaan</button></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Automatische follow-up op offertes</h3>
@@ -4688,7 +4690,7 @@ async function loadSettings() {
     finally { btn.disabled = false; btn.textContent = old; }
   });
   $('#saveAutoReply').onclick = async () => {
-    const autoReply = { enabled: $('#ar-enabled').checked, subject: $('#ar-subject').value, body: $('#ar-body').value };
+    const autoReply = { enabled: $('#ar-enabled').checked, subject: $('#ar-subject').value, body: $('#ar-body').value, disclaimer: $('#ar-disclaimer')?.value ?? '' };
     try { await api('/api/settings', 'PATCH', { autoReply }); toast('Ontvangstbevestiging opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };

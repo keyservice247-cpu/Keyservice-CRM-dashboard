@@ -54,7 +54,7 @@ export async function runFollowUps() {
         try {
           const sig = getEmailSignature();
           const text = sig ? `${cfg.emailBody}\n\n${sig}` : cfg.emailBody;
-          await sendMail({ to: c.email, subject: cfg.emailSubject, text });
+          await sendMail({ to: c.email, subject: cfg.emailSubject, text, automatisch: true });
           o.thread = o.thread || [];
           o.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (automatische follow-up)', subject: cfg.emailSubject, body: cfg.emailBody, at: now() });
           sent = true;
@@ -71,7 +71,7 @@ export async function runFollowUps() {
       try {
         const sig = getEmailSignature();
         const text = sig ? `${cfg.noReplyEmailBody}\n\n${sig}` : cfg.noReplyEmailBody;
-        await sendMail({ to: c.email, subject: cfg.noReplyEmailSubject, text });
+        await sendMail({ to: c.email, subject: cfg.noReplyEmailSubject, text, automatisch: true });
         o.thread = o.thread || [];
         o.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (automatische follow-up)', subject: cfg.noReplyEmailSubject, body: cfg.noReplyEmailBody, at: now() });
         sent = true;

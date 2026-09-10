@@ -457,6 +457,11 @@ Bedankt voor uw aanvraag. Om u zo goed mogelijk te kunnen helpen, kunt u ons alv
 - Uw woonplaats of volledige adresgegevens
 
 Dan nemen we contact met u op zodra een collega beschikbaar is.`,
+  // Vaste voetregel onder ELKE automatisch gegenereerde klantmail (bevestiging,
+  // afspraak, herinnering, follow-up, review, betaalherinnering, offerte-opvolging).
+  // Wens eigenaar 10 sep: een klant die al in behandeling is, of een bestaande klant
+  // die ons mailt, moet direct zien dat het een automatisch bericht is. Leeg = uit.
+  disclaimer: 'Dit is een automatisch gegenereerd bericht. Bent u al bij ons in behandeling of heeft u al contact met een van onze medewerkers? Dan kunt u deze e-mail negeren — u hoeft niets te doen.',
 };
 
 export function getAutoReply() {
@@ -465,8 +470,11 @@ export function getAutoReply() {
     enabled: !!a.enabled,
     subject: a.subject || DEFAULT_AUTOREPLY.subject,
     body: a.body || DEFAULT_AUTOREPLY.body,
+    // undefined = nog nooit ingesteld → standaardtekst; lege string = bewust uit.
+    disclaimer: typeof a.disclaimer === 'string' ? a.disclaimer : DEFAULT_AUTOREPLY.disclaimer,
   };
 }
+export const getAutoMailDisclaimer = () => getAutoReply().disclaimer;
 
 // LEAD-INSTROOM WET (Regel 4): patronen (afzender/onderwerp) waarmee bestellingen,
 // orderbevestigingen, facturen, verzend-/bezorgberichten en no-reply-post van

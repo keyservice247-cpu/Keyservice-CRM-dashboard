@@ -3034,6 +3034,8 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       enabled: !!a.enabled,
       subject: String(a.subject || '').slice(0, 200),
       body: String(a.body || '').slice(0, 2000),
+      // Niet meegestuurd → huidige waarde houden (oudere schermen kennen het veld niet).
+      disclaimer: typeof a.disclaimer === 'string' ? a.disclaimer.trim().slice(0, 500) : (db().settings.autoReply || {}).disclaimer,
     };
   }
   if ('followUp' in b) {
@@ -4850,7 +4852,8 @@ app.post('/api/test-mail', requireRole('admin'), async (req, res) => {
   text += '\n\n———\n(Dit is een TESTMAIL vanuit je eigen CRM, met voorbeeldgegevens. De echte klant krijgt exact deze opmaak, zonder deze regel.)';
   if (sig) text = `${text}\n\n${sig}`;
   try {
-    await sendMail({ to, subject: '[TEST] ' + fill(subject || 'Keyservice'), text , afzender: afzenderVan(req) });
+    // Mét de voetregel, zodat je precies ziet wat de klant ziet.
+    await sendMail({ to, subject: '[TEST] ' + fill(subject || 'Keyservice'), text, afzender: afzenderVan(req), automatisch: true });
     logActivity(req.user.name, 'testmail verstuurd', `${type} -> ${to}`);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }

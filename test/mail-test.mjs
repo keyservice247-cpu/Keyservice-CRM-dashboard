@@ -125,6 +125,34 @@ const r3 = await ingestMessage({
 });
 ok('échte NIEUWE aanvraag zelfde klant (andere tekst, >3u later) = géén duplicaat', !r3.duplicate && r3.message && r3.message.id !== r1.message.id);
 
+// ---------- Voetregel onder automatische klantmails (10 sep 2026) ----------
+console.log('\n== Disclaimer onder automatische mails ==');
+const { metDisclaimer } = await import('../server/connectors/email-smtp.js');
+const { getAutoReply, getEmailSignature } = await import('../server/settings.js');
+const { klantInBehandeling } = await import('../server/autoreply.js');
+const std = getAutoReply().disclaimer;
+ok('standaard-voetregel zegt dat het automatisch gegenereerd is', /automatisch gegenereerd/i.test(std) && /in behandeling/i.test(std), std);
+const sig = String(getEmailSignature() || '').trim();
+ok('er is een platte handtekening om tegen te testen', sig.length > 0);
+const brief = `Beste klant,\n\nBedankt voor uw aanvraag.\n\n${sig}`;
+const met = metDisclaimer(brief);
+ok('voetregel staat VÓÓR de handtekening (niet erachter)', met.indexOf(std) > met.indexOf('Bedankt') && met.indexOf(std) < met.lastIndexOf(sig) && met.trim().endsWith(sig), met);
+ok('nogmaals toepassen plakt hem niet dubbel', metDisclaimer(met).split(std).length === 2);
+ok('zonder handtekening: voetregel achteraan', metDisclaimer('Beste klant,\n\nTekst.').endsWith(std));
+ok('lege voetregel = tekst ongewijzigd', metDisclaimer(brief, '') === brief);
+const htmlD = wrapHtmlMail(met);
+ok('HTML-versie: voetregel klein en grijs, handtekening één keer', !!htmlD && htmlD.includes('font-size:12.5px') && htmlD.includes('Dit is een automatisch gegenereerd bericht') && (htmlD.match(/Dit is een automatisch/g) || []).length === 1, htmlD ? htmlD.slice(0, 200) : 'geen html');
+ok('HTML-versie: gewone alinea NIET grijs', !!htmlD && htmlD.includes('<p style="margin:0 0 14px">Bedankt voor uw aanvraag.</p>'));
+// Klant al in behandeling → ontvangstbevestiging overslaan.
+db().customers.push({ id: 'cust_discl', name: 'Lopende Klant', email: 'lopend@example.com' });
+ok('klant zonder kaarten: niet in behandeling', klantInBehandeling('cust_discl') === false);
+db().orders.push({ id: 'ord_discl_1', customerId: 'cust_discl', status: 'in_behandeling', title: 'Rhenen — test', createdAt: new Date().toISOString() });
+ok('klant met lopende kaart: in behandeling', klantInBehandeling('cust_discl') === true);
+db().orders.find((o) => o.id === 'ord_discl_1').status = 'afgerond';
+ok('kaart afgerond → niet meer in behandeling', klantInBehandeling('cust_discl') === false);
+db().orders.push({ id: 'ord_discl_2', customerId: 'cust_discl', status: 'nieuw', archivedWeek: '2026-W30', createdAt: new Date().toISOString() });
+ok('ingeklapte (archief) kaart telt niet', klantInBehandeling('cust_discl') === false);
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

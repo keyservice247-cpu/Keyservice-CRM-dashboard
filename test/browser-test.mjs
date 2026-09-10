@@ -71,6 +71,15 @@ noErr('Instellingen laden');
 // 7) Instellingen → AI: ochtendbriefing-kaart rendert met alle velden
 ok('ochtendbriefing-instellingen zichtbaar', await page.locator('#mb-enabled').count() > 0 && await page.locator('#mb-channel').count() > 0 && await page.locator('#testMorningBrief').count() > 0);
 ok('samenvoeg-venster-instelling zichtbaar', await page.locator('#amw-hours').count() > 0);
+// Voetregel onder automatische klantmails (10 sep): veld met standaardtekst, opslaan werkt.
+ok('voetregel-veld voor automatische mails zichtbaar mét standaardtekst', await page.locator('#ar-disclaimer').count() > 0 && /automatisch gegenereerd/i.test(await page.locator('#ar-disclaimer').inputValue()));
+// De kaart zit in een ingeklapte instellingen-groep (niet zichtbaar zonder pil-klik):
+// waarde zetten en opslaan via het DOM, precies wat de knop zelf doet.
+await page.locator('#ar-disclaimer').evaluate((el) => { el.value = 'Dit is een automatisch gegenereerd bericht (browsertest).'; });
+await page.locator('#saveAutoReply').evaluate((b) => b.click());
+await page.waitForTimeout(1200);
+const arOpgeslagen = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).autoReply?.disclaimer);
+ok('voetregel opslaan komt door tot de server', arOpgeslagen === 'Dit is een automatisch gegenereerd bericht (browsertest).', JSON.stringify(arOpgeslagen));
 
 // 8) Kaart-modal: gesprekshistorie + "Alles van deze klant" (klanthistorie)
 clear();

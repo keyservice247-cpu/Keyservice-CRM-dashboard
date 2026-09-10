@@ -422,6 +422,22 @@ de regressie meegroeit.
   /api/taken/:id/klaar {klaar}. Elf starttaken worden ÉÉN keer ingeladen
   (settings._takenSeedV1, eigenaar = eerste admin; Youssef-taak deadline 1 nov).
   Mobiel: één kolom. Test: test/taken-test.mjs (70, PORT=3133) + 31 browser-asserties.
+- **Voetregel onder automatische klantmails (10 sep 2026, wens eigenaar):** klacht:
+  een klant die al in behandeling is, of een bestaande klant die ons mailt, kreeg
+  een automatische mail "alsof hij nieuw was". Twee maatregelen: (1) `sendMail({…,
+  automatisch:true})` plakt de instelbare voetregel (settings.autoReply.disclaimer,
+  standaard "Dit is een automatisch gegenereerd bericht… u kunt deze e-mail negeren";
+  leeg = uit; veld in Instellingen → ontvangstbevestiging-kaart, #ar-disclaimer)
+  VÓÓR de platte handtekening (metDisclaimer in email-smtp.js — erachter gaf een
+  dubbele handtekening in HTML), in HTML klein en grijs. Gemarkeerd: ontvangst-
+  bevestiging (2 paden), afspraakbevestiging/annulering/herinnering, review-
+  verzoek, follow-up (2), betaalherinnering, offerte-opvolging, testmail. NIET:
+  handgeschreven antwoorden, facturen/offertes zelf, onderweg-bericht, campagne,
+  interne alarm-/rapportmails. (2) ontvangstbevestiging wordt OVERGESLAGEN als de
+  klant (op e-mail) nog een lopende kaart heeft (klantInBehandeling in
+  autoreply.js: niet afgerond/geannuleerd/prullenbak/archief) — review.
+  autoReplySkipped + logboekregel; de aanvraag zelf komt gewoon in de inbox.
+  Test: mail-test.mjs (35) + 2 browser-asserties.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

@@ -13,7 +13,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, now, logActivity, saveSoon } from '../db.js';
-import { getHtmlSignature, getEmailSignature } from '../settings.js';
+import { getHtmlSignature, getEmailSignature, getAutoMailDisclaimer } from '../settings.js';
+
+// Voetregel onder automatisch gegenereerde klantmails (wens eigenaar 10 sep 2026).
+// Komt VÓÓR de platte handtekening te staan: wrapHtmlMail herkent de handtekening
+// alleen als die het einde van de tekst is — erachter plakken gaf 'm dubbel in HTML.
+export function metDisclaimer(text, disclaimer = getAutoMailDisclaimer()) {
+  const d = String(disclaimer || '').trim();
+  let t = String(text || '');
+  if (!d || t.includes(d)) return t;
+  let plain = '';
+  try { plain = String(getEmailSignature() || '').trim(); } catch { /* geen handtekening */ }
+  if (plain && t.trim().endsWith(plain)) {
+    const kern = t.trim().slice(0, t.trim().length - plain.length).trim();
+    return `${kern}\n\n${d}\n\n${plain}`;
+  }
+  return `${t.trim()}\n\n${d}`;
+}
 
 let transporter = null;
 
@@ -65,8 +81,14 @@ export function wrapHtmlMail(text, afzender = null) {
     const plain = String(getEmailSignature() || '').trim();
     if (plain && t.trim().endsWith(plain)) t = t.trim().slice(0, t.trim().length - plain.length).trim();
   } catch { /* fallback: hele tekst tonen */ }
+  // De disclaimer-alinea klein en grijs, zodat hij als voetregel leest en niet als
+  // onderdeel van het bericht.
+  let discl = '';
+  try { discl = escHtml(String(getAutoMailDisclaimer() || '').trim()); } catch { /* geen instelling */ }
   const paras = escHtml(t).split(/\n{2,}/)
-    .map((p) => `<p style="margin:0 0 14px">${p.replace(/\n/g, '<br>')}</p>`).join('');
+    .map((p) => (discl && p.trim() === discl)
+      ? `<p style="margin:14px 0;padding-top:10px;border-top:1px solid #e3e7ec;font-size:12.5px;color:#6b7580">${p.replace(/\n/g, '<br>')}</p>`
+      : `<p style="margin:0 0 14px">${p.replace(/\n/g, '<br>')}</p>`).join('');
   return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14.5px;color:#1f2530;line-height:1.6;max-width:640px">${paras}${signatureHtml(sig)}</div>`;
 }
 
@@ -103,10 +125,12 @@ async function getTransporter() {
   return transporter;
 }
 
-export async function sendMail({ to, subject, text, attachments, inReplyTo, references, afzender = null }) {
+export async function sendMail({ to, subject, text, attachments, inReplyTo, references, afzender = null, automatisch = false }) {
   const tx = await getTransporter();
   if (!tx) throw new Error('SMTP niet geconfigureerd op de server');
   if (!to) throw new Error('Geen ontvanger (e-mailadres) opgegeven');
+  // Automatisch gegenereerde klantmail → vaste voetregel (instelbaar, leeg = uit).
+  if (automatisch) text = metDisclaimer(text);
   // Altijd een nette afzendernaam, anders tonen mail-apps alleen het kale adresdeel
   // ("info"). SMTP_FROM (compleet) of SMTP_FROM_NAME (alleen de naam) op Render
   // overschrijven de standaard.
