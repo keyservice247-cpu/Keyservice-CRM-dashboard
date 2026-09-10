@@ -61,10 +61,17 @@ const WA_WEB_VERSION = process.env.WA_WEB_VERSION || HARDCODED_WA_WEB_VERSION;
 const STARTPOGINGEN_FILE = path.join(__dirname, 'start-pogingen.json');
 const leesStartPogingen = () => { try { return JSON.parse(fs.readFileSync(STARTPOGINGEN_FILE, 'utf8')); } catch { return { n: 0, at: 0 }; } };
 const schrijfStartPogingen = (o) => { try { fs.writeFileSync(STARTPOGINGEN_FILE, JSON.stringify(o)); } catch { /* alleen-lezen schijf: dan geen teller */ } };
+// v7 (10 sep 18:10, bewezen in de log): de vaste versie kwam NIET tot "actief", de
+// live versie daarna WÉL. Daarom: begin met de stand die de vorige keer werkte
+// (start-pogingen.json → werkend: 'live' | 'vast'; standaard live) en wissel alleen
+// als die kant faalt. Voorheen begon elke start opnieuw met de vaste versie en kostte
+// elke update-herstart eerst 4 minuten vasthangen.
 const _sp = leesStartPogingen();
 const _mislukteStarts = (Date.now() - (_sp.at || 0) < 60 * 60 * 1000) ? (_sp.n || 0) : 0;
-const gebruikVasteVersie = WA_WEB_VERSION !== 'live' && _mislukteStarts % 2 === 0;
-if (gebruikVasteVersie) console.log(`[versie] WhatsApp Web vastgezet op ${WA_WEB_VERSION}${_mislukteStarts ? ` (poging ${_mislukteStarts + 1})` : ''}`);
+const _basis = _sp.werkend === 'vast' ? 'vast' : 'live';
+const _modus = _mislukteStarts % 2 === 0 ? _basis : (_basis === 'vast' ? 'live' : 'vast');
+const gebruikVasteVersie = WA_WEB_VERSION !== 'live' && _modus === 'vast';
+if (gebruikVasteVersie) console.log(`[versie] WhatsApp Web vastgezet op ${WA_WEB_VERSION}${_mislukteStarts ? ` (poging ${_mislukteStarts + 1}: live kwam niet tot "actief")` : ' (werkte de vorige keer)'}`);
 else console.log(`[versie] live versie van WhatsApp Web${_mislukteStarts ? ` (poging ${_mislukteStarts + 1}: de vaste versie kwam niet tot "actief")` : ''}`);
 
 const client = new Client({
@@ -210,7 +217,7 @@ client.on('qr', async (qr) => {
 // seint het CRM vooraf in, en de update-controle loopt óók als WhatsApp nooit "ready"
 // wordt (voorheen startte die pas bij ready — een vastgelopen bridge bleef dus hangen).
 // v6: vaste WhatsApp-Web-versie (zie bovenaan) — de oorzaak van het vasthangen.
-const BRIDGE_VERSION = 6;
+const BRIDGE_VERSION = 7;
 
 // ---- START-WACHTER (v5) ----
 // Casus 10 sep 2026: na de zelf-update-herstart kwam de bridge tot "Gekoppeld" maar
@@ -248,7 +255,8 @@ client.on('authenticated', () => {
 client.on('ready', async () => {
   console.log(`\nBridge actief (v${BRIDGE_VERSION}). Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
   isReady = true;
-  schrijfStartPogingen({ n: 0, at: 0 });   // gezonde start → teller terug naar nul
+  // Gezonde start → teller op nul én onthouden WELKE stand werkte (live/vast).
+  schrijfStartPogingen({ n: 0, at: 0, werkend: gebruikVasteVersie ? 'vast' : 'live' });
   ooitGekoppeld = true;
   codeGeblokkeerd = false;
   aantalCodes = 0;

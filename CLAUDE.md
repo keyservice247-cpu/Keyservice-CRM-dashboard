@@ -97,6 +97,13 @@ de regressie meegroeit.
   oneven = live — zodat een verlopen/kapotte pin nooit een dode bridge oplevert.
   (De oude notitie "webVersionCache-pinning helpt niet" ging over het LID-
   groepsleesprobleem, niet hierover.)
+  BRIDGE v7 (10 sep 18:10, uit de log): de VASTE versie kwam óók niet tot 'actief'
+  (poging 3/3), de LIVE versie daarná WÉL ("Bridge actief (v6)", 2 wachtrij-items
+  verstuurd). Conclusie: het vasthangen is niet (alleen) de WA-Web-versie; live
+  kan na een paar pogingen gewoon werken. Daarom onthoudt start-pogingen.json nu
+  `werkend: 'live'|'vast'` (gezet bij ready) en begint elke start met de stand die
+  de vorige keer werkte (standaard LIVE); wisselen alleen bij falen. v6 begon
+  elke start met 'vast' en kostte zo elke update-herstart eerst 4 min.
 - **Render env vars:** INGEST_TOKEN, ANTHROPIC_API_KEY (Claude Haiku), IMAP_* (TransIP ontvangen),
   SMTP_* (TransIP versturen), WHATSAPP_VERIFY_TOKEN, DATA_DIR=/var/data, SESSION_SECRET.
 - **Bridge .env / hardcoded:** DASHBOARD_URL, INGEST_TOKEN, PAIR_NUMBER (31685352477) en token
