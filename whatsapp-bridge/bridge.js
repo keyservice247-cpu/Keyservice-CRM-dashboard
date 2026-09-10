@@ -118,6 +118,7 @@ async function meldKoppelcode({ code = '', qr = '', fout = '' }) {
 }
 
 client.on('qr', async (qr) => {
+  koppelenBezig = true;   // start-wachter mag nu NIET herstarten (zou een nieuwe code kosten)
   // Al eens gekoppeld geweest? Dan NOOIT een nieuwe code aanvragen (zie boven).
   if (ooitGekoppeld) {
     // Hooguit één regel per 5 minuten: bij een hapering komen deze gebeurtenissen
@@ -178,7 +179,42 @@ client.on('qr', async (qr) => {
 // storing), leest groepsnamen via een reparatie-route, valt terug op 1-op-1 naar de
 // monteur als een groep echt niet lukt, en stuurt het groeps-id mee naar het CRM
 // zodat dat de koppeling id→naam automatisch leert.
-const BRIDGE_VERSION = 4;
+// v5 (10 sep 2026): start-wachter (hangt de bridge na een herstart tussen "Gekoppeld"
+// en "actief", dan herstart hij zichzelf), zelf-update wacht op een rustig moment en
+// seint het CRM vooraf in, en de update-controle loopt óók als WhatsApp nooit "ready"
+// wordt (voorheen startte die pas bij ready — een vastgelopen bridge bleef dus hangen).
+const BRIDGE_VERSION = 5;
+
+// ---- START-WACHTER (v5) ----
+// Casus 10 sep 2026: na de zelf-update-herstart kwam de bridge tot "Gekoppeld" maar
+// nooit tot "Bridge actief"; geen heartbeat → uitval-alarm, en alleen een handmatige
+// `pm2 restart wa` hielp. Nu: is er een opgeslagen sessie én zijn we 4 minuten na de
+// start nog niet actief, dan sluiten we af zodat pm2 opnieuw start. NOOIT tijdens het
+// koppelen (QR/code in beeld) — een herstart zou dan een nieuwe code aanvragen, en dat
+// is precies het gedrag waar WhatsApp een nummer voor blokkeert. Max 3 keer per uur;
+// daarna 30 minuten rust vóór de volgende poging (geen herstart-lus).
+let isReady = false;
+let koppelenBezig = false;
+const START_LIMIET_MS = 4 * 60 * 1000;
+const STARTPOGINGEN_FILE = path.join(__dirname, 'start-pogingen.json');
+const leesStartPogingen = () => { try { return JSON.parse(fs.readFileSync(STARTPOGINGEN_FILE, 'utf8')); } catch { return { n: 0, at: 0 }; } };
+const schrijfStartPogingen = (o) => { try { fs.writeFileSync(STARTPOGINGEN_FILE, JSON.stringify(o)); } catch { /* alleen-lezen schijf: dan geen teller */ } };
+function sessieBewaard() {
+  try { const d = path.resolve(SESSION_DIR); return fs.existsSync(d) && fs.readdirSync(d).length > 0; } catch { return false; }
+}
+setTimeout(() => {
+  if (isReady || koppelenBezig || !sessieBewaard()) return;
+  const p = leesStartPogingen();
+  const n = (Date.now() - (p.at || 0) < 60 * 60 * 1000) ? (p.n || 0) + 1 : 1;
+  schrijfStartPogingen({ n, at: Date.now() });
+  if (n > 3) {
+    console.error(`[start] na 4 min nog niet actief en al ${n - 1} herstarts in het afgelopen uur — wacht 30 min voor de volgende poging.`);
+    setTimeout(() => { if (!isReady) process.exit(1); }, 30 * 60 * 1000);
+    return;
+  }
+  console.error(`[start] na 4 min nog niet actief (poging ${n}/3) — bridge sluit af zodat pm2 opnieuw start; sessie blijft bewaard.`);
+  setTimeout(() => process.exit(1), 1500);
+}, START_LIMIET_MS);
 
 client.on('authenticated', () => {
   ooitGekoppeld = true;   // vanaf nu nooit meer uit onszelf een koppelcode aanvragen
@@ -186,13 +222,15 @@ client.on('authenticated', () => {
 });
 client.on('ready', async () => {
   console.log(`\nBridge actief (v${BRIDGE_VERSION}). Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
+  isReady = true;
+  schrijfStartPogingen({ n: 0, at: 0 });   // gezonde start → teller terug naar nul
   ooitGekoppeld = true;
   codeGeblokkeerd = false;
   aantalCodes = 0;
   meldKoppelcode({});   // koppeling gelukt -> melding in het CRM opruimen
   startHeartbeat();
   startOutbox();
-  startZelfUpdate();
+  startZelfUpdate();   // (draait al sinds de procesestart; deze aanroep is een no-op)
   // Reparatie voor de WhatsApp-storing (LID-migratie, zomer 2026): vang de lees-fout
   // op groeps-chats af zodat getChats()/getChat() weer bruikbaar zijn. Moet na elke
   // (her)verbinding opnieuw, want WhatsApp-web wordt dan opnieuw geladen.
@@ -279,20 +317,55 @@ let heartbeatTimer = null;
 // 6 uur (en 2 minuten na de start) of er iets nieuws in de repository staat. Zo ja:
 // netjes afsluiten — pm2 start hem direct opnieuw met de nieuwe code. De WhatsApp-
 // sessie staat op schijf en overleeft dat gewoon (geen nieuwe koppelcode).
+// v5: (a) draait vanaf de PROCESSTART, niet pas bij "ready" — anders werkt een
+// vastgelopen bridge zichzelf nooit bij; (b) herstart alleen op een RUSTIG moment
+// (WhatsApp verbonden én wachtrij niet bezig; max 10 min wachten, een hangende bridge
+// mag meteen); (c) seint het CRM vooraf in ("restarting: update"), zodat dat pas na
+// 25 min alarm slaat i.p.v. 12 — een gewone update geeft dus geen valse melding meer.
+let outboxBezig = false;
+let zelfUpdateGestart = false;
+const metTimeout = (p, ms, terugval) => Promise.race([p, new Promise((r) => setTimeout(() => r(terugval), ms))]);
+async function huidigeState() {
+  try { return (await metTimeout(client.getState(), 10000, 'TRAAG')) || 'GEEN'; } catch (e) { return 'FOUT: ' + e.message; }
+}
+async function herstartVoorUpdate(van, naar) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < 10 * 60 * 1000) {
+    const state = isReady ? await huidigeState() : 'NIET-ACTIEF';
+    const rustig = !outboxBezig && (!isReady || state === 'CONNECTED');
+    if (rustig) break;
+    console.log(`[update] wacht met herstarten: ${outboxBezig ? 'wachtrij is bezig' : `WhatsApp-status ${state}`}`);
+    await new Promise((r) => setTimeout(r, 30000));
+  }
+  try {
+    await fetch(`${DASHBOARD_URL}/api/whatsapp/heartbeat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
+      body: JSON.stringify({ at: new Date().toISOString(), state: 'HERSTART', restarting: 'update', lastIncomingAt, version: BRIDGE_VERSION }),
+    });
+  } catch { /* CRM even niet bereikbaar: dan gewoon de normale alarmgrens */ }
+  console.log(`[update] nieuwe versie opgehaald (${van} → ${naar}) — herstart via pm2, sessie blijft bewaard.`);
+  setTimeout(() => process.exit(0), 1500);
+}
 function startZelfUpdate() {
+  if (zelfUpdateGestart) return;
+  zelfUpdateGestart = true;
   const repoDir = path.resolve(__dirname, '..');
   if (!fs.existsSync(path.join(repoDir, '.git'))) { console.log('[update] geen git-repo gevonden — zelf-update uit'); return; }
+  let updateBezig = false;
   const check = async () => {
+    if (updateBezig) return;
     try {
       const { execFile } = await import('node:child_process');
       const uit = await new Promise((resolve) => execFile('git', ['pull', '--ff-only', '--quiet'], { cwd: repoDir, timeout: 60000 }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') })));
       if (uit.err) { console.error('[update] git pull mislukt:', (uit.stderr || uit.err.message).trim().slice(0, 200)); return; }
       const na = await new Promise((resolve) => execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir }, (e, so) => resolve(e ? '' : String(so).trim())));
       if (na && na !== startCommit) {
-        console.log(`[update] nieuwe versie opgehaald (${startCommit.slice(0, 7)} → ${na.slice(0, 7)}) — herstart via pm2, sessie blijft bewaard.`);
-        setTimeout(() => process.exit(0), 1500);
+        updateBezig = true;
+        console.log(`[update] nieuwe code gevonden (${startCommit.slice(0, 7)} → ${na.slice(0, 7)}) — herstart zodra het rustig is.`);
+        await herstartVoorUpdate(startCommit.slice(0, 7), na.slice(0, 7));
       }
-    } catch (e) { console.error('[update] controle mislukt:', e.message); }
+    } catch (e) { console.error('[update] controle mislukt:', e.message); updateBezig = false; }
   };
   setTimeout(check, 2 * 60 * 1000);
   setInterval(check, 6 * 60 * 60 * 1000);
@@ -302,6 +375,7 @@ try {
   const { execFileSync } = await import('node:child_process');
   startCommit = String(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path.resolve(__dirname, '..') })).trim();
 } catch { /* geen git: zelf-update doet dan niets */ }
+startZelfUpdate();   // v5: meteen bij de processtart, óók als WhatsApp nooit "ready" wordt
 
 let notConnectedCount = 0;
 let lastIncomingAt = null; // laatst ONTVANGEN WhatsApp-bericht (voor diagnose in het CRM)
@@ -413,13 +487,13 @@ function startOutbox() {
   // dan 8 seconden, dan haalde de volgende ronde dezelfde wachtrij nog eens op en
   // ging een bericht dubbel de deur uit. Het CRM claimt items nu óók 2 minuten, maar
   // deze vlag houdt het aan de bron al tegen.
-  let bezig = false;
+  // (v5: de vlag staat op moduleniveau — de zelf-update wacht erop.)
   const tick = async () => {
-    if (bezig) return;
-    bezig = true;
+    if (outboxBezig) return;
+    outboxBezig = true;
     try {
       await tickRonde();
-    } finally { bezig = false; }
+    } finally { outboxBezig = false; }
   };
   const tickRonde = async () => {
     try {

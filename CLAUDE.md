@@ -68,6 +68,20 @@ de regressie meegroeit.
   eerste koppeling: max 3 codes per proces met oplopende wachttijd (30s/2min/5min),
   daarna alleen nog QR. Herhaald code-aanvragen is precies het geautomatiseerde
   gedrag waar WhatsApp een nummer voor blokkeert — niet verzwakken.
+  BRIDGE v5 (10 sep 2026, casus "bridge gestopt" na zelf-update): na de update-
+  herstart kwam de bridge tot "Gekoppeld" maar nooit tot "Bridge actief" → geen
+  heartbeat (die start pas bij ready), alarm na 12 min, alleen handmatige restart
+  hielp. Drie reparaties in bridge.js: (1) START-WACHTER: opgeslagen sessie + na
+  4 min niet ready → exit(1) → pm2 herstart; NOOIT als er een QR/code in beeld is
+  geweest (koppelenBezig; een herstart zou een nieuwe code kosten); max 3×/uur via
+  start-pogingen.json, daarna 30 min rust. (2) ZELF-UPDATE draait vanaf de
+  PROCESSTART (niet pas bij ready — een hangende bridge werkte zichzelf anders
+  nooit bij) en herstart alleen op een rustig moment (CONNECTED + outboxBezig
+  false, max 10 min wachten; niet-ready mag meteen). (3) Vooraf een heartbeat met
+  `restarting:'update'` → CRM zet settings.whatsappRestartAt en de watchdog geeft
+  25 min i.p.v. 12 (bridgeAlarmGrens in automations.js; zichtbaar in
+  GET /api/whatsapp/status als restartAt/alarmGrensMin). Test: 3 assertions in
+  scenarios.mjs (100).
 - **Render env vars:** INGEST_TOKEN, ANTHROPIC_API_KEY (Claude Haiku), IMAP_* (TransIP ontvangen),
   SMTP_* (TransIP versturen), WHATSAPP_VERIFY_TOKEN, DATA_DIR=/var/data, SESSION_SECRET.
 - **Bridge .env / hardcoded:** DASHBOARD_URL, INGEST_TOKEN, PAIR_NUMBER (31685352477) en token

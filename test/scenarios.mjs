@@ -433,6 +433,16 @@ const nieuweKaart = await api('POST', '/api/orders', { title: 'Pulse-test kaart'
 const pulse3 = (await api('GET', '/api/pulse')).json;
 ok('een ECHTE wijziging hoogt de teller wel op (scherm ververst nog steeds)', pulse3.v !== pulse2.v && nieuweKaart.status === 200, `${pulse2.v} -> ${pulse3.v}`);
 
+// ---------- Bridge v5: aangekondigde update-herstart -> ruimere alarmgrens ----------
+console.log('\n== Bridge kondigt update-herstart aan -> alarmgrens 25 min ==');
+const st0 = (await api('GET', '/api/whatsapp/status')).json;
+ok('normale alarmgrens is 12 min', st0.alarmGrensMin === 12 && st0.restartAt === null, JSON.stringify({ g: st0.alarmGrensMin, r: st0.restartAt }));
+await api('POST', '/api/whatsapp/heartbeat', { state: 'HERSTART', restarting: 'update', version: 5 }, true);
+const st1 = (await api('GET', '/api/whatsapp/status')).json;
+ok('na aankondiging: restartAt gezet en grens 25 min', !!st1.restartAt && st1.alarmGrensMin === 25 && st1.state === 'HERSTART', JSON.stringify({ g: st1.alarmGrensMin, r: st1.restartAt, s: st1.state }));
+await api('POST', '/api/whatsapp/heartbeat', { state: 'CONNECTED', version: 5 }, true);
+ok('gewone hartslag daarna: bridge weer online, versie 5 zichtbaar', (await api('GET', '/api/whatsapp/status')).json.online === true);
+
 // ---------- Audit-reparaties 1 aug ----------
 console.log('\n== Ons EIGEN dagrapport in de DRS-groep is geen aanvraag ==');
 await api('PATCH', '/api/settings', { whatsappOrderGroups: 'Raf Breda' });

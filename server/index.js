@@ -57,7 +57,7 @@ import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest } from './automations.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -2227,6 +2227,9 @@ app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
   // Extra diagnose van de bridge (nieuwere versies sturen dit mee): de echte
   // WhatsApp-verbindingsstatus en wanneer er voor het laatst een bericht BINNENKWAM.
   const b = req.body || {};
+  // Bridge v5 seint vooraf in dat hij herstart voor een code-update: de watchdog
+  // geeft dan 25 min i.p.v. 12 voordat hij "bridge gestopt" roept.
+  if (b.restarting) { db().settings.whatsappRestartAt = now(); logActivity('bridge', 'herstart aangekondigd', String(b.restarting).slice(0, 40)); }
   if (b.state) db().settings.whatsappState = String(b.state).slice(0, 60);
   if (b.lastIncomingAt) db().settings.whatsappLastIncomingAt = String(b.lastIncomingAt).slice(0, 40);
   // Bridge-versie: zo zien we in het dashboard of de VPS al de nieuwe bridge draait
@@ -2343,6 +2346,9 @@ app.get('/api/whatsapp/status', requireAuth, (req, res) => {
   res.json({
     configured: !!last, online, lastSeen: last, ageSeconds: ageSec,
     state: db().settings.whatsappState || null,
+    // Bridge v5: aangekondigde update-herstart + de alarmgrens die daardoor geldt.
+    restartAt: db().settings.whatsappRestartAt || null,
+    alarmGrensMin: Math.round(bridgeAlarmGrens() / 60000),
     lastIncomingAt: lastIn,
     lastIncomingAgeMin: lastIn ? Math.round((Date.now() - new Date(lastIn).getTime()) / 60000) : null,
     // Voor de statusbalk in Berichten (punt 9): pauzeknop + officiële route.

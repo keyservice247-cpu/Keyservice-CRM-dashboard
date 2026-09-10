@@ -318,6 +318,11 @@ async function runSnoozeChecks() {
 
 // ---------- 6. Uitval-alarm (bridge / e-mail / AI) ----------
 const BRIDGE_DOWN_MS = 12 * 60 * 1000;
+const BRIDGE_UPDATE_MS = 25 * 60 * 1000;
+export function bridgeAlarmGrens(s = db().settings) {
+  const r = s.whatsappRestartAt ? Date.now() - new Date(s.whatsappRestartAt).getTime() : Infinity;
+  return r < BRIDGE_UPDATE_MS ? BRIDGE_UPDATE_MS : BRIDGE_DOWN_MS;
+}
 async function alertAdmins(title, body) {
   sendPush({ title, body, url: '/' }).catch(() => {});
   const to = getBackupMail().email; // zelfde adres als de back-up-mail (indien ingesteld)
@@ -349,9 +354,12 @@ export function healthAlarmDecision({ bad, badSince, alerted, graceMin, nowMs })
 async function runWatchdog() {
   const s = db().settings;
   s._alerts = s._alerts || {};
-  // WhatsApp-bridge: heartbeat ouder dan 12 min = uitgevallen.
+  // WhatsApp-bridge: heartbeat ouder dan 12 min = uitgevallen. Heeft de bridge (v5)
+  // net een update-herstart aangekondigd, dan krijgt hij 25 min — WhatsApp Web laden
+  // na een herstart duurt soms langer en dat is geen storing.
   if (s.whatsappLastSeen) {
-    const down = Date.now() - new Date(s.whatsappLastSeen).getTime() > BRIDGE_DOWN_MS;
+    const grens = bridgeAlarmGrens(s);
+    const down = Date.now() - new Date(s.whatsappLastSeen).getTime() > grens;
     if (down && !s._alerts.bridge) {
       s._alerts.bridge = now(); save();
       await alertAdmins('WhatsApp-bridge gestopt', 'De WhatsApp-verbinding laat niets meer van zich horen. Nieuwe WhatsApp-berichten komen NIET binnen. Check de VPS (pm2 restart wa).');
