@@ -45,8 +45,34 @@ if (!DASHBOARD_URL || !INGEST_TOKEN) {
   process.exit(1);
 }
 
+// ---- VASTE WHATSAPP-WEB-VERSIE (v6, 10 sep 2026) ----
+// WhatsApp zet meerdere keren per dag een nieuwe versie van WhatsApp Web live. De
+// bridge laadde standaard altijd de NIEUWSTE; sinds de versie van 10 sep 11:47 UTC
+// komt hij niet verder dan "Gekoppeld" (nooit "ready"), en dat bij elke herstart.
+// Daarom laden we een vaste, bewezen versie (de versie die de bridge op 9 sep de hele
+// dag draaide) uit het wa-version-archief. Werkt de vaste versie een keer NIET (na 4
+// min niet actief), dan probeert de volgende start de live versie, en zo om en om —
+// zodat we nooit vastzitten aan één kant. Overschrijven kan via WA_WEB_VERSION in .env
+// ('live' = altijd de nieuwste). LET OP: archiefversies verlopen na ~2 maanden
+// (deze: 9 nov 2026) — dan een nieuwere kiezen uit
+// https://raw.githubusercontent.com/wppconnect-team/wa-version/main/versions.json.
+const HARDCODED_WA_WEB_VERSION = '2.3000.1047051837-alpha';
+const WA_WEB_VERSION = process.env.WA_WEB_VERSION || HARDCODED_WA_WEB_VERSION;
+const STARTPOGINGEN_FILE = path.join(__dirname, 'start-pogingen.json');
+const leesStartPogingen = () => { try { return JSON.parse(fs.readFileSync(STARTPOGINGEN_FILE, 'utf8')); } catch { return { n: 0, at: 0 }; } };
+const schrijfStartPogingen = (o) => { try { fs.writeFileSync(STARTPOGINGEN_FILE, JSON.stringify(o)); } catch { /* alleen-lezen schijf: dan geen teller */ } };
+const _sp = leesStartPogingen();
+const _mislukteStarts = (Date.now() - (_sp.at || 0) < 60 * 60 * 1000) ? (_sp.n || 0) : 0;
+const gebruikVasteVersie = WA_WEB_VERSION !== 'live' && _mislukteStarts % 2 === 0;
+if (gebruikVasteVersie) console.log(`[versie] WhatsApp Web vastgezet op ${WA_WEB_VERSION}${_mislukteStarts ? ` (poging ${_mislukteStarts + 1})` : ''}`);
+else console.log(`[versie] live versie van WhatsApp Web${_mislukteStarts ? ` (poging ${_mislukteStarts + 1}: de vaste versie kwam niet tot "actief")` : ''}`);
+
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
+  ...(gebruikVasteVersie ? {
+    webVersion: WA_WEB_VERSION,
+    webVersionCache: { type: 'remote', remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${WA_WEB_VERSION}.html` },
+  } : {}),
   // --disable-dev-shm-usage: op een kleine VPS is /dev/shm te klein -> anders random
   // Chromium-crashes. --disable-gpu: headless, geen GPU nodig.
   puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] },
@@ -183,7 +209,8 @@ client.on('qr', async (qr) => {
 // en "actief", dan herstart hij zichzelf), zelf-update wacht op een rustig moment en
 // seint het CRM vooraf in, en de update-controle loopt óók als WhatsApp nooit "ready"
 // wordt (voorheen startte die pas bij ready — een vastgelopen bridge bleef dus hangen).
-const BRIDGE_VERSION = 5;
+// v6: vaste WhatsApp-Web-versie (zie bovenaan) — de oorzaak van het vasthangen.
+const BRIDGE_VERSION = 6;
 
 // ---- START-WACHTER (v5) ----
 // Casus 10 sep 2026: na de zelf-update-herstart kwam de bridge tot "Gekoppeld" maar
@@ -196,9 +223,7 @@ const BRIDGE_VERSION = 5;
 let isReady = false;
 let koppelenBezig = false;
 const START_LIMIET_MS = 4 * 60 * 1000;
-const STARTPOGINGEN_FILE = path.join(__dirname, 'start-pogingen.json');
-const leesStartPogingen = () => { try { return JSON.parse(fs.readFileSync(STARTPOGINGEN_FILE, 'utf8')); } catch { return { n: 0, at: 0 }; } };
-const schrijfStartPogingen = (o) => { try { fs.writeFileSync(STARTPOGINGEN_FILE, JSON.stringify(o)); } catch { /* alleen-lezen schijf: dan geen teller */ } };
+// (teller-helpers staan bovenaan bij de versiekeuze: die leest ze al vóór de client bestaat)
 function sessieBewaard() {
   try { const d = path.resolve(SESSION_DIR); return fs.existsSync(d) && fs.readdirSync(d).length > 0; } catch { return false; }
 }

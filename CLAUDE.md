@@ -82,6 +82,21 @@ de regressie meegroeit.
   25 min i.p.v. 12 (bridgeAlarmGrens in automations.js; zichtbaar in
   GET /api/whatsapp/status als restartAt/alarmGrensMin). Test: 3 assertions in
   scenarios.mjs (100).
+  BRIDGE v6 (10 sep 2026, 17:50 — de ÉCHTE oorzaak): ook mét v5 bleef hij hangen
+  ("[start] na 4 min nog niet actief (poging 1/3)" en daarna wéér alleen
+  "Gekoppeld"). WhatsApp zet meerdere keren per dag een nieuwe WhatsApp-Web-versie
+  live (wa-version versions.json: released/expire); de bridge laadde standaard de
+  NIEUWSTE (webVersionCache type 'local' zonder passende cache = live). Sinds
+  2.3000.1047193214 (10 sep 11:47 UTC) komt whatsapp-web.js 1.34.7 (nieuwste,
+  24 apr) niet meer tot 'ready'. Fix: VASTE VERSIE via webVersion +
+  webVersionCache {type:'remote', remotePath: raw.githubusercontent.com/
+  wppconnect-team/wa-version/main/html/<versie>.html}; HARDCODED_WA_WEB_VERSION =
+  2.3000.1047051837-alpha (draaide 9 sep de hele dag; VERLOOPT 9 nov 2026 → vóór
+  die tijd een nieuwere kiezen uit versions.json, of .env WA_WEB_VERSION; 'live' =
+  uit). OM-EN-OM: start-pogingen.json telt mislukte starts; even = vaste versie,
+  oneven = live — zodat een verlopen/kapotte pin nooit een dode bridge oplevert.
+  (De oude notitie "webVersionCache-pinning helpt niet" ging over het LID-
+  groepsleesprobleem, niet hierover.)
 - **Render env vars:** INGEST_TOKEN, ANTHROPIC_API_KEY (Claude Haiku), IMAP_* (TransIP ontvangen),
   SMTP_* (TransIP versturen), WHATSAPP_VERIFY_TOKEN, DATA_DIR=/var/data, SESSION_SECRET.
 - **Bridge .env / hardcoded:** DASHBOARD_URL, INGEST_TOKEN, PAIR_NUMBER (31685352477) en token
