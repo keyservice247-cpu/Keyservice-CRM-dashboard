@@ -214,6 +214,10 @@ function hasPerm(key) {
   if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => { const need = el.dataset.need; if (!need || !hasPerm(need)) el.remove(); });
   if (me.user.role === 'monteur') {
     $$('.perm-write').forEach((el) => (el.hidden = true));
+    // Noodroute (10 sep): een GEKOPPELDE monteur mag zelf een opdracht plakken of
+    // aanmaken (ligt de bridge stil, dan komt de DRS-opdracht niet vanzelf binnen).
+    // De server hangt zo'n kaart automatisch aan hemzelf.
+    if (me.user.monteurId) ['#newOrderBtn', '#pasteOrderBtn'].forEach((s) => { const el = $(s); if (el) el.hidden = false; });
     // Monteur ziet alleen zijn eigen werk: Opdrachten + Agenda + eigen Facturen
     // (+ Inbox als de beheerder dat recht heeft aangezet).
     // Berichten mag sinds 15 aug óók voor de monteur — de server geeft hem alleen
@@ -1821,7 +1825,7 @@ function openOrderModal(id, pool) {
   const canWrite = state.me.role !== 'monteur';
   const isMonteur = state.me.role === 'monteur';
   const monteurOpts = '<option value="">— geen monteur —</option>' +
-    state.monteurs.map((m) => `<option value="${m.id}" ${o?.monteurId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+    state.monteurs.map((m) => `<option value="${m.id}" ${(o ? o.monteurId === m.id : (isMonteur && state.me.monteurId === m.id)) ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
 
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
@@ -1837,7 +1841,7 @@ function openOrderModal(id, pool) {
     ${o && o.customerIncomplete ? `<div class="sug-banner sug-warn">${icon('user', 13)} <strong>Klant onbekend — aanvullen.</strong> Er is geen echte klantnaam in het bericht gevonden (de afzender is nooit automatisch de klant). Vul hieronder de klantgegevens aan.</div>` : ''}
     ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open kaart <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. ${canWrite ? `<span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span>` : ''}</div>` : ''}
     ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de kaart gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from || '—')}"</span> → <strong>"${esc(sg.to)}"</strong>${canWrite ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
-    <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur ? 'disabled' : ''} placeholder="bv. Cilinderslot vervangen"></label>
+    <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur && o ? 'disabled' : ''} placeholder="bv. Rhenen — cilinderslot vervangen"></label>
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}"></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" placeholder="e-mailadres klant (nodig voor de factuur)"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}"></label> </div>${o.customer?.phone ? `<div class="muted small" style="margin:-4px 0 10px"><a href="tel:${esc(String(o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 12)} Bel ${esc(o.customer.phone)}</a></div>` : ''}`}

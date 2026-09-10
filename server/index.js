@@ -1574,8 +1574,23 @@ app.delete('/api/orders/:id/thread/:threadId', requirePerm('orders'), (req, res)
   res.json(withRelations(order));
 });
 
-app.post('/api/orders', requirePerm('orders'), (req, res) => {
+// Kaart aanmaken/plakken: kantoor met 'orders'-recht, óf een MONTEUR met gekoppeld
+// monteur-record. Noodroute (wens eigenaar 10 sep 2026): ligt de bridge stil, dan
+// moet de monteur een DRS-opdracht zelf kunnen plakken of intypen in zijn eigen
+// account. Zo'n kaart hangt automatisch aan hemzelf en gaat NIET nog eens naar zijn
+// eigen WhatsApp-groep.
+const requireKaartMaken = (req, res, next) => {
+  if (req.user.role === 'monteur') {
+    if (!req.user.monteurId) return res.status(403).json({ error: 'Je account is niet aan een monteur gekoppeld — vraag de beheerder dat te doen bij Gebruikers.' });
+    return next();
+  }
+  return requirePerm('orders')(req, res, next);
+};
+const monteurZelf = (req) => (req.user.role === 'monteur' ? db().monteurs.find((m) => m.id === req.user.monteurId) || null : null);
+
+app.post('/api/orders', requireAuth, requireKaartMaken, (req, res) => {
   const b = req.body || {};
+  const zelf = monteurZelf(req);
   let customerId = b.customerId;
   if (!customerId && (b.customerName || b.customerPhone || b.customerEmail)) {
     const { customer } = upsertCustomer({
@@ -1590,20 +1605,22 @@ app.post('/api/orders', requirePerm('orders'), (req, res) => {
     title: b.title || 'Nieuwe opdracht',
     description: b.description || '',
     status: normalizeStatus(b.status || 'open'),
-    source: b.source || 'Handmatig',
+    source: zelf ? (b.source || 'Handmatig (monteur)') : (b.source || 'Handmatig'),
     customerId,
-    monteurId: b.monteurId || null,
+    // Monteur: altijd aan zichzelf, nooit aan een collega; prijs blijft aan kantoor.
+    monteurId: zelf ? zelf.id : (b.monteurId || null),
     appointmentAt: b.appointmentAt || null,
     appointmentEndAt: b.appointmentEndAt || null,
-    price: b.price || '',
+    price: zelf ? '' : (b.price || ''),
     urgent: !!b.urgent,
     notes: b.notes || '',
     messageId: null,
+    ...(zelf ? { zelfAangemaaktDoorMonteur: true } : {}),
     createdAt: now(),
     updatedAt: now(),
   };
   db().orders.push(order);
-  logActivity(req.user.name, 'opdracht aangemaakt', order.title);
+  logActivity(req.user.name, zelf ? 'opdracht zelf aangemaakt (monteur)' : 'opdracht aangemaakt', order.title);
   saveSoon();
   if (order.appointmentAt) {
     syncOrderToGoogle(order); // best-effort, niet awaiten
@@ -1620,7 +1637,8 @@ app.post('/api/orders', requirePerm('orders'), (req, res) => {
 // een handmatige opdracht, inclusief klant-ontdubbeling op telefoonnummer.
 // VASTE REGEL: de kaart-TITEL begint altijd met de PLAATSNAAM ("Hoogerheide — slot
 // voordeur eruit gekomen"), zodat het bord en de dagrapport-matching op plaats werken.
-app.post('/api/orders/paste', requirePerm('orders'), (req, res) => {
+app.post('/api/orders/paste', requireAuth, requireKaartMaken, (req, res) => {
+  const zelf = monteurZelf(req);
   const tekst = String(req.body?.text || '').trim();
   if (tekst.length < 10) return res.status(400).json({ error: 'Plak eerst het hele bericht uit WhatsApp.' });
   // Veld-voor-veld: pak de tekst achter een bekend label, tot het einde van de regel.
@@ -1657,18 +1675,21 @@ app.post('/api/orders/paste', requirePerm('orders'), (req, res) => {
     status: 'nieuw',
     source: 'DRS WhatsApp groep',
     customerId: customer.id,
-    monteurId: null,
+    // Plakt de monteur zelf (bridge ligt stil), dan is de kaart meteen van hem.
+    monteurId: zelf ? zelf.id : null,
     appointmentAt: null, appointmentEndAt: null,
     price: '', urgent: false, notes: '', messageId: null,
     intake: { name: klantNaam, phone: klantTel, email: '', address: adres },
+    ...(zelf ? { zelfAangemaaktDoorMonteur: true } : {}),
     createdAt: now(), updatedAt: now(),
   };
   if (sugg.length) order.dataSuggestions = sugg.map((x) => ({ id: id('sug'), field: x.field, value: x.to, current: x.from, at: now(), reason: 'geplakte DRS-opdracht wijkt af van het klantrecord' }));
   db().orders.push(order);
-  logActivity(req.user.name, 'opdracht geplakt (DRS-noodroute)', order.title);
+  logActivity(req.user.name, zelf ? 'opdracht zelf geplakt (monteur, DRS-noodroute)' : 'opdracht geplakt (DRS-noodroute)', order.title);
   saveSoon();
-  // Zelfde vervolg als goedkeuren: automatisch naar de monteur als dat aanstaat.
-  maybeAutoSendToMonteur(order, 'approved');
+  // Zelfde vervolg als goedkeuren: automatisch naar de monteur als dat aanstaat
+  // (niet als de monteur 'm zelf plakte — hij heeft het bericht al).
+  if (!zelf) maybeAutoSendToMonteur(order, 'approved');
   res.json(withRelations(order));
 });
 
@@ -1989,6 +2010,7 @@ function maybeAutoSendToMonteur(order, event) {
   if (cfg.trigger !== event) { console.log(`[autosend] trigger '${cfg.trigger}' != gebeurtenis '${event}' — overgeslagen (${order.title})`); return; }
   if (cfg.onlyDrs !== false && !isDrsOrder(order)) { console.log(`[autosend] geen DRS-opdracht — overgeslagen (${order.title})`); return; }
   if (order.sentToMonteur) { console.log(`[autosend] al verstuurd — overgeslagen (${order.title})`); return; }
+  if (order.zelfAangemaaktDoorMonteur) { console.log(`[autosend] door de monteur zelf aangemaakt — niet naar zijn eigen groep sturen (${order.title})`); return; }
   if (!autoSendAllowedToday()) { console.log(`[autosend] vandaag niet ingeschakeld (dag staat uit) — overgeslagen (${order.title})`); return; }
   // Trefwoord-routering (bv. "schuifpui" -> Abdel) gaat vóór de standaardmonteur.
   const routed = routeMonteurForOrder(order);

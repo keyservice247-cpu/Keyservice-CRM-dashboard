@@ -100,6 +100,27 @@ ok('met force wél', mergeForce.status === 200);
 trash = (await api('GET', '/api/trash')).json || [];
 ok('bronkaart staat in de prullenbak (niet hard weg)', trash.some((o) => o.id === b.json.id));
 
+console.log('\n== Monteur maakt/plakt zelf een opdracht (noodroute bridge stil, 10 sep) ==');
+cookie = adminCookie;
+const montRec = await api('POST', '/api/monteurs', { name: 'Youssef Zelf', phone: '0612000001' });
+const andereMont = await api('POST', '/api/monteurs', { name: 'Piotr Ander', phone: '0612000002' });
+await api('POST', '/api/users', { name: 'Monteur Zelf', email: 'monteurzelf@keyservice.nl', password: 'monteur123', role: 'monteur', monteurId: montRec.json?.id });
+ok('gekoppelde monteur inloggen', (await login('monteurzelf@keyservice.nl', 'monteur123')).status === 200);
+const eigen = await api('POST', '/api/orders', { customerName: 'Zelf Klant', customerPhone: '0612777001', title: 'Veenendaal — slot kapot', monteurId: andereMont.json?.id, price: '250' });
+ok('monteur maakt zelf een kaart', eigen.status === 200 && !!eigen.json?.id, JSON.stringify(eigen.json));
+ok('kaart hangt aan HEMZELF (opgegeven collega genegeerd), prijs blijft leeg', eigen.json?.monteurId === montRec.json?.id && eigen.json?.price === '' && eigen.json?.source === 'Handmatig (monteur)');
+ok('kaart staat op zijn eigen bord', (await api('GET', '/api/orders')).json.some((o) => o.id === eigen.json.id));
+const drs = 'Hallo. We sturen je de volgende klant:\nNaam: Plak Klant\nAdres: Kerkstraat 5\nWoonplaats: 3901 AB - Veenendaal\nTelefoon: 0612777002\nOpmerkingen: voordeur klemt';
+const geplakt = await api('POST', '/api/orders/paste', { text: drs });
+ok('monteur plakt zelf een DRS-opdracht', geplakt.status === 200 && /^Veenendaal — /.test(geplakt.json?.title || ''), JSON.stringify(geplakt.json?.title));
+ok('geplakte kaart hangt aan hemzelf', geplakt.json?.monteurId === montRec.json?.id);
+cookie = adminCookie;
+const zelfKaart = (await api('GET', '/api/orders')).json.find((o) => o.id === geplakt.json.id);
+ok('server markeert: zelf aangemaakt (geen dispatch naar eigen groep)', zelfKaart?.zelfAangemaaktDoorMonteur === true && !zelfKaart?.sentToMonteur);
+ok('NIET-gekoppelde monteur mag geen kaart maken (403 met uitleg)', (await login('monteurlos@keyservice.nl', 'monteur123')).status === 200 && (await api('POST', '/api/orders', { customerName: 'X', customerPhone: '0612777003', title: 'x' })).status === 403);
+ok('NIET-gekoppelde monteur mag ook niet plakken', (await api('POST', '/api/orders/paste', { text: drs })).status === 403);
+cookie = adminCookie;
+
 console.log('\n== Werkbon-handtekening is beschermd ==');
 const sig = await api('POST', `/api/orders/${orderId}/attachments`, { filename: 'handtekening.png', mime: 'image/png', dataBase64: Buffer.from('png').toString('base64') });
 const sigId = (sig.json?.attachments || []).slice(-1)[0]?.id;

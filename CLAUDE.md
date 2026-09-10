@@ -547,6 +547,16 @@ PLAK-OPDRACHT (noodroute 2 aug): knop "Plak opdracht" op het bord → POST
 Opmerkingen) deterministisch, ontdubbelt de klant op telefoon, maakt direct een
 kaart (source "DRS WhatsApp groep") en draait dezelfde monteur-dispatch als
 goedkeuren. Gebouwd toen het bridge-nummer tijdelijk geblokkeerd was.
+MONTEUR-NOODROUTE (10 sep 2026, wens eigenaar): een monteur met GEKOPPELD
+monteur-record (user.monteurId) mag zelf "+ Nieuwe opdracht" en "Plak opdracht"
+gebruiken (requireKaartMaken op POST /api/orders en /api/orders/paste; niet-
+gekoppelde monteur → 403 met uitleg). Zo'n kaart hangt ALTIJD aan hemzelf
+(opgegeven monteurId genegeerd), prijs blijft leeg, bron "Handmatig (monteur)",
+vlag order.zelfAangemaaktDoorMonteur → maybeAutoSendToMonteur slaat 'm over
+(niet naar zijn eigen groep). Frontend: perm-write-knoppen blijven verborgen
+voor monteurs, behalve deze twee bij een koppeling; titelveld alleen bij een
+BESTAANDE kaart uitgeschakeld; eigen monteur voorgeselecteerd. Test: 9 assertions
+in rollen-test.mjs (47).
 
 LET OP: md-bestanden zijn dev-documentatie; de runtime-regels staan in code +
 settings. Wijzig je het één, houd BEIDE synchroon.
