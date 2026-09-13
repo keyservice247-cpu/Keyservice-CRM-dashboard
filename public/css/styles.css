@@ -258,6 +258,10 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
   #trashZone { display: none; } /* slepen naar prullenbak heeft geen zin op mobiel */
 }
 .column.drag-over { outline: 1px dashed var(--accent); outline-offset: -3px; background: var(--accent-soft); }
+/* Slepen op de pc (13 sep): eigen kopie die met de muis meebeweegt; de bron vervaagt. */
+.card.drag-src { opacity: .35; }
+.board-drag-ghost { position: fixed; left: 0; top: 0; z-index: 9999; pointer-events: none; opacity: .94; box-shadow: 0 14px 34px rgba(15, 30, 60, .28); transform: translate(-9999px, -9999px); cursor: grabbing; }
+body.board-dragging, body.board-dragging * { user-select: none; -webkit-user-select: none; cursor: grabbing !important; }
 .column-head { padding: 14px 14px 10px; display: flex; align-items: center; gap: 9px; font-weight: 500; font-size: 13px; color: var(--ink-soft); }
 .column-head .count { margin-left: auto; background: rgba(31,37,48,.05); border-radius: 999px; padding: 1px 9px; font-size: 12px; color: var(--ink-soft); font-weight: 400; }
 .column-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }

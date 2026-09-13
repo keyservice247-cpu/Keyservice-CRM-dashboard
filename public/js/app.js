@@ -298,6 +298,8 @@ async function startLiveUpdates() {
     try {
       const p = await api('/api/pulse');
       if (!p) return;
+      // Slepen begonnen terwijl de pulse onderweg was? Dan nu niets hertekenen.
+      if (window._dragging) { window._boardRenderNaSleep = true; return; }
       // ZELF-VERVERSING (18 aug): draait de server inmiddels een nieuwere versie
       // (deploy geweest), dan herlaadt de app zichzelf — maar alleen op een veilig
       // moment: geen open venster, geen getypte chat-tekst, geen lopende selectie.
@@ -1362,6 +1364,9 @@ function filteredOrders() {
 
 function renderBoard() {
   const board = $('#board');
+  // NIET tekenen tijdens slepen/vegen (13 sep): het gesleepte element zou uit de
+  // pagina verdwijnen. Onthouden en na het loslaten alsnog verversen.
+  if (window._dragging) { window._boardRenderNaSleep = true; return; }
   // Titel meebewegen met het gekozen hoofdmenu.
   const titles = { all: 'Opdrachten', email: 'E-mail — opdrachten', whatsapp: 'WhatsApp — opdrachten' };
   const h = $('#view-board h2'); if (h) h.textContent = titles[state.channel] || 'Opdrachten';
@@ -1416,10 +1421,9 @@ function renderBoard() {
       if (e.target.closest('.card-select') || e.target.closest('.card-trash') || el.dataset.swiped) return;
       markSeen(el.dataset.id); openOrderModal(el.dataset.id);
     });
-    el.addEventListener('dragstart', (e) => { window._dragging = true; e.dataTransfer.setData('text/plain', el.dataset.id); el.style.opacity = '.5'; });
-    el.addEventListener('dragend', () => { window._dragging = false; el.style.opacity = '1'; });
   });
-  bindCardSwipe();
+  bindCardDrag();   // pc: slepen met de muis (eigen implementatie, zie onder)
+  bindCardSwipe();  // mobiel: vegen
   // Mini-prullenbak per kaart (met "Ongedaan maken")
   $$('.card-trash').forEach((b) => b.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -1437,55 +1441,10 @@ function renderBoard() {
   for (const sid of [...boardSel]) if (!zichtbaar.has(sid)) boardSel.delete(sid);
   updateBoardBulk();
 
-  $$('.column-cards').forEach((col) => {
-    col.addEventListener('dragover', (e) => { e.preventDefault(); col.closest('.column').classList.add('drag-over'); });
-    col.addEventListener('dragleave', () => col.closest('.column').classList.remove('drag-over'));
-    col.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      // Meteen vrijgeven (audit 18 aug): renderBoard() hieronder vervangt het gesleepte
-      // element, waardoor 'dragend' soms nooit vuurt en _dragging voorgoed op true
-      // bleef — dan stopte de 5-seconden-verversing en veroudert het bord onbeperkt.
-      window._dragging = false;
-      col.closest('.column').classList.remove('drag-over');
-      const id = e.dataTransfer.getData('text/plain');
-      const newStatus = col.dataset.status;
-      const order = state.orders.find((o) => o.id === id);
-      if (!order) {
-        // Kaart staat niet (meer) in het geheugen: verouderd bord. Niet stil niks doen.
-        toast('Deze kaart is intussen gewijzigd — het bord wordt ververst');
-        loadBoard();
-        return;
-      }
-      if (order.status === newStatus) return;
-      // Monteur + kolom met verplichte notitie: niet tegen een 400 aanlopen, maar de
-      // kaart openen met de cursor in het notitieveld (zelfde regel als in de modal).
-      if (state.me.role === 'monteur' && noteRequiredKeys().includes(newStatus) && !(order.notes || '').trim()) {
-        toast('Vul eerst een korte notitie in (wat is er gedaan/afgesproken) — de kaart gaat nu open');
-        openOrderModal(id);
-        setTimeout(() => { const s = $('#f-status'); if (s) s.value = newStatus; $('#f-notes')?.focus(); }, 300);
-        return;
-      }
-      order.status = newStatus;
-      renderBoard();
-      const moved = $(`.card[data-id="${id}"]`); if (moved) moved.classList.add('just-moved');
-      try { await api(`/api/orders/${id}`, 'PATCH', { status: newStatus }); toast('Status bijgewerkt'); await loadBoard(); flash(`.card[data-id="${id}"]`); }
-      catch (err) { toast(err.message, true); loadBoard(); }
-    });
-  });
-
-  // Prullenbak-dropzone (alleen voor wie mag verwijderen)
+  // Prullenbak-dropzone (alleen voor wie mag verwijderen) — het slepen zelf zit in
+  // bindCardDrag(); hier alleen tonen/verbergen.
   const tz = $('#trashZone');
-  if (tz && state.me.role !== 'monteur') {
-    tz.hidden = false;
-    tz.ondragover = (e) => { e.preventDefault(); tz.classList.add('drag-over'); };
-    tz.ondragleave = () => tz.classList.remove('drag-over');
-    tz.ondrop = async (e) => {
-      e.preventDefault(); tz.classList.remove('drag-over');
-      const id = e.dataTransfer.getData('text/plain');
-      try { await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo('Naar prullenbak verplaatst', () => restoreOrders([id])); }
-      catch (err) { toast(err.message, true); }
-    };
-  } else if (tz) { tz.hidden = true; }
+  if (tz) tz.hidden = state.me.role === 'monteur';
 
   setupBoardTabs();
   // Kwam je via een KPI/kolom-klik? Spring meteen naar die kolom (mobiel = tab, pc = scroll).
@@ -1562,6 +1521,120 @@ function advanceStatus(id, dir = 1) {
     .finally(() => { o._bezig = false; });
 }
 
+// Kaart naar een andere kolom (status) — gedeeld door slepen op de pc en vegen op mobiel.
+async function verplaatsKaart(id, newStatus) {
+  const order = state.orders.find((o) => o.id === id);
+  if (!order) {
+    // Kaart staat niet (meer) in het geheugen: verouderd bord. Niet stil niks doen.
+    toast('Deze kaart is intussen gewijzigd — het bord wordt ververst');
+    loadBoard();
+    return;
+  }
+  if (order.status === newStatus) return;
+  // Monteur + kolom met verplichte notitie: niet tegen een 400 aanlopen, maar de
+  // kaart openen met de cursor in het notitieveld (zelfde regel als in de modal).
+  if (state.me.role === 'monteur' && noteRequiredKeys().includes(newStatus) && !(order.notes || '').trim()) {
+    toast('Vul eerst een korte notitie in (wat is er gedaan/afgesproken) — de kaart gaat nu open');
+    openOrderModal(id);
+    setTimeout(() => { const s = $('#f-status'); if (s) s.value = newStatus; $('#f-notes')?.focus(); }, 300);
+    return;
+  }
+  order.status = newStatus;
+  renderBoard();
+  const moved = $(`.card[data-id="${id}"]`); if (moved) moved.classList.add('just-moved');
+  try { await api(`/api/orders/${id}`, 'PATCH', { status: newStatus }); toast('Status bijgewerkt'); await loadBoard(); flash(`.card[data-id="${id}"]`); }
+  catch (err) { toast(err.message, true); loadBoard(); }
+}
+async function kaartNaarPrullenbak(id) {
+  try { await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo('Naar prullenbak verplaatst', () => restoreOrders([id])); }
+  catch (err) { toast(err.message, true); }
+}
+
+// SLEPEN OP DE PC (13 sep 2026) — eigen implementatie met pointer-events.
+// Klacht eigenaar: "elke keer als ik een kaart sleep loopt hij vast". De oude
+// versie gebruikte het ingebouwde HTML5-slepen van de browser. Dat is breekbaar:
+// wordt het bord tijdens het slepen opnieuw opgebouwd (de 5-seconden-verversing
+// zodra een collega, de bridge of een klant iets wijzigt — op een druk bord gebeurt
+// dat continu), dan verdwijnt het gesleepte element uit de pagina, breekt de browser
+// het slepen af en vuurt 'dragend' nooit: kaart blijft vervaagd hangen en het bord
+// ververst niet meer. Nu: (1) wij slepen zelf een kopie mee met de muis,
+// (2) renderBoard() tekent NIET tijdens het slepen maar daarna (zie renderBoard),
+// (3) loslaten werkt altijd, ook als er niets onder de muis staat (dan gebeurt er
+// gewoon niets). Vinger op mobiel blijft vegen (bindCardSwipe).
+function bindCardDrag() {
+  if (window.matchMedia('(max-width: 820px)').matches) return;
+  $$('#board .card').forEach((card) => {
+    card.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.pointerType === 'touch') return;
+      if (e.target.closest('.card-select, .card-trash, a, button, input, select, textarea')) return;
+      const id = card.dataset.id;
+      const x0 = e.clientX, y0 = e.clientY;
+      const r0 = card.getBoundingClientRect();
+      let bezig = false, ghost = null, doel = null;
+      const kolomOnder = (ev) => {
+        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        return { kolom: el && el.closest('#board .column'), prullenbak: el && el.closest('#trashZone') };
+      };
+      const markeer = (ev) => {
+        const { kolom, prullenbak } = kolomOnder(ev);
+        if (kolom !== doel) { $$('#board .column.drag-over').forEach((c) => c.classList.remove('drag-over')); if (kolom) kolom.classList.add('drag-over'); doel = kolom; }
+        const tz = $('#trashZone'); if (tz) tz.classList.toggle('drag-over', !!prullenbak && !tz.hidden);
+      };
+      const move = (ev) => {
+        if (!bezig) {
+          if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;   // gewone klik
+          bezig = true;
+          window._dragging = true;
+          window._dragSinds = Date.now();
+          document.body.classList.add('board-dragging');
+          card.classList.add('drag-src');
+          ghost = card.cloneNode(true);
+          ghost.className = 'card board-drag-ghost';
+          ghost.style.width = `${r0.width}px`;
+          document.body.appendChild(ghost);
+        }
+        ev.preventDefault();
+        ghost.style.transform = `translate(${ev.clientX - (x0 - r0.left)}px, ${ev.clientY - (y0 - r0.top)}px)`;
+        markeer(ev);
+        // Aan de rand van het scherm: meescrollen, anders kom je nooit bij Afgerond.
+        if (ev.clientY > window.innerHeight - 60) window.scrollBy(0, 14);
+        else if (ev.clientY < 70) window.scrollBy(0, -14);
+      };
+      const stop = async (ev) => {
+        document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', stop); document.removeEventListener('pointercancel', stop);
+        if (!bezig) return;   // niet gesleept -> de klik opent de kaart zoals altijd
+        card.dataset.swiped = '1'; setTimeout(() => { delete card.dataset.swiped; }, 400);
+        const { kolom, prullenbak } = ev.type === 'pointercancel' ? {} : kolomOnder(ev);
+        if (ghost) ghost.remove();
+        card.classList.remove('drag-src');
+        document.body.classList.remove('board-dragging');
+        $$('#board .column.drag-over').forEach((c) => c.classList.remove('drag-over'));
+        $('#trashZone')?.classList.remove('drag-over');
+        window._dragging = false;
+        if (prullenbak && state.me.role !== 'monteur') await kaartNaarPrullenbak(id);
+        else if (kolom && kolom.dataset.status) await verplaatsKaart(id, kolom.dataset.status);
+        // Verversing die tijdens het slepen is uitgesteld alsnog doen.
+        if (window._boardRenderNaSleep) { window._boardRenderNaSleep = false; loadBoard(); }
+      };
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', stop);
+      document.addEventListener('pointercancel', stop);
+    });
+  });
+}
+// Vangnet: blijft de sleepvlag om wat voor reden dan ook langer dan 20 s staan
+// (bv. venster verloor focus midden in een sleep), dan vrijgeven — anders stopt de
+// verversing van het bord voorgoed. Precies de "vast"-klacht.
+setInterval(() => {
+  if (window._dragging && window._dragSinds && Date.now() - window._dragSinds > 20000) {
+    window._dragging = false; window._dragSinds = 0;
+    document.body.classList.remove('board-dragging');
+    $$('.board-drag-ghost').forEach((g) => g.remove());
+    $$('#board .card.drag-src').forEach((c) => c.classList.remove('drag-src'));
+    if (window._boardRenderNaSleep) { window._boardRenderNaSleep = false; if (state.view === 'board') loadBoard(); }
+  }
+}, 5000);
+
 // Swipe-acties op kaarten (alleen mobiel): rechts = volgende kolom, links = vorige kolom.
 // (Verwijderen gaat NIET via swipe — daarvoor is het prullenbak-knopje op de kaart.)
 function bindCardSwipe() {
@@ -1580,10 +1653,13 @@ function bindCardSwipe() {
       if (horiz) { e.preventDefault(); card.style.transform = `translateX(${dx}px)`; card.style.opacity = String(Math.max(0.55, 1 - Math.abs(dx) / 360)); }
     }, { passive: false });
     // Vinger van het scherm zonder net touchend (bv. inkomend telefoontje): rem eraf.
-    card.addEventListener('touchcancel', () => { window._dragging = false; dragging = false; card.style.transform = ''; card.style.opacity = ''; });
+    // Na een veeg/tik: een verversing die intussen is uitgesteld alsnog doen.
+    const naVeeg = () => { if (window._boardRenderNaSleep) { window._boardRenderNaSleep = false; if (state.view === 'board') loadBoard(); } };
+    card.addEventListener('touchcancel', () => { window._dragging = false; dragging = false; card.style.transform = ''; card.style.opacity = ''; naVeeg(); });
     card.addEventListener('touchend', () => {
       window._dragging = false;
-      if (!dragging) return; dragging = false;
+      if (!dragging) { naVeeg(); return; } dragging = false;
+      if (!(horiz && Math.abs(dx) >= 95)) setTimeout(naVeeg, 50);
       card.style.transition = 'transform .16s ease, opacity .16s ease';
       card.style.transform = ''; card.style.opacity = '';
       const id = card.dataset.id;
@@ -1640,7 +1716,7 @@ function cardHTML(o) {
   const replyLabel = replyCount > 1 ? `${replyCount} nieuwe berichten` : 'Nieuw bericht';
   const canDel = state.me.role !== 'monteur';
   return `
-    <div class="card ${o.urgent ? 'urgent' : ''} ${st.c === 'new' ? 'is-new' : ''} ${o.customerReplied ? 'replied-alert' : ''}" data-id="${o.id}" draggable="true" style="border-left-color:${esc(statusColor(o.status))}">
+    <div class="card ${o.urgent ? 'urgent' : ''} ${st.c === 'new' ? 'is-new' : ''} ${o.customerReplied ? 'replied-alert' : ''}" data-id="${o.id}" style="border-left-color:${esc(statusColor(o.status))}">
       ${canDel ? `<label class="card-select" title="Selecteren"><input type="checkbox" class="card-check" data-id="${o.id}"${boardSel.has(o.id) ? ' checked' : ''}></label>` : ''}
       ${canDel ? `<button class="card-trash" data-del="${o.id}" title="Naar prullenbak">${icon('trash', 14)}</button>` : ''}
       ${o.customerReplied ? `<div class="reply-banner">${icon('message', 12)} ${replyLabel}</div>` : ''}

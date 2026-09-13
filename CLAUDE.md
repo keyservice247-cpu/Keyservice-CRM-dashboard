@@ -474,6 +474,21 @@ de regressie meegroeit.
   autoreply.js: niet afgerond/geannuleerd/prullenbak/archief) — review.
   autoReplySkipped + logboekregel; de aanvraag zelf komt gewoon in de inbox.
   Test: mail-test.mjs (35) + 2 browser-asserties.
+- **Bord slepen op de pc = eigen pointer-implementatie (13 sep 2026):** klacht
+  "elke keer als ik een kaart sleep loopt hij vast". Het ingebouwde HTML5-slepen
+  (draggable/dragstart/drop) brak zodra het bord tijdens de sleep opnieuw werd
+  opgebouwd (pulse-verversing na een wijziging van collega/bridge/klant — op een
+  druk bord elke paar seconden): bron-element weg → browser breekt de sleep af,
+  dragend vuurt nooit, `_dragging` bleef true → verversing stopte voorgoed en de
+  kaart bleef vervaagd hangen. Nu: bindCardDrag() (pointerdown/move/up op het
+  DOCUMENT, kopie `.board-drag-ghost` volgt de muis, doelkolom via
+  elementFromPoint, prullenbak-zone idem, rand-autoscroll, klik-drempel 6 px;
+  touch = nog steeds bindCardSwipe), gedeelde verplaatsKaart(id,status) +
+  kaartNaarPrullenbak(id), renderBoard() TEKENT NIET tijdens `_dragging` maar zet
+  `_boardRenderNaSleep` (uitgevoerd na loslaten/veeg), de pulse checkt
+  `_dragging` óók ná de await, en een 20-s-vangnet geeft een blijven-hangende
+  sleepvlag vrij. `draggable="true"` is van de kaart af. Test: 8 browser-asserties
+  (echte muisbeweging + herbouw halverwege).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

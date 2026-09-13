@@ -446,6 +446,59 @@ ok('taken: mobiel één kolom onder elkaar, binnen het scherm', !!tkMob && tkMob
 await page.setViewportSize({ width: 1280, height: 800 });
 noErr('Taken (mobiel)');
 
+// ---------- Bord: slepen met de muis (13 sep 2026, eigen pointer-implementatie) ----------
+// Klacht: "elke keer als ik een kaart sleep loopt hij vast". Test: echte muisbeweging,
+// halverwege wordt het bord door een 'collega-wijziging' ververst (zoals de pulse
+// doet) — het slepen moet gewoon doorgaan, de kaart komt in de nieuwe kolom, en de
+// sleepvlag is daarna vrij. Daarna: klikken opent de kaart nog steeds.
+clear();
+await page.setViewportSize({ width: 1366, height: 820 });
+await page.evaluate(() => goView('board'));
+await page.waitForFunction(() => document.querySelectorAll('#board .card').length > 0);
+await page.waitForTimeout(600);
+{
+  const bron = page.locator('#board .column[data-status="open"] .card').first();
+  if (!(await bron.count())) {
+    await page.evaluate(async () => { await fetch('/api/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ customerName: 'Sleep Klant', customerPhone: '0612340099', title: 'Rhenen — sleeptest', status: 'open' }) }); await loadBoard(); });
+    await page.waitForTimeout(600);
+  }
+  const kaart = page.locator('#board .column[data-status="open"] .card').first();
+  const sleepId = await kaart.getAttribute('data-id');
+  const b = await kaart.boundingBox();
+  const doel = await page.locator('#board .column[data-status="nieuw"]').first().boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 + 12, b.y + 42, { steps: 4 });
+  await page.mouse.move(b.x + b.width / 2 + 80, b.y + 80, { steps: 6 });
+  ok('bord: slepen gestart (kopie volgt de muis, bron vervaagd)', await page.evaluate((id) => window._dragging === true && !!document.querySelector('.board-drag-ghost') && document.querySelector(`.card[data-id="${id}"]`)?.classList.contains('drag-src'), sleepId));
+  // Collega wijzigt een andere kaart -> bord zou herbouwd worden; moet nu uitgesteld zijn.
+  await page.evaluate(async () => { const o = state.orders.find((x) => x.status !== 'open') || state.orders[1]; await fetch(`/api/orders/${o.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: o.title + ' (gewijzigd)' }) }); await loadBoard(); });
+  await page.waitForTimeout(300);
+  ok('bord: verversing tijdens slepen wordt uitgesteld (kaart blijft bestaan)', await page.evaluate((id) => window._boardRenderNaSleep === true && !!document.querySelector(`.card[data-id="${id}"].drag-src`), sleepId));
+  await page.mouse.move(doel.x + doel.width / 2, doel.y + 60, { steps: 10 });
+  await page.waitForTimeout(150);
+  ok('bord: doelkolom licht op', await page.locator('#board .column[data-status="nieuw"].drag-over').count() === 1);
+  await page.mouse.up();
+  await page.waitForTimeout(2000);
+  const naSleepBord = await page.evaluate((id) => ({ dragging: window._dragging, ghost: !!document.querySelector('.board-drag-ghost'), inNieuw: !!document.querySelector(`#board .column[data-status="nieuw"] .card[data-id="${id}"]`), status: state.orders.find((o) => o.id === id)?.status, pending: !!window._boardRenderNaSleep }), sleepId);
+  ok('bord: kaart staat in de nieuwe kolom en de sleepvlag is vrij', naSleepBord.inNieuw && naSleepBord.status === 'nieuw' && naSleepBord.dragging === false && !naSleepBord.ghost && !naSleepBord.pending, JSON.stringify(naSleepBord));
+  const serverStatus = await page.evaluate(async (id) => (await (await fetch('/api/orders')).json()).find((o) => o.id === id)?.status, sleepId);
+  ok('bord: status ook op de server gewijzigd', serverStatus === 'nieuw', serverStatus);
+  ok('bord: de uitgestelde collega-wijziging is na het slepen alsnog getekend', (await page.locator('#board .card:has-text("(gewijzigd)")').count()) === 1);
+  // Loslaten buiten een kolom: niets gebeurt, niets blijft hangen.
+  const k2 = page.locator(`#board .card[data-id="${sleepId}"]`); const b2 = await k2.boundingBox();
+  await page.mouse.move(b2.x + 40, b2.y + 30); await page.mouse.down(); await page.mouse.move(b2.x + 60, b2.y + 60, { steps: 4 }); await page.mouse.move(700, 60, { steps: 6 }); await page.mouse.up();
+  await page.waitForTimeout(800);
+  ok('bord: loslaten buiten een kolom = geen wijziging, niets blijft hangen', await page.evaluate((id) => window._dragging === false && !document.querySelector('.board-drag-ghost') && !document.querySelector('.card.drag-src') && state.orders.find((o) => o.id === id)?.status === 'nieuw', sleepId));
+  // Gewone klik opent nog steeds de kaart.
+  await k2.click();
+  await page.waitForTimeout(800);
+  ok('bord: gewone klik opent de kaart', await page.locator('#f-title').count() === 1);
+  await page.evaluate(() => closeModal());
+  await page.waitForTimeout(300);
+}
+noErr('Bord slepen');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
