@@ -104,6 +104,19 @@ de regressie meegroeit.
   `werkend: 'live'|'vast'` (gezet bij ready) en begint elke start met de stand die
   de vorige keer werkte (standaard LIVE); wisselen alleen bij falen. v6 begon
   elke start met 'vast' en kostte zo elke update-herstart eerst 4 min.
+  BRIDGE v8 (14 sep 2026, "opdrachten worden niet verzonden"): de bord-fix van
+  13 sep (alleen public/+test/) liet de bridge 's nachts tóch herstarten (zelf-
+  update keek alleen naar "nieuwe commit") en daarna kwam hij niet meer tot
+  'actief' → groepsberichten bleven de hele ochtend op "wachtrij" (klant-DM's via
+  de officiële route gingen wél). Twee reparaties: (1) zelf-update herstart
+  ALLEEN als `git diff --name-only <oud> <nieuw> -- whatsapp-bridge/` iets
+  oplevert; anders alleen startCommit bijwerken. (2) start-wachter wacht 10 min
+  i.p.v. 4 (WhatsApp Web moet na een herstart alle chats opnieuw binnenhalen; op
+  de CPX22 duurt dat soms >4 min en elke te vroege herstart begon dat werk
+  opnieuw), met elke 2 min een logregel "[start] nog niet actief na X min
+  (WhatsApp-status: …)". Bug mee opgelost: het faalpad schreef start-pogingen.json
+  zonder `werkend` (stand ging verloren). REGEL VOOR MIJ: een push naar main
+  raakt de bridge alleen nog als whatsapp-bridge/ verandert.
 - **Render env vars:** INGEST_TOKEN, ANTHROPIC_API_KEY (Claude Haiku), IMAP_* (TransIP ontvangen),
   SMTP_* (TransIP versturen), WHATSAPP_VERIFY_TOKEN, DATA_DIR=/var/data, SESSION_SECRET.
 - **Bridge .env / hardcoded:** DASHBOARD_URL, INGEST_TOKEN, PAIR_NUMBER (31685352477) en token

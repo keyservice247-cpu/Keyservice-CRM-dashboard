@@ -217,7 +217,7 @@ client.on('qr', async (qr) => {
 // seint het CRM vooraf in, en de update-controle loopt óók als WhatsApp nooit "ready"
 // wordt (voorheen startte die pas bij ready — een vastgelopen bridge bleef dus hangen).
 // v6: vaste WhatsApp-Web-versie (zie bovenaan) — de oorzaak van het vasthangen.
-const BRIDGE_VERSION = 7;
+const BRIDGE_VERSION = 8;
 
 // ---- START-WACHTER (v5) ----
 // Casus 10 sep 2026: na de zelf-update-herstart kwam de bridge tot "Gekoppeld" maar
@@ -229,22 +229,33 @@ const BRIDGE_VERSION = 7;
 // daarna 30 minuten rust vóór de volgende poging (geen herstart-lus).
 let isReady = false;
 let koppelenBezig = false;
-const START_LIMIET_MS = 4 * 60 * 1000;
+// v8 (14 sep): 10 minuten i.p.v. 4. Na een herstart moet WhatsApp Web álle chats
+// opnieuw binnenhalen (honderden groepsberichten); op de kleine VPS duurt dat soms
+// langer dan 4 minuten — en elke te vroege herstart begon dat werk weer van voren af
+// aan. Tussendoor een levensteken in de log, zodat je ziet dat hij nog bezig is.
+const START_LIMIET_MIN = 10;
+const START_LIMIET_MS = START_LIMIET_MIN * 60 * 1000;
 // (teller-helpers staan bovenaan bij de versiekeuze: die leest ze al vóór de client bestaat)
 function sessieBewaard() {
   try { const d = path.resolve(SESSION_DIR); return fs.existsSync(d) && fs.readdirSync(d).length > 0; } catch { return false; }
 }
+const _startOp = Date.now();
+const _startTikker = setInterval(async () => {
+  if (isReady) { clearInterval(_startTikker); return; }
+  let state = 'ONBEKEND'; try { state = (await metTimeout(client.getState(), 5000, 'TRAAG')) || 'GEEN'; } catch (e) { state = 'FOUT'; }
+  console.log(`[start] nog niet actief na ${Math.round((Date.now() - _startOp) / 60000)} min (WhatsApp-status: ${state}) — wachten tot ${START_LIMIET_MIN} min.`);
+}, 2 * 60 * 1000);
 setTimeout(() => {
   if (isReady || koppelenBezig || !sessieBewaard()) return;
   const p = leesStartPogingen();
   const n = (Date.now() - (p.at || 0) < 60 * 60 * 1000) ? (p.n || 0) + 1 : 1;
-  schrijfStartPogingen({ n, at: Date.now() });
+  schrijfStartPogingen({ ...p, n, at: Date.now() });
   if (n > 3) {
-    console.error(`[start] na 4 min nog niet actief en al ${n - 1} herstarts in het afgelopen uur — wacht 30 min voor de volgende poging.`);
+    console.error(`[start] na ${START_LIMIET_MIN} min nog niet actief en al ${n - 1} herstarts in het afgelopen uur — wacht 30 min voor de volgende poging.`);
     setTimeout(() => { if (!isReady) process.exit(1); }, 30 * 60 * 1000);
     return;
   }
-  console.error(`[start] na 4 min nog niet actief (poging ${n}/3) — bridge sluit af zodat pm2 opnieuw start; sessie blijft bewaard.`);
+  console.error(`[start] na ${START_LIMIET_MIN} min nog niet actief (poging ${n}/3) — bridge sluit af zodat pm2 opnieuw start; sessie blijft bewaard.`);
   setTimeout(() => process.exit(1), 1500);
 }, START_LIMIET_MS);
 
@@ -394,8 +405,19 @@ function startZelfUpdate() {
       if (uit.err) { console.error('[update] git pull mislukt:', (uit.stderr || uit.err.message).trim().slice(0, 200)); return; }
       const na = await new Promise((resolve) => execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir }, (e, so) => resolve(e ? '' : String(so).trim())));
       if (na && na !== startCommit) {
+        // v8 (14 sep 2026): ALLEEN herstarten als er iets in whatsapp-bridge/ is
+        // veranderd. Een CRM-wijziging (scherm, server) raakt de bridge niet, maar
+        // gaf wél elke keer een herstart — en elke herstart is een kans op vasthangen
+        // (13 sep: bord-fix gepusht → bridge herstartte 's nachts → kwam niet meer
+        // tot "actief" → opdrachten bleven de hele ochtend in de wachtrij).
+        const diff = await new Promise((resolve) => execFile('git', ['diff', '--name-only', startCommit, na, '--', 'whatsapp-bridge/'], { cwd: repoDir, timeout: 30000 }, (e, so) => resolve(e ? 'FOUT' : String(so || '').trim())));
+        if (diff === '') {
+          console.log(`[update] nieuwe CRM-code (${startCommit.slice(0, 7)} → ${na.slice(0, 7)}), maar niets voor de bridge — geen herstart nodig.`);
+          startCommit = na;
+          return;
+        }
         updateBezig = true;
-        console.log(`[update] nieuwe code gevonden (${startCommit.slice(0, 7)} → ${na.slice(0, 7)}) — herstart zodra het rustig is.`);
+        console.log(`[update] nieuwe bridge-code gevonden (${startCommit.slice(0, 7)} → ${na.slice(0, 7)}) — herstart zodra het rustig is.`);
         await herstartVoorUpdate(startCommit.slice(0, 7), na.slice(0, 7));
       }
     } catch (e) { console.error('[update] controle mislukt:', e.message); updateBezig = false; }
