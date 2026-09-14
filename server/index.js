@@ -52,7 +52,7 @@ import {
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken } from './gesprekken.js';
-import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, gedeeldMetNamen, zetVolgorde } from './taken.js';
+import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, kantoor, gedeeldMetNamen, zetVolgorde } from './taken.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
@@ -2402,6 +2402,7 @@ app.get('/api/taken/vandaag', requireRole('admin', 'assistent'), (req, res) => {
   res.json(vandaagLijst(req.user, Math.max(1, Math.min(10, Number(req.query.max) || 5))).map((t) => taakUit(t, req.user)));
 });
 app.get('/api/taken/collegas', requireRole('admin', 'assistent'), (req, res) => res.json(collegas(req.user)));
+app.get('/api/taken/kantoor', requireRole('admin', 'assistent'), (req, res) => res.json(kantoor(req.user)));
 app.get('/api/taken', requireRole('admin', 'assistent'), (req, res) => {
   const zichtbaar = takenLijst().filter((t) => zichtbaarVoor(t, req.user));
   res.json(sorteerTaken(filterTaken(zichtbaar, req.query || {}, req.user), String(req.query.sorteer || 'slim')).map((t) => taakUit(t, req.user)));

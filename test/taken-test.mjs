@@ -125,6 +125,16 @@ ok('assistente kan eigen privé-taak maken en zien', haar.status === 200 && (awa
 cookie = adminCookie;
 ok('Abdel ziet de privé-taak van de assistente NIET', !(await api('GET', '/api/taken')).json.some((t) => t.id === haar.json.id));
 
+console.log('\n== Toewijzen met vinkjes: kantoorlijst ==');
+const kantoorL = (await api('GET', '/api/taken/kantoor')).json;
+ok('kantoorlijst bevat mijzelf (eerst, isMij) én de assistente, geen monteur', Array.isArray(kantoorL) && kantoorL[0]?.isMij === true && kantoorL.some((u) => u.name === 'Assistente Taak' && u.role === 'assistent') && !kantoorL.some((u) => u.role === 'monteur'), JSON.stringify(kantoorL));
+const toeg = await api('POST', '/api/taken', { titel: 'Vinkjes-taak', toegewezen: ['Beheerder', 'Assistente Taak'] });
+ok('toewijzen als lijst (vinkjes) wordt bewaard', JSON.stringify(toeg.json?.toegewezen) === JSON.stringify(['Beheerder', 'Assistente Taak']), JSON.stringify(toeg.json?.toegewezen));
+await login('assistente-taak@keyservice.nl', 'assist123');
+ok('assistente ziet de taak onder "Toegewezen aan mij"', (await api('GET', '/api/taken?mij=1')).json.some((t) => t.id === toeg.json.id));
+cookie = adminCookie;
+await api('DELETE', `/api/taken/${toeg.json.id}`);
+
 console.log('\n== Privé-taak DELEN met een collega (optioneel) ==');
 const collegas = (await api('GET', '/api/taken/collegas')).json;
 const assistent = (collegas || []).find((c) => c.name === 'Assistente Taak');

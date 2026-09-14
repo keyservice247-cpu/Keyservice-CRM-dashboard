@@ -698,6 +698,20 @@ async function openTaakModal(id) {
   const eigenaar = t.isEigenaar !== false;
   let collegas = [];
   if (eigenaar) { try { collegas = await api('/api/taken/collegas'); } catch { collegas = []; } }
+  // Toewijzen met vinkjes (14 sep): alle kantoor-accounts uit Gebruikers, jijzelf eerst.
+  // Namen die niet (meer) bij een account horen blijven als extra vinkje staan.
+  let kantoorLijst = [];
+  try { kantoorLijst = await api('/api/taken/kantoor'); } catch { kantoorLijst = []; }
+  const wieNu = t.toegewezen || [];
+  const wieMatch = (naam) => kantoorLijst.some((u) => u.name === naam || String(u.name || '').split(/\s+/)[0].toLowerCase() === String(naam).split(/\s+/)[0].toLowerCase());
+  const losseNamen = wieNu.filter((n) => !wieMatch(n));
+  const wieOpties = [
+    ...kantoorLijst.map((u) => ({ naam: u.name, label: `${u.name}${u.isMij ? ' (ik)' : ''}`, sub: u.role === 'admin' ? 'beheerder' : 'assistente', aan: wieNu.some((n) => n === u.name || String(n).split(/\s+/)[0].toLowerCase() === String(u.name).split(/\s+/)[0].toLowerCase()) })),
+    ...losseNamen.map((n) => ({ naam: n, label: n, sub: 'geen account', aan: true })),
+  ];
+  const wieHTML = wieOpties.length
+    ? `<div class="tk-deel-lijst" id="tk-wie-lijst">${wieOpties.map((o) => `<label class="tk-deel-opt"><input type="checkbox" class="tk-wie-opt" value="${esc(o.naam)}" ${o.aan ? 'checked' : ''}> ${esc(o.label)} <span class="muted small">(${esc(o.sub)})</span></label>`).join('')}</div>`
+    : '<div class="muted small">Geen kantoor-accounts gevonden.</div>';
   const deelBlok = eigenaar ? `<div id="tk-deelblok" ${t.categorie === 'prive' ? '' : 'hidden'}>
       <div class="small" style="margin:4px 0 4px;font-weight:600">Delen met (optioneel)</div>
       ${collegas.length ? `<div class="tk-deel-lijst">${collegas.map((c) => `<label class="tk-deel-opt"><input type="checkbox" class="tk-deel" value="${esc(c.id)}" ${(t.gedeeldMet || []).includes(c.id) ? 'checked' : ''}> ${esc(c.name)} <span class="muted small">(${c.role === 'admin' ? 'beheerder' : 'assistente'})</span></label>`).join('')}</div>`
@@ -719,7 +733,7 @@ async function openTaakModal(id) {
       <label>Deadline <input id="tk-deadline" type="date" value="${esc(t.deadline || '')}"></label>
     </div>
     <div class="row">
-      <label>Toegewezen aan <input id="tk-wie" value="${esc((t.toegewezen || []).join(' + '))}" placeholder="bv. Abdel + Ouiam"></label>
+      <div><div class="small" style="margin:0 0 4px;font-weight:600">Toegewezen aan</div>${wieHTML}<div class="muted small" style="margin-top:4px">Vink aan wie dit oppakt. Meerdere mag. Zakelijke taken ziet het hele kantoor; "Toegewezen aan mij" filtert op deze vinkjes.</div></div>
       <label>Status ${sel('tk-status', [['open', 'Open'], ['bezig', 'Bezig'], ['klaar', 'Klaar']], t.status)}</label>
     </div>
     <div class="row">
@@ -773,7 +787,7 @@ async function openTaakModal(id) {
   $('#tk-save').onclick = async () => {
     const body = {
       titel: $('#tk-titel').value, omschrijving: $('#tk-omschr').value, categorie: $('#tk-cat').value, urgentie: $('#tk-urg').value,
-      duur: $('#tk-duur').value, deadline: $('#tk-deadline').value || null, toegewezen: $('#tk-wie').value, status: $('#tk-status').value,
+      duur: $('#tk-duur').value, deadline: $('#tk-deadline').value || null, toegewezen: $$('.tk-wie-opt:checked').map((c) => c.value), status: $('#tk-status').value,
       customerId: $('#tk-klant').value || null, orderId: $('#tk-kaart').value || null, notities: $('#tk-notities').value,
     };
     if (eigenaar) body.gedeeldMet = $$('.tk-deel:checked').map((c) => c.value);

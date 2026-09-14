@@ -372,6 +372,14 @@ await page.waitForTimeout(300);
 await page.locator('#view-taken .tk-kaart', { hasText: 'Browsertest taak' }).locator('.tk-body').click();
 await page.waitForTimeout(500);
 ok('taken: bewerkscherm opent met titel', await page.locator('#tk-titel').inputValue() === 'Browsertest taak');
+// Toewijzen met vinkjes (14 sep): kantoor-accounts als vinkjes, jijzelf gemarkeerd met "(ik)".
+ok('taken: toewijzen = vinkjes per kantoor-account, jijzelf "(ik)"', await page.locator('.tk-wie-opt').count() >= 1 && /\(ik\)/.test(await page.locator('#tk-wie-lijst').textContent()));
+await page.locator('.tk-wie-opt').first().check();
+await page.click('#tk-save');
+await page.waitForTimeout(1000);
+ok('taken: aangevinkte naam staat als label op de kaart', (await page.locator('#view-taken .tk-kaart', { hasText: 'Browsertest taak' }).locator('.tk-wie').textContent()).includes('Beheerder'));
+await page.locator('#view-taken .tk-kaart', { hasText: 'Browsertest taak' }).locator('.tk-body').click();
+await page.waitForTimeout(500);
 ok('taken: deelblok verborgen bij een zakelijke taak', await page.locator('#tk-deelblok').isHidden());
 await page.selectOption('#tk-cat', 'prive');
 await page.waitForTimeout(200);

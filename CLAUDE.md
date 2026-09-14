@@ -484,7 +484,12 @@ de regressie meegroeit.
   Endpoints: GET/POST /api/taken, PATCH/DELETE /api/taken/:id, POST
   /api/taken/:id/klaar {klaar}. Elf starttaken worden ÉÉN keer ingeladen
   (settings._takenSeedV1, eigenaar = eerste admin; Youssef-taak deadline 1 nov).
-  Mobiel: één kolom. Test: test/taken-test.mjs (70, PORT=3133) + 31 browser-asserties.
+  TOEWIJZEN MET VINKJES (14 sep, "typen is te vaag"): GET /api/taken/kantoor =
+  alle admin+assistent-accounts (jijzelf eerst, isMij) → in het bewerkscherm een
+  vinkje per collega (#tk-wie-lijst / .tk-wie-opt); opslaan stuurt `toegewezen`
+  als lijst van namen (server accepteerde arrays al). Oude vrije namen zonder
+  account blijven als extra vinkje "(geen account)" staan.
+  Mobiel: één kolom. Test: test/taken-test.mjs (73, PORT=3133) + 33 browser-asserties.
 - **Voetregel onder automatische klantmails (10 sep 2026, wens eigenaar):** klacht:
   een klant die al in behandeling is, of een bestaande klant die ons mailt, kreeg
   een automatische mail "alsof hij nieuw was". Twee maatregelen: (1) `sendMail({…,

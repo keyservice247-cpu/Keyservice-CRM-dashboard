@@ -43,6 +43,13 @@ export function zichtbaarVoor(t, user) {
 }
 export const isEigenaar = (t, user) => !!user && t.eigenaarId === user.id;
 // Collega's waarmee gedeeld kan worden: kantoor (admin + assistent), nooit jezelf.
+// Hele kantoor (admin + assistent, incl. jezelf) — voor het toewijzen met vinkjes
+// (14 sep: "typen wie het doet is te vaag"). Volgorde: jijzelf eerst, dan op naam.
+export function kantoor(user) {
+  return (db().users || []).filter((u) => ['admin', 'assistent'].includes(u.role) && !u.disabled)
+    .map((u) => ({ id: u.id, name: u.name || u.email || '', role: u.role, isMij: !!user && u.id === user.id }))
+    .sort((a, b) => (b.isMij - a.isMij) || a.name.localeCompare(b.name, 'nl'));
+}
 export function collegas(user) {
   return (db().users || []).filter((u) => ['admin', 'assistent'].includes(u.role) && u.id !== user?.id && !u.disabled)
     .map((u) => ({ id: u.id, name: u.name || u.email || '', role: u.role }));
