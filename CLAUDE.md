@@ -117,6 +117,20 @@ de regressie meegroeit.
   (WhatsApp-status: …)". Bug mee opgelost: het faalpad schreef start-pogingen.json
   zonder `werkend` (stand ging verloren). REGEL VOOR MIJ: een push naar main
   raakt de bridge alleen nog als whatsapp-bridge/ verandert.
+  BRIDGE v9 (14 sep, "laat hem niet steeds codes opvragen"): de sessie bleek
+  ongeldig (WhatsApp vroeg opnieuw koppelen; eigenaar kan niet bij de telefoon).
+  De 3-codes-grens gold per PROCES; pm2 herstartte na een crash en elk nieuw
+  proces vroeg weer 3 codes. Nu telt koppelcodes.json (max 3 per 6 uur, over
+  herstarts heen; gewist bij ready); daarboven alleen de passieve QR + uitleg in
+  het CRM (Instellingen → Koppelingen). Telefoon tijdelijk buiten bereik? Dan
+  `pm2 stop wa` (later `pm2 start wa`): geen enkele aanvraag richting WhatsApp.
+  STRATEGIE (besproken 14 sep, eigenaar akkoord "klinkt goed"): de bridge is
+  structureel breekbaar; waterdicht = (1) DRS-opdrachten óók per e-mail laten
+  sturen (bestaande mail-instroom), (2) monteur-dispatch + CRM-meldingen via het
+  OFFICIËLE nummer (1-op-1 sjabloon i.p.v. groepen), (3) als DRS niet mailt: een
+  Android-toestel met MacroDroid dat WhatsApp-meldingen van de DRS-groep als
+  HTTP-POST naar het CRM stuurt (leest een echte telefoon, geen sessie). Nog te
+  bouwen zodra de eigenaar de route kiest en DRS heeft gebeld.
 - **Render env vars:** INGEST_TOKEN, ANTHROPIC_API_KEY (Claude Haiku), IMAP_* (TransIP ontvangen),
   SMTP_* (TransIP versturen), WHATSAPP_VERIFY_TOKEN, DATA_DIR=/var/data, SESSION_SECRET.
 - **Bridge .env / hardcoded:** DASHBOARD_URL, INGEST_TOKEN, PAIR_NUMBER (31685352477) en token

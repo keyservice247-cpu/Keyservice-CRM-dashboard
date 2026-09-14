@@ -135,6 +135,18 @@ let ooitGekoppeld = false;
 let aantalCodes = 0;
 const CODE_LIMIET = 3;
 const CODE_WACHT = [30000, 120000, 300000];
+// Teller van gevraagde koppelcodes die een herstart overleeft (v9): max CODE_LIMIET
+// per 6 uur, wat pm2 ook doet. Wordt gewist zodra de koppeling slaagt.
+const KOPPELCODES_FILE = path.join(__dirname, 'koppelcodes.json');
+const KOPPELCODES_VENSTER_MS = 6 * 60 * 60 * 1000;
+function leesKoppelcodes() {
+  try {
+    const o = JSON.parse(fs.readFileSync(KOPPELCODES_FILE, 'utf8'));
+    if (!o.since || Date.now() - o.since > KOPPELCODES_VENSTER_MS) return { n: 0, since: 0 };
+    return { n: o.n || 0, since: o.since };
+  } catch { return { n: 0, since: 0 }; }
+}
+function schrijfKoppelcodes(o) { try { fs.writeFileSync(KOPPELCODES_FILE, JSON.stringify(o)); } catch { /* alleen-lezen schijf */ } }
 
 // De koppelcode ook NAAR HET CRM sturen. Reden (6 aug 2026): opnieuw koppelen kon
 // alleen via de Hetzner-webconsole, en daar valt niets uit te kopiëren, verloopt de code
@@ -162,11 +174,23 @@ client.on('qr', async (qr) => {
     }
     return;
   }
+  // v9 (14 sep 2026): de grens geldt ook OVER HERSTARTS HEEN. pm2 start een gecrasht
+  // proces opnieuw, en elk nieuw proces begon weer bij 0 codes — met de telefoon
+  // buiten bereik betekent dat de hele dag door codes aanvragen. Dat is opvallend
+  // gedrag richting WhatsApp. Nu: hooguit CODE_LIMIET codes per 6 uur, geteld in
+  // koppelcodes.json; daarna alleen nog de passieve QR (geen enkele aanvraag meer).
+  const koppelTeller = leesKoppelcodes();
+  if (PAIR_NUMBER && !ooitGekoppeld && koppelTeller.n >= CODE_LIMIET && aantalCodes < CODE_LIMIET) {
+    aantalCodes = CODE_LIMIET;
+    console.log(`[koppelen] Al ${koppelTeller.n} koppelcodes gevraagd in de afgelopen 6 uur — geen nieuwe aanvraag. Koppel via de QR in het CRM (Instellingen -> Koppelingen), of wacht: na 6 uur mag het weer.`);
+    meldKoppelcode({ qr, fout: 'Er zijn de afgelopen 6 uur al 3 koppelcodes gevraagd; de bridge vraagt er bewust geen meer. Scan de QR, of zet de bridge stil tot je de telefoon hebt (pm2 stop wa).' });
+  }
   // Nog niet gekoppeld: hooguit CODE_LIMIET codes, met oplopende wachttijd.
   const wacht = CODE_WACHT[Math.min(aantalCodes, CODE_WACHT.length - 1)];
   if (PAIR_NUMBER && aantalCodes < CODE_LIMIET && Date.now() - laatsteCodeOp > wacht) {
     laatsteCodeOp = Date.now();
     aantalCodes++;
+    schrijfKoppelcodes({ n: koppelTeller.n + 1, since: koppelTeller.since || Date.now() });
     try {
       const code = await client.requestPairingCode(PAIR_NUMBER);
       const pretty = code.match(/.{1,4}/g)?.join('-') || code;
@@ -217,7 +241,7 @@ client.on('qr', async (qr) => {
 // seint het CRM vooraf in, en de update-controle loopt óók als WhatsApp nooit "ready"
 // wordt (voorheen startte die pas bij ready — een vastgelopen bridge bleef dus hangen).
 // v6: vaste WhatsApp-Web-versie (zie bovenaan) — de oorzaak van het vasthangen.
-const BRIDGE_VERSION = 8;
+const BRIDGE_VERSION = 9;
 
 // ---- START-WACHTER (v5) ----
 // Casus 10 sep 2026: na de zelf-update-herstart kwam de bridge tot "Gekoppeld" maar
@@ -266,6 +290,7 @@ client.on('authenticated', () => {
 client.on('ready', async () => {
   console.log(`\nBridge actief (v${BRIDGE_VERSION}). Berichten worden doorgestuurd naar ${DASHBOARD_URL}\n`);
   isReady = true;
+  schrijfKoppelcodes({ n: 0, since: 0 });   // gekoppeld → code-teller wissen
   // Gezonde start → teller op nul én onthouden WELKE stand werkte (live/vast).
   schrijfStartPogingen({ n: 0, at: 0, werkend: gebruikVasteVersie ? 'vast' : 'live' });
   ooitGekoppeld = true;

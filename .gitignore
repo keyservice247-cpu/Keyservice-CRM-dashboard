@@ -16,3 +16,4 @@ whatsapp-bridge/.wwebjs_cache/
 data/db.sqlite*
 data/archives/
 whatsapp-bridge/start-pogingen.json
+whatsapp-bridge/koppelcodes.json
