@@ -611,6 +611,12 @@ vlag order.zelfAangemaaktDoorMonteur → maybeAutoSendToMonteur slaat 'm over
 voor monteurs, behalve deze twee bij een koppeling; titelveld alleen bij een
 BESTAANDE kaart uitgeschakeld; eigen monteur voorgeselecteerd. Test: 9 assertions
 in rollen-test.mjs (47).
+NAZORG 14 sep ("Youssef zegt dat het niet in zijn systeem zit"): de knoppen
+stonden op mobiel WEL in de DOM maar helemaal rechts in de horizontaal
+schuivende .view-actions-rij, buiten beeld — een monteur weet niet dat die rij
+schuift. Nu op mobiel via CSS `order` vooraan: + Nieuwe opdracht, Plak
+opdracht, Telefoon, dan pas zoek/filters. Les: een "zichtbaar"-check op de DOM
+is niet genoeg; de browser-test meet nu de x-positie binnen 390 px.
 
 LET OP: md-bestanden zijn dev-documentatie; de runtime-regels staan in code +
 settings. Wijzig je het één, houd BEIDE synchroon.

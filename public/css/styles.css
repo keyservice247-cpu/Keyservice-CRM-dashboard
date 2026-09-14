@@ -891,6 +891,12 @@ table tbody tr:hover { background: var(--panel-2); }
   .view-actions { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; max-width: 100%; }
   .view-actions > * { flex: 0 0 auto; }
   .view-actions input[type=search] { width: 180px; min-width: 180px; }
+  /* Opdrachten op mobiel (14 sep): de maak-knoppen VOORAAN in de schuivende rij.
+     Ze stonden helemaal rechts, buiten beeld — de monteur zag "Plak opdracht"
+     daardoor nooit ("het staat niet in mijn systeem"). */
+  #view-board .view-actions #newOrderBtn { order: -3; }
+  #view-board .view-actions #pasteOrderBtn { order: -2; }
+  #view-board .view-actions #phoneOrderBtn { order: -1; }
   .content { padding-top: 10px; }
 
   /* Instellingen-tabbladen op mobiel: één horizontaal schuivende rij, net onder de

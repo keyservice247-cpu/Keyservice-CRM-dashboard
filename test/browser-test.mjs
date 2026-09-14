@@ -288,6 +288,15 @@ clear();
 await page.setViewportSize({ width: 390, height: 844 });
 await page.evaluate(() => showView('overview'));
 await page.waitForTimeout(300);
+// Maak-knoppen op het bord ZONDER zijwaarts scrollen in beeld (14 sep: de monteur
+// zag "Plak opdracht" nooit — hij stond helemaal rechts in de schuivende rij).
+await page.evaluate(() => goView('board'));
+await page.waitForTimeout(1000);
+{
+  const pb = await page.locator('#pasteOrderBtn').boundingBox();
+  const nb = await page.locator('#newOrderBtn').boundingBox();
+  ok('mobiel: "Plak opdracht" en "+ Nieuwe opdracht" staan zonder scrollen in beeld', !!pb && !!nb && pb.x >= 0 && pb.x + pb.width <= 390 && nb.x >= 0 && nb.x + nb.width <= 390, JSON.stringify({ pb, nb }));
+}
 await page.evaluate(() => goView('chats'));
 await page.waitForTimeout(1200);
 ok('mobiel: lijst zichtbaar, gesprek nog niet', await page.locator('#chatList').isVisible() && await page.locator('#chatPane').isHidden());
