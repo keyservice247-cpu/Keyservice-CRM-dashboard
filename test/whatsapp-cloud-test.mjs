@@ -70,6 +70,18 @@ ok('een status-melding (bezorgd/gelezen) levert GEEN bericht op', statusOnly.len
 ok('lege/onbekende body geeft geen fout', parseCloudWebhook({}).length === 0 && parseCloudWebhook(null).length === 0);
 const [mm] = parseCloudWebhook({ entry: [{ changes: [{ value: { contacts: [{ profile: { name: 'Foto Klant' }, wa_id: '31611112222' }], messages: [{ from: '31611112222', id: 'wamid.F', type: 'image', image: { id: 'MEDIA1', mime_type: 'image/jpeg', caption: 'kapotte deur' } }] } }] }] });
 ok('foto: media-id, mime en bijschrift komen mee', mm.mediaId === 'MEDIA1' && mm.mime === 'image/jpeg' && mm.body === 'kapotte deur');
+// Berichten ZONDER tekst (15 sep 2026): een duimpje als reactie op onze
+// afspraakbevestiging kwam binnen als leeg bericht — wit vakje in het CRM.
+const zonderTekst = (extra) => parseCloudWebhook({ entry: [{ changes: [{ value: { messages: [{ from: '31611112222', id: 'wamid.R', ...extra }] } }] }] })[0];
+const re = zonderTekst({ type: 'reaction', reaction: { message_id: 'wamid.ONS', emoji: '👍' } });
+ok('emoji-reactie krijgt tekst mét het emoji', /^👍 \(reactie/.test(re.body), re.body);
+ok('emoji-reactie onthoudt op welk bericht', re.reactieOp === 'wamid.ONS');
+ok('sticker wordt "(sticker)" met media-id', zonderTekst({ type: 'sticker', sticker: { id: 'ST1', mime_type: 'image/webp' } }).body === '(sticker)' && zonderTekst({ type: 'sticker', sticker: { id: 'ST1' } }).mediaId === 'ST1');
+const loc = zonderTekst({ type: 'location', location: { latitude: 51.9, longitude: 4.3, name: 'Thuis', address: 'Dorpsstraat 1' } });
+ok('locatie wordt leesbaar mét kaartlink', /Dorpsstraat 1/.test(loc.body) && /maps\.google\.com/.test(loc.body), loc.body);
+ok('visitekaartje toont naam + nummer', /Piet 0612345678/.test(zonderTekst({ type: 'contacts', contacts: [{ name: { formatted_name: 'Piet' }, phones: [{ phone: '0612345678' }] }] }).body));
+ok('niet-ondersteund type geeft uitleg i.p.v. leegte', /kijk op de telefoon/.test(zonderTekst({ type: 'unsupported', errors: [{ code: 131051 }] }).body));
+ok('gewoon tekstbericht blijft onaangeraakt', zonderTekst({ type: 'text', text: { body: 'Hoi' } }).body === 'Hoi');
 ok('uit staat uit: zonder token/phone-id is de koppeling niet actief', cloudConfigured() === false);
 
 // ---------- 2. Route-gedrag (server moet draaien) ----------

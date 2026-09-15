@@ -869,7 +869,11 @@ async function renderChatPane(scrollDown) {
     // Kaart-label alleen als het bericht bij een kaart hoort — klein, boven de bubbel.
     const label = t.orderTitle ? `<div class="chat-meta"><a href="#" class="cp-orderlink" data-oid="${esc(t.orderId)}">${icon('tag', 11)} ${esc(t.orderTitle.slice(0, 44))}</a></div>` : '';
     const kanaal = (t.channel === 'email') ? `<div class="chat-meta" ${uit ? 'style="justify-content:flex-end"' : ''}>${sourceIcon('email')} via e-mail</div>` : '';
-    const bubble = `<div class="chat-bubble" title="${esc((t.sender || '') + (t.waResult ? ' — ' + t.waResult : ''))}">${esc(q.text)}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}<span class="wa-meta">${klok(t.at)} ${tikjes(t)}</span></div>`;
+    // Leeg bericht zonder bijlage (15 sep 2026): een oud emoji-duimpje (reactie) of
+    // een sticker kwam binnen zonder tekst → wit vakje. Nieuwe reacties krijgen op de
+    // server tekst; voor de oude staat hier tenminste een uitleg.
+    const inhoud = q.text || (t.attachments && t.attachments.length ? '' : '<span class="muted">(bericht zonder tekst, bv. een emoji-reactie of sticker — kijk op de telefoon)</span>');
+    const bubble = `<div class="chat-bubble" title="${esc((t.sender || '') + (t.waResult ? ' — ' + t.waResult : ''))}">${q.text ? esc(q.text) : inhoud}${q.quoted ? `<button type="button" class="quote-toggle">${icon('message', 11)} toon eerdere berichten</button><div class="quoted-block" hidden>${esc(q.quoted)}</div>` : ''}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}<span class="wa-meta">${klok(t.at)} ${tikjes(t)}</span></div>`;
     return `<div class="chat-msg ${uit ? 'out' : 'in'}">${label}${kanaal}${bubble}${foutregel(t)}</div>`;
   }).join('') : '<div class="muted small" style="padding:14px">Nog geen berichten met deze klant.</div>';
 

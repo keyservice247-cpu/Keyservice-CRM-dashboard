@@ -729,6 +729,15 @@ terugknop; scherm begint op mobiel ALTIJD met de lijst. Techniek:
   ksPushUit respecteert bewust-uit) + GET /api/push/status toont server-toestellen,
   HEIC/verdwenen foto's krijgen een nette bestands-tegel, Berichten op mobiel
   voluit (view-head weg, grotere bubbels/tikdoelen).
+- **Berichten zonder tekst via de officiële route (15 sep 2026, casus Tom Mangnus):**
+  een duimpje als REACTIE op onze afspraakbevestiging kwam binnen als leeg bericht
+  (Meta type 'reaction' heeft geen text.body) → wit vakje in Berichten. parseCloud-
+  Webhook geeft nu tekst aan reaction ("👍 (reactie op een eerder bericht)", veld
+  reactieOp = wamid), sticker ("(sticker)", media-id meegenomen), location (naam/
+  adres + maps-link), contacts (naam + nummer), unsupported/errors (uitleg "kijk op
+  de telefoon"), spraakbericht "(spraakbericht)". renderChatPane toont bij een oud
+  leeg bericht zonder bijlage een grijze uitleg i.p.v. niets. Test: 7 assertions in
+  whatsapp-cloud-test.mjs (43).
 - Tests: test/chat-test.mjs (57 assertions, PORT=3127) + browser-assertions
   (desktop + iPhone-formaat, echt versturen, live-update mét getypte tekst).
 

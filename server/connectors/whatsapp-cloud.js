@@ -115,19 +115,38 @@ export function parseCloudWebhook(body) {
       const namen = new Map((waarde.contacts || []).map((c) => [c.wa_id, c.profile?.name || '']));
       for (const m of waarde.messages || []) {
         const van = m.from || '';
-        const tekst = m.text?.body
+        let tekst = m.text?.body
           || m.button?.text
           || m.interactive?.list_reply?.title
           || m.interactive?.button_reply?.title
           || m.image?.caption || m.document?.caption || m.video?.caption || '';
+        // Berichttypes ZONDER tekst (15 sep 2026, casus Tom Mangnus): een duimpje als
+        // REACTIE op onze afspraakbevestiging kwam binnen als leeg bericht — in het
+        // CRM een wit vakje zonder inhoud ("sturen ze een emoji ofzo?"). Meta stuurt
+        // zo'n reactie als type 'reaction' met alleen het emoji; stickers, locaties,
+        // visitekaartjes en niet-ondersteunde types hadden hetzelfde gat.
+        if (!tekst) {
+          if (m.type === 'reaction') tekst = `${m.reaction?.emoji || ''} (reactie op een eerder bericht)`.trim();
+          else if (m.type === 'sticker') tekst = '(sticker)';
+          else if (m.type === 'location') {
+            const l = m.location || {};
+            const plek = [l.name, l.address].filter(Boolean).join(', ');
+            tekst = `(locatie gedeeld${plek ? `: ${plek}` : ''}${l.latitude != null ? ` — https://maps.google.com/?q=${l.latitude},${l.longitude}` : ''})`;
+          } else if (m.type === 'contacts') {
+            const kaartjes = (m.contacts || []).map((c) => [c.name?.formatted_name, (c.phones || []).map((p) => p.phone || p.wa_id).filter(Boolean).join(' / ')].filter(Boolean).join(' '));
+            tekst = `(visitekaartje gedeeld${kaartjes.length ? `: ${kaartjes.join('; ')}` : ''})`;
+          } else if (m.type === 'unsupported' || m.errors?.length) tekst = '(bericht van een type dat WhatsApp niet doorgeeft, bv. een poll of doorgestuurde media — kijk op de telefoon)';
+          else if (m.type === 'audio') tekst = m.audio?.voice ? '(spraakbericht)' : '';
+        }
         uit.push({
           externalId: m.id,
           fromPhone: van.startsWith('31') ? `0${van.slice(2)}` : van,
           sender: namen.get(van) || van,
           body: tekst,
           soort: m.type,
-          mediaId: m.image?.id || m.document?.id || m.audio?.id || m.video?.id || null,
-          mime: m.image?.mime_type || m.document?.mime_type || m.audio?.mime_type || m.video?.mime_type || '',
+          reactieOp: m.type === 'reaction' ? (m.reaction?.message_id || null) : null,
+          mediaId: m.image?.id || m.document?.id || m.audio?.id || m.video?.id || m.sticker?.id || null,
+          mime: m.image?.mime_type || m.document?.mime_type || m.audio?.mime_type || m.video?.mime_type || m.sticker?.mime_type || '',
           filename: m.document?.filename || '',
           at: m.timestamp ? new Date(Number(m.timestamp) * 1000).toISOString() : new Date().toISOString(),
         });
