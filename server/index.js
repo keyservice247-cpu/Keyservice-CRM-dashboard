@@ -3838,6 +3838,16 @@ function requeueRecentFailedGroupItems() {
       if (it.status !== 'failed') continue;
       if (!it.group || it.group === '__klant_dm__') continue;
       if (!it.createdAt || new Date(it.createdAt).getTime() < cutoff) continue;
+      // DUBBEL-BLOKKADE (15 sep 2026, casus Leenhuis/Den Haag): een tweede exemplaar
+      // van dezelfde opdracht wordt door filterDubbeleItems op 'failed' gezet met
+      // "dubbel — …". Deze herstelronde zette dat exemplaar bij ELKE herstart van het
+      // CRM (elke deploy!) weer op queued → de monteur kreeg de opdracht een dag later
+      // nogmaals in zijn groep. Een dubbel blijft dubbel. Ook een item dat de bridge
+      // al écht heeft geprobeerd (attempts > 0) gaat niet nogmaals: whatsapp-web.js kan
+      // een fout gooien NA het bezorgen — beter één mislukking zichtbaar in het CRM
+      // dan een tweede bericht in de groep.
+      if (it.dubbel || /^dubbel\b/i.test(String(it.lastResult || ''))) continue;
+      if ((it.attempts || 0) > 0) continue;
       it.status = 'queued';
       delete it.doneAt;
       it.attempts = it.attempts || 0;
@@ -3932,6 +3942,7 @@ function filterDubbeleItems(items) {
     if (!sleutel.startsWith('|') && gezien.has(sleutel)) {
       it.status = 'failed';
       it.doneAt = now();
+      it.dubbel = true; // harde vlag: nooit meer herkansen, ook niet bij een herstart
       it.lastResult = 'dubbel — identiek bericht stond al klaar voor dezelfde ontvanger';
       continue;
     }

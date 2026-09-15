@@ -26,6 +26,8 @@ node test/whatsapp-cloud-test.mjs
 node test/chat-test.mjs
 # Taken-module: aanmaken, afvinken, filteren, deadline-teller, privé/zakelijk (PORT=3133)
 node test/taken-test.mjs
+# Herstart van het CRM: dubbel wachtrij-item komt NIET terug (start zelf een server op PORT=3135)
+node test/herstart-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 

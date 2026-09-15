@@ -759,6 +759,13 @@ vangrails, alle drie in `GET /api/outbox` (aan de bron, niet in de bridge):
 3. **Snelheidsrem**: hooguit 2 berichten per ronde en minimaal 20 s tussen rondes
    (`db()._outboxLaatsteRonde`). Bij normaal gebruik merk je hier niets van; alleen een
    opgelopen wachtrij wordt rustig afgewikkeld.
+DUBBEL BLIJFT DUBBEL (15 sep 2026, casus Leenhuis/Den Haag — opdracht 2× in de
+monteursgroep, 13 uur uit elkaar): filterDubbeleItems zet het tweede exemplaar op
+'failed' + vlag `dubbel:true`; requeueRecentFailedGroupItems (bij boot) zette zo'n
+item bij ELKE herstart/deploy weer op queued → tweede bezorging. Nu slaat de
+herstelronde items met `dubbel` (of lastResult "dubbel…") én items met attempts>0
+over (de bridge kan een fout gooien NÁ het bezorgen). Test: test/herstart-test.mjs
+(12, start de server zelf op PORT=3135, herstart hem op dezelfde DB).
 `GET /api/whatsapp/outbox-status?full=1` (admin) geeft de HELE wachtrij ongefilterd —
 nodig voor diagnose én voor de tests, want /api/outbox is sinds de rem geen eerlijk
 beeld meer van wat er klaarstaat. Regressie: 3 assertions in scenarios.mjs (88 totaal).
