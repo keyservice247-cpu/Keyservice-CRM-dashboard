@@ -15,7 +15,7 @@ node test/cijfers-test.mjs   # automatische boekingen: factuur-omzet + DRS-fee, 
 node test/google-test.mjs    # Google Agenda: sync-filter, koppeling-alarm, no-op zonder verbinding (GEEN server nodig)
 node test/mail-test.mjs      # Bounce-detectie + FormSubmit-dedup 72u (Misa-casus) (GEEN server nodig)
 node test/rapport-test.mjs    # Dagrapporten: regeleindes, postcodes, adres-extractie (GEEN server nodig)
-node test/opslag-test.mjs    # SQLite-opslag: migratie, volgorde, verwijderen, terugvalpunt, herstel (GEEN server nodig)
+node test/opslag-test.mjs    # SQLite-opslag + bijlage-opslag (hash-hergebruik, ontdubbelen op schijf, wezen) (GEEN server nodig)
 # Officiële WhatsApp (Meta): handtekening-controle, formaat-omzetting, webhook (PORT=3125)
 # Start de server hiervoor MET het app secret:
 #   DATA_DIR=/tmp/crm-watest INGEST_TOKEN=test123 SESSION_SECRET=test \

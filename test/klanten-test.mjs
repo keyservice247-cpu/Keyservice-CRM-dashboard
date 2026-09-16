@@ -105,7 +105,10 @@ console.log('\n== Bijlagen beheren: bladeren + bulk verwijderen + werkbon-besche
 const PNG2 = Buffer.from('89504e470d0a1a0a0000000d4948445200000002000000020806000000aabbccdd', 'hex').toString('base64');
 const up2 = await api('POST', `/api/orders/${ord.json.id}/attachments`, { filename: 'deur2.png', mime: 'image/png', dataBase64: PNG2 });
 const attId2 = ((up2.json.attachments || []).find((a) => a.filename === 'deur2.png') || {}).id;
-const sigUp = await api('POST', `/api/orders/${ord.json.id}/attachments`, { filename: 'handtekening.png', mime: 'image/png', dataBase64: PNG2 });
+// Eigen inhoud voor de handtekening (16 sep): identieke inhoud deelt nu één bestand op
+// schijf, en een bestand waar een handtekening naar wijst is terecht onverwijderbaar.
+const PNG_SIG = Buffer.from('89504e470d0a1a0a0000000d4948445200000004000000040806000000aabbcc11', 'hex').toString('base64');
+const sigUp = await api('POST', `/api/orders/${ord.json.id}/attachments`, { filename: 'handtekening.png', mime: 'image/png', dataBase64: PNG_SIG });
 const sigAttId = ((sigUp.json.attachments || []).find((a) => a.filename === 'handtekening.png') || {}).id;
 await api('POST', `/api/orders/${ord.json.id}/werkbon`, { work: 'Slot vervangen', materials: 'Cilinderslot', signatureAttachmentId: sigAttId });
 
@@ -123,6 +126,30 @@ const afterOrd = (await api('GET', '/api/orders')).json.find((o) => o.id === ord
 ok('foto ook echt weg van de kaart', !(afterOrd.attachments || []).some((a) => a.id === attId2));
 const browse2 = await api('GET', '/api/attachments/browse');
 ok('verwijderde foto verdwijnt ook uit de bladerlijst', !browse2.json.items.some((x) => x.id === attId2));
+
+console.log('\n== Dubbele foto\'s (16 sep 2026): één bestand op schijf, eerlijke lijst, veilig verwijderen ==');
+// Dezelfde foto op TWEE kaarten: er mag maar één bestand op schijf komen, de
+// bladerlijst toont hem één keer met "op 2 plekken", en verwijderen haalt hem overal weg.
+const PNG3 = Buffer.from('89504e470d0a1a0a0000000d4948445200000003000000030806000000aabbccee', 'hex').toString('base64');
+const kaartB = await api('POST', '/api/orders', { customerId: piet.id, title: 'Tweede kaart dubbel-test', status: 'nieuw' });
+const upA = await api('POST', `/api/orders/${ord.json.id}/attachments`, { filename: 'zelfde.png', mime: 'image/png', dataBase64: PNG3 });
+const upB = await api('POST', `/api/orders/${kaartB.json.id}/attachments`, { filename: 'zelfde-kopie.png', mime: 'image/png', dataBase64: PNG3 });
+const attA = (upA.json.attachments || []).find((a) => a.filename === 'zelfde.png');
+const attB = (upB.json.attachments || []).find((a) => a.filename === 'zelfde-kopie.png');
+ok('identieke foto op tweede kaart hergebruikt het BESTAND (geen tweede kopie op schijf)', !!attA && !!attB && attA.file === attB.file && attA.id !== attB.id, `${attA?.file} vs ${attB?.file}`);
+const browse3 = await api('GET', '/api/attachments/browse');
+const tegels = browse3.json.items.filter((x) => x.file === attA.file);
+ok('bladerlijst toont het bestand ÉÉN keer, met "op 2 plekken"', tegels.length === 1 && tegels[0].plekken === 2, JSON.stringify(tegels.map((t) => [t.file, t.plekken])));
+ok('totaalgrootte telt elk bestand één keer', browse3.json.totalBytes === browse3.json.items.reduce((s, x) => s + (x.missing ? 0 : x.size), 0));
+ok('schijf-samenvatting aanwezig (dubbelen/wezen/ontbrekend)', browse3.json.schijf && typeof browse3.json.schijf.dubbeleBestanden === 'number' && typeof browse3.json.schijf.wees === 'number');
+const dedupe = await api('POST', '/api/attachments/dedupe', { wees: false });
+ok('ontdubbelen op schijf draait zonder fout', dedupe.status === 200 && dedupe.json.ok === true, JSON.stringify(dedupe.json));
+const delBeide = await api('POST', '/api/attachments/bulk-delete', { items: [{ id: tegels[0].id, file: tegels[0].file }] });
+ok('verwijderen = 1 bestand, 2 verwijzingen weg', delBeide.status === 200 && delBeide.json.removed === 1 && delBeide.json.verwijzingen === 2, JSON.stringify(delBeide.json));
+const naA = (await api('GET', '/api/orders')).json.find((o) => o.id === ord.json.id);
+const naB = (await api('GET', '/api/orders')).json.find((o) => o.id === kaartB.json.id);
+ok('geen kapotte verwijzing achtergebleven op kaart A of B', !(naA.attachments || []).some((a) => a.id === attA.id) && !(naB.attachments || []).some((a) => a.id === attB.id));
+ok('handtekening-bestand blijft ook na alles staan', (naA.attachments || []).some((a) => a.id === sigAttId));
 
 console.log('\n== Slimme zoekbalk: klanten, kaarten en telefoonnummers in één zoekveld ==');
 const zc = await api('POST', '/api/customers', { name: 'Zoekbalk Testklant', phone: '0699887766', address: 'Zoekstraat 9, Rhenen' });

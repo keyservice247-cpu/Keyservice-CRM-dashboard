@@ -101,6 +101,32 @@ const mMig2 = await import(`../server/db.js?mig2=${Math.random()}`);
 mMig2.load();
 ok('tweede start leest uit SQLite (migreert niet nog eens)', mMig2.db().customers.length === 120 && mMig2.storageEngine() === 'sqlite');
 
+console.log('\n== Bijlage-opslag: één bestand per inhoud, ontdubbelen op schijf, wezen (16 sep 2026) ==');
+process.env.DATA_DIR = DIR;
+const st = await import(`../server/storage.js?opslag=${Math.random()}`);
+const foto = Buffer.from('fotoinhoud-' + 'x'.repeat(500));
+const a1 = st.saveBuffer(foto, { mime: 'image/jpeg', filename: 'a.jpg' });
+const a2 = st.saveBuffer(foto, { mime: 'image/jpeg', filename: 'b.jpg' });
+ok('tweede keer dezelfde inhoud → zelfde bestand, eigen id, vlag hergebruikt', a1.file === a2.file && a1.id !== a2.id && a2.hergebruikt === true);
+const samen = st.mergeAttachments([a1], [a2]);
+ok('mergeAttachments slaat het dubbel over en laat het gedeelde bestand STAAN', samen.length === 1 && st.fileExists(a1.file));
+// Oude situatie nabootsen: twee losse bestanden met identieke inhoud, zonder hash.
+const { writeFileSync: wf } = await import('node:fs');
+const oud1 = 'att_1000_aaaaaa.jpg'; const oud2 = 'att_2000_bbbbbb.jpg';
+wf(join(st.UPLOAD_DIR, oud1), foto); wf(join(st.UPLOAD_DIR, oud2), foto);
+const refA = { id: 'x1', file: oud1, url: '/uploads/' + oud1 }; const refB = { id: 'x2', file: oud2, url: '/uploads/' + oud2 }; const refC = { id: 'x3', file: oud2, url: '/uploads/' + oud2 };
+const droog = st.ontdubbelOpSchijf([refA, refB, refC], { dryRun: true });
+ok('dryRun telt 1 dubbel bestand en verandert niets', droog.dubbeleBestanden === 1 && st.fileExists(oud2) && refB.file === oud2, JSON.stringify(droog));
+const echt = st.ontdubbelOpSchijf([refA, refB, refC]);
+ok('ontdubbelen: oudste bestand blijft, verwijzingen herschreven, dubbel weg', echt.dubbeleBestanden === 1 && echt.herschreven === 2 && refB.file === oud1 && refC.url === '/uploads/' + oud1 && st.fileExists(oud1) && !st.fileExists(oud2), JSON.stringify(echt));
+ok('hash aangevuld op oude verwijzingen', !!refA.hash && refA.hash === refB.hash);
+const wees = 'att_3000_cccccc.jpg'; wf(join(st.UPLOAD_DIR, wees), Buffer.from('wees'));
+const { utimesSync } = await import('node:fs'); const oudTijd = new Date(Date.now() - 2 * 3600000); utimesSync(join(st.UPLOAD_DIR, wees), oudTijd, oudTijd);
+const w1 = st.weesBestanden([refA, refB, refC, a1]);
+ok('weesbestand (geen verwijzing, ouder dan 1 uur) wordt geteld', w1.n === 1 && w1.bytes === 4, JSON.stringify(w1));
+st.weesBestanden([refA, refB, refC, a1], { verwijder: true });
+ok('weesbestand verwijderd; bestanden mét verwijzing blijven', !st.fileExists(wees) && st.fileExists(oud1) && st.fileExists(a1.file));
+
 try { rmSync(DIR, { recursive: true, force: true }); rmSync(DIR2, { recursive: true, force: true }); } catch { /* opruimen best-effort */ }
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

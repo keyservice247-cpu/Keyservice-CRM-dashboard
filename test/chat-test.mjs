@@ -305,6 +305,35 @@ const m2PatchVreemd = await api('PATCH', `/api/customers/${znId}`, { email: 'hac
 ok('monteur mag andermans klant NIET bewerken', m2PatchVreemd.status === 403, JSON.stringify(m2PatchVreemd.json));
 cookie = adminCookie;
 
+console.log('\n== Wacht op antwoord (16 sep 2026): afgehandeld-knop, gesloten kaart, termijn ==');
+const wk = await api('POST', '/api/customers', { name: 'Wacht Klant', phone: '0611223344' });
+await api('POST', '/api/ingest/whatsapp', { from: '31611223344@c.us', fromPhone: '31611223344', name: 'Wacht Klant', body: 'Is het slot al binnen?\nTelefoon: +31611223344', externalId: 'wa-wacht-1' }, true);
+let wacht = (await api('GET', '/api/chats/onbeantwoord?uren=0')).json || [];
+const wItem = wacht.find((x) => x.chatId === wk.json.id);
+ok('onbeantwoord appje van bekende klant staat in de lijst', !!wItem, JSON.stringify(wacht.map((x) => x.chatId)));
+ok('item draagt dagenWachtend + tekst', !!wItem && typeof wItem.dagenWachtend === 'number' && /slot al binnen/.test(wItem.tekst));
+ok('nieuwste staat bovenaan (oplopende wachttijd)', wacht.every((x, i) => i === 0 || x.urenWachtend >= wacht[i - 1].urenWachtend));
+const afg = await api('POST', `/api/chats/${wk.json.id}/afgehandeld`, {});
+wacht = (await api('GET', '/api/chats/onbeantwoord?uren=0')).json || [];
+ok('"Afgehandeld" haalt het gesprek uit de lijst', afg.status === 200 && !wacht.some((x) => x.chatId === wk.json.id));
+await new Promise((r) => setTimeout(r, 1100));
+await api('POST', '/api/ingest/whatsapp', { from: '31611223344@c.us', fromPhone: '31611223344', name: 'Wacht Klant', body: 'En de sleutels?\nTelefoon: +31611223344', externalId: 'wa-wacht-2' }, true);
+wacht = (await api('GET', '/api/chats/onbeantwoord?uren=0')).json || [];
+ok('een NIEUW bericht ná "afgehandeld" komt gewoon terug', wacht.some((x) => x.chatId === wk.json.id));
+const wKaart = await api('POST', '/api/orders', { customerId: wk.json.id, title: 'Rhenen — slot wachtklant', status: 'nieuw' });
+wacht = (await api('GET', '/api/chats/onbeantwoord?uren=0')).json || [];
+const wItem2 = wacht.find((x) => x.chatId === wk.json.id);
+ok('open kaart van de klant gaat als context mee', !!wItem2 && wItem2.kaart && wItem2.kaart.id === wKaart.json.id, JSON.stringify(wItem2?.kaart));
+await new Promise((r) => setTimeout(r, 1100));
+await api('PATCH', `/api/orders/${wKaart.json.id}`, { status: 'geannuleerd', notes: 'klant belde af' });
+wacht = (await api('GET', '/api/chats/onbeantwoord?uren=0')).json || [];
+ok('kaart geannuleerd ná het bericht = afgehandeld (uit de lijst)', !wacht.some((x) => x.chatId === wk.json.id), JSON.stringify(wacht.map((x) => x.chatId)));
+const woa = await api('PATCH', '/api/settings', { wachtOpAntwoordDagen: 7 });
+const woaGet = await api('GET', '/api/settings');
+ok('termijn instelbaar (7 dagen) en terug te lezen', woa.status === 200 && woaGet.json.wachtOpAntwoordDagen === 7, String(woaGet.json.wachtOpAntwoordDagen));
+const woaFout = await api('PATCH', '/api/settings', { wachtOpAntwoordDagen: 0 });
+ok('ongeldige termijn valt terug op 14', woaFout.status === 200 && (await api('GET', '/api/settings')).json.wachtOpAntwoordDagen === 14);
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

@@ -810,11 +810,28 @@ async function vulOnbeantwoord() {
   const el = $('#onbeantwoordBlok'); if (!el) return;
   let lijst; try { lijst = await api('/api/chats/onbeantwoord?uren=2'); } catch { return; }
   if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; return; }
+  // 16 sep 2026: nieuwste eerst, wachttijd in dagen, kaart-context, knop "Afgehandeld"
+  // (haalt het bericht weg zonder iets te sturen) en "Alles tonen" i.p.v. een vage "+ N meer".
+  const wacht = (x) => x.urenWachtend >= 48 ? `${x.dagenWachtend} dagen` : `${x.urenWachtend} uur`;
+  const toon = window._wachtAlles ? lijst : lijst.slice(0, 6);
+  const statusLabel = (k) => { const st = (state.meta?.statuses || []).find((s) => s.key === k); return st ? st.label : k; };
   el.innerHTML = `<div class="info-card" style="margin-bottom:18px;border-left:4px solid var(--danger)">
     <h3 style="margin:0 0 6px">${icon('message', 15)} Wacht op antwoord (${lijst.length})</h3>
-    <div class="muted small" style="margin-bottom:8px">Klantvragen waar langer dan 2 uur niet op is gereageerd — los van gelezen of ongelezen.</div>
-    <ul class="ov-list">${lijst.slice(0, 8).map((x) => `<li data-chat="${esc(x.chatId)}"><strong>${esc(x.naam)}</strong> <span class="muted">· ${x.urenWachtend}u · ${esc(x.kanaal === 'email' ? 'e-mail' : 'WhatsApp')}</span><br><span class="muted small">${esc(x.tekst)}</span></li>`).join('')}${lijst.length > 8 ? `<li class="muted small">+ ${lijst.length - 8} meer…</li>` : ''}</ul></div>`;
-  $$('li[data-chat]', el).forEach((li) => li.onclick = () => { goView('chats'); setTimeout(() => openChat(li.dataset.chat), 500); });
+    <div class="muted small" style="margin-bottom:8px">Laatste klantbericht zonder antwoord van ons, langer dan 2 uur geleden. Geen antwoord nodig? Tik op <strong>Afgehandeld</strong>. Ouder dan de ingestelde termijn valt vanzelf af (Instellingen → Werkwijze).</div>
+    <ul class="ov-list wacht-lijst">${toon.map((x) => `<li data-chat="${esc(x.chatId)}">
+      <div style="display:flex;gap:8px;align-items:flex-start">
+        <div style="flex:1;min-width:0"><strong>${esc(x.naam)}</strong> <span class="muted">· ${wacht(x)} · ${esc(x.kanaal === 'email' ? 'e-mail' : 'WhatsApp')}</span>${x.kaart ? `<br><span class="chip" style="font-size:10px;padding:1px 7px;margin-top:3px" title="${esc(x.kaart.title)}">${icon('tag', 10)} ${esc(x.kaart.title.slice(0, 40))} · ${esc(statusLabel(x.kaart.status))}</span>` : ''}<br><span class="muted small">${esc(x.tekst)}</span></div>
+        <button type="button" class="btn btn-sm wacht-klaar" data-chat="${esc(x.chatId)}" title="Uit de lijst halen — er wordt niets verstuurd">Afgehandeld</button>
+      </div></li>`).join('')}</ul>
+    ${lijst.length > 6 ? `<button type="button" class="btn btn-sm" id="wachtAlles" style="margin-top:6px">${window._wachtAlles ? 'Minder tonen' : `Alle ${lijst.length} tonen`}</button>` : ''}</div>`;
+  $$('li[data-chat]', el).forEach((li) => li.onclick = (e) => { if (e.target.closest('.wacht-klaar')) return; goView('chats'); setTimeout(() => openChat(li.dataset.chat), 500); });
+  $$('.wacht-klaar', el).forEach((b) => b.onclick = async (e) => {
+    e.stopPropagation();
+    b.disabled = true;
+    try { await api(`/api/chats/${encodeURIComponent(b.dataset.chat)}/afgehandeld`, 'POST'); b.closest('li')?.remove(); toast('Afgehandeld — uit de lijst gehaald'); vulOnbeantwoord(); }
+    catch (err) { toast(err.message, true); b.disabled = false; }
+  });
+  const alles = $('#wachtAlles'); if (alles) alles.onclick = () => { window._wachtAlles = !window._wachtAlles; vulOnbeantwoord(); };
 }
 async function openChat(cid) {
   _chatActive = cid;
@@ -2590,14 +2607,21 @@ function fmtBytes(n) {
 async function openAttachmentManager() {
   modal(`
     <h2>${icon('paperclip', 16)} Foto's &amp; video's beheren</h2>
-    <p class="muted small">Vink aan wat je wilt verwijderen en klik op Verwijderen. Werkbon-handtekeningen staan hier bewust niet bij — die blijven altijd bewaard.</p>
+    <p class="muted small">Elke tegel is één bestand op de server. Staat een foto op meerdere plekken (kaart, gesprek, los bericht), dan zie je "op 2 plekken" — verwijderen haalt hem overal weg. Werkbon-handtekeningen staan hier bewust niet bij, die blijven altijd bewaard.</p>
+    <div id="am-schijf" class="muted small" style="margin:6px 0 8px"></div>
     <div id="am-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
       <label style="margin:0"><input type="checkbox" id="am-all" style="width:auto"> Alles selecteren</label>
-      <select id="am-filter" style="max-width:220px">
+      <select id="am-filter" style="max-width:240px">
         <option value="all">Alle bijlages</option>
         <option value="done">Alleen afgeronde/geannuleerde klussen</option>
-        <option value="old">Ouder dan 90 dagen</option>
+        <option value="old14">Ouder dan 14 dagen</option>
+        <option value="old30">Ouder dan 30 dagen</option>
+        <option value="old60">Ouder dan 60 dagen</option>
+        <option value="old90">Ouder dan 90 dagen</option>
+        <option value="old180">Ouder dan 180 dagen</option>
         <option value="video">Alleen video's</option>
+        <option value="los">Alleen losse berichten (geen kaart)</option>
+        <option value="missing">Kapotte verwijzingen (bestand ontbreekt)</option>
       </select>
       <span class="muted small" id="am-summary" style="margin-left:auto"></span>
     </div>
@@ -2606,26 +2630,58 @@ async function openAttachmentManager() {
   $('#am-cancel').onclick = closeModal;
   let items = [];
   const selected = new Set();
+  const zichtbaar = () => {
+    const f = $('#am-filter').value;
+    const m = /^old(\d+)$/.exec(f);
+    const cutoff = m ? Date.now() - Number(m[1]) * 86400000 : 0;
+    return items.filter((x) => {
+      if (f === 'done') return ['afgerond', 'geannuleerd'].includes(x.orderStatus);
+      if (m) return x.at && new Date(x.at).getTime() < cutoff;
+      if (f === 'video') return x.kind === 'video';
+      if (f === 'los') return !x.orderId;
+      if (f === 'missing') return !!x.missing;
+      return true;
+    });
+  };
   const updateSummary = () => {
     const sel = items.filter((x) => selected.has(x.id));
-    $('#am-summary').textContent = sel.length ? `${sel.length} geselecteerd — ${fmtBytes(sel.reduce((s, x) => s + (x.size || 0), 0))}` : `${items.length} bestand(en) — ${fmtBytes(items.reduce((s, x) => s + (x.size || 0), 0))}`;
+    const shown = zichtbaar();
+    $('#am-summary').textContent = sel.length
+      ? `${sel.length} geselecteerd — ${fmtBytes(sel.reduce((s, x) => s + (x.size || 0), 0))}`
+      : `${shown.length} van ${items.length} bestand(en) — ${fmtBytes(shown.reduce((s, x) => s + (x.missing ? 0 : (x.size || 0)), 0))}`;
     $('#am-delete').disabled = sel.length === 0;
     $('#am-delete').textContent = sel.length ? `Verwijder ${sel.length} geselecteerde` : 'Verwijder geselecteerde';
   };
+  const renderSchijf = (schijf) => {
+    const el = $('#am-schijf'); if (!el) return;
+    if (!schijf) { el.innerHTML = ''; return; }
+    const delen = [];
+    if (schijf.dubbeleBestanden) delen.push(`<strong>${schijf.dubbeleBestanden} dubbel(e) bestand(en)</strong> met identieke inhoud (${fmtBytes(schijf.dubbelBytes)})`);
+    if (schijf.wees) delen.push(`${schijf.wees} weesbestand(en) zonder verwijzing (${fmtBytes(schijf.weesBytes)})`);
+    if (schijf.ontbrekend) delen.push(`${schijf.ontbrekend} kapotte verwijzing(en) — bestand is al weg (filter "Kapotte verwijzingen")`);
+    if (!delen.length) { el.innerHTML = `${icon('check', 12)} Geen dubbele of overbodige bestanden op de server.`; return; }
+    const winst = (schijf.dubbelBytes || 0) + (schijf.weesBytes || 0);
+    el.innerHTML = `${delen.join(' · ')}${winst && state.me?.role === 'admin' ? ` <button type="button" class="btn btn-sm btn-primary" id="am-dedupe" style="margin-left:6px">Opschonen — ${fmtBytes(winst)} vrijmaken</button>` : ''}`;
+    const b = $('#am-dedupe');
+    if (b) b.onclick = async () => {
+      if (!confirm(`Dubbele bestanden samenvoegen en weesbestanden verwijderen (${fmtBytes(winst)})? Geen enkele kaart raakt een foto kwijt: verwijzingen worden omgezet naar het bewaarde bestand.`)) return;
+      b.disabled = true; b.textContent = 'Bezig…';
+      try {
+        const r = await api('/api/attachments/dedupe', 'POST', { wees: true });
+        toast(`${r.dubbeleBestanden} dubbel(e) samengevoegd, ${r.wees?.n || 0} wees weg — ${fmtBytes(r.vrijgemaaktTotaal)} vrijgemaakt`);
+        await laad();
+      } catch (err) { toast(err.message, true); b.disabled = false; }
+    };
+  };
   const renderGrid = () => {
-    const f = $('#am-filter').value;
-    const cutoff = Date.now() - 90 * 86400000;
-    const shown = items.filter((x) => {
-      if (f === 'done') return ['afgerond', 'geannuleerd'].includes(x.orderStatus);
-      if (f === 'old') return x.at && new Date(x.at).getTime() < cutoff;
-      if (f === 'video') return x.kind === 'video';
-      return true;
-    });
+    const shown = zichtbaar();
     $('#am-grid').innerHTML = shown.length ? `<div class="attach-grid">${shown.map((x) => `
       <label class="am-item" style="position:relative;cursor:pointer;display:block">
         <input type="checkbox" class="am-pick" data-id="${esc(x.id)}" ${selected.has(x.id) ? 'checked' : ''} style="position:absolute;top:6px;left:6px;width:18px;height:18px;z-index:2;accent-color:var(--danger)">
-        ${x.kind === 'image' ? `<img src="${esc(x.url)}" loading="lazy" style="width:100%;height:90px;object-fit:cover;border-radius:8px;display:block;border:2px solid transparent">` : `<div style="width:100%;height:90px;border-radius:8px;background:var(--panel-2,#f6f8fb);display:flex;align-items:center;justify-content:center;border:2px solid transparent">${icon(x.kind === 'video' ? 'video' : 'file', 26)}</div>`}
-        <div class="muted small" style="margin-top:3px;line-height:1.3" title="${esc(x.orderTitle)}">${esc((x.orderTitle || '').slice(0, 22))}<br>${fmtBytes(x.size)} · ${fmtDateShort(x.at)}</div>
+        ${x.plekken > 1 ? `<span class="chip" style="position:absolute;top:6px;right:6px;z-index:2;font-size:10px;padding:1px 6px" title="Dit bestand staat op ${x.plekken} plekken (kaart/gesprek/los bericht)">op ${x.plekken} plekken</span>` : ''}
+        ${x.missing ? `<div style="width:100%;height:90px;border-radius:8px;background:var(--panel-2,#f6f8fb);display:flex;align-items:center;justify-content:center;border:2px solid transparent;color:var(--danger)" title="Bestand ontbreekt op de server">${icon('x', 26)}</div>`
+          : x.kind === 'image' ? `<img src="${esc(x.url)}" loading="lazy" style="width:100%;height:90px;object-fit:cover;border-radius:8px;display:block;border:2px solid transparent">` : `<div style="width:100%;height:90px;border-radius:8px;background:var(--panel-2,#f6f8fb);display:flex;align-items:center;justify-content:center;border:2px solid transparent">${icon(x.kind === 'video' ? 'video' : 'file', 26)}</div>`}
+        <div class="muted small" style="margin-top:3px;line-height:1.3" title="${esc(x.orderTitle)}">${esc((x.orderTitle || '').slice(0, 22))}<br>${x.missing ? 'bestand ontbreekt' : fmtBytes(x.size)} · ${fmtDateShort(x.at)}</div>
       </label>`).join('')}</div>` : '<div class="empty">Niets gevonden voor dit filter.</div>';
     $$('.am-pick', $('#am-grid')).forEach((c) => {
       const box = c.closest('.am-item');
@@ -2638,16 +2694,9 @@ async function openAttachmentManager() {
     });
     updateSummary();
   };
-  $('#am-filter').onchange = renderGrid;
+  $('#am-filter').onchange = () => { $('#am-all').checked = false; renderGrid(); };
   $('#am-all').onchange = () => {
-    const f = $('#am-filter').value;
-    const cutoff = Date.now() - 90 * 86400000;
-    const visible = items.filter((x) => {
-      if (f === 'done') return ['afgerond', 'geannuleerd'].includes(x.orderStatus);
-      if (f === 'old') return x.at && new Date(x.at).getTime() < cutoff;
-      if (f === 'video') return x.kind === 'video';
-      return true;
-    });
+    const visible = zichtbaar();
     if ($('#am-all').checked) visible.forEach((x) => selected.add(x.id));
     else visible.forEach((x) => selected.delete(x.id));
     renderGrid();
@@ -2655,21 +2704,25 @@ async function openAttachmentManager() {
   $('#am-delete').onclick = async () => {
     const toDelete = items.filter((x) => selected.has(x.id));
     if (!toDelete.length) return;
-    if (!confirm(`${toDelete.length} bestand(en) definitief verwijderen (${fmtBytes(toDelete.reduce((s, x) => s + (x.size || 0), 0))})? Dit kan niet ongedaan worden gemaakt.`)) return;
+    const plekken = toDelete.reduce((s, x) => s + (x.plekken || 1), 0);
+    if (!confirm(`${toDelete.length} bestand(en) definitief verwijderen (${fmtBytes(toDelete.reduce((s, x) => s + (x.size || 0), 0))})?${plekken > toDelete.length ? ` Ze verdwijnen van alle ${plekken} plekken (kaart, gesprek, los bericht).` : ''} Dit kan niet ongedaan worden gemaakt.`)) return;
     const btn = $('#am-delete'); btn.disabled = true; btn.textContent = 'Bezig…';
     try {
-      const r = await api('/api/attachments/bulk-delete', 'POST', { items: toDelete.map((x) => ({ id: x.id, orderId: x.orderId, threadId: x.threadId, messageId: x.messageId })) });
+      const r = await api('/api/attachments/bulk-delete', 'POST', { items: toDelete.map((x) => ({ id: x.id, file: x.file })) });
       toast(`${r.removed} bestand(en) verwijderd — ${fmtBytes(r.freedBytes)} vrijgemaakt`);
       items = items.filter((x) => !selected.has(x.id));
       selected.clear();
+      $('#am-all').checked = false;
       renderGrid();
     } catch (err) { toast(err.message, true); btn.disabled = false; }
   };
-  try {
+  const laad = async () => {
     const r = await api('/api/attachments/browse');
     items = (r.items || []).sort((a, b) => (b.size || 0) - (a.size || 0));
+    renderSchijf(r.schijf);
     renderGrid();
-  } catch (err) { $('#am-grid').innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+  };
+  try { await laad(); } catch (err) { $('#am-grid').innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
 }
 
 function openImportModal() {
@@ -4458,6 +4511,11 @@ async function loadSettings() {
       <label>Venster (uren) <input id="amw-hours" type="number" min="0" max="72" value="${esc(String(s.autoMergeWindowHours ?? 6))}" style="max-width:120px"></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoMerge">Opslaan</button></div>
     </div>
+    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>${icon('message', 15)} "Wacht op antwoord" op Start</h3>
+      <p class="muted small">Het blok toont klantberichten waar wij langer dan 2 uur niet op hebben gereageerd. Berichten ouder dan deze termijn vallen automatisch af; met de knop <strong>Afgehandeld</strong> haal je een bericht eerder weg. Een kaart die na het bericht is afgerond of geannuleerd telt ook als afgehandeld.</p>
+      <label>Maximaal dagen terug <input id="woa-dagen" type="number" min="1" max="60" value="${esc(String(s.wachtOpAntwoordDagen ?? 14))}" style="max-width:120px"></label>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveWachtOpAntwoord">Opslaan</button></div>
+    </div>
     <div data-sg="werk" class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div data-sg="werk" class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
   // OVERZICHT: kaarten fysiek groeperen in dezelfde volgorde als de pillen, met een
@@ -4698,6 +4756,10 @@ async function loadSettings() {
   };
   $('#saveAutoMerge').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { autoMergeWindowHours: Number($('#amw-hours').value) }); toast('Samenvoeg-venster opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#saveWachtOpAntwoord').onclick = async () => {
+    try { await api('/api/settings', 'PATCH', { wachtOpAntwoordDagen: Number($('#woa-dagen').value) }); toast('Termijn "Wacht op antwoord" opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
   $('#saveOvModel').onclick = async () => {

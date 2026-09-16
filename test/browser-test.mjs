@@ -118,9 +118,40 @@ await page.evaluate(() => closeModal());
 await page.evaluate(() => openCampaignModal());
 ok('campagne-scherm opent', await page.locator('#cp-subject').count() > 0);
 await page.evaluate(() => closeModal());
+// Foto's & video's beheren (16 sep 2026): dezelfde foto op twee kaarten = één tegel
+// "op 2 plekken", filters per aantal dagen, schijf-regel, verwijderen haalt alles weg.
+const fotoSetup = await page.evaluate(async () => {
+  const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const cust = await post('/api/customers', { name: 'Fotodubbel Klant', phone: '0611000099' });
+  const a = await post('/api/orders', { customerId: cust.id, title: 'Rhenen — fotodubbel A', status: 'nieuw' });
+  const b = await post('/api/orders', { customerId: cust.id, title: 'Rhenen — fotodubbel B', status: 'nieuw' });
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==';
+  const ua = await post(`/api/orders/${a.id}/attachments`, { filename: 'dubbel.png', mime: 'image/png', dataBase64: png });
+  const ub = await post(`/api/orders/${b.id}/attachments`, { filename: 'dubbel.png', mime: 'image/png', dataBase64: png });
+  const fa = (ua.attachments || []).find((x) => x.filename === 'dubbel.png');
+  const fb = (ub.attachments || []).find((x) => x.filename === 'dubbel.png');
+  return { file: fa && fa.file, zelfde: !!fa && !!fb && fa.file === fb.file };
+});
+ok('zelfde foto op 2 kaarten = 1 bestand op schijf', fotoSetup.zelfde, JSON.stringify(fotoSetup));
 await page.evaluate(() => openAttachmentManager());
-await page.waitForTimeout(600);
+await page.waitForTimeout(900);
 ok('bijlagen-beheren-scherm opent en laadt de lijst', await page.locator('#am-grid').count() > 0 && !/^Laden/.test((await page.locator('#am-summary').innerText().catch(() => '')) || 'x'));
+ok('filter kent 14/30/60/90/180 dagen', await page.evaluate(() => ['old14', 'old30', 'old60', 'old90', 'old180', 'missing', 'los'].every((v) => !!document.querySelector(`#am-filter option[value="${v}"]`))));
+ok('schijf-regel (dubbelen/wezen) staat in het scherm', ((await page.locator('#am-schijf').innerText().catch(() => '')) || '').length > 5);
+ok('tegel toont "op 2 plekken"', await page.evaluate(() => /op 2 plekken/.test(document.querySelector('#am-grid')?.innerText || '')));
+const tegelsVoor = await page.locator('#am-grid .am-item').count();
+await page.evaluate((file) => { const c = [...document.querySelectorAll('#am-grid .am-pick')].find((x) => x.closest('.am-item')?.querySelector('span.chip')); if (c) { c.click(); } }, fotoSetup.file);
+await page.waitForTimeout(200);
+page.once('dialog', (d) => d.accept());
+await page.click('#am-delete');
+await page.waitForTimeout(900);
+const tegelsNa = await page.locator('#am-grid .am-item').count();
+ok('verwijderen haalt de tegel weg (1 bestand, beide plekken)', tegelsNa === tegelsVoor - 1, `${tegelsVoor} -> ${tegelsNa}`);
+const kapot = await page.evaluate(async () => {
+  const os = await fetch('/api/orders').then((r) => r.json());
+  return os.filter((o) => /fotodubbel/.test(o.title)).some((o) => (o.attachments || []).some((a) => a.filename === 'dubbel.png'));
+});
+ok('geen kapotte verwijzing op kaart A of B', !kapot);
 await page.evaluate(() => closeModal());
 noErr('Klanten-tools (dossier/import/campagne/bijlagen-beheren)');
 
@@ -141,6 +172,32 @@ noErr('Cijfers (historie boeken / omzet-suggesties)');
 // 10) Start-pagina: AI-dagoverzicht rendert (feiten-fallback zonder AI-sleutel)
 clear();
 await page.evaluate(() => goView('overview'));
+// Wacht op antwoord (16 sep 2026): appje van bekende klant zonder antwoord → blok met
+// kaart-context en Afgehandeld-knop; klikken haalt het item weg zonder JS-fout.
+await page.evaluate(async () => {
+  const post = (p, b, tok) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json', ...(tok ? { 'x-ingest-token': 'test123' } : {}) }, body: JSON.stringify(b) }).then((r) => r.json());
+  const c = await post('/api/customers', { name: 'Wachtblok Klant', phone: '0611000077' });
+  await post('/api/orders', { customerId: c.id, title: 'Rhenen — wachtblok kaart', status: 'nieuw' });
+  await post('/api/ingest/whatsapp', { from: '31611000077@c.us', fromPhone: '31611000077', name: 'Wachtblok Klant', body: 'Wanneer komt de monteur?\nTelefoon: +31611000077', externalId: 'wa-wachtblok-1' }, true);
+});
+await page.evaluate(async () => {
+  // Het blok kijkt standaard naar >2 uur; in de test tekenen we het met alles (uren=0).
+  const el = document.querySelector('#onbeantwoordBlok');
+  const lijst = await fetch('/api/chats/onbeantwoord?uren=0').then((r) => r.json());
+  window.__wachtLijst = lijst;
+  const orig = window.api; window.api = (p, ...rest) => p.startsWith('/api/chats/onbeantwoord') ? Promise.resolve(lijst) : orig(p, ...rest);
+  await vulOnbeantwoord(); window.api = orig;
+  return el && el.innerText;
+});
+await page.waitForTimeout(300);
+ok('Wacht-op-antwoord-blok toont het appje mét kaart-context', await page.evaluate(() => { const t = document.querySelector('#onbeantwoordBlok')?.innerText || ''; return /Wachtblok Klant/.test(t) && /wachtblok kaart/.test(t); }));
+clear();
+const wachtVoor = await page.locator('#onbeantwoordBlok li[data-chat]').count();
+await page.evaluate(() => { const b = [...document.querySelectorAll('#onbeantwoordBlok .wacht-klaar')].find((x) => /Wachtblok/.test(x.closest('li')?.innerText || '')); b && b.click(); });
+await page.waitForTimeout(700);
+const wachtNa = await page.evaluate(() => fetch('/api/chats/onbeantwoord?uren=0').then((r) => r.json()).then((l) => l.some((x) => /Wachtblok/.test(x.naam))));
+ok('Afgehandeld-knop haalt het gesprek uit de lijst (server)', wachtVoor >= 1 && wachtNa === false);
+noErr('Wacht op antwoord');
 await page.waitForTimeout(1200);
 ok('dagoverzicht-blok aanwezig op Start', await page.locator('#dayov').count() > 0);
 ok('dagoverzicht toont inhoud (geen leeg blok)', ((await page.locator('#dayov-body').innerText().catch(() => '')) || '').length > 10);

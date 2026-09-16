@@ -51,7 +51,7 @@ import {
   findCustomerStrong, senderPhoneFromText, matchPhone, queueCrmWhatsappAlert,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
-import { onbeantwoordeGesprekken } from './gesprekken.js';
+import { onbeantwoordeGesprekken, wachtOpAntwoordDagen } from './gesprekken.js';
 import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, kantoor, gedeeldMetNamen, zetVolgorde } from './taken.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
@@ -62,7 +62,7 @@ import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, save
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
-import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries } from './storage.js';
+import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries, registerAttachmentFiles, ontdubbelOpSchijf, weesBestanden, fileExists } from './storage.js';
 import { cloudConfigured, sendCloudText, sendCloudTemplate, sendCloudMedia, webhookSignatureOk, parseCloudWebhook, parseCloudStatuses, fetchCloudMedia, cloudSelftest } from './connectors/whatsapp-cloud.js';
 import Busboy from 'busboy';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
@@ -1408,79 +1408,124 @@ app.get('/api/disk-usage', requireRole('admin'), (req, res) => {
 // zodat je zelf kunt kiezen wat weg mag i.p.v. te wachten op de automatische
 // opschoning (die alleen afgeronde/geannuleerde klussen ouder dan X dagen pakt).
 // Werkbon-handtekeningen worden NOOIT getoond/verwijderbaar gemaakt.
-app.get('/api/attachments/browse', requireRole('admin', 'assistent'), (req, res) => {
+// Alle bijlage-verwijzingen in het hele CRM (16 sep 2026): kaarten, prullenbak,
+// gesprekshistorie, losse inbox-berichten en taken. Nodig voor de hash-index, het
+// ontdubbelen op schijf en het veilig verwijderen (alle verwijzingen naar één bestand).
+function alleBijlageVerwijzingen() {
+  const uit = [];
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    for (const a of o.attachments || []) if (a) uit.push(a);
+    for (const t of o.thread || []) for (const a of t.attachments || []) if (a) uit.push(a);
+  }
+  for (const m of db().messages || []) for (const a of m.attachments || []) if (a) uit.push(a);
+  for (const t of db().taken || []) for (const a of t.bijlagen || []) if (a) uit.push(a);
+  return uit;
+}
+function beschermdeBijlageIds() {
   const protectedIds = new Set();
   for (const o of [...(db().orders || []), ...(db().trash || [])]) {
     const sigId = o.werkbon && o.werkbon.signatureAttachmentId;
     if (sigId) protectedIds.add(sigId);
   }
-  const items = [];
+  return protectedIds;
+}
+
+// FOTO'S & VIDEO'S BEHEREN — één regel per BESTAND op schijf (16 sep 2026). Voorheen
+// stond dezelfde foto drie keer in de lijst (los bericht + gesprekshistorie + kaart
+// verwijzen naar hetzelfde bestand), telde de totaalgrootte dus 3x mee, en wiste
+// "verwijderen" van één regel het bestand onder de andere twee vandaan (witte tegel
+// "foto — tik om te openen"). Nu: gegroepeerd per bestand, met alle plekken waar het
+// gebruikt wordt; verwijderen haalt álle verwijzingen weg.
+app.get('/api/attachments/browse', requireRole('admin', 'assistent'), (req, res) => {
+  const protectedIds = beschermdeBijlageIds();
+  const perFile = new Map();
+  const voeg = (a, ref) => {
+    if (!a || protectedIds.has(a.id)) return;
+    const sleutel = a.file || a.url || a.id;
+    let e = perFile.get(sleutel);
+    if (!e) {
+      e = { id: a.id, file: a.file || '', url: a.url, filename: a.filename, mime: a.mime, kind: a.kind, size: a.size || 0, at: a.at || ref.at, hash: a.hash || '', refs: [], orderId: null, orderTitle: '', orderStatus: '', trashed: false, missing: a.file ? !fileExists(a.file) : false };
+      perFile.set(sleutel, e);
+    }
+    if (!e.size && a.size) e.size = a.size;
+    if (ref.at && (!e.at || String(ref.at) < String(e.at))) e.at = ref.at;
+    e.refs.push({ id: a.id, ...ref });
+    // Hoofdplek = eerste kaart (niet-prullenbak wint); anders "los bericht".
+    if (ref.orderId && (!e.orderId || (e.trashed && !ref.trashed))) { e.orderId = ref.orderId; e.orderTitle = ref.orderTitle; e.orderStatus = ref.orderStatus; e.trashed = !!ref.trashed; }
+  };
   for (const o of [...(db().orders || []), ...(db().trash || [])]) {
-    for (const a of o.attachments || []) {
-      if (protectedIds.has(a.id)) continue;
-      items.push({ id: a.id, url: a.url, filename: a.filename, mime: a.mime, kind: a.kind, size: a.size || 0, at: a.at || o.createdAt, orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', trashed: !!o.trashedAt, source: 'order' });
-    }
-    for (const t of o.thread || []) {
-      for (const a of t.attachments || []) {
-        if (protectedIds.has(a.id)) continue;
-        items.push({ id: a.id, url: a.url, filename: a.filename, mime: a.mime, kind: a.kind, size: a.size || 0, at: a.at || t.at, orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', trashed: !!o.trashedAt, source: 'thread', threadId: t.id });
-      }
-    }
+    const basis = { orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', trashed: !!o.trashedAt };
+    for (const a of o.attachments || []) voeg(a, { ...basis, source: 'order', at: a.at || o.createdAt });
+    for (const t of o.thread || []) for (const a of t.attachments || []) voeg(a, { ...basis, source: 'thread', threadId: t.id, at: a.at || t.at });
   }
-  for (const m of db().messages || []) {
-    for (const a of m.attachments || []) {
-      items.push({ id: a.id, url: a.url, filename: a.filename, mime: a.mime, kind: a.kind, size: a.size || 0, at: a.at || m.receivedAt, messageId: m.id, orderTitle: '(los bericht, geen kaart)', source: 'message' });
-    }
-  }
-  res.json({ items, totalBytes: items.reduce((s, x) => s + (x.size || 0), 0) });
+  for (const m of db().messages || []) for (const a of m.attachments || []) voeg(a, { source: 'message', messageId: m.id, at: a.at || m.receivedAt });
+  const items = [...perFile.values()].map((e) => ({ ...e, orderTitle: e.orderId ? e.orderTitle : '(los bericht, geen kaart)', plekken: e.refs.length }));
+  const totalBytes = items.reduce((s, x) => s + (x.missing ? 0 : (x.size || 0)), 0);
+  // Schijf-samenvatting: dubbele bestanden (zelfde inhoud, ander bestand) en wezen.
+  let schijf = { dubbeleBestanden: 0, dubbelBytes: 0, wees: 0, weesBytes: 0 };
+  try {
+    const alle = alleBijlageVerwijzingen();
+    const d = ontdubbelOpSchijf(alle, { dryRun: true });
+    const w = weesBestanden(alle);
+    schijf = { dubbeleBestanden: d.dubbeleBestanden, dubbelBytes: d.vrijgemaakt, wees: w.n, weesBytes: w.bytes, ontbrekend: items.filter((x) => x.missing).length };
+  } catch (e) { console.error('[bijlage-schijf]', e.message); }
+  res.json({ items, totalBytes, schijf });
 });
 
-// Bulk verwijderen: elk item is {id, orderId?, threadId?, messageId?} — precies
-// zoals teruggegeven door /browse. Best-effort per item (één kapotte referentie
-// mag de rest niet blokkeren); geeft terug hoeveel bytes zijn vrijgemaakt.
+// Bulk verwijderen: elk item is {id, file?} — precies zoals teruggegeven door /browse.
+// Verwijdert het BESTAND én álle verwijzingen ernaar (kaart, historie, los bericht,
+// prullenbak), zodat nergens een kapotte tegel achterblijft. Oude aanroepen met
+// {id, orderId, threadId?, messageId?} werken nog (bestand wordt dan opgezocht).
 app.post('/api/attachments/bulk-delete', requireRole('admin', 'assistent'), (req, res) => {
   const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 2000) : [];
-  // Zelfde bescherming als /browse: een werkbon-handtekening mag NOOIT weg, ook
-  // niet als een verkeerd/verouderd item-id wordt meegestuurd.
-  const protectedIds = new Set();
-  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
-    const sigId = o.werkbon && o.werkbon.signatureAttachmentId;
-    if (sigId) protectedIds.add(sigId);
-  }
-  let removed = 0; let freedBytes = 0;
-  const stripFrom = (list, attId) => {
-    if (!Array.isArray(list) || protectedIds.has(attId)) return list;
-    const idx = list.findIndex((a) => a.id === attId);
-    if (idx === -1) return list;
-    const [a] = list.splice(idx, 1);
-    try { deleteFile(a.file); } catch { /* bestand al weg */ }
-    freedBytes += a.size || 0;
-    removed++;
-    return list;
-  };
+  const protectedIds = beschermdeBijlageIds();
+  const alle = alleBijlageVerwijzingen();
+  const fileById = new Map(); for (const a of alle) if (a.id && a.file) fileById.set(a.id, a.file);
+  // Een bestand waar een werkbon-handtekening naar wijst blijft ALTIJD staan.
+  const beschermdeFiles = new Set(alle.filter((a) => protectedIds.has(a.id)).map((a) => a.file));
+  const teVerwijderen = new Set();
   for (const it of items) {
-    try {
-      if (it.messageId) {
-        const m = db().messages.find((x) => x.id === it.messageId);
-        if (m) m.attachments = stripFrom(m.attachments, it.id);
-        continue;
-      }
-      if (!it.orderId) continue;
-      const o = db().orders.find((x) => x.id === it.orderId) || db().trash.find((x) => x.id === it.orderId);
-      if (!o) continue;
-      if (it.threadId) {
-        const t = (o.thread || []).find((x) => x.id === it.threadId);
-        if (t) t.attachments = stripFrom(t.attachments, it.id);
-      } else {
-        o.attachments = stripFrom(o.attachments, it.id);
-      }
-    } catch (e) { console.error('[bijlage-verwijderen]', e.message); }
+    const f = it?.file || fileById.get(it?.id);
+    if (f && /^att_[a-zA-Z0-9_.]+$/.test(f) && !beschermdeFiles.has(f)) teVerwijderen.add(f);
+  }
+  let removed = 0; let freedBytes = 0; let verwijzingen = 0;
+  const strip = (list) => {
+    if (!Array.isArray(list)) return list;
+    const rest = list.filter((a) => !(a && teVerwijderen.has(a.file) && !protectedIds.has(a.id)));
+    verwijzingen += list.length - rest.length;
+    return rest;
+  };
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    o.attachments = strip(o.attachments);
+    for (const t of o.thread || []) t.attachments = strip(t.attachments);
+  }
+  for (const m of db().messages || []) m.attachments = strip(m.attachments);
+  for (const t of db().taken || []) t.bijlagen = strip(t.bijlagen);
+  for (const f of teVerwijderen) {
+    const a = alle.find((x) => x.file === f);
+    freedBytes += a?.size || 0;
+    try { deleteFile(f); } catch { /* al weg */ }
+    removed++;
   }
   if (removed) {
-    logActivity(req.user.name, 'bijlages opgeruimd', `${removed} bestand(en), ${(freedBytes / 1048576).toFixed(1)} MB vrijgemaakt`);
+    void db().orders; void db().trash; void db().messages; void db().taken;
+    logActivity(req.user.name, 'bijlages opgeruimd', `${removed} bestand(en), ${verwijzingen} verwijzing(en), ${(freedBytes / 1048576).toFixed(1)} MB vrijgemaakt`);
     saveSoon();
   }
-  res.json({ ok: true, removed, freedBytes });
+  res.json({ ok: true, removed, freedBytes, verwijzingen });
+});
+
+// Ontdubbelen op schijf + weesbestanden opruimen (knop in Foto's & video's beheren).
+// Verwijzingen worden herschreven, nooit weggehaald: geen kaart raakt een foto kwijt.
+app.post('/api/attachments/dedupe', requireRole('admin'), (req, res) => {
+  const alle = alleBijlageVerwijzingen();
+  const d = ontdubbelOpSchijf(alle);
+  const w = req.body?.wees ? weesBestanden(alle, { verwijder: true }) : weesBestanden(alle);
+  void db().orders; void db().trash; void db().messages; void db().taken;
+  const totaal = d.vrijgemaakt + (req.body?.wees ? w.bytes : 0);
+  logActivity(req.user.name, 'bijlages ontdubbeld', `${d.dubbeleBestanden} dubbel(e) bestand(en) samengevoegd${req.body?.wees ? `, ${w.n} weesbestand(en) weg` : ''}, ${(totaal / 1048576).toFixed(1)} MB vrijgemaakt`);
+  saveSoon();
+  res.json({ ok: true, ...d, wees: w, vrijgemaaktTotaal: totaal });
 });
 
 // Extra back-ups opruimen (houd de N nieuwste). Handmatige noodrem als de schijf
@@ -2450,8 +2495,9 @@ app.post('/api/taken/:id/bijlage', requireRole('admin', 'assistent'), (req, res)
   if (!saved) return res.status(400).json({ error: 'Bestand te groot of leeg (max 25 MB)' });
   saved.uploadedBy = req.user.name;
   if (!Array.isArray(t.bijlagen)) t.bijlagen = [];
-  if (t.bijlagen.some((a) => a.hash && a.hash === saved.hash)) { deleteFile(saved.file); return res.json({ ...taakUit(t, req.user), dubbel: true }); }
-  if (t.bijlagen.length >= 30) { deleteFile(saved.file); return res.status(400).json({ error: 'Maximaal 30 bijlages per taak' }); }
+  // Een hergebruikt bestand (zelfde inhoud bestond al elders) NOOIT wissen (16 sep).
+  if (t.bijlagen.some((a) => a.hash && a.hash === saved.hash)) { if (!saved.hergebruikt) deleteFile(saved.file); return res.json({ ...taakUit(t, req.user), dubbel: true }); }
+  if (t.bijlagen.length >= 30) { if (!saved.hergebruikt) deleteFile(saved.file); return res.status(400).json({ error: 'Maximaal 30 bijlages per taak' }); }
   t.bijlagen.push(saved);
   logActivity(req.user.name, 'taak-bijlage toegevoegd', `${t.titel}: ${saved.filename}`);
   saveSoon();
@@ -2479,8 +2525,25 @@ app.delete('/api/taken/:id', requireRole('admin', 'assistent'), (req, res) => {
 
 // Onbeantwoorde klantvragen (punt 10): tijd-gebaseerd, los van gelezen/ongelezen.
 app.get('/api/chats/onbeantwoord', requireRole('admin', 'assistent'), (req, res) => {
-  const uren = Math.max(1, Number(req.query.uren) || 2);
+  // uren=0 toegestaan (alles zonder antwoord) — nodig voor de regressietest.
+  const q = Number(req.query.uren);
+  const uren = Number.isFinite(q) && q >= 0 ? q : 2;
   res.json(onbeantwoordeGesprekken(uren));
+});
+// "Afgehandeld" (16 sep 2026): een klantbericht dat geen antwoord (meer) nodig heeft
+// ("wij gaan niet op uw offerte in", "bedankt") uit het blok halen zonder iets te
+// versturen. Markering per gesprek; een NIEUW bericht van de klant komt gewoon terug.
+app.post('/api/chats/:id/afgehandeld', requireRole('admin', 'assistent'), (req, res) => {
+  const cid = String(req.params.id || '').slice(0, 80);
+  if (!cid) return res.status(400).json({ error: 'Geen gesprek' });
+  const marks = { ...(db().settings._wachtAfgehandeld || {}) };
+  marks[cid] = now();
+  // Nooit eindeloos laten groeien: markeringen ouder dan 90 dagen weg.
+  const grens = Date.now() - 90 * 86400000;
+  for (const [k, v] of Object.entries(marks)) if (new Date(v).getTime() < grens) delete marks[k];
+  db().settings._wachtAfgehandeld = marks;
+  saveSoon();
+  res.json({ ok: true });
 });
 
 app.post('/api/ingest/email', checkIngestToken, async (req, res) => {
@@ -2977,6 +3040,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     bridgeGroupsOnly: !!db().settings.bridgeGroupsOnly,
     whatsappCloudReady: cloudConfigured(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
+    wachtOpAntwoordDagen: wachtOpAntwoordDagen(),
     htmlSignature: getHtmlSignature(),
     aiOverviewModel: db().settings.aiOverviewModel === 'opus' ? 'opus' : 'standaard',
     invoiceSettings: getInvoiceSettings(),
@@ -3195,6 +3259,10 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   if ('autoMergeWindowHours' in b) {
     const v = Number(b.autoMergeWindowHours);
     db().settings.autoMergeWindowHours = Number.isFinite(v) && v >= 0 ? Math.min(72, v) : 6;
+  }
+  if ('wachtOpAntwoordDagen' in b) {
+    const v = Number(b.wachtOpAntwoordDagen);
+    db().settings.wachtOpAntwoordDagen = Number.isFinite(v) && v >= 1 ? Math.min(60, Math.round(v)) : 14;
   }
   if ('morningBriefing' in b) {
     const m = b.morningBriefing || {};
@@ -5681,6 +5749,38 @@ app.listen(PORT, () => {
       save();
     }
   } catch (e) { console.error('[bijlage-dedup]', e.message); }
+  // HASH-INDEX vullen (16 sep 2026): zo hergebruikt saveBuffer een bestaand bestand
+  // voor een identieke foto i.p.v. nogmaals wegschrijven. Daarna, uitgesteld (de
+  // server moet eerst bereikbaar zijn), ÉÉN keer alle bestaande dubbele bestanden op
+  // schijf samenvoegen — verwijzingen worden herschreven, nooit weggehaald.
+  try { registerAttachmentFiles(alleBijlageVerwijzingen()); } catch (e) { console.error('[hash-index]', e.message); }
+  if (!db().settings._attDiskDedupV1) {
+    setTimeout(async () => {
+      try {
+        // Hashes van oude bijlages (van vóór 27 jul) eerst ASYNCHROON aanvullen, één
+        // bestand per beurt — anders blokkeert 800 MB inlezen de server seconden lang.
+        const alle = alleBijlageVerwijzingen();
+        const gezien = new Map();
+        for (const a of alle) {
+          if (a.hash || !a.file) continue;
+          if (gezien.has(a.file)) { a.hash = gezien.get(a.file); continue; }
+          try {
+            const buf = await fs.promises.readFile(path.join(UPLOAD_DIR, a.file));
+            a.hash = crypto.createHash('sha256').update(buf).digest('hex');
+            if (!a.size) a.size = buf.length;
+            gezien.set(a.file, a.hash);
+          } catch { /* bestand weg — ontdubbelOpSchijf telt 'm als zonderBestand */ }
+          await new Promise((r) => setImmediate(r));
+        }
+        const d = ontdubbelOpSchijf(alle);
+        db().settings._attDiskDedupV1 = true;
+        void db().orders; void db().trash; void db().messages; void db().taken;
+        console.log(`[bijlage-schijf] ${d.bestanden} bestand(en), ${d.dubbeleBestanden} dubbel(e) samengevoegd, ${(d.vrijgemaakt / 1048576).toFixed(1)} MB vrijgemaakt, ${d.zonderBestand} verwijzing(en) zonder bestand`);
+        if (d.dubbeleBestanden) logActivity('systeem', 'bijlages ontdubbeld op schijf', `${d.dubbeleBestanden} dubbel(e) bestand(en) samengevoegd, ${(d.vrijgemaakt / 1048576).toFixed(1)} MB vrijgemaakt`);
+        save();
+      } catch (e) { console.error('[bijlage-schijf]', e.message); }
+    }, 20000);
+  }
   // Eenmalige opschoning: NEP-correcties uit het AI-feedback-geheugen. Door een
   // vergelijkingsfout telde élke gewone goedkeuring als "mens koos nieuw"-correctie
   // (honderden stuks) — dat vervuilde de leervoorbeelden die naar de AI meegaan én

@@ -521,6 +521,33 @@ de regressie meegroeit.
   `_dragging` óók ná de await, en een 20-s-vangnet geeft een blijven-hangende
   sleepvlag vrij. `draggable="true"` is van de kaart af. Test: 8 browser-asserties
   (echte muisbeweging + herbouw halverwege).
+- **Foto-opslag ontdubbeld + eerlijk beheerscherm (16 sep 2026, klacht "heel veel foto's
+  dubbel of driedubbel"):** (1) storage.js heeft een HASH-INDEX (inhoud-hash → bestand;
+  registerAttachmentFiles bij boot uit alleBijlageVerwijzingen()): saveBuffer schrijft een
+  identieke foto NIET nogmaals weg maar geeft een nieuwe verwijzing (eigen id) naar het
+  bestaande bestand (`hergebruikt:true`). mergeAttachments wist daarom nooit meer een
+  gedeeld bestand. (2) /api/attachments/browse groepeert per FYSIEK bestand (`plekken`
+  = aantal verwijzingen: kaart/gesprekshistorie/los bericht; voorheen stond dezelfde
+  foto 3× in de lijst, telde 3× mee in de MB's en wiste "verwijderen" van één regel het
+  bestand onder de andere twee vandaan → witte tegel). bulk-delete accepteert {id,file}
+  en haalt het bestand + ÁLLE verwijzingen weg (ook taken); een bestand waar een
+  werkbon-handtekening naar wijst blijft altijd staan. (3) ontdubbelOpSchijf(): per hash
+  het oudste bestand houden, verwijzingen HERSCHRIJVEN (nooit weghalen), rest van schijf;
+  eenmalig bij boot (_attDiskDedupV1, 20 s uitgesteld, hashes van oude bijlages
+  asynchroon aangevuld) + knop "Opschonen — X MB vrijmaken" in Foto's & video's beheren
+  (POST /api/attachments/dedupe, admin; `wees:true` verwijdert ook weesbestanden zonder
+  verwijzing >1 uur oud). browse geeft `schijf` {dubbeleBestanden, dubbelBytes, wees,
+  weesBytes, ontbrekend} mee. (4) Filters: 14/30/60/90/180 dagen, losse berichten,
+  kapotte verwijzingen. Tests: opslag-test (29), klanten-test (45), browser (+6).
+- **"Wacht op antwoord" op Start opgeschoond (16 sep 2026):** nieuwste bovenaan,
+  wachttijd in dagen (≥48 u), kaart-context (nieuwste open kaart + status), knop
+  **Afgehandeld** (POST /api/chats/:id/afgehandeld → settings._wachtAfgehandeld[chatId]
+  = nu; een NIEUW klantbericht komt gewoon terug; markeringen >90 d worden opgeruimd),
+  "Alle N tonen"-knop. Valt automatisch af: (a) ouder dan settings.wachtOpAntwoordDagen
+  (default 14, 1–60, Instellingen → Werkwijze, wachtOpAntwoordDagen() in gesprekken.js),
+  (b) kaart van de klant ná het bericht afgerond/geannuleerd. GET /api/chats/onbeantwoord
+  accepteert uren=0 (tests). Ochtendbriefing/weekcheck gebruiken dezelfde functie.
+  Test: chat-test (71) + browser (+3).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

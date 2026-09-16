@@ -12,9 +12,16 @@ const SYSTEEMRUIS = /^\s*\[?(e2e_notification|ciphertext|protocol|revoked|gp2|no
 const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const echtNummer = (p) => { const d = String(p).replace(/\D/g, ''); return d.length >= 6 && d.length <= 13; };
 
-export function onbeantwoordeGesprekken(urenGrens = 2, maxDagen = 14) {
+// Hoe ver terug het blok kijkt (16 sep 2026, wens eigenaar: "alles wat 2 weken of
+// ouder is moet eruit"): instelbaar, standaard 14 dagen, Instellingen → Werkwijze.
+export function wachtOpAntwoordDagen() {
+  const v = Number(db().settings.wachtOpAntwoordDagen);
+  return Number.isFinite(v) && v >= 1 ? Math.min(60, Math.round(v)) : 14;
+}
+export function onbeantwoordeGesprekken(urenGrens = 2, maxDagen = wachtOpAntwoordDagen()) {
   const nu = Date.now();
   const vloer = nu - maxDagen * 86400000;
+  const afgehandeld = db().settings._wachtAfgehandeld || {};
   const grens = nu - urenGrens * 3600000;
   const perNummer = new Map(); const perMail = new Map();
   for (const c of db().customers || []) {
@@ -58,17 +65,38 @@ export function onbeantwoordeGesprekken(urenGrens = 2, maxDagen = 14) {
     if (cid) bump(cid, ob.createdAt);
   }
   for (const mu of db().mailUit || []) bump(mu.customerId, mu.at);
+  // Kaarten per klant: (a) een kaart die NA het bericht is afgerond/geannuleerd telt
+  // als afgehandeld (iemand heeft de klant gesproken of de zaak gesloten); (b) de
+  // nieuwste open kaart gaat mee als context ("waar gaat dit over?").
+  const kaartenPerKlant = new Map();
+  for (const o of db().orders || []) {
+    if (!o.customerId || o.trashedAt) continue;
+    if (!kaartenPerKlant.has(o.customerId)) kaartenPerKlant.set(o.customerId, []);
+    kaartenPerKlant.get(o.customerId).push(o);
+  }
+  const GESLOTEN = new Set(['afgerond', 'geannuleerd']);
   const uit = [];
   for (const [chatId, info] of laatsteIn) {
     if (info.at > grens) continue;                 // nog binnen de grens
     if ((laatsteUit.get(chatId) || 0) >= info.at) continue; // wél beantwoord
+    const markering = afgehandeld[chatId] ? new Date(afgehandeld[chatId]).getTime() : 0;
+    if (markering >= info.at) continue;            // handmatig op "afgehandeld" gezet
+    const kaarten = kaartenPerKlant.get(chatId) || [];
+    if (kaarten.some((o) => GESLOTEN.has(o.status) && new Date(o.updatedAt || 0).getTime() >= info.at)) continue;
+    const open = kaarten.filter((o) => !GESLOTEN.has(o.status)).sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0]
+      || kaarten.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
+    const uren = Math.round((nu - info.at) / 3600000);
     uit.push({
       chatId, naam: info.klant ? (info.klant.name || 'Klant') : `Onbekend nummer ${chatId.slice(4)}`,
       kanaal: info.channel, at: new Date(info.at).toISOString(),
-      urenWachtend: Math.round((nu - info.at) / 3600000),
-      tekst: String(info.body || '').replace(/\s+/g, ' ').slice(0, 90),
+      urenWachtend: uren,
+      dagenWachtend: Math.floor(uren / 24),
+      tekst: String(info.body || '').replace(/\s+/g, ' ').slice(0, 140),
+      kaart: open ? { id: open.id, title: open.title || '', status: open.status || '' } : null,
     });
   }
-  uit.sort((a, b) => b.urenWachtend - a.urenWachtend);
+  // Nieuwste bovenaan: wat vandaag binnenkwam vraagt het eerst om actie; het oudste
+  // valt na de ingestelde termijn vanzelf af.
+  uit.sort((a, b) => a.urenWachtend - b.urenWachtend);
   return uit;
 }
