@@ -28,6 +28,8 @@ node test/chat-test.mjs
 node test/taken-test.mjs
 # Herstart van het CRM: dubbel wachtrij-item komt NIET terug (start zelf een server op PORT=3135)
 node test/herstart-test.mjs
+# Audit-fixes 16 sep: suggesties, samenvoegen, gedeelde bestanden, rechten (PORT=3137)
+node test/audit-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 

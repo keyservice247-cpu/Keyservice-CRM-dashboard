@@ -25,8 +25,10 @@ export async function runFollowUps() {
     const c = db().customers.find((x) => x.id === o.customerId) || {};
 
     // A) Offerte blijft liggen: status offerte verzonden, geen reactie, X dagen open.
+    // Meten vanaf het verzendmoment van de offerte (quoteSentAt; audit 16 sep) — updatedAt
+    // schuift bij elke systeemactie op en liet de opvolging zelden afgaan.
     const offerteCase = offerteOn && o.status === 'offerte_verzonden' && !o.customerReplied
-      && new Date(o.updatedAt).getTime() <= offerteCutoff;
+      && new Date(o.quoteSentAt || o.updatedAt).getTime() <= offerteCutoff;
 
     // B) We hebben gemaild maar geen reactie gekregen (geen offerte-geval).
     const repliedSince = o.customerReplied

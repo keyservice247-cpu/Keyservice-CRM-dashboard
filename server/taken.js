@@ -25,10 +25,14 @@ const namen = (v) => (Array.isArray(v) ? v : String(v || '').split(/[+,]/)).map(
 export function dagenTot(deadline) {
   const d = datum(deadline);
   if (!d) return null;
-  const vandaag = new Date(); vandaag.setHours(0, 0, 0, 0);
+  // Nederlandse kalenderdag (server draait in UTC; tussen 00:00 en 02:00 NL was de
+  // teller anders een dag mis).
+  const vandaagNL = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const [vy, vm, vd] = vandaagNL.split('-').map(Number);
+  const vandaag = Date.UTC(vy, vm - 1, vd);
   const [y, m, dd] = d.split('-').map(Number);
-  const doel = new Date(y, m - 1, dd);
-  return Math.round((doel.getTime() - vandaag.getTime()) / 86400000);
+  const doel = Date.UTC(y, m - 1, dd);
+  return Math.round((doel - vandaag) / 86400000);
 }
 
 // Privé-taak: eigenaar ziet 'm altijd; OPTIONEEL gedeeld met gekozen collega's
@@ -101,7 +105,9 @@ export function werkTaakBij(t, body, user) {
   if ('gedeeldMet' in b && isEigenaar(t, user)) t.gedeeldMet = idLijst(b.gedeeldMet, user);
   if ('titel' in b) { const v = String(b.titel || '').trim().slice(0, 160); if (!v) throw Object.assign(new Error('Titel mag niet leeg zijn'), { status: 400 }); t.titel = v; }
   if ('omschrijving' in b) t.omschrijving = String(b.omschrijving || '').trim().slice(0, 2000);
-  if ('categorie' in b) t.categorie = kies(b.categorie, CATEGORIEEN, t.categorie);
+  // Categorie (privé/zakelijk) alleen door de eigenaar: een collega mocht een gedeelde
+  // privé-taak anders op 'zakelijk' zetten en zo voor het hele kantoor openbaar maken.
+  if ('categorie' in b && isEigenaar(t, user)) t.categorie = kies(b.categorie, CATEGORIEEN, t.categorie);
   if ('urgentie' in b) t.urgentie = kies(b.urgentie, URGENTIES, t.urgentie);
   if ('duur' in b) t.duur = kies(b.duur, DUREN, t.duur);
   if ('deadline' in b) t.deadline = datum(b.deadline);

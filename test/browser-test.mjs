@@ -573,6 +573,42 @@ await page.waitForTimeout(600);
 }
 noErr('Bord slepen');
 
+// MONTEUR-NOODROUTE ÉCHT via het scherm (audit 16 sep, kritiek): een gekoppelde
+// monteur vult "+ Nieuwe opdracht" in en drukt Opslaan. Voorheen kreeg hij altijd
+// "Titel verplicht" (de titel zat achter de kantoor-vlag) en kon hij nooit een kaart maken.
+{
+  const mSetup = await page.evaluate(async () => {
+    const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+    const m = await post('/api/monteurs', { name: 'Browser Monteur', phone: '0687000001', waGroup: 'Browser Monteur groep' });
+    const u = await post('/api/users', { name: 'Browser Monteur', email: 'bmonteur@keyservice.nl', password: 'monteur123', role: 'monteur', monteurId: m.id });
+    return { monteurId: m.id, userId: u.id, error: u.error };
+  });
+  ok('monteur-account met koppeling aangemaakt', !!mSetup.monteurId && !mSetup.error, JSON.stringify(mSetup));
+  const mp = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const mErr = [];
+  mp.on('pageerror', (e) => mErr.push(e.message));
+  await mp.goto(BASE + '/login.html', { waitUntil: 'networkidle' });
+  await mp.fill('input[type=email], input[name=email], #email', 'bmonteur@keyservice.nl');
+  await mp.fill('input[type=password], input[name=password], #password', 'monteur123');
+  await Promise.all([mp.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}), mp.click('button[type=submit], button')]);
+  await mp.waitForTimeout(2500);
+  await mp.evaluate(() => goView('board'));
+  await mp.waitForTimeout(1000);
+  ok('monteur: "+ Nieuwe opdracht" zichtbaar', await mp.locator('#newOrderBtn').isVisible());
+  await mp.click('#newOrderBtn');
+  await mp.waitForTimeout(600);
+  await mp.fill('#f-title', 'Rhenen — noodroute via scherm');
+  await mp.fill('#f-cname', 'Noodroute Klant');
+  await mp.fill('#f-cphone', '0611009988');
+  await mp.click('#f-save');
+  await mp.waitForTimeout(1500);
+  const gemaakt = await mp.evaluate(() => fetch('/api/orders').then((r) => r.json()).then((os) => os.find((o) => /noodroute via scherm/.test(o.title))));
+  ok('monteur: kaart via het formulier ÉCHT aangemaakt (geen "Titel verplicht")', !!gemaakt, JSON.stringify(gemaakt && gemaakt.title));
+  ok('monteur: kaart hangt aan hemzelf + vlag zelf aangemaakt', !!gemaakt && gemaakt.monteurId === mSetup.monteurId && gemaakt.zelfAangemaaktDoorMonteur === true, JSON.stringify(gemaakt && { m: gemaakt.monteurId, z: gemaakt.zelfAangemaaktDoorMonteur }));
+  ok('monteur-scherm zonder JS-fouten', !mErr.filter((e) => !/favicon|manifest|ServiceWorker/i.test(e)).length, mErr.join(' | '));
+  await mp.close();
+}
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

@@ -62,7 +62,8 @@ import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, save
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
-import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries, registerAttachmentFiles, ontdubbelOpSchijf, weesBestanden, fileExists } from './storage.js';
+import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries, registerAttachmentFiles, ontdubbelOpSchijf, weesBestanden, fileExists, mergeAttachments } from './storage.js';
+import { alleBijlageVerwijzingen, beschermdeBijlageIds, verwijderBestandenAlsOngebruikt } from './bijlagen.js';
 import { cloudConfigured, sendCloudText, sendCloudTemplate, sendCloudMedia, webhookSignatureOk, parseCloudWebhook, parseCloudStatuses, fetchCloudMedia, cloudSelftest } from './connectors/whatsapp-cloud.js';
 import Busboy from 'busboy';
 import { runHealthCheck, lastHealth, startHealthMonitor } from './health.js';
@@ -1240,6 +1241,18 @@ app.post('/api/customers/merge', requirePerm('customers'), (req, res) => {
     // opdrachten overzetten
     db().orders.forEach((o) => { if (o.customerId === mid) { o.customerId = primaryId; moved++; } });
     db().trash.forEach((o) => { if (o.customerId === mid) o.customerId = primaryId; });
+    // Ook facturen/offertes, losse mails, wachtrij-items, taken en leesmarkeringen
+    // meenemen (audit 16 sep): anders stonden facturen als wees zonder klantnaam en
+    // was het dossier van de hoofdklant aantoonbaar incompleet.
+    (db().invoices || []).forEach((i) => { if (i.customerId === mid) i.customerId = primaryId; });
+    (db().mailUit || []).forEach((m) => { if (m.customerId === mid) m.customerId = primaryId; });
+    (db().outbox || []).forEach((it) => { if (it.customerId === mid) it.customerId = primaryId; });
+    (db().taken || []).forEach((t) => { if (t.customerId === mid) t.customerId = primaryId; });
+    for (const sleutel of ['_chatGelezen', '_chatGelezenMonteur', '_wachtAfgehandeld']) {
+      const marks = db().settings[sleutel];
+      if (marks && marks[mid]) { if (!marks[primaryId] || String(marks[mid]) > String(marks[primaryId])) marks[primaryId] = marks[mid]; delete marks[mid]; db().settings[sleutel] = { ...marks }; }
+    }
+    void db().invoices; void db().mailUit; void db().outbox; void db().taken;
     // ontbrekende gegevens aanvullen
     if (!primary.email && other.email) primary.email = other.email;
     if (!primary.phone && other.phone) primary.phone = other.phone;
@@ -1408,28 +1421,6 @@ app.get('/api/disk-usage', requireRole('admin'), (req, res) => {
 // zodat je zelf kunt kiezen wat weg mag i.p.v. te wachten op de automatische
 // opschoning (die alleen afgeronde/geannuleerde klussen ouder dan X dagen pakt).
 // Werkbon-handtekeningen worden NOOIT getoond/verwijderbaar gemaakt.
-// Alle bijlage-verwijzingen in het hele CRM (16 sep 2026): kaarten, prullenbak,
-// gesprekshistorie, losse inbox-berichten en taken. Nodig voor de hash-index, het
-// ontdubbelen op schijf en het veilig verwijderen (alle verwijzingen naar één bestand).
-function alleBijlageVerwijzingen() {
-  const uit = [];
-  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
-    for (const a of o.attachments || []) if (a) uit.push(a);
-    for (const t of o.thread || []) for (const a of t.attachments || []) if (a) uit.push(a);
-  }
-  for (const m of db().messages || []) for (const a of m.attachments || []) if (a) uit.push(a);
-  for (const t of db().taken || []) for (const a of t.bijlagen || []) if (a) uit.push(a);
-  return uit;
-}
-function beschermdeBijlageIds() {
-  const protectedIds = new Set();
-  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
-    const sigId = o.werkbon && o.werkbon.signatureAttachmentId;
-    if (sigId) protectedIds.add(sigId);
-  }
-  return protectedIds;
-}
-
 // FOTO'S & VIDEO'S BEHEREN — één regel per BESTAND op schijf (16 sep 2026). Voorheen
 // stond dezelfde foto drie keer in de lijst (los bericht + gesprekshistorie + kaart
 // verwijzen naar hetzelfde bestand), telde de totaalgrootte dus 3x mee, en wiste
@@ -1454,7 +1445,7 @@ app.get('/api/attachments/browse', requireRole('admin', 'assistent'), (req, res)
     if (ref.orderId && (!e.orderId || (e.trashed && !ref.trashed))) { e.orderId = ref.orderId; e.orderTitle = ref.orderTitle; e.orderStatus = ref.orderStatus; e.trashed = !!ref.trashed; }
   };
   for (const o of [...(db().orders || []), ...(db().trash || [])]) {
-    const basis = { orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', trashed: !!o.trashedAt };
+    const basis = { orderId: o.id, orderTitle: o.title || '', orderStatus: o.status || '', trashed: !!o.deletedAt };
     for (const a of o.attachments || []) voeg(a, { ...basis, source: 'order', at: a.at || o.createdAt });
     for (const t of o.thread || []) for (const a of t.attachments || []) voeg(a, { ...basis, source: 'thread', threadId: t.id, at: a.at || t.at });
   }
@@ -1504,9 +1495,11 @@ app.post('/api/attachments/bulk-delete', requireRole('admin', 'assistent'), (req
   for (const f of teVerwijderen) {
     const a = alle.find((x) => x.file === f);
     freedBytes += a?.size || 0;
-    try { deleteFile(f); } catch { /* al weg */ }
     removed++;
   }
+  // Pas van schijf als er écht geen verwijzing meer over is (factuur-PDF in de
+  // wachtrij, taak, handtekening) — anders blijft het bestand netjes staan.
+  verwijderBestandenAlsOngebruikt([...teVerwijderen]);
   if (removed) {
     void db().orders; void db().trash; void db().messages; void db().taken;
     logActivity(req.user.name, 'bijlages opgeruimd', `${removed} bestand(en), ${verwijzingen} verwijzing(en), ${(freedBytes / 1048576).toFixed(1)} MB vrijgemaakt`);
@@ -1856,9 +1849,14 @@ app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
     const i = db().orders.findIndex((o) => o.id === mid);
     if (i < 0) continue;
     const other = db().orders[i];
-    // historie en bijlagen overnemen
+    // historie en bijlagen overnemen (bijlages ontdubbeld op inhoud)
     primary.thread.push(...(other.thread || []));
-    primary.attachments.push(...(other.attachments || []));
+    primary.attachments = mergeAttachments(primary.attachments || [], other.attachments || []);
+    // Facturen/offertes van de bronkaart horen bij de hoofdkaart (audit 16 sep):
+    // anders zag de hoofdkaart geen factuur en stond de klus bij "nog te factureren".
+    for (const inv of db().invoices || []) if (inv.orderId === mid) inv.orderId = primaryId;
+    if (!primary.invoiceId && other.invoiceId) primary.invoiceId = other.invoiceId;
+    void db().invoices;
     // ontbrekende velden aanvullen
     if (!primary.description && other.description) primary.description = other.description;
     if (!primary.appointmentAt && other.appointmentAt) primary.appointmentAt = other.appointmentAt;
@@ -1880,7 +1878,7 @@ app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
   }
   if (db().trash.length > 500) {
     const old = db().trash.splice(500);
-    old.forEach((o) => (o.attachments || []).forEach((a) => deleteFile(a.file)));
+    verwijderBestandenAlsOngebruikt(old.flatMap((o) => (o.attachments || []).map((a) => a.file)));
   }
   // historie netjes op tijd sorteren
   primary.thread.sort((a, b) => (a.at || '').localeCompare(b.at || ''));
@@ -1903,7 +1901,7 @@ app.delete('/api/orders/:id', requirePerm('deleteOrders'), (req, res) => {
   if (db().trash.length > 500) {
     // oudste boven de 500 definitief opruimen (incl. bestanden)
     const old = db().trash.splice(500);
-    old.forEach((o) => (o.attachments || []).forEach((a) => deleteFile(a.file)));
+    verwijderBestandenAlsOngebruikt(old.flatMap((o) => (o.attachments || []).map((a) => a.file)));
   }
   logActivity(req.user.name, 'opdracht naar prullenbak', removed.title);
   saveSoon();
@@ -1933,7 +1931,9 @@ app.delete('/api/trash/:id', requirePerm('hardDelete'), (req, res) => {
   const i = db().trash.findIndex((o) => o.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   const [order] = db().trash.splice(i, 1);
-  (order.attachments || []).forEach((a) => deleteFile(a.file));
+  // Bestanden alleen weg als geen andere kaart/bericht/taak ze nog gebruikt (gedeelde
+  // bestanden sinds de ontdubbeling van 16 sep).
+  verwijderBestandenAlsOngebruikt([...(order.attachments || []), ...(order.thread || []).flatMap((t) => t.attachments || [])].map((a) => a.file));
   logActivity(req.user.name, 'opdracht definitief verwijderd', order.title);
   saveSoon();
   res.json({ ok: true });
@@ -1942,8 +1942,9 @@ app.delete('/api/trash/:id', requirePerm('hardDelete'), (req, res) => {
 // Prullenbak helemaal legen (alleen admin)
 app.post('/api/trash/empty', requirePerm('hardDelete'), (req, res) => {
   const count = db().trash.length;
-  db().trash.forEach((o) => (o.attachments || []).forEach((a) => deleteFile(a.file)));
+  const files = db().trash.flatMap((o) => [...(o.attachments || []), ...(o.thread || []).flatMap((t) => t.attachments || [])].map((a) => a.file));
   db().trash = [];
+  verwijderBestandenAlsOngebruikt(files);
   logActivity(req.user.name, 'prullenbak geleegd', `${count} opdrachten`);
   saveSoon();
   res.json({ ok: true, removed: count });
@@ -1953,6 +1954,7 @@ app.post('/api/trash/empty', requirePerm('hardDelete'), (req, res) => {
 app.post('/api/orders/:id/seen', requireAuth, (req, res) => {
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   let changed = false;
   if (!order.openedAt) { order.openedAt = now(); changed = true; }
   // 'Klant heeft gereageerd'-melding wegklikken zodra je de kaart opent.
@@ -1977,19 +1979,31 @@ app.post('/api/orders/:id/attachments', requireAuth, (req, res) => {
   const saved = saveBuffer(buffer, { mime, filename });
   if (!saved) return res.status(400).json({ error: 'Bestand te groot of leeg (max 25 MB)' });
   saved.uploadedBy = req.user.name;
-  order.attachments = (order.attachments || []).concat(saved);
+  // Zelfde foto nogmaals op deze kaart? Dan geen tweede verwijzing (audit 16 sep).
+  const voor = (order.attachments || []).length;
+  order.attachments = mergeAttachments(order.attachments || [], [saved]);
+  const dubbel = order.attachments.length === voor;
   order.updatedAt = now();
-  logActivity(req.user.name, 'bijlage toegevoegd', `${order.title}: ${saved.filename}`);
+  if (!dubbel) logActivity(req.user.name, 'bijlage toegevoegd', `${order.title}: ${saved.filename}`);
   saveSoon();
-  res.json(withRelations(order));
+  res.json({ ...withRelations(order), ...(dubbel ? { dubbel: true } : {}) });
 });
 
 // Bijlage verwijderen van een opdracht.
-app.delete('/api/orders/:id/attachments/:attId', requirePerm('orders'), (req, res) => {
+// Ook de MONTEUR mag een foto van zijn EIGEN kaart weghalen (audit 16 sep): toevoegen
+// mocht al, verwijderen eiste kantoor — een verkeerde foto kostte dan een telefoontje.
+app.delete('/api/orders/:id/attachments/:attId', requireAuth, (req, res) => {
+  if (req.user.role !== 'monteur' && !can(req.user, 'orders')) return res.status(403).json({ error: 'Geen toegang' });
   const order = db().orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const att = (order.attachments || []).find((a) => a.id === req.params.attId);
-  if (att) { deleteFile(att.file); order.attachments = order.attachments.filter((a) => a.id !== req.params.attId); order.updatedAt = now(); saveSoon(); }
+  if (att) {
+    if (order.werkbon?.signatureAttachmentId === att.id) return res.status(400).json({ error: 'De werkbon-handtekening kan niet verwijderd worden' });
+    order.attachments = order.attachments.filter((a) => a.id !== req.params.attId);
+    verwijderBestandenAlsOngebruikt([att.file]);
+    order.updatedAt = now(); saveSoon();
+  }
   res.json(withRelations(order));
 });
 
@@ -2125,6 +2139,7 @@ function maybeIntakeAutoSend(result) {
 
 // Eén review afwijzen + als leersignaal opslaan (herbruikbaar voor bulk).
 function rejectReview(review, user, b = {}) {
+  if (review.status !== 'rejected') review.prevStatus = review.status; // voor Terugzetten
   review.status = 'rejected';
   review.reviewedBy = user.name;
   review.reviewedAt = now();
@@ -2220,7 +2235,9 @@ app.post('/api/reviews/:id/restore', requirePerm('inbox'), (req, res) => {
   const r = db().reviews.find((x) => x.id === req.params.id);
   if (!r) return res.status(404).json({ error: 'Niet gevonden' });
   if (r.status !== 'rejected') return res.status(400).json({ error: 'Alleen afgewezen berichten terugzetten' });
-  r.status = 'pending'; r.reviewedAt = null; r.reviewedBy = null;
+  // Terug naar waar het vandaan kwam (audit 16 sep): afgewezen "geklets" hoort bij
+  // Overige, niet ineens in de lead-wachtrij.
+  r.status = r.prevStatus === 'overige' ? 'overige' : 'pending'; r.reviewedAt = null; r.reviewedBy = null; delete r.prevStatus;
   saveSoon();
   res.json({ ok: true });
 });
@@ -2245,7 +2262,7 @@ app.post('/api/reviews/empty-rejected', requirePerm('inbox'), (req, res) => {
   res.json({ ok: true, removed: before - db().reviews.length });
 });
 
-app.get('/api/feedback', requireAuth, (req, res) => {
+app.get('/api/feedback', requireRole('admin', 'assistent'), (req, res) => {
   res.json((db().feedback || []).slice(0, 100));
 });
 
@@ -2507,8 +2524,8 @@ app.delete('/api/taken/:id/bijlage/:attId', requireRole('admin', 'assistent'), (
   const t = taakVanReq(req, res); if (!t) return;
   const att = (t.bijlagen || []).find((a) => a.id === req.params.attId);
   if (!att) return res.status(404).json({ error: 'Bijlage niet gevonden' });
-  deleteFile(att.file);
   t.bijlagen = t.bijlagen.filter((a) => a.id !== att.id);
+  verwijderBestandenAlsOngebruikt([att.file]);
   logActivity(req.user.name, 'taak-bijlage verwijderd', `${t.titel}: ${att.filename}`);
   saveSoon();
   res.json(taakUit(t, req.user));
@@ -2516,8 +2533,9 @@ app.delete('/api/taken/:id/bijlage/:attId', requireRole('admin', 'assistent'), (
 app.delete('/api/taken/:id', requireRole('admin', 'assistent'), (req, res) => {
   const t = taakVanReq(req, res); if (!t) return;
   if (t.categorie === 'prive' && !isEigenaar(t, req.user)) return res.status(403).json({ error: 'Alleen de eigenaar kan een gedeelde privé-taak verwijderen' });
-  for (const a of t.bijlagen || []) { try { deleteFile(a.file); } catch { /* bestand al weg */ } }
+  const taakFiles = (t.bijlagen || []).map((a) => a.file);
   db().taken = takenLijst().filter((x) => x.id !== t.id);
+  verwijderBestandenAlsOngebruikt(taakFiles);
   logActivity(req.user.name, 'taak verwijderd', t.titel);
   saveSoon();
   res.json({ ok: true });
@@ -2688,7 +2706,7 @@ app.post('/api/ingest/form', async (req, res) => {
     formAttachments = dedupeAttachments(parsed.attachments);
     rejectedFiles = parsed.rejected;
   }
-  const dropSavedFiles = () => { for (const a of formAttachments) { try { deleteFile(a.file); } catch { /* al weg */ } } };
+  const dropSavedFiles = () => { verwijderBestandenAlsOngebruikt(formAttachments.map((a) => a.file)); };
   // Toegang: óf een geldig token, óf de aanvraag komt aantoonbaar van de eigen site.
   // Leads gaan sowieso altijd eerst door handmatige controle, dus de impact van
   // misbruik is beperkt tot hooguit spam in de te-controleren inbox.
@@ -3580,14 +3598,21 @@ app.post('/api/orders/:id/data-suggestion', requireRole('admin', 'assistent'), (
   const idx = list.findIndex((s) => s.field === field);
   if (idx < 0) return res.status(404).json({ error: 'Suggestie niet gevonden' });
   const sug = list[idx];
+  // Twee vormen leefden naast elkaar ({field,from,to} uit upsertCustomer en
+  // {field,value,current} uit plak-opdracht/factuur): "Bijwerken" schreef dan
+  // `undefined` in het klantrecord — het adres was weg (audit 16 sep, kritiek).
+  const nieuw = sug.to ?? sug.value;
+  const oud = sug.from ?? sug.current;
   if (action === 'apply') {
     const customer = db().customers.find((c) => c.id === order.customerId);
-    const map = { adres: 'address', telefoon: 'phone', 'e-mail': 'email', naam: 'name' };
+    const map = { adres: 'address', address: 'address', telefoon: 'phone', phone: 'phone', 'e-mail': 'email', email: 'email', naam: 'name', name: 'name' };
+    if (nieuw === undefined || nieuw === null || String(nieuw).trim() === '') return res.status(400).json({ error: 'Deze suggestie bevat geen nieuwe waarde — negeer hem.' });
     if (customer && map[sug.field]) {
-      customer[map[sug.field]] = sug.to;
+      customer[map[sug.field]] = String(nieuw);
+      void db().customers;
       order.thread = order.thread || [];
-      order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: `Klantrecord bijgewerkt door ${req.user.name}: ${sug.field} "${sug.from || '—'}" → "${sug.to}".`, at: now() });
-      logActivity(req.user.name, 'klantrecord bijgewerkt via suggestie', `${customer.name}: ${sug.field} → ${sug.to}`);
+      order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (gegevens-check)', body: `Klantrecord bijgewerkt door ${req.user.name}: ${sug.field} "${oud || '—'}" → "${nieuw}".`, at: now() });
+      logActivity(req.user.name, 'klantrecord bijgewerkt via suggestie', `${customer.name}: ${sug.field} → ${nieuw}`);
     }
   } else {
     logActivity(req.user.name, 'gegevens-suggestie genegeerd', `${order.title}: ${sug.field}`);
@@ -4314,6 +4339,12 @@ app.post('/api/invoices', requireAuth, (req, res) => {
   const b = req.body || {};
   const type = b.type === 'offerte' ? 'offerte' : 'factuur';
   let customerId = b.customerId;
+  // Monteur: alleen voor klanten van zijn EIGEN kaarten (audit 16 sep — hij kon voor
+  // elke klant een factuur openen en zo nummers verbruiken); nieuwe klant = recht 'customers'.
+  if (req.user.role === 'monteur') {
+    if (b.newCustomer && !can(req.user, 'customers')) return res.status(403).json({ error: 'Een nieuwe klant aanmaken kan alleen via kantoor' });
+    if (customerId && !(db().orders || []).some((o) => o.customerId === customerId && o.monteurId && o.monteurId === req.user.monteurId)) return res.status(403).json({ error: 'Alleen voor klanten van je eigen opdrachten' });
+  }
   if (!customerId && b.newCustomer) {
     const nc = b.newCustomer || {};
     if (!String(nc.name || '').trim()) return res.status(400).json({ error: 'Vul minimaal de naam van de nieuwe klant in.' });
@@ -4563,7 +4594,8 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
     // Vorige WhatsApp-PDF van deze factuur opruimen, zodat er per factuur maar één
     // bestand op de schijf blijft staan.
-    if (inv.waPdfFile) { try { deleteFile(inv.waPdfFile); } catch { /* al weg */ } }
+    const vorigePdf = inv.waPdfFile; inv.waPdfFile = null;
+    if (vorigePdf) verwijderBestandenAlsOngebruikt([vorigePdf]);
     const saved = saveBuffer(pdf, { mime: 'application/pdf', filename: `${isQuote ? 'Offerte' : 'Factuur'}-${inv.number}.pdf` });
     if (!saved) return res.status(500).json({ error: 'PDF klaarzetten mislukt.' });
     inv.waPdfFile = saved.file;
@@ -4589,6 +4621,13 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
     if (order) {
       order.thread = order.thread || [];
       order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: `Keyservice (${isQuote ? 'offerte' : 'factuur'} ${inv.number})`, body: tekst, at: now() });
+      // Zelfde regel als bij e-mail (audit 16 sep): de kaart beweegt mee naar
+      // "Offerte verzonden", alleen vooruit.
+      if (isQuote && ['nieuw', 'open'].includes(order.status)) {
+        order.status = 'offerte_verzonden';
+        order.quoteSentAt = order.quoteSentAt || now();
+        logActivity(req.user.name, 'kaart naar Offerte verzonden', `${order.title} (offerte ${inv.number})`);
+      }
       order.updatedAt = now();
     }
     logActivity(req.user.name, `${isQuote ? 'offerte' : 'factuur'} via WhatsApp verstuurd`, `${inv.number} -> ${tel}`);
@@ -4649,6 +4688,7 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
     // kaart die al op afspraak/afgerond staat laten we met rust.
     if (order && isQuote && ['nieuw', 'open'].includes(order.status)) {
       order.status = 'offerte_verzonden';
+      order.quoteSentAt = order.quoteSentAt || now();
       order.updatedAt = now();
       logActivity(req.user.name, 'kaart naar Offerte verzonden', `${order.title} (offerte ${inv.number})`);
     }
@@ -4730,11 +4770,14 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
 app.get('/api/invoices', requireAuth, (req, res) => {
   const maps = buildMaps();
   let list = db().invoices || [];
-  if (req.user.role === 'monteur') list = list.filter((i) => canTouchInvoice(req, i));
+  // Zelfde grens als GET /api/invoices/:id — ook een assistente zonder invoicesAll
+  // zag de hele lijst en liep daarna tegen een 403 aan (audit 16 sep).
+  list = list.filter((i) => canTouchInvoice(req, i));
   const payDays = getInvoiceSettings().paymentDays || 7;
+  const ordersById = new Map((db().orders || []).map((x) => [x.id, x]));
   res.json(list.map((i) => {
     const c = maps.customers.get(i.customerId) || {};
-    const o = i.orderId ? (db().orders.find((x) => x.id === i.orderId) || {}) : {};
+    const o = i.orderId ? (ordersById.get(i.orderId) || {}) : {};
     // Vervaldatum meegeven zodat het overzicht "verlopen" op de ÉCHTE betaaltermijn
     // baseert (instelbaar) i.p.v. een vaste 7 dagen in de frontend.
     const dueAt = i.type !== 'offerte' && i.sentAt
@@ -5607,7 +5650,7 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
   const none = { id: '', name: 'Geen monteur', afgerond: 0, omzet: 0, afspraken: 0, actief: 0 };
 
   let newOrders = 0, doneCount = 0, cancelCount = 0, omzet = 0, apptCount = 0;
-  for (const o of db().orders.concat((db().trash || []).filter((o) => !o.deletedAt))) {
+  for (const o of db().orders) {
     const row = monteurMap.get(o.monteurId) || none;
     if (inWeek(o.createdAt)) newOrders++;
     if (o.appointmentAt && inWeek(o.appointmentAt)) { apptCount++; row.afspraken++; }
@@ -5672,7 +5715,7 @@ app.get('/api/health', requirePerm('system'), async (req, res) => {
   res.json(lastHealth());
 });
 
-app.get('/api/activity', requireAuth, (req, res) => {
+app.get('/api/activity', requireRole('admin', 'assistent'), (req, res) => {
   res.json(db().activity.slice(0, 100));
 });
 

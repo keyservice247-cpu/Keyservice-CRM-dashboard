@@ -5,6 +5,9 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 // Dunne outline-iconen (Lucide-stijl) — strak en zakelijk, geen emoji.
 const ICON_PATHS = {
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-8 8"/>',
+  check: '<path d="M5 12l4 4L19 6"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   whatsapp: '<path d="M3 21l1.7-5A8 8 0 1 1 8 19.3z"/>',
   bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
   pin: '<path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
@@ -212,6 +215,12 @@ function hasPerm(key) {
   // Admin-onderdelen: weg voor wie het recht niet heeft. Een element met
   // data-need="finance" (enz.) blijft staan als dat recht per gebruiker aanstaat.
   if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => { const need = el.dataset.need; if (!need || !hasPerm(need)) el.remove(); });
+  // Zijbalk volgt dezelfde rechten als het mobiele menu (navItems): geen menu-item
+  // dat op een 403 uitkomt (audit 16 sep).
+  if (me.user.role !== 'admin') {
+    const eis = { inbox: 'inbox', trash: 'deleteOrders', customers: 'customers', monteurs: 'customers' };
+    $$('.nav-item[data-view]').forEach((el) => { const need = eis[el.dataset.view]; if (need && !hasPerm(need)) el.hidden = true; });
+  }
   if (me.user.role === 'monteur') {
     $$('.perm-write').forEach((el) => (el.hidden = true));
     // Noodroute (10 sep): een GEKOPPELDE monteur mag zelf een opdracht plakken of
@@ -345,11 +354,14 @@ async function startLiveUpdates() {
         // Bezig met een bulk-selectie? Dan het bord met rust laten tot je klaar bent —
         // anders schuift alles onder je vingers weg terwijl je aan het aanvinken bent.
         if (state.view === 'board' && boardSel.size) return;
-        if (state.view === 'overview') loadOverview();
-        else if (state.view === 'board') loadBoard();
-        else if (state.view === 'inbox') loadInbox();
-        else if (state.view === 'customers') loadCustomers();
-        else if (state.view === 'chats') loadChats(true);
+        // Inbox: selectie of half ingetypte correctie open? Dan óók met rust laten.
+        if (state.view === 'inbox' && (inboxSel.size || inboxHeeftBewerking())) return;
+        const stil = (e) => console.warn('[pulse] verversen mislukt:', e?.message);
+        if (state.view === 'overview') loadOverview().catch(stil);
+        else if (state.view === 'board') loadBoard().catch(stil);
+        else if (state.view === 'inbox') loadInbox().catch(stil);
+        else if (state.view === 'customers') loadCustomers().catch(stil);
+        else if (state.view === 'chats') loadChats(true).catch(stil);
       }
       _lastPulse = p.v;
     } catch { /* offline: volgende keer opnieuw */ }
@@ -799,7 +811,10 @@ async function vulTakenVandaag() {
   const el = $('#takenVandaagBlok'); if (!el) return;
   let lijst; try { lijst = await api('/api/taken/vandaag'); } catch { return; }
   const badge = $('#takenBadge'); if (badge) { const n = Array.isArray(lijst) ? lijst.length : 0; badge.textContent = n; badge.hidden = !n; }
-  if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; return; }
+  if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; window._lastTakenBlokHtml = ''; return; }
+  const takenBlokHtml = JSON.stringify(lijst.map((t) => [t.id, t.titel, t.urgentie, t.dagen]));
+  if (takenBlokHtml === window._lastTakenBlokHtml && el.children.length) return;
+  window._lastTakenBlokHtml = takenBlokHtml;
   el.innerHTML = `<div class="info-card" style="margin-bottom:18px;border-left:4px solid #4a6fa5">
     <h3 style="margin:0 0 6px">${icon('list', 15)} Vandaag — taken (${lijst.length})</h3>
     <ul class="ov-list">${lijst.map((t) => `<li data-taak="${esc(t.id)}"><strong>${esc(t.titel)}</strong> <span class="muted">· ${TAAK_URG[t.urgentie] || t.urgentie}${t.dagen !== null && t.dagen !== undefined ? ` · ${t.dagen < 0 ? Math.abs(t.dagen) + ' dagen te laat' : t.dagen === 0 ? 'vandaag' : 'nog ' + t.dagen + ' dagen'}` : ''}</span></li>`).join('')}</ul></div>`;
@@ -809,7 +824,10 @@ async function vulTakenVandaag() {
 async function vulOnbeantwoord() {
   const el = $('#onbeantwoordBlok'); if (!el) return;
   let lijst; try { lijst = await api('/api/chats/onbeantwoord?uren=2'); } catch { return; }
-  if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; return; }
+  if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; window._lastWachtHtml = ''; return; }
+  const wachtVinger = JSON.stringify([window._wachtAlles, lijst.map((x) => [x.chatId, x.urenWachtend, x.tekst, x.kaart?.status])]);
+  if (wachtVinger === window._lastWachtHtml && el.children.length) return;
+  window._lastWachtHtml = wachtVinger;
   // 16 sep 2026: nieuwste eerst, wachttijd in dagen, kaart-context, knop "Afgehandeld"
   // (haalt het bericht weg zonder iets te sturen) en "Alles tonen" i.p.v. een vage "+ N meer".
   const wacht = (x) => x.urenWachtend >= 48 ? `${x.dagenWachtend} dagen` : `${x.urenWachtend} uur`;
@@ -824,7 +842,7 @@ async function vulOnbeantwoord() {
         <button type="button" class="btn btn-sm wacht-klaar" data-chat="${esc(x.chatId)}" title="Uit de lijst halen — er wordt niets verstuurd">Afgehandeld</button>
       </div></li>`).join('')}</ul>
     ${lijst.length > 6 ? `<button type="button" class="btn btn-sm" id="wachtAlles" style="margin-top:6px">${window._wachtAlles ? 'Minder tonen' : `Alle ${lijst.length} tonen`}</button>` : ''}</div>`;
-  $$('li[data-chat]', el).forEach((li) => li.onclick = (e) => { if (e.target.closest('.wacht-klaar')) return; goView('chats'); setTimeout(() => openChat(li.dataset.chat), 500); });
+  $$('li[data-chat]', el).forEach((li) => li.onclick = async (e) => { if (e.target.closest('.wacht-klaar')) return; goView('chats'); try { await loadChats(); } catch { /* lijst komt via de pulse */ } openChat(li.dataset.chat); });
   $$('.wacht-klaar', el).forEach((b) => b.onclick = async (e) => {
     e.stopPropagation();
     b.disabled = true;
@@ -898,7 +916,8 @@ async function renderChatPane(scrollDown) {
     const boxEl = $('#cpMsgs');
     if (!boxEl) return;
     $$('.cp-orderlink', boxEl).forEach((a) => a.onclick = async (e) => { e.preventDefault(); state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(a.dataset.oid); });
-    $$('.quote-toggle', boxEl).forEach((btn) => btn.onclick = () => { const b = btn.nextElementSibling; if (b) b.hidden = !b.hidden; });
+    // (quote-toggle: de document-brede handler onderaan dekt dit al — een tweede binding
+    // klapte het citaat twee keer om en het bleef dus dicht; audit 16 sep)
   };
 
   // ZELFDE gesprek al open? Dan alleen de BERICHTEN bijwerken — de kop en de
@@ -1013,7 +1032,8 @@ function showView(view, tab) {
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
   const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance, chats: loadChats, taken: loadTaken };
-  (map[view] || (() => {}))();
+  // Elke laadfout ZICHTBAAR maken (audit 16 sep): voorheen bleef het scherm stil leeg.
+  Promise.resolve().then(map[view] || (() => {})).catch((err) => toast(`Kon dit scherm niet laden: ${err.message}`, true));
 }
 
 // Markeer een opdracht als geopend/gezien (zet de statusstip op blauw).
@@ -1044,10 +1064,16 @@ function flash(elOrSelector) {
 }
 
 async function refreshAll() {
-  state.monteurs = await api('/api/monteurs');
-  fillMonteurFilter();
-  await loadOverview();
-  await refreshInboxBadge();
+  try {
+    state.monteurs = await api('/api/monteurs');
+    fillMonteurFilter();
+    await loadOverview();
+    await refreshInboxBadge();
+  } catch (err) {
+    // Nooit stil doodlopen bij het opstarten (audit 16 sep): de live-updates hierna
+    // moeten hoe dan ook starten, en de gebruiker hoort te weten wat er is.
+    toast(`Laden mislukt: ${err.message} — probeer het zo opnieuw`, true);
+  }
 }
 
 // Spring naar een weergave alsof je op het menu-item klikt (incl. actief-markering).
@@ -1115,8 +1141,6 @@ async function loadOverview() {
   const first = (state.me.name || '').trim().split(' ')[0] || '';
   $('#overviewHi').textContent = first ? `Hoi ${first}` : 'Overzicht';
   $('#overviewDate').textContent = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  setTimeout(vulOnbeantwoord, 400); // nadat het overzicht is getekend
-  setTimeout(vulTakenVandaag, 400);
   const card = (num, label, view, cls = '', col = '') => `<button class="kpi-card ${cls}" data-go="${view}"${col ? ` data-col="${esc(col)}"` : ''}><span class="kpi-num">${num}</span><span class="kpi-label">${esc(label)}</span></button>`;
   const wa = d.whatsapp || {};
   const list = (arr, empty) => arr.length
@@ -1169,6 +1193,10 @@ async function loadOverview() {
   // Alleen opnieuw tekenen als er echt iets veranderd is. Anders werd bij élke
   // achtergrondwijziging je zoekbalk leeggegooid, het dagoverzicht opnieuw opgehaald
   // en sprong de pagina — precies het "geknipper" op Start.
+  // De losse blokken (Wacht op antwoord / taken) hebben hun eigen HTML-vergelijking,
+  // dus die mogen bij elke ronde kijken zonder te knipperen (audit 16 sep).
+  setTimeout(vulOnbeantwoord, 400);
+  setTimeout(vulTakenVandaag, 400);
   if (ovHtml === _lastOvHtml && $('#overviewPanel').children.length) return;
   _lastOvHtml = ovHtml;
   $('#overviewPanel').innerHTML = ovHtml;
@@ -1434,7 +1462,16 @@ function renderBoard() {
   // elke keer volledig herbouwd zodra de server ook maar íets opsloeg (ook een
   // achtergrondtaak). Dat gaf het "knipperen", liet de pagina verspringen onder de
   // onderbalk, en wiste je selectie. Zelfde HTML = scherm met rust laten.
-  if (nieuweHtml === _lastBoardHtml && board.children.length) return;
+  if (nieuweHtml === _lastBoardHtml && board.children.length) {
+    // Zelfde HTML, maar een KPI-klik kan de gekozen kolom/tab hebben gewijzigd (audit 16 sep).
+    setupBoardTabs();
+    if (state._focusCol) {
+      const colEl = $(`#board .column[data-status="${state._focusCol}"]`);
+      if (colEl) { colEl.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); flash(colEl); }
+      state._focusCol = null;
+    }
+    return;
+  }
   _lastBoardHtml = nieuweHtml;
   // Scrollposities onthouden (pagina + horizontaal gescrolde kolommenrij), zodat het
   // beeld niet wegspringt terwijl je aan het kijken of tikken bent.
@@ -1711,6 +1748,10 @@ function bindCardSwipe() {
 // zodra er ergens iets verandert) — precies de klacht "na een halve minuut is mijn
 // selectie verdwenen en kan ik niets meer toepassen".
 const boardSel = new Set();
+// Inbox-selectie (audit 16 sep): overleeft een verversing, net als boardSel.
+const inboxSel = new Set();
+// Staat er in de inbox een half ingetypte correctie (naam/telefoon/adres) open?
+function inboxHeeftBewerking() { const a = document.activeElement; return !!(a && a.closest && a.closest('#reviewList') && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== 'checkbox'); }
 let _lastBoardHtml = '';   // laatst getekende bord, om nutteloos hertekenen te herkennen
 let _lastArchHtml = '';    // idem voor de ingeklapte week-agenda's
 let _lastOvHtml = '';      // idem voor de Start-pagina
@@ -1933,6 +1974,17 @@ function openMergeModal(primary) {
 function openOrderModal(id, pool) {
   const list = pool || state.orders;
   const o = id ? list.find((x) => x.id === id) : null;
+  if (id && !o && !pool) {
+    // Kaart (nog) niet in het geheugen (net aangemaakt, archief, andere collega)? Eerst
+    // ophalen — voorheen kreeg je stilletjes een LEEG nieuw-formulier en daarmee een
+    // dubbele kaart (audit 16 sep).
+    api('/api/orders?includeArchived=1').then((os) => {
+      state.orders = os;
+      if (os.find((x) => x.id === id)) openOrderModal(id, os);
+      else toast('Kaart niet gevonden — misschien staat hij in de prullenbak.', true);
+    }).catch((err) => toast(err.message, true));
+    return;
+  }
   const canWrite = state.me.role !== 'monteur';
   const isMonteur = state.me.role === 'monteur';
   const monteurOpts = '<option value="">— geen monteur —</option>' +
@@ -1951,7 +2003,7 @@ function openOrderModal(id, pool) {
     </div>` : ''}
     ${o && o.customerIncomplete ? `<div class="sug-banner sug-warn">${icon('user', 13)} <strong>Klant onbekend — aanvullen.</strong> Er is geen echte klantnaam in het bericht gevonden (de afzender is nooit automatisch de klant). Vul hieronder de klantgegevens aan.</div>` : ''}
     ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open kaart <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. ${canWrite ? `<span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span>` : ''}</div>` : ''}
-    ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de kaart gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from || '—')}"</span> → <strong>"${esc(sg.to)}"</strong>${canWrite ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
+    ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de kaart gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from ?? sg.current ?? '—')}"</span> → <strong>"${esc(sg.to ?? sg.value ?? '')}"</strong>${canWrite && (sg.to ?? sg.value) ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur && o ? 'disabled' : ''} placeholder="bv. Rhenen — cilinderslot vervangen"></label>
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
@@ -2194,8 +2246,11 @@ function openOrderModal(id, pool) {
     const apptEindNu = $('#f-appt-end') ? ($('#f-appt-end').value || null) : null;
     const apptEindWas = o?.appointmentEndAt ? o.appointmentEndAt.slice(0, 16) : null;
     if (!o || apptEindNu !== apptEindWas) payload.appointmentEndAt = apptEindNu;
+    // Titel: bij een NIEUWE kaart altijd meesturen — ook voor de gekoppelde monteur
+    // (noodroute). Die zat voorheen achter canWrite, waardoor de monteur op Opslaan
+    // altijd "Titel verplicht" kreeg en nooit een kaart kon maken (audit 16 sep 2026).
+    if (!o || canWrite) payload.title = $('#f-title').value;
     if (canWrite) {
-      payload.title = $('#f-title').value;
       payload.monteurId = $('#f-monteur').value || null;
       payload.price = $('#f-price').value;
       payload.source = $('#modal [data-source]')?.value || 'Handmatig';
@@ -2294,6 +2349,8 @@ async function loadInbox(append = false) {
       : '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>';
     return;
   }
+  // Selectie leeft in inboxSel (Set) en wordt in reviewHTML als checked teruggezet —
+  // zoals boardSel op het bord (audit 16 sep: 12 vinkjes weg bij één nieuw bericht).
   const rowsHTML = reviews.map(reviewHTML).join('');
   // Niets veranderd? Dan de lijst met rust laten. Anders werd de inbox bij élke
   // achtergrondwijziging opnieuw opgebouwd: half ingetypte klantcorrecties weg,
@@ -2304,7 +2361,8 @@ async function loadInbox(append = false) {
   if (append) { $('#inboxMoreWrap')?.remove(); list.insertAdjacentHTML('beforeend', rowsHTML); _lastInboxHtml = ''; }
   else list.innerHTML = rowsHTML;
   reviews.forEach((r) => bindReview(r));
-  $$('.r-select').forEach((c) => c.addEventListener('change', updateBulkCount));
+  if (!append) for (const sid of [...inboxSel]) if (!reviews.some((r) => r.id === sid)) inboxSel.delete(sid); // verwerkte items uit de selectie
+  $$('.r-select').forEach((c) => c.addEventListener('change', () => { if (c.checked) inboxSel.add(c.dataset.id); else inboxSel.delete(c.dataset.id); updateBulkCount(); }));
   // "Toon meer"-knop als er nog berichten resteren.
   const shown = state._inboxOffset || 0;
   if (shown < total) {
@@ -2328,7 +2386,7 @@ function reviewHTML(r) {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}"></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open kaart: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}
+    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open kaart: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div>${esc(s.engine || '')}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
       ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('inbox') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
@@ -2983,14 +3041,18 @@ function openWerkbonModal(o) {
     <div class="modal-actions"><span></span><div class="right"><button class="btn" id="wb-cancel">Annuleren</button><button class="btn btn-primary" id="wb-save">Werkbon opslaan</button></div></div>`);
   // Simpel teken-canvas (muis + touch).
   const cv = $('#wb-sign'); const ctx = cv.getContext('2d');
-  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.strokeStyle = '#111';
+  // Scherp op retina: canvas-bitmap op de echte pixelmaat van het vak (audit 16 sep).
+  { const r = cv.getBoundingClientRect(); const dpr = Math.min(3, window.devicePixelRatio || 1); if (r.width) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); } }
+  ctx.lineWidth = Math.max(2.2, cv.width / 260); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
   let drawing = false; let drew = false;
   const pos = (e) => { const r = cv.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; return { x: (p.clientX - r.left) * (cv.width / r.width), y: (p.clientY - r.top) * (cv.height / r.height) }; };
   const start = (e) => { drawing = true; drew = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); e.preventDefault(); };
   const move = (e) => { if (!drawing) return; const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); e.preventDefault(); };
   const end = () => { drawing = false; };
-  cv.addEventListener('mousedown', start); cv.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
-  cv.addEventListener('touchstart', start, { passive: false }); cv.addEventListener('touchmove', move, { passive: false }); cv.addEventListener('touchend', end);
+  // Bewegen op het DOCUMENT (net als bij bord-slepen): even buiten het vak = lijn
+  // loopt gewoon door i.p.v. afbreken.
+  cv.addEventListener('mousedown', start); document.addEventListener('mousemove', move); document.addEventListener('mouseup', end);
+  cv.addEventListener('touchstart', start, { passive: false }); document.addEventListener('touchmove', move, { passive: false }); document.addEventListener('touchend', end);
   $('#wb-clear').onclick = () => { ctx.clearRect(0, 0, cv.width, cv.height); drew = false; };
   $('#wb-cancel').onclick = () => openOrderModal(o.id);
   $('#wb-save').onclick = async () => {
@@ -3274,6 +3336,7 @@ function renderInvoiceEditor(ctx) {
   if ($('#inv-send-wa')) $('#inv-send-wa').onclick = async () => {
     const tel = (ctx.order && ctx.order.intake && ctx.order.intake.phone) || customer.phone || '';
     if (!tel) { toast('Deze klant heeft nog geen telefoonnummer — vul dat eerst in.', true); return; }
+    if (!confirmEditIfSent()) return;
     if (!confirm(`${woord} als PDF via WhatsApp sturen naar ${tel}?`)) return;
     try {
       const saved = await saveConcept();
@@ -4180,6 +4243,12 @@ function renderAnalysis(a) {
 
 async function loadSettings() {
   const s = await api('/api/settings');
+  await loadSettingsHtml(s);
+  // Admin-onderdelen die pas nu gerenderd zijn (bv. Google-kaart) alsnog wegfilteren
+  // voor een assistente met instellingen-recht (audit 16 sep).
+  if (state.me.role !== 'admin') $$('#settingsPanel .admin-only').forEach((el) => { const need = el.dataset.need; if (!need || !hasPerm(need)) el.remove(); });
+}
+async function loadSettingsHtml(s) {
   $('#settingsPanel').innerHTML = `
     <div class="sg-nav">
       <button class="chip sg-chip on" data-g="alles">Alles</button>
@@ -5134,8 +5203,12 @@ async function loadSettings() {
     const row = document.createElement('div');
     row.className = 'editor-row';
     row.dataset.key = st.key || '';
-    row.innerHTML = `<input type="color" value="${esc(st.color || '#64748b')}"><input type="text" value="${esc(st.label || '')}" placeholder="Kolomnaam"><button class="btn btn-sm btn-danger" title="Verwijderen"></button>`;
-    row.querySelector('button').onclick = () => row.remove();
+    row.innerHTML = `<input type="color" value="${esc(st.color || '#64748b')}"><input type="text" value="${esc(st.label || '')}" placeholder="Kolomnaam"><button class="btn btn-sm btn-danger" title="Kolom verwijderen" aria-label="Kolom verwijderen">${icon('trash', 13)}</button>`;
+    row.querySelector('button').onclick = () => {
+      const n = (state.orders || []).filter((o) => o.status === row.dataset.key).length;
+      if (!confirm(`Kolom "${row.querySelector('input[type=text]').value || 'zonder naam'}" verwijderen?${n ? ` Er staan ${n} kaart(en) in — die krijgen daarna "onbekende kolom".` : ''} Pas na "Kolommen opslaan" is het definitief.`)) return;
+      row.remove();
+    };
     statusRows.appendChild(row);
   };
   (s.statuses || []).forEach(renderStatusRow);
@@ -5538,7 +5611,9 @@ function openSimulateModal() {
 // ---------- Status-scan (digest) ----------
 async function openDigestModal() {
   modal('<h2>Status-scan</h2><p class="muted small">Bezig met scannen…</p>');
-  const d = await api('/api/digest');
+  let d;
+  try { d = await api('/api/digest'); }
+  catch (err) { modal(`<h2>Status-scan</h2><p class="error">${esc(err.message)}</p><div class="modal-actions"><span></span><div class="right"><button class="btn" onclick="closeModal()">Sluiten</button><button class="btn btn-primary" onclick="openDigestModal()">Opnieuw proberen</button></div></div>`); return; }
   const list = (arr, emptyTxt) => arr.length
     ? `<ul class="digest-list">${arr.map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}</ul>`
     : `<div class="muted small">${emptyTxt}</div>`;
@@ -5571,13 +5646,15 @@ async function openDigestModal() {
     } catch {}
     toast(dgAuto.checked ? 'Status-scan opent voortaan elke ochtend automatisch' : 'Automatisch openen staat uit');
   };
-  $$('[data-open]').forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
+  $$('[data-open]', $('#modal')).forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
 }
 
 // ---------- Dubbele klanten samenvoegen ----------
 async function openDuplicatesModal() {
   modal('<h2>Dubbele klanten</h2><p class="muted small">Zoeken naar dubbele klanten…</p>');
-  const groups = await api('/api/customers/duplicates');
+  let groups;
+  try { groups = await api('/api/customers/duplicates'); }
+  catch (err) { modal(`<h2>Dubbele klanten</h2><p class="error">${esc(err.message)}</p><div class="modal-actions"><span></span><div class="right"><button class="btn" onclick="closeModal()">Sluiten</button></div></div>`); return; }
   if (!groups.length) {
     modal('<h2>Dubbele klanten</h2><p>Geen dubbele klanten gevonden.</p><div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="d-close">Sluiten</button></div></div>');
     $('#d-close').onclick = closeModal; return;
@@ -5821,6 +5898,11 @@ document.addEventListener('keydown', (e) => {
 // Command palette: Ctrl/⌘+K -> overal zoeken (opdrachten, klanten) en snel navigeren.
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCommandPalette(); }
+});
+// Typveld in Berichten groeit mee met de tekst (max 120 px), audit 16 sep.
+document.addEventListener('input', (e) => {
+  const t = e.target;
+  if (t && t.id === 'cpText') { t.style.height = 'auto'; t.style.height = Math.min(120, t.scrollHeight) + 'px'; }
 });
 // Eén lijst met alle pagina's — gebruikt door het zoekvenster ("Ga naar") én het
 // menu rechtsboven, zodat ze nooit uit elkaar lopen. Rechten-gestuurd: een

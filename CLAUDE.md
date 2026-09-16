@@ -548,6 +548,46 @@ de regressie meegroeit.
   (b) kaart van de klant ná het bericht afgerond/geannuleerd. GET /api/chats/onbeantwoord
   accepteert uren=0 (tests). Ochtendbriefing/weekcheck gebruiken dezelfde functie.
   Test: chat-test (71) + browser (+3).
+- **AUDIT 16 sep 2026 — ronde 1 (3 opus-agents: backend, frontend, browser-doorloop;
+  terugvalpunt = branch `terugvalpunt-2026-09-16`, commit ecbfadb):** gefixt:
+  KRITIEK: (1) monteur kon via "+ Nieuwe opdracht" NOOIT een kaart maken (titel zat
+  achter canWrite → altijd "Titel verplicht"; browser-test logt nu écht als monteur in
+  en maakt een kaart); (2) gegevens-suggestie "Bijwerken" schreef `undefined` in het
+  klantrecord (twee vormen {from,to} vs {current,value}; route leest nu beide, lege
+  waarde = 400; banner toont beide vormen); (3) GEDEELDE BESTANDEN: sinds de
+  ontdubbeling wijzen meerdere kaarten naar één bestand — alle verwijderpaden
+  (kaart-foto, prullenbak definitief/legen/>500, taak, formulier-terugdraai, factuur-
+  PDF, nachtelijke runAttachmentCleanup) lopen nu via server/bijlagen.js
+  `verwijderBestandenAlsOngebruikt(files)` (telt verwijzingen incl. taken, factuur-
+  PDF's `inv.waPdfFile` en outbox-media; handtekening-bestanden nooit). HOOG:
+  applyReview hangt aan de NIEUWSTE open kaart (was oudste); klanten samenvoegen
+  neemt facturen/mailUit/outbox/taken/leesmarkeringen mee; kaarten samenvoegen
+  ontdubbelt bijlages en hangt facturen om; /api/activity + /api/feedback alleen
+  kantoor; GET /api/invoices filtert canTouchInvoice voor iedereen (+ ordersById-
+  map); ontvangstbevestiging-bij-goedkeuren slaat klant-in-behandeling over
+  (klantInBehandelingBehalve); POST /api/invoices: monteur alleen eigen klanten,
+  nieuwe klant vereist recht; /seen eist canTouchOrder; offerte via WhatsApp zet
+  kaart op offerte_verzonden + `order.quoteSentAt` (followup.js meet daarop);
+  restore → review.prevStatus (geklets terug naar Overige); zelfdeTijd() nu module-
+  breed (herinnering + briefing); taken: categorie alleen eigenaar, dagenTot in
+  Europe/Amsterdam; sanitizeStatuses bewaart noteRequired; monteur mag foto van
+  eigen kaart weghalen; kaart-upload via mergeAttachments (`dubbel:true`);
+  browse `trashed` op deletedAt. FRONTEND: showView/refreshAll/pulse vangen
+  laadfouten (toast i.p.v. stil leeg scherm); inbox-selectie in `inboxSel` (Set,
+  overleeft verversing; pulse slaat inbox over bij selectie/open invoerveld);
+  KPI-klik → juiste kolom óók als het bord niet hertekent; Start-blokken alleen
+  hertekenen bij verandering; gesprek openen vanaf Start wacht op loadChats;
+  dubbele quote-toggle weg; openOrderModal haalt een onbekende kaart op i.p.v.
+  leeg nieuw-formulier; status-scan/dubbele klanten tonen fouten; data-open
+  gescoopt op de modal; iconen image/check/edit; "Via WhatsApp" respecteert
+  confirmEditIfSent; admin-only opnieuw gefilterd na instellingen-render; zijbalk
+  verbergt menu's zonder recht (inbox/prullenbak/klanten/monteurs); kolom-
+  verwijderknop met icoon + bevestiging; handtekening-canvas retina + bewegen op
+  document; typveld Berichten groeit mee; login: knop blokkeren, netwerkfout
+  tonen, demo-regel weg; sw.js navigeert naar de melding-URL; CSS: --border token,
+  nachtmodus-tokens (kolommen Afgehandeld, DRS-chip), primaire knop vooraan in élke
+  mobiele knoppenrij + schuif-fade, tikdoelen 40+ px, inputs 16 px op mobiel.
+  Test: test/audit-test.mjs (27, PORT=3137) + browser-test 129.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

@@ -237,10 +237,12 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
   // meer — de nieuwe kaart krijgt een SUGGESTIE ("Mogelijk zelfde opdracht als kaart
   // X — samenvoegen?") en de mens beslist. Zelfde input geeft zo altijd zelfde
   // uitkomst; er verdwijnt nooit meer stil een aanvraag in een oude kaart.
-  const openOrder = db().orders.find((o) =>
-    o.customerId === customer.id &&
-    !o.archivedWeek &&
-    !['afgerond', 'geannuleerd'].includes(o.status));
+  // NIEUWSTE open kaart (audit 16 sep): .find() gaf de OUDSTE, waardoor het zelfde-
+  // moment-venster en de samenvoeg-suggestie naar een oude klus wezen — de pipeline
+  // zelf (ingestMessageKern) sorteert al sinds juli op nieuwste.
+  const openOrder = db().orders
+    .filter((o) => o.customerId === customer.id && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0];
 
   // VERFIJNING Regel 1 (25 jul, akkoord Abdel): "zelfde moment"-samenvoegen.
   // Heeft deze klant een open kaart die KORT geleden (venster, standaard 6 uur,

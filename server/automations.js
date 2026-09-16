@@ -11,6 +11,11 @@ import {
 import { morningInsight, askAssistant } from './ai/categorizer.js';
 import { syncOrderToGoogle, isConnected as googleIsConnected, calendarAlarmDecision, testingModusVermoeden } from './google.js';
 import { deleteFile } from './storage.js';
+import { verwijderBestandenAlsOngebruikt } from './bijlagen.js';
+
+// Afspraaktijden op TIJDSTIP vergelijken, niet op tekst (de kaart-modal kapt af op
+// 16 tekens). Gedeeld door bevestiging, herinnering en ochtendbriefing (audit 16 sep).
+export const zelfdeTijd = (a, b) => !!(a && b) && new Date(a).getTime() === new Date(b).getTime();
 import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
@@ -93,7 +98,6 @@ export async function maybeSendAppointmentConfirm(order) {
     if (!order.appointmentAt || ['afgerond', 'geannuleerd'].includes(order.status)) return;
     // Op TIJDSTIP vergelijken, niet op tekst: de kaart-modal kapt af op 16 tekens, waardoor
     // dezelfde afspraak bij elke opslag opnieuw werd bevestigd (audit 18 aug).
-    const zelfdeTijd = (a, b) => a && b && new Date(a).getTime() === new Date(b).getTime();
     if (order.apptMsg && zelfdeTijd(order.apptMsg.confirmedFor, order.appointmentAt)) return; // al bevestigd
     const c = custOf(order);
     const vars = apptVars(order, c);
@@ -185,7 +189,7 @@ async function runAppointmentReminders() {
     if (!o.appointmentAt || o.archivedWeek || ['afgerond', 'geannuleerd'].includes(o.status)) continue;
     const t = new Date(o.appointmentAt).getTime();
     if (isNaN(t) || t < nowMs || t - nowMs > windowMs) continue;
-    if (o.apptMsg && o.apptMsg.remindedFor === o.appointmentAt) continue;
+    if (o.apptMsg && zelfdeTijd(o.apptMsg.remindedFor, o.appointmentAt)) continue;
     const c = custOf(o);
     const vars = apptVars(o, c);
     let sent = false;
@@ -577,7 +581,7 @@ export function morningBriefingData() {
         title: o.title || '',
         name: c.name || '',
         place: (o.intake && o.intake.address) || c.address || '',
-        confirmed: !!(o.apptMsg && o.apptMsg.confirmedFor === o.appointmentAt),
+        confirmed: !!(o.apptMsg && zelfdeTijd(o.apptMsg.confirmedFor, o.appointmentAt)),
       };
     });
   const unanswered = open.filter((o) => (o.unreadReplies || 0) > 0).length;
@@ -948,12 +952,16 @@ export function runAttachmentCleanup() {
     if (sigId) keep.add(sigId);
   }
   let removed = 0;
+  // GEDEELDE BESTANDEN (16 sep 2026): sinds de ontdubbeling wijzen meerdere kaarten/
+  // berichten naar hetzelfde bestand. Hier alleen de VERWIJZING weghalen; het bestand
+  // gaat pas van schijf als niemand er meer naar wijst (ná de ronde, in één keer).
+  const kandidaten = new Set();
   const stripList = (list) => {
     if (!Array.isArray(list) || !list.length) return list;
     const rest = [];
     for (const att of list) {
       if (!att || !att.file || keep.has(att.id)) { rest.push(att); continue; }
-      try { deleteFile(att.file); removed++; } catch { rest.push(att); continue; }
+      kandidaten.add(att.file); removed++;
     }
     return rest;
   };
@@ -977,8 +985,9 @@ export function runAttachmentCleanup() {
     if (!m.receivedAt || new Date(m.receivedAt).getTime() >= cutoff) continue;
     if (m.attachments && m.attachments.length) m.attachments = stripList(m.attachments);
   }
+  const echtWeg = kandidaten.size ? verwijderBestandenAlsOngebruikt([...kandidaten]) : 0;
   if (removed) {
-    logActivity('systeem', 'oude bijlages opgeruimd', `${removed} bestand(en) van afgehandelde klussen ouder dan ${cfg.days} dagen`);
+    logActivity('systeem', 'oude bijlages opgeruimd', `${removed} verwijzing(en) van afgehandelde klussen ouder dan ${cfg.days} dagen, ${echtWeg} bestand(en) van schijf`);
     console.log(`[bijlage-opschoning] ${removed} bestand(en) verwijderd (ouder dan ${cfg.days} dagen, alleen afgeronde/geannuleerde klussen)`);
   }
   saveSoon();

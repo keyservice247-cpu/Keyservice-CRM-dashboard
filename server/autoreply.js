@@ -8,6 +8,9 @@ const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 // Lopende kaart = niet afgerond/geannuleerd, niet in de prullenbak, niet ingeklapt.
 export const klantInBehandeling = (customerId) => (db().orders || []).some((o) => o.customerId === customerId
   && !o.trashedAt && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
+// Zelfde, maar zonder de kaart die net voor deze aanvraag is aangemaakt.
+export const klantInBehandelingBehalve = (customerId, behalveOrderId) => !!customerId && (db().orders || []).some((o) => o.customerId === customerId
+  && o.id !== behalveOrderId && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
 
 export async function maybeSendAutoReply(result) {
   const cfg = getAutoReply();
@@ -83,6 +86,11 @@ export async function maybeSendConfirmationOnApprove(order, review) {
     if (!cfg.enabled || !smtpConfigured()) return;
     if (!order || !review || review.channel !== 'email') return;
     if (order.autoReplied) return; // al bij binnenkomst gestuurd
+    // Aanvraag is bij goedkeuren aan een LOPENDE kaart gehangen (zelfde-moment-venster)
+    // of de klant heeft nog een andere lopende kaart → geen "bedankt voor uw aanvraag"
+    // alsof hij nieuw is (audit 16 sep; zelfde regel als bij binnenkomst).
+    if (review.mergedIntoOrder) return;
+    if (klantInBehandelingBehalve(order.customerId, order.id)) return;
     // Niet bij stokoude aanvragen die iemand laat opruimt/goedkeurt (dan is
     // "bedankt voor uw aanvraag" mosterd na de maaltijd).
     if (review.createdAt && (Date.now() - new Date(review.createdAt).getTime()) > 72 * 3600000) return;

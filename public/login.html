@@ -26,26 +26,31 @@
     </label>
     <button type="submit" class="btn btn-primary btn-block">Inloggen</button>
     <p id="loginError" class="error" hidden></p>
-    <p class="muted small">Demo-account: <strong>admin@keyservice.nl</strong> / <strong>admin123</strong></p>
   </form>
 
   <script>
     const form = document.getElementById('loginForm');
     const errEl = document.getElementById('loginError');
+    const knop = form.querySelector('button[type=submit]');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errEl.hidden = true;
+      // Knop blokkeren tijdens de poging (audit 16 sep): dubbel tikken bij een trage
+      // verbinding telde als meerdere inlogpogingen en liep tegen de login-rem aan.
+      knop.disabled = true; knop.textContent = 'Bezig…';
       const body = { email: form.email.value, password: form.password.value };
-      const res = await fetch('/api/login', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-      });
-      if (res.ok) {
-        window.location.href = '/';
-      } else {
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+        });
+        if (res.ok) { window.location.href = '/'; return; }
         const data = await res.json().catch(() => ({}));
-        errEl.textContent = data.error || 'Inloggen mislukt';
+        errEl.textContent = data.error || (res.status === 429 ? 'Te veel pogingen — wacht even en probeer opnieuw.' : 'Inloggen mislukt');
         errEl.hidden = false;
-      }
+      } catch {
+        errEl.textContent = 'Geen verbinding met de server — probeer het zo opnieuw.';
+        errEl.hidden = false;
+      } finally { knop.disabled = false; knop.textContent = 'Inloggen'; }
     });
   </script>
   <script>if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }</script>

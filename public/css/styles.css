@@ -1,4 +1,7 @@
 :root {
+  --border: var(--line);            /* audit 16 sep: werd gebruikt maar bestond niet (geen rand om het handtekeningvak) */
+  --column-secondary-bg: #f3f4f7;
+  --chip-drs-bg: #eaf1fb;
   /* Neutrale grijstinten + één rustige accentkleur */
   --bg: #fbfcfd;
   --panel: #ffffff;
@@ -30,6 +33,8 @@
 
 /* Nachtmodus — rustige donkere tinten, zelfde accent. Aangezet via data-theme="dark". */
 html[data-theme="dark"] {
+  --column-secondary-bg: #161c26;
+  --chip-drs-bg: #24334a;
   --bg: #0f141b;
   --panel: #1a212c;
   --panel-2: #222b38;
@@ -162,7 +167,7 @@ label input, label select, label textarea { margin-top: 6px; font-weight: 400; c
 .board-secondary { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 12px; }
 .board-sec-label { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
 .board-sec-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 360px)); gap: 12px; }
-.column-secondary { background: #f3f4f7; opacity: .82; }
+.column-secondary { background: var(--column-secondary-bg); opacity: .82; }
 .column-secondary .column-cards { max-height: 260px; }
 .column-secondary:hover { opacity: 1; }
 @media (max-width: 1100px) {
@@ -358,7 +363,7 @@ tr:last-child td { border-bottom: none; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
 .info-card { background: var(--panel); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow-sm); border: 1px solid var(--line); }
 .info-card h3 { font-size: 15px; margin-bottom: 4px; font-weight: 500; }
-.chip-drs { background: #eaf1fb; color: var(--accent-ink); font-weight: 700; letter-spacing: .03em; }
+.chip-drs { background: var(--chip-drs-bg); color: var(--accent-ink); font-weight: 700; letter-spacing: .03em; }
 .chip-ack { background: #e7f6ee; color: #137a43; }
 .status-pill { font-weight: 600; border: 1px solid transparent; }
 .cust-last { cursor: pointer; display: inline-block; }
@@ -897,6 +902,17 @@ table tbody tr:hover { background: var(--panel-2); }
   #view-board .view-actions #newOrderBtn { order: -3; }
   #view-board .view-actions #pasteOrderBtn { order: -2; }
   #view-board .view-actions #phoneOrderBtn { order: -1; }
+  /* Audit 16 sep: dezelfde les voor ÁLLE schermen — de primaire knop (+ Nieuwe klant,
+     + Factuur, Bericht toevoegen …) staat vooraan, en een vervagende rand laat zien
+     dat de rij verder schuift. */
+  .view-actions .btn-primary { order: -1; }
+  .view-actions { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+  /* Tikdoelen minimaal 44 px (prullenbakje op de kaart, pauzeknop, bijlage-kruisjes). */
+  .card-trash { width: 40px; height: 40px; right: 6px; top: 4px; }
+  .chat-statusbar .btn { min-height: 34px; padding: 4px 12px; }
+  .tk-att-del, .chat-del { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+  /* iOS zoomt in op velden < 16 px — inline stijlen in de app winnen anders van de regel hierboven. */
+  input, select, textarea { font-size: 16px !important; }
   .content { padding-top: 10px; }
 
   /* Instellingen-tabbladen op mobiel: één horizontaal schuivende rij, net onder de

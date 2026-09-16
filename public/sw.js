@@ -25,7 +25,14 @@ self.addEventListener('notificationclick', (event) => {
   const url = (event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-      for (const c of list) { if ('focus' in c) return c.focus(); }
+      // Open venster naar het juiste scherm sturen (audit 16 sep): voorheen kwam een
+      // tik op "Nieuwe opdracht" op het scherm uit dat toevallig openstond.
+      for (const c of list) {
+        if ('focus' in c) {
+          if ('navigate' in c && url && url !== '/') return c.navigate(url).then((w) => (w || c).focus()).catch(() => c.focus());
+          return c.focus();
+        }
+      }
       if (self.clients.openWindow) return self.clients.openWindow(url);
     })
   );

@@ -728,7 +728,7 @@ export function sanitizeStatuses(input) {
     let key = (item.key || slugify(label)).trim();
     while (seen.has(key)) key = key + '_';
     seen.add(key);
-    out.push({ key, label, color: /^#[0-9a-fA-F]{6}$/.test(item.color) ? item.color : '#64748b', secondary: !!item.secondary });
+    out.push({ key, label, color: /^#[0-9a-fA-F]{6}$/.test(item.color) ? item.color : '#64748b', secondary: !!item.secondary, ...(typeof item.noteRequired === 'boolean' ? { noteRequired: item.noteRequired } : {}) });
   }
   return out.length ? out : null;
 }
