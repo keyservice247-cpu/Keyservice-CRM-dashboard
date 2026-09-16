@@ -52,6 +52,16 @@ const linesAfter = await page.locator('#inv-lines .inv-line').count();
 // De lege startregel wordt vervangen door de 3 pakket-regels -> minstens 3 regels.
 ok('pakket voegt de 3 regels toe', linesAfter >= 3, `${linesBefore} -> ${linesAfter}`);
 noErr('Pakket toevoegen');
+// "Regels → pakket" vraagt de naam in een EIGEN venster (geen browser-prompt), bovenop de editor.
+await page.click('#il-to-bundle');
+await page.waitForTimeout(300);
+ok('pakketnaam wordt gevraagd in een eigen venster (geen prompt)', await page.locator('#md-input').count() === 1 && await page.locator('#inv-save').count() === 1);
+await page.fill('#md-input', 'Browsertest pakket');
+await page.click('#md-ok');
+await page.waitForTimeout(600);
+ok('pakket opgeslagen via het venster', await page.evaluate(() => fetch('/api/settings').then((r) => r.json()).then((s) => (s.priceBundles || []).some((b) => b.name === 'Browsertest pakket'))));
+ok('venster is weer weg, editor staat nog', await page.locator('#md-input').count() === 0 && await page.locator('#inv-save').count() === 1);
+noErr('Pakketnaam-venster');
 await page.click('#inv-cancel').catch(() => {});
 await page.waitForTimeout(400);
 
@@ -97,7 +107,7 @@ ok('kaart-modal opent met gesprekshistorie', !!ordId && await page.locator('#f-c
 ok('"Alles van deze klant"-knop aanwezig', await page.locator('#f-history').count() > 0);
 await page.click('#f-history');
 await page.waitForTimeout(900);
-ok('klanthistorie geladen (knop wisselt naar "Alleen deze kaart")', /Alleen deze kaart/i.test(await page.locator('#f-history').innerText().catch(() => '')));
+ok('klanthistorie geladen (knop wisselt naar "Alleen deze kaart")', /Alleen deze opdracht/i.test(await page.locator('#f-history').innerText().catch(() => '')));
 ok('zoekveld in de gesprekshistorie aanwezig', await page.locator('#f-chatsearch').count() > 0);
 noErr('Kaart + klanthistorie');
 
@@ -264,6 +274,14 @@ const gemeld = await page.evaluate(() => fetch('/api/whatsapp/pairing', {
 ok('bridge kan de koppelcode melden', gemeld === 200, `status=${gemeld}`);
 await page.setViewportSize({ width: 390, height: 844 }); // iPhone-formaat
 await page.evaluate(() => showView('settings'));
+await page.waitForTimeout(1200);
+// Instellingen onthoudt de laatst gekozen groep (keuze eigenaar 16 sep).
+await page.click('#settingsPanel .sg-chip[data-g="facturen"]');
+await page.waitForTimeout(200);
+await page.evaluate(() => { state._sgroup = null; });
+await page.evaluate(() => loadSettings());
+await page.waitForTimeout(1200);
+ok('instellingen openen op de laatst gekozen groep (Facturen)', await page.evaluate(() => document.querySelector('#settingsPanel .sg-chip.on')?.dataset.g === 'facturen'));
 await page.waitForTimeout(1800);
 ok('koppel-kaartje zichtbaar op telefoonformaat', await page.locator('#wa-pair-card').isVisible());
 ok('de code staat er leesbaar in', (await page.locator('#pair-code').textContent().catch(() => '')) === 'V6AF-P2CR');
@@ -606,6 +624,39 @@ noErr('Bord slepen');
   const zonderAfspraak = await page.evaluate((id) => fetch('/api/orders').then((r) => r.json()).then((os) => { const o = os.find((x) => x.id === id); return o && !o.appointmentAt; }), apptId);
   ok('afspraak is weg, kaart blijft', zonderAfspraak === true);
   noErr('Afspraak annuleren');
+}
+
+// 1-KLIK AFWIJZEN in de inbox (keuze eigenaar 16 sep): direct weg, "Ongedaan maken"
+// zet terug, "Reden toevoegen" zet de reden achteraf op de afwijzing.
+{
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.evaluate(() => fetch('/api/ingest/email', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ from: 'afwijs@example.nl', subject: 'Slot voordeur Rhenen', body: 'Kunt u langskomen voor een kapot slot in Rhenen?', externalId: 'br-afwijs-1' }) }));
+  await page.waitForTimeout(800);
+  await page.evaluate(() => goView('inbox'));
+  await page.waitForTimeout(1500);
+  const rij = page.locator('#reviewList .review', { hasText: 'afwijs@example.nl' }).first();
+  ok('inbox: testbericht staat in de lijst', await rij.count() === 1);
+  clear();
+  await rij.locator('.r-reject').click();
+  await page.waitForTimeout(700);
+  ok('1-klik afwijzen: melding met Ongedaan maken + Reden toevoegen, geen venster', await page.locator('#tr-undo').count() === 1 && await page.locator('#tr-reason').count() === 1 && await page.locator('#rj-save').count() === 0);
+  await page.click('#tr-undo');
+  await page.waitForTimeout(900);
+  const terug = await page.evaluate(() => fetch('/api/reviews?status=all').then((r) => r.json()).then((d) => (d.items || d).find((x) => /br-afwijs-1|afwijs@example/.test(JSON.stringify(x)))?.status));
+  ok('ongedaan maken zet het bericht terug in de wachtrij', terug === 'pending', String(terug));
+  await page.waitForTimeout(600);
+  const rij2 = page.locator('#reviewList .review', { hasText: 'afwijs@example.nl' }).first();
+  await rij2.locator('.r-reject').click();
+  await page.waitForTimeout(700);
+  await page.click('#tr-reason');
+  await page.waitForTimeout(500);
+  ok('reden toevoegen opent het redenvenster', await page.locator('#rj-save').count() === 1);
+  await page.fill('#rj-note', 'Was een leverancier');
+  await page.click('#rj-save');
+  await page.waitForTimeout(800);
+  const reden = await page.evaluate(() => fetch('/api/reviews?status=all').then((r) => r.json()).then((d) => (d.items || d).find((x) => /br-afwijs-1|afwijs@example/.test(JSON.stringify(x)))));
+  ok('reden achteraf opgeslagen op de afwijzing', reden && reden.status === 'rejected' && reden.rejectNote === 'Was een leverancier', JSON.stringify(reden && { s: reden.status, n: reden.rejectNote }));
+  noErr('1-klik afwijzen');
 }
 
 // MONTEUR-NOODROUTE ÉCHT via het scherm (audit 16 sep, kritiek): een gekoppelde

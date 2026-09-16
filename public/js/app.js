@@ -121,6 +121,37 @@ function toastUndo(msg, undoFn, ms = 8000) {
   if (btn) btn.onclick = async () => { clearTimeout(toast._t); close(); try { await undoFn(); } catch (e) { toast(e.message, true); } };
 }
 
+// Eigen invoervenster i.p.v. de kale browser-prompt() (keuze eigenaar 16 sep): met
+// titel, uitleg, validatie en een nette annuleerknop. Ligt BOVEN een eventueel open
+// venster (factuur-editor), dus het bestaande scherm blijft staan. Geeft null bij annuleren.
+function vraagTekst({ titel = 'Invoer', uitleg = '', label = '', waarde = '', placeholder = '', type = 'text', knop = 'OK', valideer = null } = {}) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'mini-dialog-root';
+    wrap.innerHTML = `<div class="mini-dialog" role="dialog" aria-modal="true" aria-labelledby="md-titel">
+      <h3 id="md-titel">${esc(titel)}</h3>${uitleg ? `<p class="muted small">${esc(uitleg)}</p>` : ''}
+      <label>${esc(label)}<input id="md-input" type="${esc(type)}" value="${esc(waarde)}" placeholder="${esc(placeholder)}" autocomplete="off"></label>
+      <div class="md-fout muted small" id="md-fout" hidden></div>
+      <div class="modal-actions"><span></span><div class="right"><button type="button" class="btn" id="md-cancel">Annuleren</button><button type="button" class="btn btn-primary" id="md-ok">${esc(knop)}</button></div></div>
+    </div>`;
+    document.body.appendChild(wrap);
+    const input = wrap.querySelector('#md-input'); const fout = wrap.querySelector('#md-fout');
+    const sluit = (v) => { wrap.remove(); document.removeEventListener('keydown', toets); resolve(v); };
+    const ok = () => {
+      const v = input.value.trim();
+      const probleem = valideer ? valideer(v) : (v ? '' : 'Vul iets in');
+      if (probleem) { fout.textContent = probleem; fout.hidden = false; input.focus(); return; }
+      sluit(v);
+    };
+    const toets = (e) => { if (e.key === 'Escape') { e.stopPropagation(); sluit(null); } else if (e.key === 'Enter' && document.activeElement === input) { e.preventDefault(); ok(); } };
+    document.addEventListener('keydown', toets, true);
+    wrap.querySelector('#md-cancel').onclick = () => sluit(null);
+    wrap.querySelector('#md-ok').onclick = ok;
+    wrap.onclick = (e) => { if (e.target === wrap) sluit(null); };
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+  });
+}
+
 // Bouwt een "Zet in Google Agenda"-link (opent Google met een vooraf ingevuld event).
 // De afspraaktijd is lokale NL-tijd; we geven 'm zo door + ctz=Europe/Amsterdam zodat
 // Google de juiste tijd toont (geen UTC-verschuiving).
@@ -624,7 +655,7 @@ function renderTaken() {
     ${deadlineBlok}
     <div class="tk-chips">${chips.map(([k, l]) => `<button type="button" class="chip tk-chip ${f === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}
       <label class="tk-sorteer">Sorteer <select id="tkSorteer">${sorteerOpties.map(([v, l]) => `<option value="${v}" ${_takenSorteer === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
-    ${_takenSorteer === 'handmatig' ? '<div class="muted small tk-sleephint">Pak een kaart bij de stippen rechts en sleep hem omhoog of omlaag.</div>' : ''}
+    ${_takenSorteer === 'handmatig' ? '<div class="muted small tk-sleephint">Pak een opdracht bij de stippen rechts en sleep hem omhoog of omlaag.</div>' : ''}
     <div class="tk-kolommen">${kolom('zakelijk', 'Zakelijk')}${kolom('prive', 'Privé')}</div>`;
   $$('.tk-chip', wrap).forEach((b) => b.onclick = () => { _takenFilter = b.dataset.f; renderTaken(); });
   $('#tkSorteer').onchange = (e) => { zetTakenSorteer(e.target.value); loadTaken(); };
@@ -759,7 +790,7 @@ async function openTaakModal(id) {
     </div>
     <div class="row">
       <label>Koppel aan klant ${sel('tk-klant', [['', '— geen —'], ...klanten.map((c) => [c.id, `${c.name || 'Klant'}${c.phone ? ' · ' + c.phone : ''}`])], t.customerId || '')}</label>
-      <label>Koppel aan kaart ${sel('tk-kaart', [['', '— geen —'], ...kaarten.map((o) => [o.id, o.title.slice(0, 60)])], t.orderId || '')}</label>
+      <label>Koppel aan opdracht ${sel('tk-kaart', [['', '— geen —'], ...kaarten.map((o) => [o.id, o.title.slice(0, 60)])], t.orderId || '')}</label>
     </div>
     <label>Notities <textarea id="tk-notities" rows="3" placeholder="Eigen aantekeningen">${esc(t.notities || '')}</textarea></label>
     <div class="attach"><div class="thread-head">${icon('paperclip', 15)} Foto's &amp; bestanden<span id="tk-attcount">${(t.bijlagen || []).length ? ` (${t.bijlagen.length})` : ''}</span>
@@ -972,7 +1003,7 @@ async function renderChatPane(scrollDown) {
       <button type="button" class="btn btn-sm cp-back" id="cpBack" title="Terug naar de lijst">←</button>
       <span class="cp-avatar">${esc(initiaal)}</span>
       <div class="cp-who"><strong>${esc(info.name || h.customer?.name || 'Klant')}</strong>${info.phone ? `<span class="muted small"> · ${esc(info.phone)}</span>` : ''}</div>
-      ${info.orderId ? `<button type="button" class="btn btn-sm" id="cpCard">${icon('tag', 12)} Kaart openen</button>` : ''}
+      ${info.orderId ? `<button type="button" class="btn btn-sm" id="cpCard">${icon('tag', 12)} Opdracht openen</button>` : ''}
     </div>
     <div class="cp-msgs" id="cpMsgs">${msgsHtml}</div>
     <div class="cp-send">
@@ -980,7 +1011,7 @@ async function renderChatPane(scrollDown) {
         ? `${kanaalKnopHtml}<textarea id="cpText" rows="1"></textarea><button class="btn cp-sendbtn" id="cpSend" title="Versturen">${icon('reply', 16)}</button>`
         : (magTypen
           ? '<div class="muted small">Deze klant heeft geen telefoonnummer of e-mailadres — vul dat eerst in bij de klantgegevens.</div>'
-          : '<div class="muted small">Meelezen — versturen gaat via de knoppen op de kaart (Onderweg, Factuur/Offerte, Review).</div>')}
+          : '<div class="muted small">Meelezen — versturen gaat via de knoppen op de opdracht (Onderweg, Factuur/Offerte, Review).</div>')}
     </div>`;
   pane.dataset.chat = _chatActive;
   _lastChatMsgsHtml = msgsHtml;
@@ -1023,6 +1054,7 @@ async function renderChatPane(scrollDown) {
 }
 
 function showView(view, tab) {
+  if (view === 'settings' && !hasPerm('settings')) { toast('Instellingen zijn alleen voor de beheerder', true); return; }
   const anderView = state.view !== view;
   state.view = view;
   if (view !== 'assistant') ssPollActive = false; // statusscan-pollen stoppen buiten de AI-pagina
@@ -1249,7 +1281,7 @@ async function loadOverview() {
       const f = d.facts || {};
       const rows = [
         f.appts && f.appts.length ? `${f.appts.length} afspraak/afspraken vandaag` : 'Geen afspraken vandaag',
-        f.pendingLeads ? `${f.pendingLeads} lead(s) te controleren in de inbox` : '',
+        f.pendingLeads ? `${f.pendingLeads} aanvraag/aanvragen te controleren in de inbox` : '',
         f.unanswered ? `${f.unanswered} klantreactie(s) onbeantwoord` : '',
         f.overdueCount ? `${f.overdueCount} factuur/facturen verlopen` : '',
       ].filter(Boolean);
@@ -1288,7 +1320,7 @@ async function loadOverview() {
           </div>
           <table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th><th>Omzet</th><th>Afspraken</th><th>Nu actief</th></tr></thead>
           <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table>
-          <p class="muted small" style="margin-top:8px">Omzet komt uit het <strong>prijsveld</strong> op afgeronde kaarten — vul die in voor een kloppend rapport.</p>`;
+          <p class="muted small" style="margin-top:8px">Omzet komt uit het <strong>prijsveld</strong> op afgeronde opdrachten — vul die in voor een kloppend rapport.</p>`;
       } catch (err) { box.innerHTML = `<span class="error">${esc(err.message)}</span>`; }
     };
     $('#wr-offset').onchange = loadWeek;
@@ -1306,9 +1338,9 @@ function sourceSelect(selected, extraClass = '') {
 }
 function bindSourceSelect(sel) {
   if (!sel) return;
-  sel.addEventListener('change', () => {
+  sel.addEventListener('change', async () => {
     if (sel.value === '__new__') {
-      const naam = prompt('Naam van de nieuwe herkomst-bron (bv. "DRS WhatsApp groep"):');
+      const naam = await vraagTekst({ titel: 'Nieuwe herkomst-bron', label: 'Naam van de bron', placeholder: 'bv. DRS WhatsApp groep' });
       if (naam && naam.trim()) {
         const opt = document.createElement('option');
         opt.value = naam.trim(); opt.textContent = naam.trim();
@@ -1461,7 +1493,7 @@ function renderBoard() {
   let leegNote = '';
   if (state.me.role === 'monteur' && !orders.length) {
     leegNote = state.me.monteurId
-      ? '<div class="board-leeg"><strong>Nog geen opdrachten aan jou toegewezen.</strong> Zodra kantoor een klus naar jou stuurt, verschijnt hij hier én als appje in je groep.</div>'
+      ? '<div class="board-leeg"><strong>Nog geen opdrachten aan jou toegewezen.</strong> Zodra kantoor een opdracht naar jou stuurt, verschijnt hij hier én als appje in je groep.</div>'
       : '<div class="board-leeg"><strong>Je account is nog niet gekoppeld aan een monteur.</strong> Daardoor zie je geen opdrachten. Vraag kantoor om je account bij Gebruikers aan jouw monteur-record te koppelen.</div>';
   }
   const nieuweHtml = perBar + leegNote +
@@ -1552,7 +1584,7 @@ function setupBoardTabs() {
   try {
     if (state.me.role !== 'monteur' && !localStorage.getItem('ks_swipeHint')) {
       localStorage.setItem('ks_swipeHint', '1');
-      setTimeout(() => toast('Tip: veeg een kaart naar rechts = volgende kolom, naar links = vorige kolom. Verwijderen via het prullenbak-icoon op de kaart.'), 800);
+      setTimeout(() => toast('Tip: veeg een opdracht naar rechts = volgende kolom, naar links = vorige kolom. Verwijderen via het prullenbak-icoon op de opdracht.'), 800);
     }
   } catch {}
   const apply = () => $$('#board .column').forEach((col) => col.classList.toggle('tab-active', col.dataset.status === state.boardTab));
@@ -1581,7 +1613,7 @@ function advanceStatus(id, dir = 1) {
   if (i < 0 || j < 0 || j >= keys.length) { toast(dir > 0 ? 'Staat al in de laatste kolom' : 'Staat al in de eerste kolom'); loadBoard(); return; }
   const next = keys[j];
   if (state.me.role === 'monteur' && noteRequiredKeys().includes(next) && !(o.notes || '').trim()) {
-    toast('Vul eerst een korte notitie in — de kaart gaat nu open');
+    toast('Vul eerst een korte notitie in — de opdracht gaat nu open');
     openOrderModal(id);
     setTimeout(() => { const s = $('#f-status'); if (s) s.value = next; $('#f-notes')?.focus(); }, 300);
     return;
@@ -1607,7 +1639,7 @@ async function verplaatsKaart(id, newStatus) {
   const order = state.orders.find((o) => o.id === id);
   if (!order) {
     // Kaart staat niet (meer) in het geheugen: verouderd bord. Niet stil niks doen.
-    toast('Deze kaart is intussen gewijzigd — het bord wordt ververst');
+    toast('Deze opdracht is intussen gewijzigd — het bord wordt ververst');
     loadBoard();
     return;
   }
@@ -1615,7 +1647,7 @@ async function verplaatsKaart(id, newStatus) {
   // Monteur + kolom met verplichte notitie: niet tegen een 400 aanlopen, maar de
   // kaart openen met de cursor in het notitieveld (zelfde regel als in de modal).
   if (state.me.role === 'monteur' && noteRequiredKeys().includes(newStatus) && !(order.notes || '').trim()) {
-    toast('Vul eerst een korte notitie in (wat is er gedaan/afgesproken) — de kaart gaat nu open');
+    toast('Vul eerst een korte notitie in (wat is er gedaan/afgesproken) — de opdracht gaat nu open');
     openOrderModal(id);
     setTimeout(() => { const s = $('#f-status'); if (s) s.value = newStatus; $('#f-notes')?.focus(); }, 300);
     return;
@@ -1680,6 +1712,9 @@ function bindCardDrag() {
         // Aan de rand van het scherm: meescrollen, anders kom je nooit bij Afgerond.
         if (ev.clientY > window.innerHeight - 60) window.scrollBy(0, 14);
         else if (ev.clientY < 70) window.scrollBy(0, -14);
+        // Ook de VOLLE doelkolom scrolt mee als je bij haar boven-/onderrand hangt.
+        const kolomLijst = doel?.querySelector('.column-cards');
+        if (kolomLijst) { const kr = kolomLijst.getBoundingClientRect(); if (ev.clientY > kr.bottom - 40) kolomLijst.scrollTop += 12; else if (ev.clientY < kr.top + 40) kolomLijst.scrollTop -= 12; }
       };
       const stop = async (ev) => {
         document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', stop); document.removeEventListener('pointercancel', stop);
@@ -1790,8 +1825,8 @@ function cardHTML(o) {
   if (o.autoReplied) meta.push(`<span class="chip chip-ack" title="Automatische ontvangstbevestiging verstuurd">${icon('mail', 12)} bevestigd</span>`);
   // Suggesties (lead-instroom wetten): het systeem voegt nooit zelf samen of wijzigt
   // nooit zelf klantgegevens — deze chips vragen om een menselijke beslissing.
-  if (o.mergeSuggestion) meta.push(`<span class="chip chip-sug" title="Mogelijk zelfde opdracht als een open kaart van deze klant — open de kaart om samen te voegen of te negeren">${icon('merge', 13)} dubbel?</span>`);
-  if (o.dataSuggestions && o.dataSuggestions.length) meta.push(`<span class="chip chip-sug" title="Deze aanvraag wijkt af van het klantrecord — open de kaart om bij te werken of te negeren">${icon('user', 13)} gegevens-check</span>`);
+  if (o.mergeSuggestion) meta.push(`<span class="chip chip-sug" title="Mogelijk zelfde opdracht als een open opdracht van deze klant — open de opdracht om samen te voegen of te negeren">${icon('merge', 13)} dubbel?</span>`);
+  if (o.dataSuggestions && o.dataSuggestions.length) meta.push(`<span class="chip chip-sug" title="Deze aanvraag wijkt af van het klantrecord — open de opdracht om bij te werken of te negeren">${icon('user', 13)} gegevens-check</span>`);
   if (o.customerIncomplete) meta.push(`<span class="chip urgent" title="Geen echte klantnaam in het bericht gevonden — vul de klantgegevens aan">${icon('user', 13)} klant onbekend</span>`);
   // Status-stip: beantwoord (groen) > geopend (blauw) > nieuw/ongelezen (geel).
   const st = o.lastReplyAt ? { c: 'replied', t: 'Beantwoord' }
@@ -1958,24 +1993,24 @@ function openMergeModal(primary) {
     <label class="dup-row"><input type="checkbox" class="mg-pick" value="${o.id}" ${suggested ? 'checked' : ''}>
       <span><strong>${esc(o.title)}</strong> <span class="muted">· ${esc(o.customer?.name || '')} · ${esc(statusLabel(o.status))} · ${o.attachments?.length || 0} bijlagen</span></span></label>`;
   modal(`
-    <h2>Kaarten samenvoegen</h2>
-    <p class="muted small">Alles wat je aanvinkt gaat op in deze kaart: <strong>${esc(primary.title)}</strong> (${esc(primary.customer?.name || '')}). Gesprekshistorie en foto's worden gecombineerd; de andere kaarten verdwijnen.</p>
-    ${sameCustomer.length ? `<div class="muted small" style="margin:8px 0 4px">Zelfde klant — vink aan wat er echt bij hoort:</div>${sameCustomer.map((o) => row(o, false)).join('')}` : '<div class="muted small">Geen andere kaarten van dezelfde klant gevonden.</div>'}
-    ${rest.length ? `<details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Andere kaarten tonen (${rest.length})</summary>${rest.slice(0, 40).map((o) => row(o, false)).join('')}</details>` : ''}
+    <h2>Opdrachten samenvoegen</h2>
+    <p class="muted small">Alles wat je aanvinkt gaat op in deze opdracht: <strong>${esc(primary.title)}</strong> (${esc(primary.customer?.name || '')}). Gesprekshistorie en foto's worden gecombineerd; de andere opdrachten verdwijnen.</p>
+    ${sameCustomer.length ? `<div class="muted small" style="margin:8px 0 4px">Zelfde klant — vink aan wat er echt bij hoort:</div>${sameCustomer.map((o) => row(o, false)).join('')}` : '<div class="muted small">Geen andere opdrachten van dezelfde klant gevonden.</div>'}
+    ${rest.length ? `<details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Andere opdrachten tonen (${rest.length})</summary>${rest.slice(0, 40).map((o) => row(o, false)).join('')}</details>` : ''}
     <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="mg-cancel">Annuleren</button> <button class="btn btn-primary" id="mg-save">Samenvoegen</button> </div></div>`);
   $('#mg-cancel').onclick = () => openOrderModal(primary.id);
   $('#mg-save').onclick = async () => {
     const ids = $$('.mg-pick:checked').map((c) => c.value);
-    if (!ids.length) return toast('Selecteer minstens één kaart', true);
+    if (!ids.length) return toast('Selecteer minstens één opdracht', true);
     // Andere klant erbij? Dan expliciet bevestigen (punt 12) — anders belandt de
     // gesprekshistorie van klant B onder klant A.
     const vreemd = ids.map((i) => state.orders.find((o) => o.id === i)).filter((o) => o && o.customerId && primary.customerId && o.customerId !== primary.customerId);
     let force = false;
     if (vreemd.length) {
-      if (!confirm(`LET OP: ${vreemd.length} gekozen kaart(en) horen bij een ANDERE klant (${vreemd.map((o) => o.customer?.name || '?').join(', ')}). Hun gesprekshistorie komt dan onder ${primary.customer?.name || 'deze klant'} te staan.\n\nToch samenvoegen?`)) return;
+      if (!confirm(`LET OP: ${vreemd.length} gekozen opdracht(en) horen bij een ANDERE klant (${vreemd.map((o) => o.customer?.name || '?').join(', ')}). Hun gesprekshistorie komt dan onder ${primary.customer?.name || 'deze klant'} te staan.\n\nToch samenvoegen?`)) return;
       force = true;
     }
-    try { await api('/api/orders/merge', 'POST', { primaryId: primary.id, mergeIds: ids, force }); closeModal(); toast(`${ids.length} kaart(en) samengevoegd — de bronkaarten staan in de prullenbak`); loadBoard(); }
+    try { await api('/api/orders/merge', 'POST', { primaryId: primary.id, mergeIds: ids, force }); closeModal(); toast(`${ids.length} opdracht(en) samengevoegd — de bronkaarten staan in de prullenbak`); loadBoard(); }
     catch (err) { toast(err.message, true); }
   };
 }
@@ -1990,7 +2025,7 @@ function openOrderModal(id, pool) {
     api('/api/orders?includeArchived=1').then((os) => {
       state.orders = os;
       if (os.find((x) => x.id === id)) openOrderModal(id, os);
-      else toast('Kaart niet gevonden — misschien staat hij in de prullenbak.', true);
+      else toast('Opdracht niet gevonden — misschien staat hij in de prullenbak.', true);
     }).catch((err) => toast(err.message, true));
     return;
   }
@@ -2011,8 +2046,8 @@ function openOrderModal(id, pool) {
       ${o.status !== 'afgerond' ? `<button type="button" class="btn sb sb-afgerond" id="sb-afgerond">✓ Afgerond</button>` : ''}
     </div>` : ''}
     ${o && o.customerIncomplete ? `<div class="sug-banner sug-warn">${icon('user', 13)} <strong>Klant onbekend — aanvullen.</strong> Er is geen echte klantnaam in het bericht gevonden (de afzender is nooit automatisch de klant). Vul hieronder de klantgegevens aan.</div>` : ''}
-    ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open kaart <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. ${canWrite ? `<span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span>` : ''}</div>` : ''}
-    ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de kaart gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from ?? sg.current ?? '—')}"</span> → <strong>"${esc(sg.to ?? sg.value ?? '')}"</strong>${canWrite && (sg.to ?? sg.value) ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
+    ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open opdracht <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. ${canWrite ? `<span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span>` : ''}</div>` : ''}
+    ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de opdracht gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from ?? sg.current ?? '—')}"</span> → <strong>"${esc(sg.to ?? sg.value ?? '')}"</strong>${canWrite && (sg.to ?? sg.value) ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur && o ? 'disabled' : ''} placeholder="bv. Rhenen — cilinderslot vervangen"></label>
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
@@ -2024,7 +2059,7 @@ function openOrderModal(id, pool) {
           <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button> <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden> </div> <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div> </div>` : ''}
     ${o && o.thread && o.thread.length ? `
       <div class="thread">
-        <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}<input id="f-chatsearch" type="search" placeholder="Zoeken…" style="margin-left:8px;max-width:120px;padding:4px 9px;font-size:12px" title="Zoek in de berichten hieronder">${o.customerId ? `<button type="button" class="btn btn-sm" id="f-history" style="margin-left:6px" title="Alle WhatsApp- en e-mailberichten van deze klant, over alle kaarten heen — gewoon terugscrollen">${icon('clock', 12)} Alles van deze klant</button>` : ''}</div>
+        <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}<input id="f-chatsearch" type="search" placeholder="Zoeken…" style="margin-left:8px;max-width:120px;padding:4px 9px;font-size:12px" title="Zoek in de berichten hieronder">${o.customerId ? `<button type="button" class="btn btn-sm" id="f-history" style="margin-left:6px" title="Alle WhatsApp- en e-mailberichten van deze klant, over alle opdrachten heen — gewoon terugscrollen">${icon('clock', 12)} Alles van deze klant</button>` : ''}</div>
         <div class="chat" id="f-chat">
           ${o.thread.map((t) => {
             const q = splitQuoted(t.body || '');
@@ -2051,8 +2086,8 @@ function openOrderModal(id, pool) {
   // Werkbon/Opslaan meer op elke kaart met samenvoeg-suggestie (browser-audit 16 sep).
   if (o && o.mergeSuggestion && $('#sug-merge-do') && $('#sug-merge-no')) {
     $('#sug-merge-do').onclick = async () => {
-      if (!confirm(`Deze kaart samenvoegen met "${o.mergeSuggestion.title}"? De berichten en bijlages gaan mee naar die kaart.`)) return;
-      try { await api('/api/orders/merge', 'POST', { primaryId: o.mergeSuggestion.orderId, mergeIds: [o.id] }); toast('Kaarten samengevoegd'); closeModal(); loadBoard(); }
+      if (!confirm(`Deze opdracht samenvoegen met "${o.mergeSuggestion.title}"? De berichten en bijlages gaan mee naar die opdracht.`)) return;
+      try { await api('/api/orders/merge', 'POST', { primaryId: o.mergeSuggestion.orderId, mergeIds: [o.id] }); toast('Opdrachten samengevoegd'); closeModal(); loadBoard(); }
       catch (err) { toast(err.message, true); }
     };
     $('#sug-merge-no').onclick = async () => {
@@ -2130,11 +2165,11 @@ function openOrderModal(id, pool) {
             if (day) lastDay = day;
             const label = t.standalone
               ? '<span class="chip" style="font-size:10px;padding:1px 7px">los bericht (inbox)</span>'
-              : (t.orderId && t.orderId !== o.id ? `<span class="chip" style="font-size:10px;padding:1px 7px" title="Uit een andere kaart van deze klant">${esc((t.orderTitle || 'andere kaart').slice(0, 40))}</span>` : '');
+              : (t.orderId && t.orderId !== o.id ? `<span class="chip" style="font-size:10px;padding:1px 7px" title="Uit een andere opdracht van deze klant">${esc((t.orderTitle || 'andere opdracht').slice(0, 40))}</span>` : '');
             const q = splitQuoted(t.body || '');
             return `${sep}<div class="chat-msg ${t.outgoing ? 'out' : 'in'}"><div class="chat-meta">${t.outgoing ? icon('reply', 12) : sourceIcon(t.channel)} ${esc(t.sender || (t.outgoing ? 'Keyservice' : 'Klant'))} · ${fmtDate(t.at)} ${label}</div><div class="chat-bubble">${esc(q.text)}${t.attachments && t.attachments.length ? `<div class="attach-grid" style="margin-top:8px">${attachmentsHTML(t.attachments)}</div>` : ''}</div></div>`;
           }).join('') || '<div class="empty">Geen berichten gevonden voor deze klant.</div>';
-          histBtn.innerHTML = `${icon('clock', 12)} Alleen deze kaart`;
+          histBtn.innerHTML = `${icon('clock', 12)} Alleen deze opdracht`;
           chat.scrollTop = chat.scrollHeight;
         } catch (err) { toast(err.message, true); }
         finally { histBtn.disabled = false; }
@@ -2312,7 +2347,7 @@ function openOrderModal(id, pool) {
       }
       // Ging de klant-update mis? Dan blijft het scherm open (je typwerk blijft staan)
       // en zie je de échte foutmelding van de server i.p.v. "Opgeslagen".
-      if (klantFout) { toast('Kaart opgeslagen, maar de klantgegevens NIET: ' + klantFout, true); loadBoard(); return; }
+      if (klantFout) { toast('Opdracht opgeslagen, maar de klantgegevens NIET: ' + klantFout, true); loadBoard(); return; }
       closeModal(); toast('Opgeslagen'); loadBoard();
     } catch (err) { toast(err.message, true); }
   };
@@ -2364,6 +2399,14 @@ async function loadInbox(append = false) {
   ['#bulkApproveBtn', '#bulkApprovePct', '#bulkRejectBtn', '#rejectAllOverigeBtn', '#rejectAllPendingBtn'].forEach((sel) => { const e = $(sel); if (e) e.style.display = inTrash ? 'none' : (sel.includes('Overige') ? (filter === 'overige' ? '' : 'none') : (sel.includes('Pending') || sel.includes('Approve')) ? (filter === 'pending' ? '' : 'none') : ''); });
   if ($('#emptyRejectedBtn')) $('#emptyRejectedBtn').style.display = (inTrash && hasPerm('inbox')) ? '' : 'none';
   if ($('#selectAll')) $('#selectAll').checked = false;
+  // Mobiel: bulkbalk ingeklapt achter één knop (keuze eigenaar 16 sep) — je scrolde
+  // anders bij elk bezoek eerst langs 400 px knoppen.
+  const bb = $('#bulkBar');
+  if (bb && !bb.querySelector('.bulk-toggle')) {
+    const tg = document.createElement('button'); tg.type = 'button'; tg.className = 'btn btn-sm bulk-toggle'; tg.textContent = 'Bulk-acties';
+    tg.onclick = () => { bb.classList.toggle('open'); tg.textContent = bb.classList.contains('open') ? 'Bulk-acties verbergen' : 'Bulk-acties'; };
+    bb.prepend(tg);
+  }
   updateBulkCount();
   if (!append && !reviews.length) {
     if (bulkBar) bulkBar.hidden = true;
@@ -2411,7 +2454,7 @@ function reviewHTML(r) {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open kaart: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}
+    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open opdracht: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div class="muted small">${s.engine && s.engine !== 'regels' ? 'AI: ' + esc(s.engine) : ''}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
       ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('inbox') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
@@ -2450,12 +2493,21 @@ function bindReview(r) {
       const gehangen = r2?.review?.mergedIntoOrder;
       const kaartId = gehangen || r2?.order?.id;
       const openKaart = () => { goView('board'); setTimeout(() => openOrderModal(kaartId), 700); };
-      if (gehangen) toastActie(`Toegevoegd aan bestaande kaart "${(r2.order?.title || '').slice(0, 40)}" (zelfde klant, binnen het samenvoegvenster)`, 'Kaart openen', openKaart);
-      else toastActie('Opdracht aangemaakt', 'Kaart openen', openKaart);
+      if (gehangen) toastActie(`Toegevoegd aan bestaande opdracht "${(r2.order?.title || '').slice(0, 40)}" (zelfde klant, binnen het samenvoegvenster)`, 'Opdracht openen', openKaart);
+      else toastActie('Opdracht aangemaakt', 'Opdracht openen', openKaart);
       loadInbox(); refreshInboxBadge();
     } catch (err) { toast(err.message, true); }
   };
-  $('.r-reject', el).onclick = () => openRejectModal(r);
+  // 1-KLIK AFWIJZEN (keuze eigenaar 16 sep): direct weg, met "Ongedaan maken" en
+  // "Reden toevoegen" in de melding. De reden was toch al optioneel.
+  $('.r-reject', el).onclick = async () => {
+    const knop = $('.r-reject', el); knop.disabled = true;
+    try {
+      await api(`/api/reviews/${r.id}/reject`, 'POST', {});
+      toastRejected(r);
+      loadInbox(); refreshInboxBadge();
+    } catch (err) { toast(err.message, true); knop.disabled = false; }
+  };
   $('.r-reply', el).onclick = () => openReplyModal({
     name: $('.r-cname', el).value,
     email: $('.r-cemail', el).value,
@@ -2499,7 +2551,7 @@ function renderCustomers() {
   const eurC = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
   $('#customerList').innerHTML = `
     <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>Laatste status</th><th>Opdrachten</th><th title="Verzonden + betaalde facturen, incl. btw (offertes tellen niet mee)">Gefactureerd</th>${canWrite ? '<th></th>' : ''}
-    </tr></thead><tbody> ${list.map((c) => `<tr> <td><strong class="cust-open" data-dossier="${esc(c.id)}" style="cursor:pointer;color:var(--accent)" title="Open het klantdossier (alles van deze klant op één scherm)">${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}${c.email ? `<div class="muted small">${esc(c.email)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td> <td>${lastCell(c)}</td> <td>${c.orderCount}${c.activeCount ? ` <span class="muted small">(${c.activeCount} actief)</span>` : ''}</td> <td>${c.invoiceCount ? `<span class="cust-invoiced">${eurC(c.invoicedTotal)}<div class="muted small">${c.invoiceCount} factuur${c.invoiceCount > 1 ? 'en' : ''}</div></span>` : '<span class="muted small">—</span>'}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
+    </tr></thead><tbody> ${list.map((c) => `<tr> <td><strong class="cust-open" data-dossier="${esc(c.id)}" style="cursor:pointer;color:var(--accent)" title="Open het klantdossier (alles van deze klant op één scherm)">${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}${c.email ? `<div class="muted small">${esc(c.email)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${c.type === 'lead' ? 'nog geen klant' : esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td> <td>${lastCell(c)}</td> <td>${c.orderCount}${c.activeCount ? ` <span class="muted small">(${c.activeCount} actief)</span>` : ''}</td> <td>${c.invoiceCount ? `<span class="cust-invoiced">${eurC(c.invoicedTotal)}<div class="muted small">${c.invoiceCount} factuur${c.invoiceCount > 1 ? 'en' : ''}</div></span>` : '<span class="muted small">—</span>'}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
     </tr>`).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
     </tbody></table>`;
   $$('[data-edit]').forEach((b) => b.onclick = () => openCustomerModal(state._customers.find((c) => c.id === b.dataset.edit)));
@@ -2563,7 +2615,7 @@ async function openCustomerDossier(custId) {
         <div class="dos-card-head" style="display:flex;align-items:center;gap:8px">${icon('sparkles', 14)} AI-samenvatting
           <button class="btn btn-sm" id="dos-ai-btn" style="margin-left:auto">${c.aiSummary ? 'Vernieuwen' : 'Maak samenvatting'}</button>
         </div>
-        <div id="dos-ai-body">${c.aiSummary ? `<div style="white-space:pre-wrap">${esc(c.aiSummary.text)}</div><div class="muted small" style="margin-top:6px">Gemaakt ${fmtDate(c.aiSummary.at)}</div>` : '<div class="muted small">Nog geen samenvatting — één klik en de AI vat alle klussen, facturen en gesprekken van deze klant samen.</div>'}</div>
+        <div id="dos-ai-body">${c.aiSummary ? `<div style="white-space:pre-wrap">${esc(c.aiSummary.text)}</div><div class="muted small" style="margin-top:6px">Gemaakt ${fmtDate(c.aiSummary.at)}</div>` : '<div class="muted small">Nog geen samenvatting — één klik en de AI vat alle opdrachten, facturen en gesprekken van deze klant samen.</div>'}</div>
       </div>
 
       ${sectie('Laatste facturen', facturen.length, facturen.length ? `
@@ -2637,7 +2689,7 @@ function openPasteOrderModal() {
     <label>WhatsApp-bericht <textarea id="po-text" rows="10" placeholder="Hallo Abdel Rafour. We sturen je de volgende klant...\n\nNaam: ...\nAdres: ...\nWoonplaats: ...\nTelefoon: ...\nOpmerkingen: ..."></textarea></label>
     <div class="modal-actions"><span></span><div class="right">
       <button class="btn" id="po-cancel">Annuleren</button>
-      <button class="btn btn-primary" id="po-save">Maak kaart</button>
+      <button class="btn btn-primary" id="po-save">Maak opdracht</button>
     </div></div>`);
   $('#po-cancel').onclick = closeModal;
   $('#po-save').onclick = async () => {
@@ -2646,10 +2698,10 @@ function openPasteOrderModal() {
     const btn = $('#po-save'); btn.disabled = true; btn.textContent = 'Bezig…';
     try {
       const o = await api('/api/orders/paste', 'POST', { text });
-      closeModal(); toast(`Kaart aangemaakt: ${o.title}`);
+      closeModal(); toast(`Opdracht aangemaakt: ${o.title}`);
       await loadBoard();
       openOrderModal(o.id);
-    } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = 'Maak kaart'; }
+    } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = 'Maak opdracht'; }
   };
 }
 
@@ -2690,20 +2742,20 @@ function fmtBytes(n) {
 async function openAttachmentManager() {
   modal(`
     <h2>${icon('paperclip', 16)} Foto's &amp; video's beheren</h2>
-    <p class="muted small">Elke tegel is één bestand op de server. Staat een foto op meerdere plekken (kaart, gesprek, los bericht), dan zie je "op 2 plekken" — verwijderen haalt hem overal weg. Werkbon-handtekeningen staan hier bewust niet bij, die blijven altijd bewaard.</p>
+    <p class="muted small">Elke tegel is één bestand op de server. Staat een foto op meerdere plekken (opdracht, gesprek, los bericht), dan zie je "op 2 plekken" — verwijderen haalt hem overal weg. Werkbon-handtekeningen staan hier bewust niet bij, die blijven altijd bewaard.</p>
     <div id="am-schijf" class="muted small" style="margin:6px 0 8px"></div>
     <div id="am-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
       <label style="margin:0"><input type="checkbox" id="am-all" style="width:auto"> Alles selecteren</label>
       <select id="am-filter" style="max-width:240px">
         <option value="all">Alle bijlages</option>
-        <option value="done">Alleen afgeronde/geannuleerde klussen</option>
+        <option value="done">Alleen afgeronde/geannuleerde opdrachten</option>
         <option value="old14">Ouder dan 14 dagen</option>
         <option value="old30">Ouder dan 30 dagen</option>
         <option value="old60">Ouder dan 60 dagen</option>
         <option value="old90">Ouder dan 90 dagen</option>
         <option value="old180">Ouder dan 180 dagen</option>
         <option value="video">Alleen video's</option>
-        <option value="los">Alleen losse berichten (geen kaart)</option>
+        <option value="los">Alleen losse berichten (geen opdracht)</option>
         <option value="missing">Kapotte verwijzingen (bestand ontbreekt)</option>
       </select>
       <span class="muted small" id="am-summary" style="margin-left:auto"></span>
@@ -2747,7 +2799,7 @@ async function openAttachmentManager() {
     el.innerHTML = `${delen.join(' · ')}${winst && state.me?.role === 'admin' ? ` <button type="button" class="btn btn-sm btn-primary" id="am-dedupe" style="margin-left:6px">Opschonen — ${fmtBytes(winst)} vrijmaken</button>` : ''}`;
     const b = $('#am-dedupe');
     if (b) b.onclick = async () => {
-      if (!confirm(`Dubbele bestanden samenvoegen en weesbestanden verwijderen (${fmtBytes(winst)})? Geen enkele kaart raakt een foto kwijt: verwijzingen worden omgezet naar het bewaarde bestand.`)) return;
+      if (!confirm(`Dubbele bestanden samenvoegen en weesbestanden verwijderen (${fmtBytes(winst)})? Geen enkele opdracht raakt een foto kwijt: verwijzingen worden omgezet naar het bewaarde bestand.`)) return;
       b.disabled = true; b.textContent = 'Bezig…';
       try {
         const r = await api('/api/attachments/dedupe', 'POST', { wees: true });
@@ -2761,7 +2813,7 @@ async function openAttachmentManager() {
     $('#am-grid').innerHTML = shown.length ? `<div class="attach-grid">${shown.map((x) => `
       <label class="am-item" style="position:relative;cursor:pointer;display:block">
         <input type="checkbox" class="am-pick" data-id="${esc(x.id)}" ${selected.has(x.id) ? 'checked' : ''} style="position:absolute;top:6px;left:6px;width:18px;height:18px;z-index:2;accent-color:var(--danger)">
-        ${x.plekken > 1 ? `<span class="chip" style="position:absolute;top:6px;right:6px;z-index:2;font-size:10px;padding:1px 6px" title="Dit bestand staat op ${x.plekken} plekken (kaart/gesprek/los bericht)">op ${x.plekken} plekken</span>` : ''}
+        ${x.plekken > 1 ? `<span class="chip" style="position:absolute;top:6px;right:6px;z-index:2;font-size:10px;padding:1px 6px" title="Dit bestand staat op ${x.plekken} plekken (opdracht/gesprek/los bericht)">op ${x.plekken} plekken</span>` : ''}
         ${x.missing ? `<div style="width:100%;height:90px;border-radius:8px;background:var(--panel-2,#f6f8fb);display:flex;align-items:center;justify-content:center;border:2px solid transparent;color:var(--danger)" title="Bestand ontbreekt op de server">${icon('x', 26)}</div>`
           : x.kind === 'image' ? `<img src="${esc(x.url)}" loading="lazy" style="width:100%;height:90px;object-fit:cover;border-radius:8px;display:block;border:2px solid transparent">` : `<div style="width:100%;height:90px;border-radius:8px;background:var(--panel-2,#f6f8fb);display:flex;align-items:center;justify-content:center;border:2px solid transparent">${icon(x.kind === 'video' ? 'video' : 'file', 26)}</div>`}
         <div class="muted small" style="margin-top:3px;line-height:1.3" title="${esc(x.orderTitle)}">${esc((x.orderTitle || '').slice(0, 22))}<br>${x.missing ? 'bestand ontbreekt' : fmtBytes(x.size)} · ${fmtDateShort(x.at)}</div>
@@ -2788,7 +2840,7 @@ async function openAttachmentManager() {
     const toDelete = items.filter((x) => selected.has(x.id));
     if (!toDelete.length) return;
     const plekken = toDelete.reduce((s, x) => s + (x.plekken || 1), 0);
-    if (!confirm(`${toDelete.length} bestand(en) definitief verwijderen (${fmtBytes(toDelete.reduce((s, x) => s + (x.size || 0), 0))})?${plekken > toDelete.length ? ` Ze verdwijnen van alle ${plekken} plekken (kaart, gesprek, los bericht).` : ''} Dit kan niet ongedaan worden gemaakt.`)) return;
+    if (!confirm(`${toDelete.length} bestand(en) definitief verwijderen (${fmtBytes(toDelete.reduce((s, x) => s + (x.size || 0), 0))})?${plekken > toDelete.length ? ` Ze verdwijnen van alle ${plekken} plekken (opdracht, gesprek, los bericht).` : ''} Dit kan niet ongedaan worden gemaakt.`)) return;
     const btn = $('#am-delete'); btn.disabled = true; btn.textContent = 'Bezig…';
     try {
       const r = await api('/api/attachments/bulk-delete', 'POST', { items: toDelete.map((x) => ({ id: x.id, file: x.file })) });
@@ -2988,12 +3040,12 @@ function openPhoneIntakeModal() {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
   modal(`
     <h2>📞 Telefonische aanvraag</h2>
-    <p class="muted small">Noteer snel de essentie tijdens het gesprek. Aanvullen kan later op de kaart.</p>
+    <p class="muted small">Noteer snel de essentie tijdens het gesprek. Aanvullen kan later op de opdracht.</p>
     <div class="row"><label>Naam klant <input id="pi-name" placeholder="naam"></label><label>Telefoon <input id="pi-phone" placeholder="06-…"></label></div>
     <label>Plaats of adres <input id="pi-address" placeholder="bv. Breda, of straat + postcode"></label>
     <label>Wat is het probleem? <textarea id="pi-problem" rows="3" placeholder="bv. buitengesloten, cilinder vervangen, schuifpui klemt…"></textarea></label>
     <div class="row"><label>Monteur <select id="pi-monteur">${monteurOpts}</select></label><label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:24px"><input type="checkbox" id="pi-urgent" style="width:auto"> Spoed</label></div>
-    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="pi-cancel">Annuleren</button><button class="btn btn-primary" id="pi-save">Kaart aanmaken</button></div></div>`);
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="pi-cancel">Annuleren</button><button class="btn btn-primary" id="pi-save">Opdracht aanmaken</button></div></div>`);
   $('#pi-name').focus();
   $('#pi-cancel').onclick = closeModal;
   $('#pi-save').onclick = async () => {
@@ -3013,7 +3065,7 @@ function openPhoneIntakeModal() {
         monteurId: $('#pi-monteur').value || null,
         urgent: $('#pi-urgent').checked,
       });
-      closeModal(); toast('Kaart aangemaakt'); loadBoard();
+      closeModal(); toast('Opdracht aangemaakt'); loadBoard();
     } catch (err) { toast(err.message, true); }
   };
 }
@@ -3027,7 +3079,7 @@ function openSnoozeModal(o) {
   const nextMonday = () => { const d = new Date(); d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7)); d.setHours(9, 0, 0, 0); return toLocal(d); };
   modal(`
     <h2>${icon('clock', 16)} Herinnering — ${esc(o.title)}</h2>
-    <p class="muted small">Wanneer moet deze kaart terugkomen? Je krijgt dan een pushmelding en de kaart krijgt een "opvolgen!"-vlag.</p>
+    <p class="muted small">Wanneer moet deze opdracht terugkomen? Je krijgt dan een pushmelding en de opdracht krijgt een "opvolgen!"-vlag.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
       <button class="btn sn-q" data-at="${at(0, 16)}">Vanmiddag 16:00</button>
       <button class="btn sn-q" data-at="${at(1, 9)}">Morgen 09:00</button>
@@ -3057,7 +3109,7 @@ function openWerkbonModal(o) {
   const wb = o.werkbon || {};
   modal(`
     <h2>${icon('tag', 16)} Werkbon — ${esc(o.title)}</h2>
-    <p class="muted small">Vul in wat er is gedaan. De klant kan hieronder tekenen. De werkbon blijft op de kaart bewaard en kun je overnemen in de factuur.</p>
+    <p class="muted small">Vul in wat er is gedaan. De klant kan hieronder tekenen. De werkbon blijft op de opdracht bewaard en kun je overnemen in de factuur.</p>
     <label>Uitgevoerd werk <textarea id="wb-work" rows="4" placeholder="bv. Loopwagens schuifpui vervangen (2x), rail gereinigd en afgesteld">${esc(wb.work || '')}</textarea></label>
     <label>Gebruikte materialen / onderdelen <textarea id="wb-mat" rows="2" placeholder="bv. 2x loopwagen GU 9-146, siliconenspray">${esc(wb.materials || '')}</textarea></label>
     <label>Handtekening klant ${wb.signatureAttachmentId ? '<span class="muted small">(al gezet — opnieuw tekenen vervangt)</span>' : ''}</label>
@@ -3150,10 +3202,9 @@ async function shareInvoicePdf(invId, label, btn) {
 // (voorgevuld met het huidige/laatst gebruikte) zodat een verkeerd adres direct te
 // corrigeren is. Mag zo vaak als nodig; een betaalde factuur blijft betaald.
 async function resendInvoice(invId, label, prefillEmail, after) {
-  const to = prompt(`${label} versturen naar welk e-mailadres?`, prefillEmail || '');
+  const to = await vraagTekst({ titel: `${label} versturen`, uitleg: 'Controleer het e-mailadres van de klant voordat je verstuurt.', label: 'E-mailadres', waarde: prefillEmail || '', type: 'email', knop: 'Versturen', valideer: (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? '' : 'Dit is geen geldig e-mailadres' });
   if (to === null) return; // geannuleerd
   const addr = to.trim();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) { toast('Geen geldig e-mailadres', true); return; }
   try {
     const r = await api(`/api/invoices/${invId}/send`, 'POST', { to: addr });
     toast(`Verstuurd naar ${r.invoice?.sentTo || addr}`);
@@ -3270,7 +3321,7 @@ function renderInvoiceEditor(ctx) {
   // Alle huidige regels opslaan als pakket (bundel) onder een naam naar keuze.
   if ($('#il-to-bundle')) $('#il-to-bundle').onclick = async () => {
     const items = readLines(); if (!items.length) { toast('Geen regels om op te slaan', true); return; }
-    const name = prompt(`Naam voor dit pakket (bv. "Hefschuifpui complete reparatie"):`, ctx.contextTitle || '');
+    const name = await vraagTekst({ titel: 'Regels opslaan als pakket', uitleg: 'Een pakket voegt deze regels voortaan met één klik toe aan een factuur of offerte.', label: 'Naam van het pakket', waarde: ctx.contextTitle || '', placeholder: 'bv. Hefschuifpui complete reparatie', knop: 'Opslaan' });
     if (!name || !name.trim()) return;
     try { await api('/api/bundles/add', 'POST', { name: name.trim(), lines: items }); toast(`Pakket "${name.trim()}" opgeslagen — voortaan één klik`); }
     catch (err) { toast(err.message, true); }
@@ -3347,7 +3398,7 @@ function renderInvoiceEditor(ctx) {
   if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); });
   if ($('#inv-save')) $('#inv-save').onclick = async () => { if (!confirmEditIfSent()) return; try { await saveConcept(); done(inv.status === 'verzonden' ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : 'Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
   if ($('#inv-send')) $('#inv-send').onclick = async () => {
-    if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de kaart of bij Klanten).', true); return; }
+    if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de opdracht of bij Klanten).', true); return; }
     if (!confirm(inv.status === 'verzonden'
       ? `LET OP: deze ${woord.toLowerCase()} is al eerder verstuurd. Je verstuurt nu een NIEUWE versie (eventuele wijzigingen vervangen wat de klant heeft). Doorgaan naar ${customer.email}?`
       : `${woord} nu versturen naar ${customer.email}?`)) return;
@@ -3366,7 +3417,7 @@ function renderInvoiceEditor(ctx) {
     try {
       const saved = await saveConcept();
       await api(`/api/invoices/${saved.id}/send-whatsapp`, 'POST', {});
-      done(`${woord} via WhatsApp verstuurd naar ${tel}`);
+      done(`${woord} klaargezet voor WhatsApp naar ${tel} — in de wachtrij. Bezorgstatus zie je in Berichten; mislukt het, dan gaat hij terug naar concept en krijg je een melding.`);
     } catch (err) { toast(err.message, true); }
   };
   const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = async () => { try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }; };
@@ -3447,17 +3498,17 @@ async function loadAssistant() {
   const groups = await api('/api/assistant/groups').catch(() => []);
   const examples = [
     'Welke klanten hebben een offerte gekregen maar nog geen factuur?',
-    'Welke klussen zijn volgens de groepsberichten afgerond maar staan nog niet op Afgerond?',
+    'Welke opdrachten zijn volgens de groepsberichten afgerond maar staan nog niet op Afgerond?',
     'Welke facturen staan nog open en hoe lang al?',
     'Hoeveel omzet is er genoemd in de groep van Youssef de afgelopen 30 dagen?',
-    'Vergelijk deze maand met vorige maand: omzet, kosten en aantal klussen.',
-    'Welke klanten hebben meerdere klussen gehad? Wie is mijn beste klant?',
+    'Vergelijk deze maand met vorige maand: omzet, kosten en aantal opdrachten.',
+    'Welke klanten hebben meerdere opdrachten gehad? Wie is mijn beste klant?',
     'Wat is er besproken over de schuifpui-opdracht van mevrouw Jansen?',
     'Welke afspraken staan er deze week en zijn ze allemaal bevestigd?',
   ];
   $('#assistantPanel').innerHTML = `
     <div class="info-card">
-      <p class="muted small" style="margin:-2px 0 10px">De assistent kijkt standaard naar <strong>álles</strong>: je opdrachtkaarten, facturen &amp; offertes, klanten en cijfers — plus het WhatsApp- en e-mailverkeer. Zo kan hij ook vergelijken ("welke klussen zijn volgens de groep afgerond maar staan nog op In behandeling?").</p>
+      <p class="muted small" style="margin:-2px 0 10px">De assistent kijkt standaard naar <strong>álles</strong>: je opdrachtkaarten, facturen &amp; offertes, klanten en cijfers — plus het WhatsApp- en e-mailverkeer. Zo kan hij ook vergelijken ("welke opdrachten zijn volgens de groep afgerond maar staan nog op In behandeling?").</p>
       <div class="row">
         <label>Wat mag hij doorzoeken <select id="as-scope">
           <option value="all" selected>Alles — dashboard + berichten</option>
@@ -3475,12 +3526,12 @@ async function loadAssistant() {
       <label>Je vraag <textarea id="as-q" rows="3" placeholder="bv. Welke klanten hebben een offerte gekregen maar nog geen factuur?"></textarea></label>
       <div class="as-examples">${examples.map((e) => `<button type="button" class="chip as-ex">${esc(e)}</button>`).join('')}</div>
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" id="as-ask">${icon('sparkles', 14)} Vraag de AI</button><button class="btn" id="as-new" title="Geheugen wissen en met een schone lei beginnen">Nieuw gesprek</button></div>
-      <p class="muted small" style="margin:8px 0 0">De assistent onthoudt dit gesprek: je kunt gewoon <strong>doorvragen</strong> ("en van die drie, wie heeft nog niet betaald?"). Kaartnummers in het antwoord zijn <strong>klikbaar</strong> — die openen direct de kaart.</p>
+      <p class="muted small" style="margin:8px 0 0">De assistent onthoudt dit gesprek: je kunt gewoon <strong>doorvragen</strong> ("en van die drie, wie heeft nog niet betaald?"). Kaartnummers in het antwoord zijn <strong>klikbaar</strong> — die openen direct de opdracht.</p>
       <div id="as-answer" style="margin-top:16px"></div>
     </div>
     <div class="info-card" style="margin-top:18px">
       <h3>${icon('activity', 15)} AI-statusscan — sorteer alles in één keer</h3>
-      <p class="muted small">De AI scant al je lopende kaarten én de groeps-/e-mailberichten. Hij snapt de werkwijze: opdracht binnen → monteur stuurt 's avonds een rapport in de monteursgroep → kantoor koppelt terug in de Raf Breda-groep. Je krijgt <strong>(1)</strong> statusvoorstellen (afgerond / geannuleerd / offerte / afspraak) en <strong>(2)</strong> opdrachten die nog <strong>teruggekoppeld</strong> moeten worden in de Raf Breda-groep, met kant-en-klare tekst om te plakken.</p>
+      <p class="muted small">De AI scant al je lopende opdrachten én de groeps-/e-mailberichten. Hij snapt de werkwijze: opdracht binnen → monteur stuurt 's avonds een rapport in de monteursgroep → kantoor koppelt terug in de Raf Breda-groep. Je krijgt <strong>(1)</strong> statusvoorstellen (afgerond / geannuleerd / offerte / afspraak) en <strong>(2)</strong> opdrachten die nog <strong>teruggekoppeld</strong> moeten worden in de Raf Breda-groep, met kant-en-klare tekst om te plakken.</p>
       <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
         <label style="margin:0">Periode berichten <select id="ss-days"><option value="14">laatste 14 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label>
         <button class="btn btn-primary" id="ss-run">Statusscan starten</button>
@@ -3552,7 +3603,7 @@ function renderAsChat(busyText = '', errText = '') {
       ord = (all || []).find((o) => o.id.toLowerCase().endsWith(ref));
       if (ord) { openOrderModal(ord.id, all); return; }
     }
-    if (!ord) return toast('Kaart niet gevonden (misschien verwijderd)', true);
+    if (!ord) return toast('Opdracht niet gevonden (misschien verwijderd)', true);
     markSeen(ord.id); openOrderModal(ord.id);
   });
   const last = box.querySelector('.as-turn:last-of-type, .muted.small:last-child, .error');
@@ -3570,7 +3621,7 @@ async function pollStatusScan() {
   catch { if (ssPollActive) setTimeout(pollStatusScan, 4000); return; }
   if (data.running) {
     btn.disabled = true; btn.textContent = 'Bezig met scannen…';
-    if (!box.innerHTML.includes('ss-item')) box.innerHTML = '<div class="muted small">De AI leest alle kaarten en groepsberichten op de achtergrond… je kunt gerust wegklikken, het loopt door.</div>';
+    if (!box.innerHTML.includes('ss-item')) box.innerHTML = '<div class="muted small">De AI leest alle opdrachten en groepsberichten op de achtergrond… je kunt gerust wegklikken, het loopt door.</div>';
     if (ssPollActive) setTimeout(pollStatusScan, 3000);
     return;
   }
@@ -3582,14 +3633,14 @@ function renderStatusScan(out) {
   const box = $('#ss-result'); if (!box) return;
   const sugg = out.suggestions || [];
   const todo = out.needsDrsUpdate || [];
-  const when = out.at ? `<div class="muted small" style="margin-bottom:8px">Laatste scan: ${esc(fmtDate(out.at))} · ${out.cards || 0} kaarten en ${out.scanned || 0} berichten doorzocht${out.engine ? ' · ' + esc(out.engine) : ''}</div>` : '';
+  const when = out.at ? `<div class="muted small" style="margin-bottom:8px">Laatste scan: ${esc(fmtDate(out.at))} · ${out.cards || 0} opdrachten en ${out.scanned || 0} berichten doorzocht${out.engine ? ' · ' + esc(out.engine) : ''}</div>` : '';
   // Bron-telling: laat zien of de monteursrapporten überhaupt binnenkomen. 0 = probleem aan
   // de WhatsApp-kant (bridge/groep), niet aan de AI.
   let src = '';
   if (out.sources) {
     const s = out.sources;
     const warn = (s.monteur || 0) === 0;
-    src = `<div class="muted small" style="margin-bottom:8px${warn ? ';color:var(--danger)' : ''}">Berichten: ${s.monteur || 0} uit monteursgroep · ${s.drs || 0} uit DRS/Raf Breda · ${s.email || 0} e-mail · ${s.overig || 0} overig.${warn ? ' ⚠ 0 monteursrapporten binnen — de dagrapporten bereiken het CRM niet. Controleer of het wegwerp-nummer in de monteursgroep zit én of de bridge die groep doorstuurt (GROUP_FILTER leeg laten). Zonder deze rapporten kan de AI de kaarten niet sorteren.' : ''}</div>`;
+    src = `<div class="muted small" style="margin-bottom:8px${warn ? ';color:var(--danger)' : ''}">Berichten: ${s.monteur || 0} uit monteursgroep · ${s.drs || 0} uit DRS/Raf Breda · ${s.email || 0} e-mail · ${s.overig || 0} overig.${warn ? ' ⚠ 0 monteursrapporten binnen — de dagrapporten bereiken het CRM niet. Controleer of het wegwerp-nummer in de monteursgroep zit én of de bridge die groep doorstuurt (GROUP_FILTER leeg laten). Zonder deze rapporten kan de AI de opdrachten niet sorteren.' : ''}</div>`;
   }
   let html = when + src;
   if (out.error) html += `<div class="error small">Laatste scan mislukt: ${esc(out.error)}</div>`;
@@ -3620,7 +3671,7 @@ function renderStatusScan(out) {
       </div>`).join('');
   }
   if (out.note && (sugg.length || todo.length)) html += `<div class="muted small" style="margin-bottom:8px">${esc(out.note)}</div>`;
-  if (!sugg.length && !todo.length) html += `<div class="muted small">${esc(out.note || 'Geen wijzigingen voorgesteld. De AI vond in het CRM geen duidelijk bewijs (een bericht of monteursmelding) om een kaart te verplaatsen. Staat er tóch een kaart in de verkeerde status? Dan mist de AI het bewijs — bijvoorbeeld omdat de "klaar"-melding van de monteur alleen in de WhatsApp-groep staat en niet in het CRM. Zet die kaart dan handmatig goed, of laat de monteursgroep meelezen.')}</div>`;
+  if (!sugg.length && !todo.length) html += `<div class="muted small">${esc(out.note || 'Geen wijzigingen voorgesteld. De AI vond in het CRM geen duidelijk bewijs (een bericht of monteursmelding) om een opdracht te verplaatsen. Staat er tóch een opdracht in de verkeerde status? Dan mist de AI het bewijs — bijvoorbeeld omdat de "klaar"-melding van de monteur alleen in de WhatsApp-groep staat en niet in het CRM. Zet die opdracht dan handmatig goed, of laat de monteursgroep meelezen.')}</div>`;
   if (out.rawSample) html += `<details style="margin-top:8px"><summary class="muted small" style="cursor:pointer">Technische details (ruwe AI-antwoord, voor debugging)</summary><pre style="white-space:pre-wrap;font-size:11px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:300px;overflow:auto">${esc(out.rawSample)}</pre></details>`;
   box.innerHTML = html;
   $$('.ss-apply').forEach((b) => b.onclick = async () => {
@@ -3769,7 +3820,7 @@ async function openMonteurModal(m) {
   // Automatische review per monteur aan/uit — los van de algemene instelling.
   const revWrap = document.createElement('label');
   revWrap.style.cssText = 'display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:4px';
-  revWrap.innerHTML = `<input type="checkbox" id="m-reviewauto" style="width:auto"${m?.reviewAuto === false ? '' : ' checked'}> Automatisch review vragen na een afgeronde klus van deze monteur`;
+  revWrap.innerHTML = `<input type="checkbox" id="m-reviewauto" style="width:auto"${m?.reviewAuto === false ? '' : ' checked'}> Automatisch review vragen na een afgeronde opdracht van deze monteur`;
   const acties = $('#modal .modal-actions');
   if (acties) acties.parentNode.insertBefore(revWrap, acties);
   $('#m-cancel').onclick = closeModal;
@@ -3792,7 +3843,7 @@ async function loadControl() {
   const ai = stats.ai;
   const pct = settings.aiAutoApproveThreshold ? Math.round(settings.aiAutoApproveThreshold * 100) : 0;
   $('#controlPanel').innerHTML = `
-    <div class="stat-grid"> <div class="stat"><div class="num">${ai.mode === 'ai' ? 'AI' : 'Demo'}</div><div class="lbl">Categorisatie-modus</div></div> <div class="stat"><div class="num">${ai.handled}</div><div class="lbl">Berichten verwerkt</div></div> <div class="stat"><div class="num">${ai.accuracy === null ? '—' : ai.accuracy + '%'}</div><div class="lbl">Juist ingedeeld (na controle)</div></div> <div class="stat"><div class="num">${ai.corrected}</div><div class="lbl">Door mens gecorrigeerd</div></div> <div class="stat"><div class="num">${stats.pendingReviews}</div><div class="lbl">Wacht op controle</div></div> </div> <div class="info-card" style="max-width:680px"> <h3>Automatisch goedkeuren (zonder controle)</h3> <p class="muted small">Hoe zeker moet de AI zijn voordat een aanvraag <strong>vanzelf</strong> een kaart wordt en naar de monteur gaat — zonder dat iemand kijkt? Geldt <strong>alleen</strong> voor opdracht-groepen (DRS) en het eigen websiteformulier; losse appjes en e-mails gaan altijd eerst langs een mens. Zet op 0% om alles handmatig te controleren. <em>Dit staat los van de knop "Accepteer boven drempel" in de Inbox — die keurt eenmalig de lijst goed die je op dat moment ziet.</em></p> <label>Vanzelf goedkeuren vanaf: <strong id="threshLbl">${pct}%</strong> <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}"></label> <button class="btn btn-primary" id="saveThreshold">Opslaan</button> </div> ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : '<p class="muted small" style="margin-top:14px">Slimme AI (Claude) is actief.</p>'}
+    <div class="stat-grid"> <div class="stat"><div class="num">${ai.mode === 'ai' ? 'AI' : 'Demo'}</div><div class="lbl">Categorisatie-modus</div></div> <div class="stat"><div class="num">${ai.handled}</div><div class="lbl">Berichten verwerkt</div></div> <div class="stat"><div class="num">${ai.accuracy === null ? '—' : ai.accuracy + '%'}</div><div class="lbl">Juist ingedeeld (na controle)</div></div> <div class="stat"><div class="num">${ai.corrected}</div><div class="lbl">Door mens gecorrigeerd</div></div> <div class="stat"><div class="num">${stats.pendingReviews}</div><div class="lbl">Wacht op controle</div></div> </div> <div class="info-card" style="max-width:680px"> <h3>Automatisch goedkeuren (zonder controle)</h3> <p class="muted small">Hoe zeker moet de AI zijn voordat een aanvraag <strong>vanzelf</strong> een opdracht wordt en naar de monteur gaat — zonder dat iemand kijkt? Geldt <strong>alleen</strong> voor opdracht-groepen (DRS) en het eigen websiteformulier; losse appjes en e-mails gaan altijd eerst langs een mens. Zet op 0% om alles handmatig te controleren. <em>Dit staat los van de knop "Accepteer boven drempel" in de Inbox — die keurt eenmalig de lijst goed die je op dat moment ziet.</em></p> <label>Vanzelf goedkeuren vanaf: <strong id="threshLbl">${pct}%</strong> <input type="range" id="threshold" min="0" max="100" step="5" value="${pct}"></label> <button class="btn btn-primary" id="saveThreshold">Opslaan</button> </div> ${ai.mode === 'demo' ? '<p class="muted small" style="max-width:680px;margin-top:14px">De AI draait nu in <strong>demo-modus</strong> (regels). Vul een Claude API-sleutel in (<code>ANTHROPIC_API_KEY</code>) voor slimmere categorisatie. Zie docs/INTEGRATIES.md.</p>' : '<p class="muted small" style="margin-top:14px">Slimme AI (Claude) is actief.</p>'}
     <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Wekelijkse agenda inklappen</h3> <p class="muted small">Gebeurt automatisch elke zondag na 23:59. Opdrachten van de afgelopen week worden ingeklapt onder een agenda-bundel — behalve openstaande/nieuwe opdrachten en afspraken die ná die week vallen. Je kunt het ook nu handmatig uitvoeren.</p> <button class="btn" id="runArchive">${icon('box', 14)} Nu de afgelopen week inklappen</button> </div> <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Systeemcheck</h3> <p class="muted small">Test of e-mail (ontvangen/versturen) en de AI nog werken. Draait ook automatisch elke 6 uur.</p> <div id="healthList">Laden…</div> <button class="btn" id="runHealth" style="margin-top:10px">${icon('refresh', 14)} Nu opnieuw testen</button> </div> <div class="info-card" style="max-width:680px;margin-top:16px"> <h3>Afwijzingen & feedback (waar de AI van leert)</h3> <p class="muted small">De laatste afwijzingen met reden. De AI krijgt deze mee om dezelfde fouten te vermijden.</p> <div id="feedbackList" class="feedback-list">Laden…</div> </div> `;
   loadFeedbackList();
   loadHealth();
@@ -3895,7 +3946,7 @@ function renderInvoices() {
   const overdueCount = all.filter(isOverdue).length;
   let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong>${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}</div>
     <div id="invTodoWrap"></div>`;
-  if (!items.length) html += '<div class="empty">Niets in deze weergave. Maak er één met de knoppen rechtsboven, of via de knop Factuur op een kaart.</div>';
+  if (!items.length) html += '<div class="empty">Niets in deze weergave. Maak er één met de knoppen rechtsboven, of via de knop Factuur op een opdracht.</div>';
   html += items.map((i) => {
     const quote = i.type === 'offerte';
     const overdue = isOverdue(i);
@@ -3912,7 +3963,7 @@ function renderInvoices() {
         <a class="btn btn-sm" target="_blank" rel="noopener" href="/api/invoices/${esc(i.id)}/pdf">PDF</a>
         <button class="btn btn-sm inv-share" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + '-' + i.number + (i.customerName ? ' ' + i.customerName : ''))}">${icon('paperclip', 13)} Deel</button>
         ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
-        ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Kaart</button>` : ''}
+        ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Opdracht</button>` : ''}
         ${!quote && i.sentAt && i.orderId ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
         ${!quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
@@ -3927,7 +3978,7 @@ function renderInvoices() {
   // Zelf een review vragen bij een verzonden factuur — het moment waarop de klus af is.
   $$('.inv-review').forEach((b) => b.onclick = async () => {
     const alGedaan = b.textContent.includes('✓');
-    if (alGedaan && !confirm('Er is al een review gevraagd voor deze klus. Nog een keer sturen?')) return;
+    if (alGedaan && !confirm('Er is al een review gevraagd voor deze opdracht. Nog een keer sturen?')) return;
     b.disabled = true; const oud = b.innerHTML; b.textContent = 'Versturen…';
     try {
       const r = await api(`/api/invoices/${b.dataset.id}/review-request`, 'POST', { force: alGedaan });
@@ -3955,7 +4006,7 @@ function renderInvoices() {
             ${icon('tag', 14)} Nog te factureren <span class="chip" style="font-size:11px">${todo.length}</span>
             <span class="muted small" style="font-weight:400;margin-left:auto">klik om te openen</span>
           </summary>
-          <p class="muted small" style="margin:8px 0">Afgeronde klussen waar nog géén factuur voor is gemaakt.</p>
+          <p class="muted small" style="margin:8px 0">Afgeronde opdrachten waar nog géén factuur voor is gemaakt.</p>
           ${todo.slice(0, 15).map((t) => `
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line-soft,#e5e7eb)">
               <span>${esc(t.title)}${t.customerName ? ` <span class="muted small">— ${esc(t.customerName)}</span>` : ''}<span class="muted small" style="display:block">afgerond ${fmtDateShort(t.completedAt)}${t.price ? ' · ' + esc(t.price) : ''}</span></span>
@@ -4008,11 +4059,11 @@ function renderFinance() {
       ${r.monteurRows.map((m) => `<tr><td><strong>${esc(m.name)}</strong></td><td>${eurF(m.income)}</td><td>${eurF(m.expense)}</td><td><strong style="color:${m.net >= 0 ? 'var(--ok)' : 'var(--danger)'}">${eurF(m.net)}</strong></td></tr>`).join('')}
       </tbody></table></div>` : ''}
     <div class="info-card" style="margin-bottom:16px"><h3>Verloop (laatste 6 maanden)</h3>
-      <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">${d.trend.map((t) => `
-        <div style="flex:1;min-width:90px;text-align:center">
-          <div class="muted small" style="margin-bottom:4px">${eurF(t.profit)}</div>
-          <div style="display:flex;flex-direction:column;gap:3px">${bar(t.income, 'var(--ok)')}${bar(t.expense, 'var(--danger)')}</div>
-          <div class="muted small" style="margin-top:5px">${esc(t.month.slice(5))}/${esc(t.month.slice(2, 4))}</div>
+      <div class="fin-trend">${d.trend.map((t) => `
+        <div class="fin-trend-item">
+          <div class="muted small fin-trend-maand">${esc(t.month.slice(5))}/${esc(t.month.slice(2, 4))}</div>
+          <div class="fin-trend-bars">${bar(t.income, 'var(--ok)')}${bar(t.expense, 'var(--danger)')}</div>
+          <div class="muted small fin-trend-winst">${eurF(t.profit)}</div>
         </div>`).join('')}</div>
       <div class="muted small" style="margin-top:8px">Groen = omzet · rood = kosten · getal = winst</div>
     </div>
@@ -4215,7 +4266,7 @@ function openFinanceSettings() {
     <div id="rec-rows">${(s.recurring || []).map(recRow).join('')}</div>
     <button type="button" class="btn btn-sm" id="rec-add">+ Vaste kostenpost</button>
     <h3 style="margin:16px 0 6px">Wekelijks CEO-rapport per e-mail</h3>
-    <p class="muted small" style="margin-bottom:8px">Elke maandagochtend automatisch: omzet, kosten, winst, nieuwe leads, openstaande facturen en aandachtspunten.</p>
+    <p class="muted small" style="margin-bottom:8px">Elke maandagochtend automatisch: omzet, kosten, winst, nieuwe aanvragen, openstaande facturen en aandachtspunten.</p>
     <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wr-enabled" style="width:auto" ${s.weeklyReport.enabled ? 'checked' : ''}> Wekelijks rapport aanzetten</label>
     <div class="row"><label>Naar e-mailadres <input id="wr-email" value="${esc(s.weeklyReport.email)}" placeholder="jij@keyservice247.nl"></label><label>Uur (maandag) <input id="wr-hour" type="number" min="0" max="23" value="${esc(String(s.weeklyReport.hour))}" style="max-width:90px"></label></div>
     <button type="button" class="btn btn-sm" id="wr-test">Stuur nu een test-rapport</button>
@@ -4287,12 +4338,12 @@ async function loadSettingsHtml(s) {
     <div data-sg="systeem" class="info-card" style="margin-bottom:18px"> <h3>Hoe alles werkt &amp; is verbonden</h3>
       <p class="muted small">Alle routes waarlangs iets binnenkomt of de deur uitgaat, en waar het in het CRM belandt. Bijgewerkt 18 augustus 2026.</p>
       <div class="flow-box">
-        <div class="flow-line"><strong>Websiteformulier:</strong> keyservice247.nl / schuifpuiservice.com / stadssites → <strong>rechtstreeks</strong> naar het CRM (geen mail nodig) → AI deelt in → boven de drempel automatisch een kaart + ontvangstbevestiging, anders <strong>Inbox / AI</strong>. Vangnet: komt dezelfde lead alleen via de FormSubmit-mail binnen, dan krijg je een melding.</div>
-        <div class="flow-line"><strong>E-mail:</strong> klant mailt <code>info@keyservice247.nl</code> → <strong>IMAP</strong> leest mailbox <code>${esc(s.imapAddress || 'niet ingesteld')}</code> (+ extra postbussen) → AI deelt in → Inbox / AI → goedkeuren → kaart. Een <em>antwoord</em> van een klant (Re:) hangt automatisch aan de lopende kaart; leveranciers-/webshopmail gaat stil naar "Geen aanvraag".</div>
-        <div class="flow-line"><strong>WhatsApp — klanten (officieel, Meta):</strong> klant appt <strong>0317 234 000</strong> → Meta-webhook → CRM. Bekende klant met open kaart → in de kaart-historie; anders Inbox of Berichten. Alles wat het CRM naar een <em>klant</em> stuurt (bevestigingen, herinneringen, Onderweg, facturen/offertes, reviews, chat) gaat via deze officiële route; buiten het 24-uursvenster automatisch als goedgekeurd sjabloon.</div>
-        <div class="flow-line"><strong>WhatsApp — groepen (wegwerpnummer + bridge op de VPS):</strong> DRS-groep en monteursgroepen → bridge → CRM → AI deelt in → boven de drempel automatisch een kaart, anders Inbox. De bridge <em>leest</em> vooral; hij verstuurt alleen groepsberichten (opdrachten naar monteurs, CRM-meldingen) en werkt zichzelf elke 6 uur bij.</div>
-        <div class="flow-line"><strong>Naar monteur:</strong> goedkeuren (of automatisch) → dispatch-regels (welke monteur, welke dagen, trefwoorden) → wachtrij → bridge → WhatsApp-groep van de monteur + kaart op zíjn bord in het CRM. Snelheidsrem: max 2 berichten per 20 seconden, dubbelen eruit, verlopen items vervallen.</div>
-        <div class="flow-line"><strong>Berichten-scherm:</strong> alle klantgesprekken op één plek (WhatsApp + e-mail). Antwoorden via het kanaal waarmee de klant kwam (kanaal-knop); e-mail = echte reply vanaf <code>${esc(s.sendAddress || 'niet ingesteld')}</code> met threading; alles komt óók op de kaart. Monteur leest alleen mee bij eigen klanten.</div>
+        <div class="flow-line"><strong>Websiteformulier:</strong> keyservice247.nl / schuifpuiservice.com / stadssites → <strong>rechtstreeks</strong> naar het CRM (geen mail nodig) → AI deelt in → boven de drempel automatisch een opdracht + ontvangstbevestiging, anders <strong>Inbox / AI</strong>. Vangnet: komt dezelfde lead alleen via de FormSubmit-mail binnen, dan krijg je een melding.</div>
+        <div class="flow-line"><strong>E-mail:</strong> klant mailt <code>info@keyservice247.nl</code> → <strong>IMAP</strong> leest mailbox <code>${esc(s.imapAddress || 'niet ingesteld')}</code> (+ extra postbussen) → AI deelt in → Inbox / AI → goedkeuren → opdracht. Een <em>antwoord</em> van een klant (Re:) hangt automatisch aan de lopende opdracht; leveranciers-/webshopmail gaat stil naar "Geen aanvraag".</div>
+        <div class="flow-line"><strong>WhatsApp — klanten (officieel, Meta):</strong> klant appt <strong>0317 234 000</strong> → Meta-webhook → CRM. Bekende klant met open opdracht → in de kaart-historie; anders Inbox of Berichten. Alles wat het CRM naar een <em>klant</em> stuurt (bevestigingen, herinneringen, Onderweg, facturen/offertes, reviews, chat) gaat via deze officiële route; buiten het 24-uursvenster automatisch als goedgekeurd sjabloon.</div>
+        <div class="flow-line"><strong>WhatsApp — groepen (wegwerpnummer + bridge op de VPS):</strong> DRS-groep en monteursgroepen → bridge → CRM → AI deelt in → boven de drempel automatisch een opdracht, anders Inbox. De bridge <em>leest</em> vooral; hij verstuurt alleen groepsberichten (opdrachten naar monteurs, CRM-meldingen) en werkt zichzelf elke 6 uur bij.</div>
+        <div class="flow-line"><strong>Naar monteur:</strong> goedkeuren (of automatisch) → dispatch-regels (welke monteur, welke dagen, trefwoorden) → wachtrij → bridge → WhatsApp-groep van de monteur + opdracht op zíjn bord in het CRM. Snelheidsrem: max 2 berichten per 20 seconden, dubbelen eruit, verlopen items vervallen.</div>
+        <div class="flow-line"><strong>Berichten-scherm:</strong> alle klantgesprekken op één plek (WhatsApp + e-mail). Antwoorden via het kanaal waarmee de klant kwam (kanaal-knop); e-mail = echte reply vanaf <code>${esc(s.sendAddress || 'niet ingesteld')}</code> met threading; alles komt óók op de opdracht. Monteur leest alleen mee bij eigen klanten.</div>
         <div class="flow-line"><strong>Automatisch:</strong> afspraakbevestiging + herinnering (mail én WhatsApp), Onderweg-knop, review-verzoek na afronden, betaal- en offerteherinneringen, ochtendbriefing, nachtelijke statusscan op dagrapporten, Google Agenda-sync, wekelijkse AI-controle, schijf- en mailbox-bewaking, watchdog op e-mail/AI/WhatsApp.</div>
       </div>
       <p class="muted small" style="margin-top:10px">Verzendadres (SMTP): <strong>${esc(s.sendAddress || 'niet ingesteld in Render')}</strong> · Inkomende mailbox (IMAP): <strong>${esc(s.imapAddress || 'niet ingesteld')}</strong></p>
@@ -4375,20 +4426,20 @@ async function loadSettingsHtml(s) {
       </div>
       <p class="muted small" style="margin-top:8px">Houd deze link privé (geeft toegang tot je afspraken). Losse afspraak nú toevoegen kan ook met de knop <strong>"Google Agenda"</strong> op een opdracht/agenda-item.</p>
     </div>
-    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een kaart. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
+    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>WhatsApp: uit welke groep(en) opdrachten?</h3> <p class="muted small">Alleen berichten uit deze groep(en) worden opdrachten (bv. de DRS / "Raf Breda"-groep). Berichten uit andere groepen gaan naar <strong>Overige</strong> en worden nooit een opdracht. Meerdere namen? Scheid met komma's. Leeg = alle groepen.</p> <input id="waOrderGroups" type="text" value="${esc(s.whatsappOrderGroups || '')}" placeholder="bv. Raf Breda, DRS"> <div style="margin-top:12px"><button class="btn btn-primary" id="saveWaGroups">Opslaan</button></div> </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>E-mailfilter: bestellingen &amp; leveranciers</h3>
       <p class="muted small">Mails waarvan de <strong>afzender of het onderwerp</strong> een van deze woorden bevat (bv. orderbevestigingen, facturen van webshops, verzendberichten, no-reply-post) gaan <strong>stil naar Overige</strong> — nooit een lead, nooit een melding. Website-aanvragen worden hier nooit door tegengehouden. Eigen woorden toevoegen: één per regel of met komma's.</p>
       <textarea id="emailFilters" rows="3" placeholder="bv. bol.com, mijn leverancier bv">${esc(s.emailFilters || '')}</textarea>
       <p class="muted small" style="margin-top:6px">Standaard al actief: ${esc(s.emailFiltersDefault || '')}</p>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveEmailFilters">Filter opslaan</button></div> </div>
     <div data-sg="systeem" class="info-card" style="margin-bottom:18px"> <h3>Oude bijlages automatisch opruimen</h3>
-      <p class="muted small">Foto's en bestanden van <strong>afgeronde of geannuleerde</strong> klussen worden na de ingestelde periode van de schijf verwijderd, zodat die nooit volloopt. Klantgegevens, kaarten, facturen en <strong>werkbon-handtekeningen blijven altijd bewaard</strong> — alleen de losse bestanden verdwijnen. Tip: garantie op producten is 3 jaar; kies 1095 dagen als je foto's daarvoor wilt kunnen terugkijken.</p>
+      <p class="muted small">Foto's en bestanden van <strong>afgeronde of geannuleerde</strong> opdrachten worden na de ingestelde periode van de schijf verwijderd, zodat die nooit volloopt. Klantgegevens, opdrachten, facturen en <strong>werkbon-handtekeningen blijven altijd bewaard</strong> — alleen de losse bestanden verdwijnen. Tip: garantie op producten is 3 jaar; kies 1095 dagen als je foto's daarvoor wilt kunnen terugkijken.</p>
       <div class="row" style="align-items:center"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ac-enabled" style="width:auto" ${s.attachmentCleanup?.enabled !== false ? 'checked' : ''}>Aan</label>
       <label>Na hoeveel dagen <input id="ac-days" type="number" min="90" max="3650" value="${esc(String(s.attachmentCleanup?.days ?? 365))}" style="max-width:120px"></label></div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAttCleanup">Opslaan</button></div>
       <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
       <h3 style="font-size:14px">Foto's &amp; video's nu opruimen</h3>
-      <p class="muted small">Wil je niet wachten op de automatische opschoning? Blader hier door alle foto's/video's van al je kaarten, vink aan wat weg mag en verwijder in één keer — handig als de schijf snel vrij moet.</p>
+      <p class="muted small">Wil je niet wachten op de automatische opschoning? Blader hier door alle foto's/video's van al je opdrachten, vink aan wat weg mag en verwijder in één keer — handig als de schijf snel vrij moet.</p>
       <button class="btn" id="openAttMgr">${icon('paperclip', 14)} Foto's &amp; video's beheren</button>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>E-mail handtekening</h3>
@@ -4400,7 +4451,7 @@ async function loadSettingsHtml(s) {
       <label style="margin-top:8px">Platte tekst-handtekening (reserve) <textarea id="emailSignature" rows="3" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
     <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Factuurgegevens (op elke factuur-PDF)</h3>
-      <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een kaart verstuurt (knop <strong>Factuur</strong>). Het logo staat er automatisch op. Prijzen voer je <strong>excl. btw</strong> in.</p>
+      <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een opdracht verstuurt (knop <strong>Factuur</strong>). Het logo staat er automatisch op. Prijzen voer je <strong>excl. btw</strong> in.</p>
       <div class="row"> <label>Bedrijfsnaam <input id="is-name" value="${esc(s.invoiceSettings?.companyName || '')}"></label> <label>Telefoon <input id="is-phone" value="${esc(s.invoiceSettings?.phone || '')}"></label> </div>
       <div class="row"> <label>Adres (straat, postcode, plaats) <input id="is-address" value="${esc(s.invoiceSettings?.address || '')}"></label> <label>Website <input id="is-web" value="${esc(s.invoiceSettings?.website || '')}"></label> </div>
       <div class="row"> <label>KvK-nummer <input id="is-kvk" value="${esc(s.invoiceSettings?.kvk || '')}"></label> <label>BTW-nummer <input id="is-btwnr" value="${esc(s.invoiceSettings?.btwNr || '')}"></label> </div>
@@ -4455,11 +4506,11 @@ async function loadSettingsHtml(s) {
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveBundles">Pakketten opslaan</button></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-melding bij nieuwe aanvragen (team)</h3>
-      <p class="muted small">Krijg een WhatsApp-seintje zodra er iets nieuws in het CRM staat: een <strong>nieuwe aanvraag om te controleren</strong> of een <strong>klantreactie</strong> op een lopende kaart. Aanbevolen: maak een WhatsApp-groep (bv. "CRM meldingen") met het <strong>wegwerp-nummer</strong> en je assistente erin — dan ziet het hele team het. Max 1 melding per 2 minuten; drukte wordt gebundeld ("+N andere").</p>
+      <p class="muted small">Krijg een WhatsApp-seintje zodra er iets nieuws in het CRM staat: een <strong>nieuwe aanvraag om te controleren</strong> of een <strong>klantreactie</strong> op een lopende opdracht. Aanbevolen: maak een WhatsApp-groep (bv. "CRM meldingen") met het <strong>wegwerp-nummer</strong> en je assistente erin — dan ziet het hele team het. Max 1 melding per 2 minuten; drukte wordt gebundeld ("+N andere").</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ca-enabled" style="width:auto" ${s.crmAlerts?.enabled ? 'checked' : ''}> Meldingen aanzetten</label>
       <label>WhatsApp-groep (naam, wegwerp-nummer moet lid zijn) <input id="ca-group" value="${esc(s.crmAlerts?.group || 'CRM meldingen')}" placeholder="CRM meldingen"></label>
       <label>Óf 1-op-1 naar dit nummer (laat leeg om de groep te gebruiken) <input id="ca-phone" value="${esc(s.crmAlerts?.phone || '')}" placeholder="bv. 0612345678 of +31612345678"></label>
-      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ca-replies" style="width:auto" ${s.crmAlerts?.notifyReplies !== false ? 'checked' : ''}> Ook melden bij klantreacties op lopende kaarten</label>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ca-replies" style="width:auto" ${s.crmAlerts?.notifyReplies !== false ? 'checked' : ''}> Ook melden bij klantreacties op lopende opdrachten</label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveCrmAlerts">Opslaan</button></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('mail', 15)} Testmail — zie hoe het bij de klant binnenkomt</h3>
@@ -4479,11 +4530,11 @@ async function loadSettingsHtml(s) {
       <label>Onderwerp <input id="ar-subject" value="${esc(s.autoReply?.subject || '')}"></label>
       <label>Bericht <textarea id="ar-body" rows="6">${esc(s.autoReply?.body || '')}</textarea></label>
       <label>Voetregel onder élke automatische klantmail <textarea id="ar-disclaimer" rows="3" placeholder="Leeg = geen voetregel">${esc(s.autoReply?.disclaimer ?? '')}</textarea></label>
-      <div class="muted small" style="margin-top:-6px;margin-bottom:8px">Staat automatisch onder de ontvangstbevestiging, afspraakbevestiging, herinneringen, follow-ups, review-verzoeken, betaalherinneringen en offerte-opvolging. Zo weet een klant die al in behandeling is dat het een automatisch bericht is. Klanten met een lopende kaart krijgen de ontvangstbevestiging sowieso niet meer.</div>
+      <div class="muted small" style="margin-top:-6px;margin-bottom:8px">Staat automatisch onder de ontvangstbevestiging, afspraakbevestiging, herinneringen, follow-ups, review-verzoeken, betaalherinneringen en offerte-opvolging. Zo weet een klant die al in behandeling is dat het een automatisch bericht is. Klanten met een lopende opdracht krijgen de ontvangstbevestiging sowieso niet meer.</div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoReply">Opslaan</button></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Automatische follow-up op offertes</h3>
-      <p class="muted small">Staat een offerte langer dan het ingestelde aantal dagen open zonder reactie van de klant? Dan stuurt het systeem automatisch een vriendelijke herinnering via e-mail én WhatsApp (1x per kaart). WhatsApp-follow-up loopt via de bridge naar het klant-nummer.</p>
+      <p class="muted small">Staat een offerte langer dan het ingestelde aantal dagen open zonder reactie van de klant? Dan stuurt het systeem automatisch een vriendelijke herinnering via e-mail én WhatsApp (1x per opdracht). WhatsApp-follow-up loopt via de bridge naar het klant-nummer.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-email" style="width:auto" ${s.followUp?.emailEnabled ? 'checked' : ''}> Follow-up via <strong>e-mail</strong> aanzetten</label>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-whatsapp" style="width:auto" ${s.followUp?.whatsappEnabled ? 'checked' : ''}> Follow-up via <strong>WhatsApp</strong> aanzetten</label>
       <label>Na hoeveel dagen zonder reactie? <input id="fu-days" type="number" min="1" max="30" value="${esc(String(s.followUp?.days || 3))}" style="max-width:120px"></label>
@@ -4492,7 +4543,7 @@ async function loadSettingsHtml(s) {
       <label>WhatsApp bericht <textarea id="fu-whatsappBody" rows="3">${esc(s.followUp?.whatsappBody || '')}</textarea></label>
       <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
       <h3 style="font-size:14px">Follow-up: gemaild, maar geen reactie</h3>
-      <p class="muted small">Heeft een klant op onze e-mail nog niet gereageerd na X dagen? Dan stuurt het systeem automatisch een vriendelijke herinnering via e-mail (1x per kaart). Geldt niet voor offertes (die hierboven) of ingeplande afspraken.</p>
+      <p class="muted small">Heeft een klant op onze e-mail nog niet gereageerd na X dagen? Dan stuurt het systeem automatisch een vriendelijke herinnering via e-mail (1x per opdracht). Geldt niet voor offertes (die hierboven) of ingeplande afspraken.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-noreply" style="width:auto" ${s.followUp?.noReplyEnabled ? 'checked' : ''}> Follow-up op gemailde klanten zonder reactie aanzetten</label>
       <label>Na hoeveel dagen zonder reactie? <input id="fu-noReplyDays" type="number" min="1" max="30" value="${esc(String(s.followUp?.noReplyDays || 3))}" style="max-width:120px"></label>
       <label>E-mail onderwerp <input id="fu-noReplySubject" value="${esc(s.followUp?.noReplyEmailSubject || '')}"></label>
@@ -4500,10 +4551,10 @@ async function loadSettingsHtml(s) {
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveFollowUp">Opslaan</button></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('calendar', 15)} Afspraakbevestiging &amp; herinnering (automatisch)</h3>
-      <p class="muted small">Plan je op een kaart een afspraak in? Dan krijgt de klant automatisch een bevestiging met datum en tijd — en optioneel een herinnering vooraf (minder no-shows). Gebruik <code>{naam}</code>, <code>{datum}</code>, <code>{tijdblok}</code> (bv. "tussen 15:00 en 18:00") en <code>{dag}</code> in de teksten; die worden automatisch ingevuld. <code>{dag}</code> wordt vanzelf "vandaag", "morgen", "overmorgen" of de dagnaam — typ dus nooit zelf "morgen" in de herinnering, want die klopt niet bij een zelfde-dag-afspraak. We werken met tijdsblokken van 3 uur. <code>{tijd}</code> mag ook — die toont nu óók het hele blok. E-mail heeft voorrang; geen e-mailadres bekend, dan WhatsApp.</p>
+      <p class="muted small">Plan je op een opdracht een afspraak in? Dan krijgt de klant automatisch een bevestiging met datum en tijd — en optioneel een herinnering vooraf (minder no-shows). Gebruik <code>{naam}</code>, <code>{datum}</code>, <code>{tijdblok}</code> (bv. "tussen 15:00 en 18:00") en <code>{dag}</code> in de teksten; die worden automatisch ingevuld. <code>{dag}</code> wordt vanzelf "vandaag", "morgen", "overmorgen" of de dagnaam — typ dus nooit zelf "morgen" in de herinnering, want die klopt niet bij een zelfde-dag-afspraak. We werken met tijdsblokken van 3 uur. <code>{tijd}</code> mag ook — die toont nu óók het hele blok. E-mail heeft voorrang; geen e-mailadres bekend, dan WhatsApp.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ab-email" style="width:auto" ${s.appointmentMsg?.emailEnabled ? 'checked' : ''}> Bevestiging via <strong>e-mail</strong></label>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ab-whatsapp" style="width:auto" ${s.appointmentMsg?.whatsappEnabled ? 'checked' : ''}> Bevestiging via <strong>WhatsApp</strong></label>
-      <label>Lengte tijdsblok (uren) — de monteur komt binnen dit blok langs <input id="ab-block" type="number" min="1" max="8" value="${esc(String(s.appointmentMsg?.blockHours ?? 3))}" style="max-width:120px"><span class="muted small">Bij een afspraak om 15:00 en blok van 3 uur toont de klant "tussen 15:00 en 18:00". Zet je op de kaart zelf een eindtijd, dan gebruikt de bevestiging díe.</span></label>
+      <label>Lengte tijdsblok (uren) — de monteur komt binnen dit blok langs <input id="ab-block" type="number" min="1" max="8" value="${esc(String(s.appointmentMsg?.blockHours ?? 3))}" style="max-width:120px"><span class="muted small">Bij een afspraak om 15:00 en blok van 3 uur toont de klant "tussen 15:00 en 18:00". Zet je op de opdracht zelf een eindtijd, dan gebruikt de bevestiging díe.</span></label>
       <label>E-mail onderwerp <input id="ab-subject" value="${esc(s.appointmentMsg?.emailSubject || '')}"></label>
       <label>E-mail bericht <textarea id="ab-body" rows="5">${esc(s.appointmentMsg?.emailBody || '')}</textarea></label>
       <label>WhatsApp bericht <textarea id="ab-wabody" rows="3">${esc(s.appointmentMsg?.whatsappBody || '')}</textarea></label>
@@ -4513,8 +4564,8 @@ async function loadSettingsHtml(s) {
       <label>Herinnering (tekst) <textarea id="ab-rembody" rows="3">${esc(s.appointmentMsg?.reminderBody || '')}</textarea></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveApptMsg">Opslaan</button></div>
     </div>
-    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('pin', 15)} "Monteur onderweg"-bericht (knop op de kaart)</h3>
-      <p class="muted small">Met de knop <strong>Onderweg</strong> op een kaart krijgt de klant direct een mail én een appje dat de monteur eraan komt. Gebruik <code>{naam}</code> en <code>{monteur}</code> in de tekst.</p>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>${icon('pin', 15)} "Monteur onderweg"-bericht (knop op de opdracht)</h3>
+      <p class="muted small">Met de knop <strong>Onderweg</strong> op een opdracht krijgt de klant direct een mail én een appje dat de monteur eraan komt. Gebruik <code>{naam}</code> en <code>{monteur}</code> in de tekst.</p>
       <label>E-mail onderwerp <input id="ow-subject" value="${esc(s.onderwegMsg?.emailSubject || '')}"></label>
       <label>E-mail bericht <textarea id="ow-body" rows="5">${esc(s.onderwegMsg?.emailBody || '')}</textarea></label>
       <label>WhatsApp-bericht <textarea id="ow-wabody" rows="3">${esc(s.onderwegMsg?.whatsappBody || '')}</textarea></label>
@@ -4535,7 +4586,7 @@ async function loadSettingsHtml(s) {
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('sparkles', 15)} AI-ochtendbriefing</h3>
-      <p class="muted small">Elke ochtend één bericht met wat er vandaag speelt: <strong>afspraken van vandaag</strong> (met tijd en of ze bevestigd zijn), alles wat <strong>om actie vraagt</strong> (onbeantwoorde klantreacties, nieuwe leads, stille offertes, verlopen facturen, stilliggende kaarten), de <strong>cijfers van deze week</strong> — afgesloten met 2-3 zinnen AI-advies waar de focus moet liggen. Via WhatsApp gaat de briefing naar dezelfde groep of het nummer van de <strong>WhatsApp-meldingen</strong> (Automatische berichten-pil); die meldingen hoeven daarvoor niet aan te staan. Kost ongeveer 1 cent per briefing.</p>
+      <p class="muted small">Elke ochtend één bericht met wat er vandaag speelt: <strong>afspraken van vandaag</strong> (met tijd en of ze bevestigd zijn), alles wat <strong>om actie vraagt</strong> (onbeantwoorde klantreacties, nieuwe aanvragen, stille offertes, verlopen facturen, stilliggende opdrachten), de <strong>cijfers van deze week</strong> — afgesloten met 2-3 zinnen AI-advies waar de focus moet liggen. Via WhatsApp gaat de briefing naar dezelfde groep of het nummer van de <strong>WhatsApp-meldingen</strong> (Automatische berichten-pil); die meldingen hoeven daarvoor niet aan te staan. Kost ongeveer 1 cent per briefing.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="mb-enabled" style="width:auto" ${s.morningBriefing?.enabled ? 'checked' : ''}> Ochtendbriefing aanzetten</label>
       <div class="row">
         <label>Tijdstip (uur) <input id="mb-hour" type="number" min="0" max="23" value="${esc(String(s.morningBriefing?.hour ?? 7))}" style="max-width:110px"></label>
@@ -4559,7 +4610,7 @@ async function loadSettingsHtml(s) {
       </div>
     </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('activity', 15)} Wekelijkse AI-controle — wat blijft er liggen?</h3>
-      <p class="muted small">Elke <strong>maandagochtend</strong> één bericht met alles wat scheef staat of blijven liggen is: afgeronde klussen <strong>zonder factuur</strong>, afspraken die al geweest zijn maar waarvan de kaart nog open staat, <strong>vergeten inbox-leads</strong> (2+ dagen), offertes 7+ dagen stil, verlopen facturen en kaarten die 14+ dagen niet zijn aangeraakt — met kort AI-advies wat je het eerst oppakt. Gaat via hetzelfde kanaal als de ochtendbriefing (WhatsApp-meldingen en/of e-mail).</p>
+      <p class="muted small">Elke <strong>maandagochtend</strong> één bericht met alles wat scheef staat of blijven liggen is: afgeronde opdrachten <strong>zonder factuur</strong>, afspraken die al geweest zijn maar waarvan de opdracht nog open staat, <strong>vergeten inbox-leads</strong> (2+ dagen), offertes 7+ dagen stil, verlopen facturen en opdrachten die 14+ dagen niet zijn aangeraakt — met kort AI-advies wat je het eerst oppakt. Gaat via hetzelfde kanaal als de ochtendbriefing (WhatsApp-meldingen en/of e-mail).</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wc-enabled" style="width:auto" ${s.weeklyAiCheck?.enabled ? 'checked' : ''}> Wekelijkse controle aanzetten</label>
       <div class="row"><label>Tijdstip maandag (uur) <input id="wc-hour" type="number" min="0" max="23" value="${esc(String(s.weeklyAiCheck?.hour ?? 8))}" style="max-width:110px"></label></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
@@ -4568,14 +4619,14 @@ async function loadSettingsHtml(s) {
       </div>
     </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('sparkles', 15)} AI-dagoverzicht (Start-pagina)</h3>
-      <p class="muted small">Het blok "Jouw dag in één oogopslag" bovenaan Start scant elke dag het échte verkeer (<strong>WhatsApp tot 7 dagen</strong>, <strong>e-mail tot 14 dagen</strong> terug) plus alle kaarten, afspraken en facturen — en zet daar de belangrijkste acties, kansen en risico's uit op een rij. Wordt 1x per dag gemaakt; met de Ververs-knop op Start forceer je een nieuwe scan.</p>
+      <p class="muted small">Het blok "Jouw dag in één oogopslag" bovenaan Start scant elke dag het échte verkeer (<strong>WhatsApp tot 7 dagen</strong>, <strong>e-mail tot 14 dagen</strong> terug) plus alle opdrachten, afspraken en facturen — en zet daar de belangrijkste acties, kansen en risico's uit op een rij. Wordt 1x per dag gemaakt; met de Ververs-knop op Start forceer je een nieuwe scan.</p>
       <label>AI-niveau <select id="ov-model">
         <option value="standaard" ${s.aiOverviewModel !== 'opus' ? 'selected' : ''}>Standaard (Sonnet) — ± €0,10 per scan</option>
         <option value="opus" ${s.aiOverviewModel === 'opus' ? 'selected' : ''}>Hoogste niveau (Opus) — scherper, ± €0,50 per scan</option>
       </select></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveOvModel">Opslaan</button></div>
     </div>
-    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een kaart, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
+    <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een opdracht, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="md-auto" style="width:auto"> Automatisch versturen aanzetten</label>
       <div class="row"> <label>Welke monteur (auto) <select id="md-monteur"></select></label> <label>Wanneer <select id="md-trigger"><option value="approved">zodra ik de opdracht goedkeur</option><option value="appointment">zodra een afspraak is ingepland</option><option value="intake">volautomatisch — meteen bij binnenkomst</option></select></label> </div>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" id="md-onlydrs" style="width:auto"> Alleen opdrachten uit de opdracht-groepen (hieronder ingesteld)</label>
@@ -4601,12 +4652,12 @@ async function loadSettingsHtml(s) {
       <div style="margin-top:12px"><button class="btn btn-primary" id="md-save">Verstuur-instellingen opslaan</button></div>
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>${icon('users', 15)} Zelfde-moment-aanvragen automatisch samenvoegen</h3>
-      <p class="muted small">Vraagt dezelfde klant kort na elkaar (nogmaals) iets aan — tweede appje, foto's erbij, of via de website én DRS tegelijk — dan hangt de goedgekeurde aanvraag <strong>automatisch aan de bestaande open kaart</strong>, met een zichtbare systeemnotitie. Is de open kaart ouder dan dit venster, dan wordt het gewoon een nieuwe kaart met een samenvoeg-suggestie (jij beslist). Zet op <strong>0</strong> om alles weer handmatig te doen.</p>
+      <p class="muted small">Vraagt dezelfde klant kort na elkaar (nogmaals) iets aan — tweede appje, foto's erbij, of via de website én DRS tegelijk — dan hangt de goedgekeurde aanvraag <strong>automatisch aan de bestaande open opdracht</strong>, met een zichtbare systeemnotitie. Is de open opdracht ouder dan dit venster, dan wordt het gewoon een nieuwe opdracht met een samenvoeg-suggestie (jij beslist). Zet op <strong>0</strong> om alles weer handmatig te doen.</p>
       <label>Venster (uren) <input id="amw-hours" type="number" min="0" max="72" value="${esc(String(s.autoMergeWindowHours ?? 6))}" style="max-width:120px"></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoMerge">Opslaan</button></div>
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>${icon('message', 15)} "Wacht op antwoord" op Start</h3>
-      <p class="muted small">Het blok toont klantberichten waar wij langer dan 2 uur niet op hebben gereageerd. Berichten ouder dan deze termijn vallen automatisch af; met de knop <strong>Afgehandeld</strong> haal je een bericht eerder weg. Een kaart die na het bericht is afgerond of geannuleerd telt ook als afgehandeld.</p>
+      <p class="muted small">Het blok toont klantberichten waar wij langer dan 2 uur niet op hebben gereageerd. Berichten ouder dan deze termijn vallen automatisch af; met de knop <strong>Afgehandeld</strong> haal je een bericht eerder weg. Een opdracht die na het bericht is afgerond of geannuleerd telt ook als afgehandeld.</p>
       <label>Maximaal dagen terug <input id="woa-dagen" type="number" min="1" max="60" value="${esc(String(s.wachtOpAntwoordDagen ?? 14))}" style="max-width:120px"></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveWachtOpAntwoord">Opslaan</button></div>
     </div>
@@ -4640,12 +4691,15 @@ async function loadSettingsHtml(s) {
     $$('#settingsPanel [data-sg]').forEach((el) => { el.style.display = (g === 'alles' || el.dataset.sg === g) ? '' : 'none'; });
     $$('#settingsPanel .sg-chip').forEach((c) => c.classList.toggle('on', c.dataset.g === g));
     state._sgroup = g;
+    try { localStorage.setItem('ksInstellingenGroep', g); } catch { /* privémodus */ }
     if (scroll) { const p = $('#settingsPanel'); if (p) p.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
   };
   $$('#settingsPanel .sg-chip').forEach((c) => c.onclick = () => applySGroup(c.dataset.g, true));
   // Standaard "Alles" (gegroepeerd mét kopjes): dan mist niemand een instelling die
   // toevallig onder een ander tabblad staat. Het laatst gekozen tabblad blijft leidend.
-  applySGroup(state._sgroup || 'alles');
+  // Opent op de laatst gekozen groep (keuze eigenaar 16 sep: "Alles" is 23 schermen lang).
+  let bewaard = ''; try { bewaard = localStorage.getItem('ksInstellingenGroep') || ''; } catch { /* stil */ }
+  applySGroup(state._sgroup || bewaard || 'alles');
 
   $('#saveApptMsg').onclick = async () => {
     const appointmentMsg = {
@@ -5152,7 +5206,7 @@ async function loadSettingsHtml(s) {
     el.innerHTML = '<div class="muted" style="margin-bottom:4px">Controle — zo herkent het systeem je groepen op dit moment:</div>' + _knownGroups.map((g) => {
       if (monteurGroups.has(normG(g))) return `<div style="padding:2px 0"><span class="muted">•</span> ${esc(g)} <span class="muted">— monteursgroep (hoort geen vinkje te hebben)</span></div>`;
       const ok = gcMatches(conf, g);
-      return `<div style="padding:2px 0">${ok ? '<span style="color:var(--ok);font-weight:700">✓</span>' : '<span style="color:var(--danger);font-weight:700">✗</span>'} ${esc(g)} <span class="muted">${ok ? '— wordt opdracht + doorgestuurd' : '— wordt NIET herkend: gaat naar Overige (geen kaart, geen monteur!)'}</span></div>`;
+      return `<div style="padding:2px 0">${ok ? '<span style="color:var(--ok);font-weight:700">✓</span>' : '<span style="color:var(--danger);font-weight:700">✗</span>'} ${esc(g)} <span class="muted">${ok ? '— wordt opdracht + doorgestuurd' : '— wordt NIET herkend: gaat naar Overige (geen opdracht, geen monteur!)'}</span></div>`;
     }).join('');
   };
   api('/api/assistant/groups').then((g) => { _knownGroups = g || []; renderGroupCheck(); }).catch(() => {});
@@ -5231,7 +5285,7 @@ async function loadSettingsHtml(s) {
     row.innerHTML = `<input type="color" value="${esc(st.color || '#64748b')}"><input type="text" value="${esc(st.label || '')}" placeholder="Kolomnaam"><button class="btn btn-sm btn-danger" title="Kolom verwijderen" aria-label="Kolom verwijderen">${icon('trash', 13)}</button>`;
     row.querySelector('button').onclick = () => {
       const n = (state.orders || []).filter((o) => o.status === row.dataset.key).length;
-      if (!confirm(`Kolom "${row.querySelector('input[type=text]').value || 'zonder naam'}" verwijderen?${n ? ` Er staan ${n} kaart(en) in — die krijgen daarna "onbekende kolom".` : ''} Pas na "Kolommen opslaan" is het definitief.`)) return;
+      if (!confirm(`Kolom "${row.querySelector('input[type=text]').value || 'zonder naam'}" verwijderen?${n ? ` Er staan ${n} opdracht(en) in — die krijgen daarna "onbekende kolom".` : ''} Pas na "Kolommen opslaan" is het definitief.`)) return;
       row.remove();
     };
     statusRows.appendChild(row);
@@ -5491,19 +5545,32 @@ const REJECT_REASONS = [
   'Geen klantaanvraag (intern/leverancier)',
   'Anders',
 ];
-function openRejectModal(r) {
+// Melding na 1-klik afwijzen: Ongedaan maken (terugzetten) of Reden toevoegen (opent
+// het oude venster, dat de reden achteraf op de afwijzing zet).
+function toastRejected(r) {
+  const t = $('#toast');
+  t.className = 'toast';
+  t.innerHTML = `<span>Afgewezen</span><button type="button" class="toast-undo" id="tr-undo">Ongedaan maken</button><button type="button" class="toast-undo" id="tr-reason">Reden toevoegen</button>`;
+  t.hidden = false;
+  clearTimeout(toast._t);
+  const close = () => { t.hidden = true; t.textContent = ''; };
+  toast._t = setTimeout(close, 9000);
+  $('#tr-undo', t).onclick = async () => { clearTimeout(toast._t); close(); try { await api(`/api/reviews/${r.id}/restore`, 'POST', {}); toast('Teruggezet'); loadInbox(); refreshInboxBadge(); } catch (e) { toast(e.message, true); } };
+  $('#tr-reason', t).onclick = () => { clearTimeout(toast._t); close(); openRejectModal(r, true); };
+}
+function openRejectModal(r, achteraf = false) {
   const statusOpts = '<option value="">— n.v.t. —</option>' + statusOptionsHTML('');
   modal(`
     <h2>Afwijzen</h2> <p class="muted small">Je kunt direct afwijzen. Feedback geven is optioneel, maar helpt de AI leren en is zichtbaar voor het team.</p> <label>Reden (optioneel) <select id="rj-reason"><option value="">— geen reden —</option>${REJECT_REASONS.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label> <label>Had eigenlijk moeten zijn (optioneel) <select id="rj-should">${statusOpts}</select></label> <label>Uitleg (optioneel) <textarea id="rj-note" rows="3" placeholder="Bv. dit was een nieuwsbrief van een leverancier, geen klant."></textarea></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="rj-cancel">Annuleren</button> <button class="btn btn-danger" id="rj-save">Afwijzen</button> </div></div>`);
   $('#rj-cancel').onclick = closeModal;
   $('#rj-save').onclick = async () => {
     try {
-      await api(`/api/reviews/${r.id}/reject`, 'POST', {
+      await api(`/api/reviews/${r.id}/${achteraf ? 'reject-reason' : 'reject'}`, 'POST', {
         reason: $('#rj-reason').value,
         shouldBe: $('#rj-should').value ? statusLabel($('#rj-should').value) : '',
         note: $('#rj-note').value,
       });
-      closeModal(); toast('Afgewezen'); loadInbox(); refreshInboxBadge();
+      closeModal(); toast(achteraf ? 'Reden opgeslagen — de AI leert ervan' : 'Afgewezen'); loadInbox(); refreshInboxBadge();
     } catch (err) { toast(err.message, true); }
   };
 }
@@ -5539,7 +5606,7 @@ function openReplyModal(ctx = {}) {
         ${canSend ? '<button class="btn btn-primary" id="rep-send">Verzenden</button>' : ''}
       </div> </div>
     <p class="muted small" id="rep-hint" style="margin-top:10px">${
-      canSend ? 'Wordt direct vanuit het dashboard verstuurd, met je naam als afzender. Het hele gesprek blijft op de kaart bewaard.'
+      canSend ? 'Wordt direct vanuit het dashboard verstuurd, met je naam als afzender. Het hele gesprek blijft op de opdracht bewaard.'
       : ctx.email ? 'Direct versturen staat nog uit (SMTP). Gebruik “Open in e-mail” of kopieer de tekst.'
       : 'Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp.'
     }</p> `);
@@ -5777,20 +5844,20 @@ function bindButtons() {
   $('#collapseBtn')?.addEventListener('click', async () => {
     const naam = state.channel === 'email' ? 'E-mail' : state.channel === 'whatsapp' ? 'WhatsApp' : 'Alle';
     const visible = filteredOrders().length;
-    if (!visible) return toast('Er staan geen kaarten om in te klappen', true);
-    if (!confirm(`${visible} kaart(en) van "${naam}" nu inklappen in een gedateerde bundel? Het bord wordt leeg; je vindt ze terug onder "Ingeklapte agenda's" en kunt ze altijd weer openen.`)) return;
+    if (!visible) return toast('Er staan geen opdrachten om in te klappen', true);
+    if (!confirm(`${visible} opdracht(en) van "${naam}" nu inklappen in een gedateerde bundel? Het bord wordt leeg; je vindt ze terug onder "Ingeklapte agenda's" en kunt ze altijd weer openen.`)) return;
     try {
       const r = await api('/api/archives/collapse', 'POST', { channel: state.channel });
       loadBoard();
       if (r.count && r.key) {
-        toastUndo(`${r.count} kaart(en) ingeklapt`, async () => { await api('/api/archives/uncollapse', 'POST', { key: r.key }); toast('Inklappen ongedaan gemaakt'); loadBoard(); }, 12000);
+        toastUndo(`${r.count} opdracht(en) ingeklapt`, async () => { await api('/api/archives/uncollapse', 'POST', { key: r.key }); toast('Inklappen ongedaan gemaakt'); loadBoard(); }, 12000);
       } else { toast('Niets ingeklapt'); }
     } catch (err) { toast(err.message, true); }
   });
   $('#boardBulkDelete')?.addEventListener('click', async () => {
     const ids = selectedCardIds();
     if (!ids.length) return;
-    if (!confirm(`${ids.length} kaart(en) naar de prullenbak verplaatsen?`)) return;
+    if (!confirm(`${ids.length} opdracht(en) naar de prullenbak verplaatsen?`)) return;
     const knop = $('#boardBulkDelete'); knop.disabled = true;
     try { let n = 0; for (const id of ids) { await api(`/api/orders/${id}`, 'DELETE'); n++; knop.textContent = `${n} van ${ids.length}…`; } clearBoardSel(); loadBoard(); toastUndo(`${ids.length} naar prullenbak`, () => restoreOrders(ids)); }
     catch (err) { toast(err.message, true); }
@@ -5804,13 +5871,13 @@ function bindButtons() {
     const status = $('#boardBulkStatus')?.value;
     if (!ids.length || !status) return;
     const label = statusLabel(status);
-    if (!confirm(`${ids.length} kaart(en) op "${label}" zetten?`)) return;
+    if (!confirm(`${ids.length} opdracht(en) op "${label}" zetten?`)) return;
     let ok = 0; let mislukt = 0; let laatsteFout = '';
     const knop = $('#boardBulkApply'); knop.disabled = true; const knopTekst = knop.textContent;
     for (const id of ids) { try { await api(`/api/orders/${id}`, 'PATCH', { status }); ok++; } catch (err) { mislukt++; laatsteFout = err.message || ''; } knop.textContent = `${ok + mislukt} van ${ids.length}…`; }
     knop.disabled = false; knop.textContent = knopTekst;
-    if (mislukt) toast(`${ok} kaart(en) → ${label}, ${mislukt} mislukt${laatsteFout ? ': ' + laatsteFout : ''}`, true);
-    else toast(`${ok} kaart(en) → ${label}`);
+    if (mislukt) toast(`${ok} opdracht(en) → ${label}, ${mislukt} mislukt${laatsteFout ? ': ' + laatsteFout : ''}`, true);
+    else toast(`${ok} opdracht(en) → ${label}`);
     clearBoardSel();
     loadBoard();
   });
@@ -5954,7 +6021,7 @@ function navItems() {
   nav.push({ label: 'Berichten', view: 'chats', ic: 'whatsapp' }); // ook monteur (meelezen, eigen klanten)
   nav.push({ label: 'Agenda', view: 'agenda', ic: 'calendar' });
   if (!monteur) nav.push({ label: 'Taken', view: 'taken', ic: 'list' });
-  if (hasPerm('customers')) nav.push({ label: 'Klanten & leads', view: 'customers', ic: 'users' }, { label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
+  if (hasPerm('customers')) nav.push({ label: 'Klanten', view: 'customers', ic: 'users' }, { label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
   nav.push({ label: 'Facturen', view: 'invoices', ic: 'file' });
   if (!monteur) nav.push({ label: 'AI Assistent', view: 'assistant', ic: 'sparkles' });
   if (hasPerm('deleteOrders')) nav.push({ label: 'Prullenbak', view: 'trash', ic: 'trash' });

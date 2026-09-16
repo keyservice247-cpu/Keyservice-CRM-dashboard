@@ -522,6 +522,17 @@ tr:last-child td { border-bottom: none; }
    betrouwbaar werkt; de scrollpositie wordt bij sluiten exact hersteld. */
 body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 100%; }
 .modal-actions-vast { position: sticky; bottom: 0; background: var(--panel); padding-top: 10px; padding-bottom: 10px; margin-top: 14px; z-index: 3; border-top: 1px solid var(--line-soft); }
+/* Eigen invoervenster (vraagTekst) — ligt boven een open modal. */
+.mini-dialog-root { position: fixed; inset: 0; z-index: 400; background: rgba(31,37,48,.42); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.mini-dialog { background: var(--panel); color: var(--ink); border-radius: 14px; border: 1px solid var(--line); box-shadow: var(--shadow-lg); width: 420px; max-width: 100%; padding: 20px 22px; }
+.mini-dialog h3 { margin: 0 0 6px; font-size: 17px; }
+.mini-dialog label { display: block; margin-top: 10px; }
+.mini-dialog .md-fout { color: var(--danger); margin-top: 6px; }
+.bulk-toggle { display: none; }
+/* Verloop-grafiek (Cijfers): op de pc naast elkaar, op mobiel als lijst. */
+.fin-trend { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+.fin-trend-item { flex: 1; min-width: 90px; text-align: center; display: flex; flex-direction: column-reverse; gap: 4px; }
+.fin-trend-bars { display: flex; flex-direction: column; gap: 3px; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(31,37,48,.38); animation: fadeIn .15s ease; }
 .modal { position: relative; background: var(--panel); border-radius: var(--radius); width: 580px; max-width: 100%; box-shadow: var(--shadow-lg); border: 1px solid var(--line); padding: 24px 26px; animation: modalIn .18s ease; }
 .modal h2 { margin-bottom: 18px; font-size: 17px; font-weight: 500; }
@@ -935,6 +946,19 @@ table tbody tr:hover { background: var(--panel-2); }
   /* iOS zoomt in op velden < 16 px — inline stijlen in de app winnen anders van de regel hierboven. */
   input, select, textarea { font-size: 16px !important; }
   .board-tab { min-height: 44px; }
+  /* Keuzes eigenaar 16 sep: tikdoelen taken-chips en agenda-links, bulkbalk ingeklapt,
+     Cijfers-knoppen wrappen, verloop-grafiek als lijst. */
+  .tk-chip { min-height: 40px; padding: 8px 12px; }
+  .agenda-gcal { min-height: 40px; padding: 8px 4px; }
+  .bulk-toggle { display: inline-flex; }
+  .bulk-bar > *:not(.bulk-toggle) { display: none; }
+  .bulk-bar.open > * { display: inline-flex; }
+  .bulk-bar.open > .bulk-check, .bulk-bar.open > span { display: inline-flex; align-items: center; }
+  #view-finance .view-actions { flex-wrap: wrap; overflow: visible; mask-image: none; -webkit-mask-image: none; row-gap: 6px; }
+  #view-finance .view-actions #finMonth { flex: 1 1 100%; }
+  .fin-trend { flex-direction: column; align-items: stretch; gap: 8px; }
+  .fin-trend-item { display: grid; grid-template-columns: 52px 1fr 92px; align-items: center; gap: 10px; text-align: left; }
+  .fin-trend-winst { text-align: right; }
   .r-select, #selectAll { width: 22px; height: 22px; }
   /* Inbox-lead compacter: correctievelden in twee kolommen i.p.v. zeven onder elkaar. */
   .review .review-actions:first-of-type { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

@@ -121,6 +121,19 @@ if (item) {
   ok('(inbox-item gevonden om te testen)', false, JSON.stringify(alleR).slice(0, 200));
 }
 
+console.log('\n== Reden achteraf bij een 1-klik-afwijzing ==');
+await api('POST', '/api/ingest/email', { from: 'reden@example.nl', subject: 'Vraag over slot', body: 'Kunt u langskomen in Ede voor een slot?', externalId: 'aud-reden-1' }, true);
+const rAll = (await api('GET', '/api/reviews?status=all')).json;
+const rItem = (rAll.items || rAll || []).find((r) => /aud-reden-1|reden@example/.test(JSON.stringify(r)));
+ok('testbericht in de inbox', !!rItem);
+const rr1 = await api('POST', `/api/reviews/${rItem.id}/reject-reason`, { note: 'x' });
+ok('reden toevoegen aan een NIET-afgewezen bericht wordt geweigerd', rr1.status === 400);
+await api('POST', `/api/reviews/${rItem.id}/reject`, {});
+const rr2 = await api('POST', `/api/reviews/${rItem.id}/reject-reason`, { reason: 'reclame', note: 'nieuwsbrief', shouldBe: '' });
+ok('reden achteraf opgeslagen op de review', rr2.status === 200 && rr2.json.review.rejectReason === 'reclame' && rr2.json.review.rejectNote === 'nieuwsbrief');
+const fbLijst = (await api('GET', '/api/feedback')).json;
+ok('leervoorbeeld (feedback) krijgt de reden ook', fbLijst.some((f) => f.reviewId === rItem.id && f.reason === 'reclame'));
+
 console.log('\n== Rechten ==');
 await login('assist-audit@keyservice.nl', 'assist123');
 const lijstAss = await api('GET', '/api/invoices');

@@ -174,6 +174,14 @@ app.post('/api/login', (req, res) => {
     noteLoginFail(ip);
     return res.status(401).json({ error: 'Onjuist e-mailadres of wachtwoord' });
   }
+  // DEMO-WACHTWOORD UIT (16 sep 2026, keuze eigenaar): het standaardwachtwoord uit de
+  // voorbeelddata mag op een échte installatie nooit meer werken. Alleen in de
+  // testomgeving (SESSION_SECRET=test of DEMO_LOGIN=1) blijft het bruikbaar.
+  const demoToegestaan = process.env.SESSION_SECRET === 'test' || process.env.DEMO_LOGIN === '1';
+  if (!demoToegestaan && password === 'admin123') {
+    logActivity(user.name, 'inlogpoging met standaardwachtwoord geweigerd');
+    return res.status(403).json({ error: 'Het standaardwachtwoord is uitgeschakeld. Laat een beheerder een nieuw wachtwoord instellen via Gebruikers.' });
+  }
   _loginAttempts.delete(ip); // geslaagd -> teller wissen
   const token = createSession(user.id);
   setSessionCookie(res, token, isHttps(req));
@@ -2021,19 +2029,36 @@ app.get('/api/reviews', requireAuth, (req, res) => {
   // (harde identificatoren: écht WhatsApp-afzendernummer, écht e-mailadres, of de
   // geëxtraheerde contactgegevens) en of die klant een open kaart heeft. Zo hoeft
   // niemand meer zelf uit te zoeken "wie is dit?" bij bv. een annulering.
+  // Eén index per aanroep i.p.v. een scan over alle klanten en kaarten per item
+  // (audit 16 sep: 150 items × duizenden klanten bij elke inbox-verversing).
+  const perTel = new Map(); const perMail = new Map();
+  for (const c of db().customers || []) {
+    const p = matchPhone(c.phone || ''); if (p.length >= 6 && !perTel.has(p)) perTel.set(p, c);
+    const e = String(c.email || '').toLowerCase(); if (e && !perMail.has(e)) perMail.set(e, c);
+  }
+  const openPerKlant = new Map(); // nieuwste open kaart per klant
+  for (const o of db().orders || []) {
+    if (!o.customerId || o.archivedWeek || ['afgerond', 'geannuleerd'].includes(o.status)) continue;
+    const cur = openPerKlant.get(o.customerId);
+    if (!cur || String(o.updatedAt || '') > String(cur.updatedAt || '')) openPerKlant.set(o.customerId, o);
+  }
+  const zoekKlant = ({ phone, email }) => {
+    if (email && perMail.has(String(email).toLowerCase())) return perMail.get(String(email).toLowerCase());
+    const p = matchPhone(phone || ''); return p.length >= 6 ? (perTel.get(p) || null) : null;
+  };
   const knownCustomerFor = (r, m) => {
     try {
       let c = null;
       if (m && m.channel === 'whatsapp' && !m.group) {
         const p = m.fromPhone || senderPhoneFromText(m.body);
-        if (p) c = findCustomerStrong({ phone: p });
+        if (p) c = zoekKlant({ phone: p });
       } else if (m && m.channel === 'email') {
         const em = (String(m.sender || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [''])[0];
-        if (em) c = findCustomerStrong({ email: em });
+        if (em) c = zoekKlant({ email: em });
       }
-      if (!c && r.suggestion) c = findCustomerStrong({ phone: r.suggestion.customerPhone, email: r.suggestion.customerEmail });
+      if (!c && r.suggestion) c = zoekKlant({ phone: r.suggestion.customerPhone, email: r.suggestion.customerEmail });
       if (!c) return null;
-      const open = db().orders.find((o) => o.customerId === c.id && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
+      const open = openPerKlant.get(c.id) || null;
       return { id: c.id, name: c.name || '', openOrderId: open ? open.id : null, openOrderTitle: open ? open.title : '' };
     } catch { return null; }
   };
@@ -2148,7 +2173,7 @@ function rejectReview(review, user, b = {}) {
   review.rejectShouldBe = b.shouldBe || '';
   const msg = db().messages.find((m) => m.id === review.messageId);
   db().feedback.unshift({
-    id: id('fb'), type: 'reject', at: now(), by: user.name, channel: review.channel,
+    id: id('fb'), type: 'reject', at: now(), by: user.name, channel: review.channel, reviewId: review.id,
     reason: b.reason || 'Afgewezen (geen reden opgegeven)', note: b.note || '', shouldBe: b.shouldBe || '',
     aiStatus: review.suggestion?.aiStatus || review.suggestion?.status,
     sample: (msg?.body || '').slice(0, 400),
@@ -2161,6 +2186,24 @@ app.post('/api/reviews/:id/reject', requirePerm('inbox'), (req, res) => {
   if (!['pending', 'overige'].includes(review.status)) return res.status(400).json({ error: 'Al verwerkt' });
   rejectReview(review, req.user, req.body || {});
   logActivity(req.user.name, 'review afgewezen', `${review.suggestion?.title || ''}${req.body?.reason ? ' — ' + req.body.reason : ''}`);
+  saveSoon();
+  res.json({ review });
+});
+
+// Reden ACHTERAF bij een afwijzing (16 sep, 1-klik afwijzen): de assistente wijst
+// direct af en kan daarna via de toast alsnog een reden/correctie meegeven — die
+// wordt op de review én op het leervoorbeeld (feedback) bijgewerkt.
+app.post('/api/reviews/:id/reject-reason', requirePerm('inbox'), (req, res) => {
+  const review = db().reviews.find((r) => r.id === req.params.id);
+  if (!review) return res.status(404).json({ error: 'Niet gevonden' });
+  if (review.status !== 'rejected') return res.status(400).json({ error: 'Dit bericht is niet afgewezen' });
+  const b = req.body || {};
+  review.rejectReason = String(b.reason || '').slice(0, 120);
+  review.rejectNote = String(b.note || '').slice(0, 600);
+  review.rejectShouldBe = String(b.shouldBe || '').slice(0, 80);
+  const fb = (db().feedback || []).find((f) => f.type === 'reject' && f.reviewId === review.id);
+  if (fb) { fb.reason = review.rejectReason || 'Afgewezen (geen reden opgegeven)'; fb.note = review.rejectNote; fb.shouldBe = review.rejectShouldBe; void db().feedback; }
+  logActivity(req.user.name, 'afwijsreden toegevoegd', `${review.suggestion?.title || ''} — ${review.rejectReason || review.rejectNote || review.rejectShouldBe}`);
   saveSoon();
   res.json({ review });
 });

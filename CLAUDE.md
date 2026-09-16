@@ -607,6 +607,25 @@ de regressie meegroeit.
   bulk-acties tonen "n van N…"; foutmeldingen 7 s + tikken sluit; modal focus
   naar eerste veld en terug naar de opener; bord-zoeken 180 ms debounce;
   snel-taak-tekst overleeft een herlaad. Browser-test 139.
+  RONDE 3 (alle "keuzes" uit het rapport, eigenaar: "doe alle keuzes gewoon bouwen"):
+  1-KLIK AFWIJZEN in de inbox (r-reject → POST reject {} + toastRejected: "Ongedaan
+  maken" = restore, "Reden toevoegen" = openRejectModal(r, true) → POST
+  /api/reviews/:id/reject-reason {reason,note,shouldBe}, werkt reden ook bij op het
+  feedback-leervoorbeeld via feedback.reviewId); ÉÉN WOORD: alle zichtbare teksten
+  "kaart(en)/klus(sen)" → "opdracht(en)" (sweep alleen binnen string-literals, geen
+  selectors/identifiers; klanttype 'lead' toont "nog geen klant", menu "Klanten");
+  INSTELLINGEN onthouden de laatst gekozen groep (localStorage ksInstellingenGroep);
+  BULKBALK inbox op mobiel ingeklapt achter knop "Bulk-acties" (.bulk-toggle);
+  CIJFERS mobiel: knoppenrij wrapt, verloop-grafiek als lijst (.fin-trend/-item);
+  vraagTekst() = eigen invoervenster (.mini-dialog-root, z-index 400, boven een open
+  modal) i.p.v. prompt() bij nieuwe bron / factuur opnieuw sturen (met e-mail-
+  validatie) / pakketnaam; "Via WhatsApp" meldt eerlijk "klaargezet — in de
+  wachtrij"; tikdoelen taken-chips en agenda-links ≥40 px mobiel; DEMO-WACHTWOORD
+  UIT: /api/login weigert 'admin123' met 403 tenzij SESSION_SECRET=test of
+  DEMO_LOGIN=1 (tests draaien met SESSION_SECRET=test); GET /api/reviews bouwt één
+  klant-/open-kaart-index per aanroep (geen scan per item); slepen scrolt de volle
+  doelkolom mee; showView('settings') weigert zonder settings-recht. Tests: audit-
+  test 31, browser-test 150.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 
@@ -954,5 +973,5 @@ Hier werken we naartoe; elke feature moet hieraan bijdragen:
   `public/.htaccess`. Wijzig dit endpoint-contract niet zonder beide kanten bij te werken.
 
 ## Test/run
-- Lokaal: `npm install && npm start` (poort 3000). Demo-login admin@keyservice.nl / admin123.
+- Lokaal: `npm install && npm start` (poort 3000). Demo-login admin@keyservice.nl / admin123 werkt ALLEEN met SESSION_SECRET=test (of DEMO_LOGIN=1); op productie is het standaardwachtwoord geblokkeerd.
 - Deploy: push naar `main` → Render auto-deploy. Branch voor werk: `claude/busy-bardeen-cr8tX`.
