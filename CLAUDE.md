@@ -588,6 +588,25 @@ de regressie meegroeit.
   nachtmodus-tokens (kolommen Afgehandeld, DRS-chip), primaire knop vooraan in élke
   mobiele knoppenrij + schuif-fade, tikdoelen 40+ px, inputs 16 px op mobiel.
   Test: test/audit-test.mjs (27, PORT=3137) + browser-test 129.
+  RONDE 2 (browser-doorloop, 3 rollen × desktop/390 px): KRITIEK monteur-kaart met
+  samenvoeg-suggestie brak af op null.onclick (knoppen bestaan alleen voor kantoor)
+  → guard; sleep-kopie stond op y=1499 (.card{position:relative} won van
+  .board-drag-ghost{position:fixed}) → `.card.board-drag-ghost{position:fixed
+  !important}` + browser-assertie op afstand tot de muis; /api/overview filtert
+  voor de monteur (eigen kaarten, teControleren 0, activity leeg; rollen-test 49);
+  mobiele kopbalk 222 px → `.layout{grid-template-rows:auto 1fr;align-content:
+  start}` (assertie < 90 px); zijbalk compacter onder 860 px hoog + scroll-
+  schaduw, Uitloggen niet meer afgekapt; bord-knoppenrij WRAPT op mobiel met het
+  zoekveld op een eigen regel; Opslaan-rij van de kaart-modal plakt onderaan
+  (.modal-actions-vast; .modal overflow-x:clip i.p.v. hidden); inbox-correctie-
+  velden in 2 kolommen op mobiel, "Bekende klant"-chip breekt af, checkboxes 22 px,
+  kolom-tabs 44 px; Cijfers-tabellen schuiven zelf; toast niet boven een open
+  venster (behalve fouten); Navigeer-knop zonder adres legt uit i.p.v. verdwijnt;
+  klantdossier via de hele naamcel; Berichten toont "WhatsApp" als vast kanaal;
+  wees-label "regels" weg; afspraak annuleren = één venster met vinkje;
+  bulk-acties tonen "n van N…"; foutmeldingen 7 s + tikken sluit; modal focus
+  naar eerste veld en terug naar de opener; bord-zoeken 180 ms debounce;
+  snel-taak-tekst overleeft een herlaad. Browser-test 139.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

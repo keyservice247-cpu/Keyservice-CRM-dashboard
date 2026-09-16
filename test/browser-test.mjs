@@ -350,6 +350,11 @@ await page.waitForTimeout(300);
 await page.evaluate(() => goView('board'));
 await page.waitForTimeout(1000);
 {
+  // Kopbalk op de telefoon: inhoud + wat lucht, niet een derde van het scherm (was 222 px).
+  const kop = await page.evaluate(() => document.querySelector('.sidebar')?.getBoundingClientRect().height);
+  ok('mobiel: kopbalk is compact (< 90 px)', typeof kop === 'number' && kop < 90, String(kop));
+  const zoek = await page.locator('#boardSearch').boundingBox();
+  ok('mobiel: zoekveld op het bord staat zonder scrollen in beeld', !!zoek && zoek.x >= 0 && zoek.x + zoek.width <= 390 && zoek.y < 844, JSON.stringify(zoek));
   const pb = await page.locator('#pasteOrderBtn').boundingBox();
   const nb = await page.locator('#newOrderBtn').boundingBox();
   ok('mobiel: "Plak opdracht" en "+ Nieuwe opdracht" staan zonder scrollen in beeld', !!pb && !!nb && pb.x >= 0 && pb.x + pb.width <= 390 && nb.x >= 0 && nb.x + nb.width <= 390, JSON.stringify({ pb, nb }));
@@ -544,6 +549,13 @@ await page.waitForTimeout(600);
   await page.mouse.down();
   await page.mouse.move(b.x + b.width / 2 + 12, b.y + 42, { steps: 4 });
   await page.mouse.move(b.x + b.width / 2 + 80, b.y + 80, { steps: 6 });
+  {
+    // De kopie moet ÉCHT bij de muis staan (browser-audit 16 sep: hij stond op y=1499
+    // door een CSS-specificiteitsfout — position:fixed werd door .card overschreven).
+    const g = await page.evaluate(() => { const el = document.querySelector('.board-drag-ghost'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, pos: getComputedStyle(el).position }; });
+    const mx = b.x + b.width / 2 + 80; const my = b.y + 80;
+    ok('bord: sleep-kopie staat vast onder de muis (position fixed, < 120 px afstand)', !!g && g.pos === 'fixed' && mx >= g.x - 120 && mx <= g.x + g.w + 120 && my >= g.y - 120 && my <= g.y + g.h + 120, JSON.stringify({ g, mx, my }));
+  }
   ok('bord: slepen gestart (kopie volgt de muis, bron vervaagd)', await page.evaluate((id) => window._dragging === true && !!document.querySelector('.board-drag-ghost') && document.querySelector(`.card[data-id="${id}"]`)?.classList.contains('drag-src'), sleepId));
   // Collega wijzigt een andere kaart -> bord zou herbouwd worden; moet nu uitgesteld zijn.
   await page.evaluate(async () => { const o = state.orders.find((x) => x.status !== 'open') || state.orders[1]; await fetch(`/api/orders/${o.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: o.title + ' (gewijzigd)' }) }); await loadBoard(); });
@@ -572,6 +584,29 @@ await page.waitForTimeout(600);
   await page.waitForTimeout(300);
 }
 noErr('Bord slepen');
+
+// Afspraak annuleren = één venster met vinkje (audit 16 sep), geen dubbele systeem-popup.
+{
+  clear();
+  const apptId = await page.evaluate(async () => {
+    const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+    const c = await post('/api/customers', { name: 'Afspraak Klant', phone: '0611000055', email: 'afspraak@example.nl' });
+    const o = await post('/api/orders', { customerId: c.id, title: 'Rhenen — afspraak annuleren test', status: 'open', appointmentAt: '2030-01-10T10:00' });
+    return o.id;
+  });
+  await page.evaluate(async (id) => { state.orders = await fetch('/api/orders').then((r) => r.json()); openOrderModal(id); }, apptId);
+  await page.waitForTimeout(600);
+  ok('kaart met afspraak toont "Afspraak annuleren"', await page.locator('#f-cancel-appt').count() === 1);
+  await page.click('#f-cancel-appt');
+  await page.waitForTimeout(400);
+  ok('annuleren opent één eigen venster met vinkje voor het klantbericht', await page.locator('#ca-ok').count() === 1 && await page.locator('#ca-notify').count() === 1);
+  await page.evaluate(() => { document.querySelector('#ca-notify').checked = false; });
+  await page.click('#ca-ok');
+  await page.waitForTimeout(900);
+  const zonderAfspraak = await page.evaluate((id) => fetch('/api/orders').then((r) => r.json()).then((os) => { const o = os.find((x) => x.id === id); return o && !o.appointmentAt; }), apptId);
+  ok('afspraak is weg, kaart blijft', zonderAfspraak === true);
+  noErr('Afspraak annuleren');
+}
 
 // MONTEUR-NOODROUTE ÉCHT via het scherm (audit 16 sep, kritiek): een gekoppelde
 // monteur vult "+ Nieuwe opdracht" in en drukt Opslaan. Voorheen kreeg hij altijd
@@ -605,6 +640,27 @@ noErr('Bord slepen');
   const gemaakt = await mp.evaluate(() => fetch('/api/orders').then((r) => r.json()).then((os) => os.find((o) => /noodroute via scherm/.test(o.title))));
   ok('monteur: kaart via het formulier ÉCHT aangemaakt (geen "Titel verplicht")', !!gemaakt, JSON.stringify(gemaakt && gemaakt.title));
   ok('monteur: kaart hangt aan hemzelf + vlag zelf aangemaakt', !!gemaakt && gemaakt.monteurId === mSetup.monteurId && gemaakt.zelfAangemaaktDoorMonteur === true, JSON.stringify(gemaakt && { m: gemaakt.monteurId, z: gemaakt.zelfAangemaaktDoorMonteur }));
+  // Kaart MET samenvoeg-suggestie (browser-audit 16 sep, kritiek): de monteur-modal
+  // brak op null.onclick en geen enkele knop werkte meer.
+  const sugId = await page.evaluate(async (monteurId) => {
+    const post = (p, b, tok) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json', ...(tok ? { 'x-ingest-token': 'test123' } : {}) }, body: JSON.stringify(b) }).then((r) => r.json());
+    await fetch('/api/settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ autoMergeWindowHours: 0, whatsappOrderGroups: 'raf breda' }) });
+    const c = await post('/api/customers', { name: 'Suggestie Monteur Klant', phone: '0611009977' });
+    await post('/api/orders', { customerId: c.id, title: 'Rhenen — bestaande open kaart', status: 'open', monteurId });
+    await post('/api/ingest/whatsapp', { group: 'Raf breda', name: 'DRS', body: 'Naam: Suggestie Monteur Klant\nAdres: Dorp 1\nWoonplaats: Rhenen\nTelefoon: 0611009977\nOpmerkingen: tweede aanvraag', externalId: 'br-sug-1' }, true);
+    const rv = await fetch('/api/reviews').then((r) => r.json());
+    const r = (rv.items || rv).find((x) => /0611009977/.test(JSON.stringify(x)));
+    if (!r) return null;
+    const g = await post(`/api/reviews/${r.id}/approve`, { monteurId });
+    return g.order && g.order.mergeSuggestion ? g.order.id : ('geen-suggestie:' + JSON.stringify(g).slice(0, 80));
+  }, mSetup.monteurId);
+  ok('testkaart met samenvoeg-suggestie aangemaakt', !!sugId && !/^geen/.test(sugId), String(sugId));
+  mErr.length = 0;
+  await mp.evaluate(async (id) => { state.orders = await fetch('/api/orders').then((r) => r.json()); openOrderModal(id); }, sugId);
+  await mp.waitForTimeout(700);
+  const gebonden = await mp.evaluate(() => ({ save: !!document.querySelector('#f-save')?.onclick, onweg: !!document.querySelector('#f-onweg')?.onclick, werkbon: !!document.querySelector('#f-werkbon')?.onclick }));
+  ok('monteur: kaart met samenvoeg-suggestie is volledig bruikbaar (Opslaan/Onderweg/Werkbon gebonden)', gebonden.save && gebonden.onweg && gebonden.werkbon, JSON.stringify(gebonden));
+  ok('monteur: geen JS-fout bij het openen van die kaart', !mErr.filter((e) => !/favicon|manifest|ServiceWorker/i.test(e)).length, mErr.join(' | '));
   ok('monteur-scherm zonder JS-fouten', !mErr.filter((e) => !/favicon|manifest|ServiceWorker/i.test(e)).length, mErr.join(' | '));
   await mp.close();
 }

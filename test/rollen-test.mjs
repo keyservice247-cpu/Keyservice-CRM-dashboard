@@ -114,6 +114,12 @@ const drs = 'Hallo. We sturen je de volgende klant:\nNaam: Plak Klant\nAdres: Ke
 const geplakt = await api('POST', '/api/orders/paste', { text: drs });
 ok('monteur plakt zelf een DRS-opdracht', geplakt.status === 200 && /^Veenendaal — /.test(geplakt.json?.title || ''), JSON.stringify(geplakt.json?.title));
 ok('geplakte kaart hangt aan hemzelf', geplakt.json?.monteurId === montRec.json?.id);
+// Start-pagina van de monteur (browser-audit 16 sep): alleen eigen cijfers, geen
+// inbox-teller, geen logboek van collega's.
+const ovM = await api('GET', '/api/overview');
+const eigenKaarten = (await api('GET', '/api/orders')).json.length;
+ok('monteur-overzicht telt alleen zijn eigen kaarten', ovM.status === 200 && ovM.json.kpis.actief === eigenKaarten, JSON.stringify({ actief: ovM.json?.kpis?.actief, eigen: eigenKaarten }));
+ok('monteur-overzicht: geen "te controleren" en geen logboek', ovM.json.kpis.teControleren === 0 && Array.isArray(ovM.json.activity) && ovM.json.activity.length === 0);
 cookie = adminCookie;
 const zelfKaart = (await api('GET', '/api/orders')).json.find((o) => o.id === geplakt.json.id);
 ok('server markeert: zelf aangemaakt (geen dispatch naar eigen groep)', zelfKaart?.zelfAangemaaktDoorMonteur === true && !zelfKaart?.sentToMonteur);

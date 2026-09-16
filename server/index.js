@@ -2360,7 +2360,11 @@ function weekBounds(ref = new Date()) {
 
 // Overzicht/Home: kerncijfers (KPI's) + lijstjes die aandacht vragen + activiteit.
 app.get('/api/overview', requireAuth, (req, res) => {
-  const active = db().orders.filter((o) => !o.archivedWeek);
+  // MONTEUR ziet alleen zijn eigen werk (browser-audit 16 sep): voorheen kreeg hij
+  // bedrijfsbrede KPI's, "te controleren" van een inbox waar hij niet in mag en het
+  // logboek van zijn collega's.
+  const monteur = req.user.role === 'monteur';
+  const active = db().orders.filter((o) => !o.archivedWeek && (!monteur || (o.monteurId && o.monteurId === req.user.monteurId)));
   const labels = getStatusLabels();
   const custMap = new Map((db().customers || []).map((c) => [c.id, c]));
   const custName = (o) => (custMap.get(o.customerId) || {}).name || '';
@@ -2383,19 +2387,19 @@ app.get('/api/overview', requireAuth, (req, res) => {
   res.json({
     kpis: {
       nieuwVandaag: active.filter((o) => isToday(o.createdAt)).length,
-      teControleren: db().reviews.filter((r) => r.status === 'pending').length,
+      teControleren: monteur ? 0 : db().reviews.filter((r) => r.status === 'pending').length,
       openOffertes: active.filter((o) => o.status === 'offerte_verzonden').length,
       afsprakenVandaag: apptToday.length,
       klantReacties: repliedList.length,
       // Op het ECHTE afrondmoment (completedAt) — updatedAt schuift op door elke
       // aanraking (notitie, badge) en trok oude kaarten terug "deze week" in.
-      afgerondDezeWeek: db().orders.filter((o) => o.status === 'afgerond' && new Date(o.completedAt || o.updatedAt).getTime() >= wk.start && new Date(o.completedAt || o.updatedAt).getTime() < wk.end).length,
+      afgerondDezeWeek: db().orders.filter((o) => (!monteur || (o.monteurId && o.monteurId === req.user.monteurId)) && o.status === 'afgerond' && new Date(o.completedAt || o.updatedAt).getTime() >= wk.start && new Date(o.completedAt || o.updatedAt).getTime() < wk.end).length,
       actief: active.length,
     },
     whatsapp: { online: ageSec != null && ageSec < 180, configured: !!last, lastSeen: last },
     apptToday, repliedList, staleQuotes,
     byStatus: getStatusKeys().map((k) => ({ key: k, label: labels[k], count: active.filter((o) => o.status === k).length })),
-    activity: (db().activity || []).slice(0, 8).map((a) => ({ actor: a.actorName, action: a.action, detail: a.detail, at: a.at })),
+    activity: monteur ? [] : (db().activity || []).slice(0, 8).map((a) => ({ actor: a.actorName, action: a.action, detail: a.detail, at: a.at })),
   });
 });
 
