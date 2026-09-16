@@ -626,6 +626,10 @@ de regressie meegroeit.
   klant-/open-kaart-index per aanroep (geen scan per item); slepen scrolt de volle
   doelkolom mee; showView('settings') weigert zonder settings-recht. Tests: audit-
   test 31, browser-test 150.
+  BORD-KOP MOBIEL OPGERUIMD (16 sep 18:15, screenshot eigenaar): Telefoon, Status-scan
+  en Inklappen zijn op de telefoon uit de knoppenrij (display:none); Inklappen staat
+  onderaan het bord (#boardFoot/#collapseBtnFoot → klikt #collapseBtn). Knoppen/velden
+  38 px hoog. Browser-test 151.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

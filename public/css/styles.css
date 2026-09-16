@@ -529,6 +529,7 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 .mini-dialog label { display: block; margin-top: 10px; }
 .mini-dialog .md-fout { color: var(--danger); margin-top: 6px; }
 .bulk-toggle { display: none; }
+.board-foot { display: none; }
 /* Verloop-grafiek (Cijfers): op de pc naast elkaar, op mobiel als lijst. */
 .fin-trend { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
 .fin-trend-item { flex: 1; min-width: 90px; text-align: center; display: flex; flex-direction: column-reverse; gap: 4px; }
@@ -931,6 +932,12 @@ table tbody tr:hover { background: var(--panel-2); }
   #view-board .view-actions { flex-wrap: wrap; overflow: visible; mask-image: none; -webkit-mask-image: none; row-gap: 6px; }
   #view-board .view-actions #boardSearch { flex: 1 1 100%; width: 100%; min-width: 0; order: 5; }
   #view-board .view-actions select { flex: 1 1 40%; min-width: 0; order: 6; }
+  /* Opgeruimd (eigenaar 16 sep): Telefoon, Status-scan en Inklappen weg uit de kop op
+     de telefoon — die nam te veel ruimte. Inklappen staat onderaan het bord. */
+  #view-board .view-actions #phoneOrderBtn, #view-board .view-actions #digestBtn, #view-board .view-actions #collapseBtn { display: none; }
+  #view-board .view-actions .btn { min-height: 38px; padding: 6px 12px; }
+  #view-board .view-actions #boardSearch, #view-board .view-actions select { min-height: 38px; padding-top: 6px; padding-bottom: 6px; }
+  .board-foot { display: flex; justify-content: center; padding: 14px 0 6px; }
   #view-board .view-actions #newOrderBtn { order: -3; }
   #view-board .view-actions #pasteOrderBtn { order: -2; }
   #view-board .view-actions #phoneOrderBtn { order: -1; }

@@ -371,6 +371,7 @@ await page.waitForTimeout(1000);
   // Kopbalk op de telefoon: inhoud + wat lucht, niet een derde van het scherm (was 222 px).
   const kop = await page.evaluate(() => document.querySelector('.sidebar')?.getBoundingClientRect().height);
   ok('mobiel: kopbalk is compact (< 90 px)', typeof kop === 'number' && kop < 90, String(kop));
+  ok('mobiel: Telefoon/Status-scan/Inklappen staan niet in de kop, Inklappen staat onderaan', await page.locator('#phoneOrderBtn').isHidden() && await page.locator('#digestBtn').isHidden() && await page.locator('#collapseBtn').isHidden() && await page.locator('#collapseBtnFoot').isVisible());
   const zoek = await page.locator('#boardSearch').boundingBox();
   ok('mobiel: zoekveld op het bord staat zonder scrollen in beeld', !!zoek && zoek.x >= 0 && zoek.x + zoek.width <= 390 && zoek.y < 844, JSON.stringify(zoek));
   const pb = await page.locator('#pasteOrderBtn').boundingBox();

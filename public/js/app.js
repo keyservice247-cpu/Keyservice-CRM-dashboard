@@ -5841,6 +5841,7 @@ function bindButtons() {
   $('#digestBtn')?.addEventListener('click', openDigestModal);
   $('#ovDigestBtn')?.addEventListener('click', openDigestModal);
   $('#ovDailyCheck')?.addEventListener('click', openDailyCheck);
+  $('#collapseBtnFoot')?.addEventListener('click', () => $('#collapseBtn')?.click()); // mobiel: onderaan het bord
   $('#collapseBtn')?.addEventListener('click', async () => {
     const naam = state.channel === 'email' ? 'E-mail' : state.channel === 'whatsapp' ? 'WhatsApp' : 'Alle';
     const visible = filteredOrders().length;
