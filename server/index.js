@@ -3073,6 +3073,7 @@ app.post('/api/simulate', requireRole('admin', 'assistent'), async (req, res) =>
 app.get('/api/settings', requirePerm('settings'), (req, res) => {
   res.json({
     aiAutoApproveThreshold: autoApproveThreshold(),
+    autoApproveAllChannels: !!db().settings.autoApproveAllChannels,
     aiMode: aiMode(),
     statuses: getStatuses(),
     sources: getSources(),
@@ -3136,6 +3137,12 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   if ('aiAutoApproveThreshold' in b) {
     const v = Number(b.aiAutoApproveThreshold);
     db().settings.aiAutoApproveThreshold = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+  }
+  // Drempel óók voor losse e-mails en 1-op-1 WhatsApp (18 sep 2026, akkoord eigenaar:
+  // "optimaliseren dat hij het al automatisch doet"). Standaard UIT = Regel 4.
+  if ('autoApproveAllChannels' in b) {
+    db().settings.autoApproveAllChannels = !!b.autoApproveAllChannels;
+    logActivity(req.user.name, 'automatisch goedkeuren alle kanalen', db().settings.autoApproveAllChannels ? 'AAN' : 'UIT');
   }
   if ('statuses' in b) {
     const clean = sanitizeStatuses(b.statuses);
@@ -3405,6 +3412,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   res.json({
     priceSync: _lastPriceSync, // {changed, bundles} als pakketten zijn meegewijzigd
     aiAutoApproveThreshold: autoApproveThreshold(),
+    autoApproveAllChannels: !!db().settings.autoApproveAllChannels,
     statuses: getStatuses(),
     sources: getSources(),
     templates: getTemplates(),

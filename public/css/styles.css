@@ -959,6 +959,9 @@ table tbody tr:hover { background: var(--panel-2); }
   .agenda-gcal { min-height: 40px; padding: 8px 4px; }
   .bulk-toggle { display: inline-flex; }
   .bulk-bar > *:not(.bulk-toggle) { display: none; }
+  /* Accepteer boven drempel + de %-keuze blijven op mobiel ALTIJD zichtbaar (18 sep,
+     eigenaar: "de knop is weggehaald"); de rest zit achter Bulk-acties. */
+  .bulk-bar > #bulkApprovePct, .bulk-bar > #bulkApproveBtn { display: inline-flex; }
   .bulk-bar.open > * { display: inline-flex; }
   .bulk-bar.open > .bulk-check, .bulk-bar.open > span { display: inline-flex; align-items: center; }
   #view-finance .view-actions { flex-wrap: wrap; overflow: visible; mask-image: none; -webkit-mask-image: none; row-gap: 6px; }

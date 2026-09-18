@@ -637,6 +637,12 @@ noErr('Bord slepen');
   await page.waitForTimeout(1500);
   const rij = page.locator('#reviewList .review', { hasText: 'afwijs@example.nl' }).first();
   ok('inbox: testbericht staat in de lijst', await rij.count() === 1);
+  // Mobiel: "Accepteer boven drempel" blijft zichtbaar zonder de bulkbalk open te klappen (18 sep).
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(400);
+  ok('mobiel: Accepteer boven drempel + %-keuze direct zichtbaar in de inbox', await page.locator('#bulkApproveBtn').isVisible() && await page.locator('#bulkApprovePct').isVisible() && await page.locator('#bulkRejectBtn').isHidden());
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.waitForTimeout(400);
   clear();
   await rij.locator('.r-reject').click();
   await page.waitForTimeout(700);

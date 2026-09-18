@@ -671,6 +671,14 @@ server/pipeline.js — er bestaat geen pad eromheen.
    dataSuggestions op de kaart (knoppen Bijwerken/Negeren, endpoint
    /api/orders/:id/data-suggestion). Elke kaart draagt order.intake (gegevens van
    DÍE aanvraag); monteur-dispatch gebruikt intake vóór het klantrecord.
+   UITBREIDING 18 sep 2026 (akkoord Abdel, "we moeten nog steeds handmatig
+   accepteren"): instelling `settings.autoApproveAllChannels` (AI-controle → vinkje
+   onder de drempel, standaard UIT). Staat hij AAN, dan geldt de drempel óók voor
+   losse e-mails en 1-op-1 WhatsApp (`losAutoOk` in pipeline.js) met dezelfde
+   vangrails: alleen een echte pending lead, nooit een e-mailreactie, nooit
+   marketing/leverancier, échte contactgegevens, geen generieke naam. Test: 6
+   assertions in scenarios.mjs (106). Mobiel: "Accepteer boven drempel" + %-keuze
+   staan ALTIJD zichtbaar in de inbox (rest achter "Bulk-acties").
 4. Leveranciers-/webshopmail (DEFAULT_EMAIL_FILTERS in settings.js + eigen
    patronen in settings.emailFilters; match alléén op afzender+onderwerp) → STIL
    naar Overige, geen lead, geen melding; wint van intake-herkenning; het

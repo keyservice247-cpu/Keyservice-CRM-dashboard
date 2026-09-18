@@ -352,7 +352,21 @@ const sJG2 = await api('POST', '/api/ingest/email', {
   externalId: 'jg2',
 }, true);
 ok('tweede formulier (mail-route) zelfde klant -> duplicaat, geen tweede kaart', !!sJG2.json?.duplicate && (await orders()).length === ordersBeforeJG2, JSON.stringify(sJG2.json));
-await api('PATCH', '/api/settings', { aiAutoApproveThreshold: 0, autoMergeWindowHours: 0 });
+// ---------- Drempel voor ALLE kanalen (18 sep 2026, akkoord eigenaar) ----------
+console.log('\n== Drempel ook voor losse e-mail / 1-op-1 WhatsApp (instelling, standaard UIT) ==');
+await api('PATCH', '/api/settings', { aiAutoApproveThreshold: 0.5, autoApproveAllChannels: false });
+const losUit = await api('POST', '/api/ingest/email', { from: 'Jaap Los <jaaplos@example.nl>', subject: 'Buitengesloten in Rhenen', body: 'Goedemiddag, ik sta buitengesloten, mijn voordeur slot is kapot. Kunt u vandaag komen? Adres Dorpsstraat 4 Rhenen, telefoon 0644400001.', externalId: 'sc-los-uit' }, true);
+ok('instelling UIT: losse e-mail boven drempel blijft handmatig (Regel 4)', losUit.json?.status === 'pending', JSON.stringify(losUit.json));
+await api('PATCH', '/api/settings', { autoApproveAllChannels: true });
+ok('instelling terug te lezen', (await api('GET', '/api/settings')).json.autoApproveAllChannels === true);
+const losAan = await api('POST', '/api/ingest/email', { from: 'Kees Los <keeslos@example.nl>', subject: 'Slot voordeur vervangen Ede', body: 'Goedemiddag, het slot van mijn voordeur is kapot en ik wil hem laten vervangen. Adres Kerkweg 12 Ede, telefoon 0644400002.', externalId: 'sc-los-aan' }, true);
+ok('instelling AAN: losse e-mail boven drempel wordt automatisch een opdracht', losAan.json?.status === 'auto_approved', JSON.stringify(losAan.json));
+ok('opdracht staat op het bord', (await orders()).some((o) => (o.intake?.phone || '').includes('0644400002')));
+const losReply = await api('POST', '/api/ingest/email', { from: 'Kees Los <keeslos@example.nl>', subject: 'Re: uw aanvraag bij Keyservice', body: 'Bedankt, wanneer kunt u komen? Kerkweg 12 Ede, 0644400002', externalId: 'sc-los-reply' }, true);
+ok('instelling AAN: een REACTIE (Re:) wordt nooit automatisch een nieuwe opdracht', losReply.json?.status !== 'auto_approved', JSON.stringify(losReply.json));
+const losReclame = await api('POST', '/api/ingest/email', { from: 'nieuwsbrief@webshop.example', subject: 'Nieuwsbrief: korting op sloten', body: 'Unsubscribe hier. Bel 0644400003 voor advies.', externalId: 'sc-los-reclame' }, true);
+ok('instelling AAN: reclame/nieuwsbrief wordt nooit automatisch een opdracht', losReclame.json?.status !== 'auto_approved', JSON.stringify(losReclame.json));
+await api('PATCH', '/api/settings', { aiAutoApproveThreshold: 0, autoMergeWindowHours: 0, autoApproveAllChannels: false });
 
 // ---------- Vangrails identiteit: LID-onzin + e-mail-exact + monteur-afscherming ----------
 console.log('\n== Vangrails: LID-nummer, e-mail-exact, monteur-afscherming ==');

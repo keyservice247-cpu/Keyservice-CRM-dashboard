@@ -952,7 +952,16 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   const formAutoOk = forceRelevant && !isEmailReply
     && !!(suggestion.customerPhone || suggestion.customerEmail)
     && !isGenericName(suggestion.customerName);
-  if ((isOrderGroupMsg || formAutoOk) && !isEigenRapport && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  // UITBREIDING (18 sep 2026, akkoord Abdel — "moeten nog steeds handmatig
+  // accepteren"): met settings.autoApproveAllChannels AAN geldt de drempel óók voor
+  // losse e-mails en 1-op-1 WhatsApp. Dezelfde vangrails: alleen een échte pending
+  // lead (nooit Overige/leveranciers/marketing), nooit een e-mailreactie, échte
+  // contactgegevens en geen generieke naam. Standaard UIT = Regel 4 ongewijzigd.
+  const losAutoOk = !!(db().settings || {}).autoApproveAllChannels
+    && review.status === 'pending' && !isEmailReply && !looksMarketing && !isOrderGroupMsg && !forceRelevant
+    && !!(suggestion.customerPhone || suggestion.customerEmail)
+    && !isGenericName(suggestion.customerName);
+  if ((isOrderGroupMsg || formAutoOk || losAutoOk) && !isEigenRapport && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 
