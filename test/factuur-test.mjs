@@ -49,7 +49,7 @@ ok('kopie heeft zelfde korting', copy.json.discount?.value === 15 && copy.json.d
 console.log('\n== dueAt in overzicht ==');
 const list = await api('GET', '/api/invoices');
 const mine = (list.json || []).find((i) => i.id === ID);
-ok('concept heeft geen dueAt (nog niet verstuurd)', mine && !mine.dueAt);
+ok('nog niet verstuurde factuur heeft geen dueAt', mine && !mine.dueAt);
 
 console.log('\n== Instellingen: auto-herinnering opslaan ==');
 await api('PATCH', '/api/settings', { invoiceSettings: { companyName: 'Key service 24/7', paymentDays: 14, quoteValidDays: 30, btwPct: 21, autoRemind: true, remindAfterDays: 5, remindRepeatDays: 10, remindMax: 3 } });
@@ -127,8 +127,12 @@ ok('factuur via WhatsApp verstuurd', waSend.status === 200 && waSend.json.ok && 
 const obWA = await (await fetch(`${BASE}/api/whatsapp/outbox-status?full=1`, { headers: { cookie } })).json();
 const item = obWA.find((x) => x.by === 'factuur-whatsapp' && x.phone === '0612347788');
 ok('appje staat in de wachtrij met de PDF als bijlage', !!item && Array.isArray(item.media) && item.media.length === 1 && item.media[0].mime === 'application/pdf', JSON.stringify(item?.media));
-ok('factuur staat nu op verzonden', waSend.json.status === 'verzonden');
+// Standaard betaald (20 sep): versturen verlaagt de status nooit — betaald blijft betaald,
+// wél met verzend-markering (sentAt) zodat hij daarna vergrendeld is.
+ok('factuur blijft betaald na versturen (status niet omlaag)', waSend.json.status === 'betaald', waSend.json.status);
 const invNa = (await api('GET', `/api/invoices/${invWA.id}`)).json.invoice || {};
+ok('verstuurd + betaald = vergrendeld (bewerken geweigerd)', (await api('PATCH', `/api/invoices/${invWA.id}`, { lines: [{ description: 'X', qty: 1, priceExcl: 1 }], btwPct: 21, note: '' })).status === 400);
+ok('verzend-markering gezet', !!invNa.sentAt);
 const eersteDatum = invNa.sentAt;
 await api('POST', `/api/invoices/${invWA.id}/send-whatsapp`, {});
 const invNa2 = (await api('GET', `/api/invoices/${invWA.id}`)).json.invoice || {};
@@ -159,6 +163,64 @@ if (eenInv) {
   ok('foute handtekening -> 404', fout.status === 404, String(fout.status));
 } else {
   ok('bon-test overgeslagen (geen factuur aanwezig)', true);
+}
+
+console.log('\n== STANDAARD BETAALD (20 sep 2026) ==');
+{
+  const ok200 = (r) => r.status === 200;
+  const nb = (await api('POST', '/api/invoices', { customerId: cust.json.id, type: 'factuur' })).json;
+  const nbInv = nb.invoice || nb;
+  ok('nieuwe factuur staat standaard op betaald, met paidAt', nbInv.status === 'betaald' && !!nbInv.paidAt, JSON.stringify([nbInv.status, nbInv.paidAt]));
+  const nbEdit = await api('PATCH', `/api/invoices/${nbInv.id}`, { lines: [{ description: 'Cilinder', qty: 1, priceExcl: 80 }], btwPct: 21, note: '' });
+  ok('betaald maar niet verstuurd = gewoon bewerkbaar', ok200(nbEdit) && nbEdit.json.totalExcl === 80, JSON.stringify(nbEdit.json?.error || nbEdit.json?.totalExcl));
+  // Omzet in Cijfers: autosync boekt de betaalde factuur; bewerken werkt het bedrag bij.
+  await api('POST', '/api/finance/settings', { autoSync: true, drsFeePerJob: 0 });
+  await api('POST', '/api/finance/autosync', {});
+  const maand = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }).slice(0, 7);
+  const boek = () => api('GET', `/api/finance?month=${maand}`).then((r) => (r.json.report.entries || []).find((e) => e.sourceRef === `inv:${nbInv.id}`));
+  const b1 = await boek();
+  ok('betaalde factuur automatisch als omzet geboekt (80 excl.)', b1 && b1.amount === 80, JSON.stringify(b1));
+  await api('PATCH', `/api/invoices/${nbInv.id}`, { lines: [{ description: 'Cilinder', qty: 1, priceExcl: 120 }], btwPct: 21, note: '' });
+  const b2 = await boek();
+  ok('regels gewijzigd → boeking loopt mee (120)', b2 && b2.amount === 120, JSON.stringify(b2));
+  // PDF van een betaalde factuur rendert (tekst "voldaan" i.p.v. betaalverzoek).
+  const pdfB = await fetch(`${BASE}/api/invoices/${nbInv.id}/pdf`, { headers: { cookie } });
+  ok('PDF betaalde factuur rendert', pdfB.status === 200 && (await pdfB.arrayBuffer()).byteLength > 5000);
+  // "Nog niet betaald" zonder verzending → concept; boeking weg.
+  const terug = await api('POST', `/api/invoices/${nbInv.id}/status`, { status: 'concept' });
+  ok('"Nog niet betaald" (nooit verstuurd) → concept', ok200(terug) && terug.json.status === 'concept', JSON.stringify(terug.json));
+  ok('omzet-boeking weer weg', !(await boek()));
+  const weer = await api('POST', `/api/invoices/${nbInv.id}/status`, { status: 'betaald' });
+  ok('concept → betaald kan direct (zonder versturen)', ok200(weer) && weer.json.status === 'betaald');
+  // Verwijderen mag zolang hij niet verstuurd is (gedraagt zich als concept).
+  const kopie = (await api('POST', `/api/invoices/${nbInv.id}/copy`, {})).json;
+  ok('kopie van een factuur volgt de instelling (betaald)', kopie.status === 'betaald', kopie.status);
+  const del = await api('DELETE', `/api/invoices/${kopie.id}`);
+  ok('niet-verstuurde betaalde factuur mag weg', ok200(del), JSON.stringify(del.json));
+  // Offerte → factuur blijft concept (nog niet betaald).
+  const off = (await api('POST', '/api/invoices', { customerId: cust.json.id, type: 'offerte' })).json;
+  const offInv = off.invoice || off;
+  ok('offerte begint als concept', offInv.status === 'concept');
+  await api('PATCH', `/api/invoices/${offInv.id}`, { lines: [{ description: 'Schuifpui', qty: 1, priceExcl: 500 }], btwPct: 21, note: '' });
+  const conv = (await api('POST', `/api/invoices/${offInv.id}/copy`, { type: 'factuur' })).json;
+  ok('factuur uit offerte begint als concept (nog te betalen)', conv.type === 'factuur' && conv.status === 'concept', JSON.stringify([conv.type, conv.status]));
+  // Instelling uit → nieuwe factuur weer concept.
+  await api('PATCH', '/api/settings', { invoiceSettings: { ...(await api('GET', '/api/settings')).json.invoiceSettings, standaardBetaald: false } });
+  const uit = (await api('POST', '/api/invoices', { customerId: cust.json.id, type: 'factuur' })).json;
+  ok('instelling uit → nieuwe factuur is concept', (uit.invoice || uit).status === 'concept');
+  await api('PATCH', '/api/settings', { invoiceSettings: { ...(await api('GET', '/api/settings')).json.invoiceSettings, standaardBetaald: true } });
+  const aan = (await api('POST', '/api/invoices', { customerId: cust.json.id, type: 'factuur' })).json;
+  ok('instelling aan → weer betaald', (aan.invoice || aan).status === 'betaald');
+  // Assistente mag betaald → verzonden (gewone handeling), maar een verstuurde betaalde
+  // factuur niet bewerkbaar maken (concept) — dat blijft beheerder.
+  const admCookie = cookie;
+  await api('POST', '/api/users', { name: 'Assistente Fx', email: 'assfx@keyservice.nl', password: 'ass12345', role: 'assistent' });
+  cookie = '';
+  await api('POST', '/api/login', { email: 'assfx@keyservice.nl', password: 'ass12345' });
+  const asInv = (aan.invoice || aan);
+  const asNaarVerz = await api('POST', `/api/invoices/${asInv.id}/status`, { status: 'verzonden' });
+  ok('assistente: betaald → nog niet betaald mag', ok200(asNaarVerz) && asNaarVerz.json.status === 'verzonden', JSON.stringify(asNaarVerz.json));
+  cookie = admCookie;
 }
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);

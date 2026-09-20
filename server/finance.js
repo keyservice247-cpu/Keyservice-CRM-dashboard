@@ -464,6 +464,27 @@ export function deleteEntry(id2) {
   return { ok: fin().entries.length < before };
 }
 
+// STANDAARD-BETAALDE factuur bewerkt (20 sep 2026): staat de omzet al automatisch
+// geboekt (sourceRef inv:<id>, auto), dan loopt het bedrag mee met het nieuwe totaal
+// excl. btw. Totaal 0 (regels weg) → boeking weg, zonder grafsteen (mag later terug).
+export function syncAutoIncomeForInvoice(inv) {
+  const ref = `inv:${inv.id}`;
+  const e = fin().entries.find((x) => x.sourceRef === ref && x.auto);
+  if (!e) return 0;
+  const amount = r2(inv.totalExcl || 0);
+  if (!(amount > 0)) {
+    fin().entries = fin().entries.filter((x) => x !== e);
+    fin().removedRefs = (fin().removedRefs || []).filter((r) => r !== ref);
+    saveSoon();
+    return 1;
+  }
+  if (e.amount === amount) return 0;
+  e.amount = amount;
+  e.note = `Factuur ${inv.number || ''} betaald (excl. btw, bijgewerkt)`.trim();
+  saveSoon();
+  return 1;
+}
+
 // Factuur is niet meer 'betaald' (teruggedraaid)? Haal dan ook de automatische
 // omzet-boeking weg — anders blijft omzet in de maand staan die er niet is.
 export function removeAutoIncomeForInvoice(invId) {

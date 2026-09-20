@@ -3216,12 +3216,15 @@ function renderInvoiceEditor(ctx) {
   const { inv, customer, priceList, bundles = [] } = ctx;
   const isQuote = inv.type === 'offerte';
   const woord = isQuote ? 'Offerte' : 'Factuur';
-  const locked = inv.status === 'betaald' || inv.status === 'goedgekeurd';
+  // Vergrendeld = verstuurd én betaald, of goedgekeurde offerte. Een betaalde factuur
+  // die nog niet is verstuurd (standaard betaald, 20 sep 2026) blijft gewoon bewerkbaar.
+  const locked = (inv.status === 'betaald' && !!inv.sentAt) || inv.status === 'goedgekeurd';
+  const betaaldOngestuurd = inv.status === 'betaald' && !inv.sentAt;
   const toExcl = (l) => l.priceExcl !== undefined ? l.priceExcl : Math.round(((l.priceIncl || 0) / (1 + (Number(inv.btwPct) || 21) / 100)) * 100) / 100;
   inv.lines = (inv.lines || []).map((l) => ({ ...l, priceExcl: toExcl(l) }));
   if (!inv.lines.length) inv.lines = [{ description: '', qty: 1, priceExcl: 0 }];
   const eur = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
-  const stLabel = { concept: 'Concept', verzonden: 'Verzonden', betaald: 'Betaald ✓', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[inv.status] || inv.status;
+  const stLabel = betaaldOngestuurd ? 'Betaald ✓ (nog niet verstuurd)' : ({ concept: 'Concept', verzonden: 'Verzonden — nog niet betaald', betaald: 'Betaald ✓', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[inv.status] || inv.status);
   const lineRow = (l, i) => `
     <div class="inv-line" data-i="${i}" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
       <input class="il-desc" value="${esc(l.description || '')}" placeholder="Omschrijving" style="flex:3">
@@ -3231,7 +3234,7 @@ function renderInvoiceEditor(ctx) {
     </div>`;
   modal(`
     <h2>${icon('mail', 16)} ${woord} — ${esc(customer.name || ctx.contextTitle || '')}</h2>
-    <p class="muted small">${inv.number ? `Nummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(stLabel)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : `Nieuw concept — het ${woord.toLowerCase()}nummer wordt bij opslaan toegekend.`} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.${locked ? ' <strong>Dit document is vergrendeld.</strong>' : ''}</p>
+    <p class="muted small">${inv.number ? `Nummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(stLabel)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : `Nieuw${isQuote ? ' concept' : ''} — het ${woord.toLowerCase()}nummer wordt bij opslaan toegekend.`} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.${locked ? ' <strong>Dit document is vergrendeld.</strong>' : ''}</p>
     ${customer.id ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('user', 13)} Klantgegevens${customer.name ? ' — ' + esc(customer.name) : ''} (klik om te wijzigen)</summary>
       <div class="row" style="margin-top:8px"><label>Naam <input id="cust-name" value="${esc(customer.name || '')}"></label><label>Telefoon <input id="cust-phone" value="${esc(customer.phone || '')}"></label></div>
       <div class="row"><label>E-mail <input id="cust-email" value="${esc(customer.email || '')}"></label><label>Adres (straat, postcode, plaats) <input id="cust-address" value="${esc(customer.address || '')}"></label></div>
@@ -3259,18 +3262,20 @@ function renderInvoiceEditor(ctx) {
     <div class="modal-actions">
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${inv.id && !isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button><button class="btn" id="inv-remind">${icon('bell', 13)} Herinnering</button>` : ''}
+        ${inv.id && !isQuote && inv.status === 'concept' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button>` : ''}
+        ${inv.id && !isQuote && inv.status === 'betaald' ? `<button class="btn" id="inv-unpaid" title="${inv.sentAt ? 'Terug naar Verzonden — de factuur staat dan open en kan herinnerd worden' : 'Terug naar Concept — de factuur staat dan open'}">Nog niet betaald</button>` : ''}
         ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button><button class="btn" id="inv-qremind" title="Vriendelijke herinnering: per e-mail met PDF, of via WhatsApp als de klant alleen een 06 heeft">${icon('bell', 13)} Herinnering${inv.quoteFollowupCount ? ` (${inv.quoteFollowupCount}x)` : ''}</button>` : ''}
         ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">→ Maak factuur</button>` : ''}
         ${inv.id ? `<button class="btn" id="inv-copy">${icon('merge', 13)} Kopieer</button>` : ''}
-        ${inv.id && inv.status !== 'betaald' ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}
+        ${inv.id && !locked ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}
       </div>
       <div class="right">
         ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('eye', 14)} PDF openen</a>` : ''}
         ${inv.id ? `<button class="btn" id="inv-share">${icon('paperclip', 14)} Delen / opslaan</button>` : ''}
         ${inv.id && locked ? `<button class="btn" id="inv-resend">${icon('mail', 14)} Verstuur opnieuw</button>` : ''}
         <button class="btn" id="inv-cancel">Sluiten</button>
-        ${locked ? '' : `<button class="btn" id="inv-save">Concept opslaan</button>
-        <button class="btn btn-primary" id="inv-send">${inv.status === 'verzonden' ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
+        ${locked ? '' : `<button class="btn" id="inv-save">${inv.status === 'concept' ? 'Concept opslaan' : 'Opslaan'}</button>
+        <button class="btn btn-primary" id="inv-send">${inv.sentAt ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
         <button class="btn" id="inv-send-wa" title="Stuur de PDF als WhatsApp-bericht naar de klant">${icon('whatsapp', 14)} Via WhatsApp</button>`}
       </div>
     </div>`);
@@ -3379,7 +3384,7 @@ function renderInvoiceEditor(ctx) {
   // WAARSCHUWING (op verzoek Abdel): een al VERZONDEN factuur/offerte wijzig je niet
   // zomaar — de klant heeft al een andere versie ontvangen. Wijzigen mag, maar pas
   // na deze bewuste bevestiging (en het wordt in het logboek vastgelegd).
-  const confirmEditIfSent = () => inv.status !== 'verzonden'
+  const confirmEditIfSent = () => !inv.sentAt
     || confirm(`LET OP: deze ${woord.toLowerCase()} is al verstuurd naar de klant. Wijzigen kan tot verwarring leiden — netter is een kopie (of bij een fout een creditregel). Toch wijzigen?`);
   const done = (msg) => { toast(msg); closeModal(); if (ctx.after) ctx.after(); };
   if ($('#cust-save')) $('#cust-save').onclick = async () => {
@@ -3396,10 +3401,10 @@ function renderInvoiceEditor(ctx) {
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
   if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); });
-  if ($('#inv-save')) $('#inv-save').onclick = async () => { if (!confirmEditIfSent()) return; try { await saveConcept(); done(inv.status === 'verzonden' ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : 'Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
+  if ($('#inv-save')) $('#inv-save').onclick = async () => { if (!confirmEditIfSent()) return; try { await saveConcept(); done(inv.sentAt ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : inv.status === 'betaald' ? 'Factuur opgeslagen (betaald)' : 'Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
   if ($('#inv-send')) $('#inv-send').onclick = async () => {
     if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de opdracht of bij Klanten).', true); return; }
-    if (!confirm(inv.status === 'verzonden'
+    if (!confirm(inv.sentAt
       ? `LET OP: deze ${woord.toLowerCase()} is al eerder verstuurd. Je verstuurt nu een NIEUWE versie (eventuele wijzigingen vervangen wat de klant heeft). Doorgaan naar ${customer.email}?`
       : `${woord} nu versturen naar ${customer.email}?`)) return;
     try {
@@ -3422,6 +3427,8 @@ function renderInvoiceEditor(ctx) {
   };
   const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = async () => { try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }; };
   statusBtn('#inv-paid', 'betaald', 'Gemarkeerd als betaald ✓');
+  // "Nog niet betaald": verstuurd → Verzonden (open, herinnerbaar); nooit verstuurd → Concept.
+  statusBtn('#inv-unpaid', inv.sentAt ? 'verzonden' : 'concept', 'Gemarkeerd als nog niet betaald');
   statusBtn('#inv-reject', 'afgekeurd', 'Offerte afgekeurd');
   // Goedkeuren: als er automatisch een factuur-concept van wordt gemaakt, dat meteen melden.
   if ($('#inv-accept')) $('#inv-accept').onclick = async () => {
@@ -3953,7 +3960,7 @@ function renderInvoices() {
   html += items.map((i) => {
     const quote = i.type === 'offerte';
     const overdue = isOverdue(i);
-    const stLabel = overdue ? 'Nog niet betaald — VERLOPEN' : ({ concept: 'Concept', verzonden: quote ? 'Verzonden' : 'Verzonden — open', betaald: 'Betaald ✓', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[i.status] || i.status);
+    const stLabel = overdue ? 'Nog niet betaald — VERLOPEN' : ({ concept: 'Concept', verzonden: quote ? 'Verzonden' : 'Verzonden — nog niet betaald', betaald: i.sentAt ? 'Betaald ✓' : 'Betaald ✓ (nog niet verstuurd)', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[i.status] || i.status);
     return `
     <div class="info-card" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
@@ -3968,7 +3975,8 @@ function renderInvoices() {
         ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Opdracht</button>` : ''}
         ${!quote && i.sentAt && i.orderId ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
-        ${!quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
+        ${!quote && (i.status === 'verzonden' || i.status === 'concept') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
+        ${!quote && i.status === 'betaald' ? `<button class="btn btn-sm inv-unmark" data-id="${esc(i.id)}" data-status="${i.sentAt ? 'verzonden' : 'concept'}" title="De factuur staat dan weer open">Nog niet betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
       </div>
     </div>`;
@@ -3990,10 +3998,11 @@ function renderInvoices() {
     } catch (err) { toast(err.message, true); b.disabled = false; b.innerHTML = oud; }
   });
   const quickStatus = (sel, status, msg) => $$(sel).forEach((b) => b.onclick = async () => {
-    try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status }); toast(msg); loadInvoices(); }
+    try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status: b.dataset.status || status }); toast(msg); loadInvoices(); }
     catch (err) { toast(err.message, true); }
   });
   quickStatus('.inv-mark', 'betaald', 'Betaald ✓');
+  quickStatus('.inv-unmark', 'verzonden', 'Gemarkeerd als nog niet betaald');
   // NOG TE FACTUREREN: afgeronde kaarten zonder factuur — nooit meer omzet vergeten.
   (async () => {
     try {
@@ -4581,6 +4590,10 @@ async function loadSettingsHtml(s) {
       <div class="row"> <label>IBAN <input id="is-iban" value="${esc(s.invoiceSettings?.iban || '')}" placeholder="NL00 BANK 0000 0000 00"></label> <label>BIC <input id="is-bic" value="${esc(s.invoiceSettings?.bic || '')}" placeholder="BUNQNL2A"></label> </div>
       <div class="row"> <label>E-mail op factuur <input id="is-email" value="${esc(s.invoiceSettings?.email || '')}"></label> <span></span> </div>
       <div class="row"> <label>Betaaltermijn (dagen) <input id="is-days" type="number" min="1" max="90" value="${esc(String(s.invoiceSettings?.paymentDays ?? 7))}" style="max-width:110px"></label> <label>Standaard btw-tarief <select id="is-btw"><option value="21" ${Number(s.invoiceSettings?.btwPct ?? 21) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(s.invoiceSettings?.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(s.invoiceSettings?.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label> </div>
+      <div style="border-top:1px solid var(--line-soft,#e5e7eb);margin:12px 0 10px;padding-top:10px"><strong>Nieuwe facturen</strong>
+        <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" id="is-standaardbetaald" style="width:auto" ${s.invoiceSettings?.standaardBetaald !== false ? 'checked' : ''}>Nieuwe factuur staat <strong>standaard op Betaald</strong></label>
+        <p class="muted small" style="margin:4px 0 8px">Vrijwel elke klus wordt direct afgerekend; zo scheelt het per factuur een klik. De knop heet dan "Nog niet betaald" voor de uitzondering. Een betaalde factuur die nog niet is verstuurd blijft gewoon bewerkbaar; de omzet gaat automatisch naar Cijfers. Facturen uit een offerte beginnen altijd als concept.</p>
+      </div>
       <div style="border-top:1px solid var(--line-soft,#e5e7eb);margin:12px 0 10px;padding-top:10px"><strong>Automatische betaalherinnering</strong>
         <p class="muted small" style="margin:4px 0 8px">Verzonden facturen die na de vervaldatum nog openstaan krijgen vanzelf een vriendelijke herinnering (zelfde mail als de knop, met PDF). Zet eerst alle al betaalde facturen op "Betaald" — anders krijgt een klant onterecht een herinnering.</p>
         <div class="row" style="align-items:center"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="is-autoremind" style="width:auto" ${s.invoiceSettings?.autoRemind ? 'checked' : ''}>Aan</label>
@@ -4994,6 +5007,7 @@ async function loadSettingsHtml(s) {
       remindRepeatDays: Number($('#is-remind-repeat').value) || 7,
       remindMax: Number($('#is-remind-max').value) || 2,
       autoInvoiceOnAccept: $('#is-autofactuur').checked,
+      standaardBetaald: $('#is-standaardbetaald').checked,
       autoQuoteFollowup: $('#is-autoquote').checked,
       quoteFollowupAfterDays: Number($('#is-quote-after').value) || 3,
       quoteFollowupMax: Number($('#is-quote-max').value) || 2,

@@ -9,7 +9,7 @@ alleen met `SESSION_SECRET=test` (op productie is het standaardwachtwoord geblok
 DATA_DIR=/tmp/crmtest INGEST_TOKEN=test123 SESSION_SECRET=test PORT=3113 node server/index.js &
 node test/scenarios.mjs      # 62 assertions: matching, dedup, e-mailreacties, multipart, bijlages,
                              # Karin-casus (écht afzendernummer), zelfde-moment-venster, klant-hint, historie
-node test/factuur-test.mjs   # kortingen, PDF, kopie, dueAt, instellingen  (draai op PORT=3117)
+node test/factuur-test.mjs   # kortingen, PDF, kopie, dueAt, instellingen, standaard-betaald-flow (PORT=3117)
 node test/briefing-test.mjs  # AI-ochtendbriefing: instellingen, WhatsApp-kanaal, inhoud (PORT=3119)
 node test/klanten-test.mjs   # klantimport (CSV), dossier, nog-te-factureren, campagne, foto-dispatch (PORT=3121)
 node test/cijfers-test.mjs   # automatische boekingen: factuur-omzet + DRS-fee, idempotent (PORT=3123)

@@ -684,6 +684,30 @@ de regressie meegroeit.
   boekingsvenster in browsertijd, `.settings-grid` op mobiel één kolom (stond nog in
   twee smalle kolommen). Tests: test/conversie-test.mjs (36, PORT=3139) + 4
   browser-asserties (desktop, periode-wissel, briefing-knop, 390 px).
+- **FACTUUR STANDAARD BETAALD (20 sep 2026, wens eigenaar "elke factuur wordt bij na
+  betaald, scheelt een handeling"):** instelling `invoiceSettings.standaardBetaald`
+  (default AAN, Instellingen → Facturen → "Nieuwe facturen"). Een nieuwe FACTUUR
+  (kaart, los, kopie) krijgt meteen status 'betaald' + paidAt (+ vlag
+  standaardBetaald); offertes altijd concept, en een factuur die uit een OFFERTE komt
+  (autoConvertQuoteToInvoice én handmatig "Maak factuur"/copy type=factuur) ook — daar
+  is nog niet betaald. VERGRENDELING is nu `isVergrendeld(inv)` (invoices.js) =
+  betaald ÉN verstuurd (sentAt), of goedgekeurde offerte: een betaalde maar nooit
+  verstuurde factuur blijft gewoon bewerkbaar en verwijderbaar (gedraagt zich als
+  concept; verwijderen haalt de auto-omzet weg). Versturen (mail/WhatsApp) verlaagt de
+  status nooit (betaald blijft betaald, sentAt erbij → daarna vergrendeld); mailtekst,
+  WhatsApp-tekst en PDF zeggen bij betaald "is voldaan — voor uw administratie" met
+  "Betaald op" i.p.v. vervaldatum/betaalverzoek. KNOP: editor + Facturen-lijst tonen
+  bij betaald "Nog niet betaald" (verstuurd → 'verzonden' = open/herinnerbaar; nooit
+  verstuurd → 'concept'); bij concept/verzonden "✓ Betaald". Rechten: betaald →
+  verzonden is een gewone handeling (ook assistente); een VERSTUURDE betaalde factuur
+  terug naar concept (bewerkbaar maken) en goedgekeurd terugzetten blijven beheerder.
+  CIJFERS: de uurlijkse autosync boekt betaalde facturen zoals altijd (totaal > 0);
+  `syncAutoIncomeForInvoice` (finance.js, aangeroepen in saveInvoiceFields) laat een al
+  geboekte auto-omzet meelopen met het nieuwe totaal (0 → boeking weg zonder grafsteen);
+  "Nog niet betaald" haalt de boeking weg (bestond al). factuurVerzendingMislukt laat
+  een betaalde factuur betaald en wist alleen de verzend-markering. Herinneringen/
+  verlopen/openstaand blijven op 'verzonden' en raken betaalde facturen dus niet.
+  Test: factuur-test (56, +17) + browser-assertie.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

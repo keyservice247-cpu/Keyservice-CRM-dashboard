@@ -58,7 +58,7 @@ import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
 import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
-import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
+import { getInvoiceSettings, isVergrendeld, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { conversieData, maakConversieBriefing } from './conversie.js';
@@ -3294,6 +3294,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       remindRepeatDays: Math.max(2, Math.min(60, Number(v.remindRepeatDays) || 7)),
       remindMax: Math.max(1, Math.min(5, Number(v.remindMax) || 2)),
       autoInvoiceOnAccept: v.autoInvoiceOnAccept !== false,
+      standaardBetaald: v.standaardBetaald !== false,
       autoQuoteFollowup: !!v.autoQuoteFollowup,
       quoteFollowupAfterDays: Math.max(1, Math.min(60, Number(v.quoteFollowupAfterDays) || 3)),
       quoteFollowupRepeatDays: Math.max(2, Math.min(60, Number(v.quoteFollowupRepeatDays) || 5)),
@@ -3916,13 +3917,15 @@ function factuurVerzendingMislukt(item, reden) {
   try {
     if (!item.invoiceId) return;
     const inv = (db().invoices || []).find((i) => i.id === item.invoiceId);
-    if (!inv || inv.status !== 'verzonden' || inv.sentTo) return; // per mail óók verstuurd: laten staan
-    inv.status = 'concept';
+    if (!inv || !['verzonden', 'betaald'].includes(inv.status) || inv.sentTo || !inv.sentToPhone) return; // per mail óók verstuurd: laten staan
+    // Betaald blijft betaald (standaard betaald sinds 20 sep); alleen de verzend-
+    // markering gaat eraf, zodat hij weer bewerkbaar/opnieuw te versturen is.
+    if (inv.status === 'verzonden') inv.status = 'concept';
     delete inv.sentAt; delete inv.lastSentAt; delete inv.sentToPhone;
     const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
-    if (order) { order.thread = order.thread || []; order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem', body: `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number} is NIET bezorgd via WhatsApp (${reden}) — status teruggezet naar concept. Verstuur opnieuw of kies e-mail.`, at: now() }); }
+    if (order) { order.thread = order.thread || []; order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem', body: `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number} is NIET bezorgd via WhatsApp (${reden})${inv.status === 'betaald' ? '' : ' — status teruggezet naar concept'}. Verstuur opnieuw of kies e-mail.`, at: now() }); }
     logActivity('systeem', 'factuur-verzending mislukt', `${inv.number}: ${reden}`);
-    sendPush({ title: `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number} niet bezorgd`, body: `WhatsApp-verzending mislukt (${reden}). Teruggezet naar concept — verstuur opnieuw of per e-mail.`, url: '/' }).catch(() => {});
+    sendPush({ title: `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number} niet bezorgd`, body: `WhatsApp-verzending mislukt (${reden}). ${inv.status === 'betaald' ? 'Verstuur' : 'Teruggezet naar concept — verstuur'} opnieuw of per e-mail.`, url: '/' }).catch(() => {});
   } catch (e) { console.error('[factuur-terugzet]', e.message); }
 }
 
@@ -4402,7 +4405,7 @@ app.post('/api/orders/:id/invoice', requireAuth, (req, res) => {
   if (out.error) return res.status(400).json({ error: out.error });
   // Verzonden document gewijzigd (na de waarschuwing in het scherm): zichtbaar vastleggen.
   if (wasSent) logActivity(req.user.name, `verzonden ${out.invoice.type} gewijzigd`, out.invoice.number);
-  else logActivity(req.user.name, 'factuur opgeslagen (concept)', `${out.invoice.number} — ${order.title}`);
+  else logActivity(req.user.name, `factuur opgeslagen (${out.invoice.status})`, `${out.invoice.number} — ${order.title}`);
   res.json(out.invoice);
 });
 
@@ -4555,8 +4558,10 @@ app.delete('/api/invoices/:id', requireAuth, (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
-  if (inv.status === 'betaald') return res.status(400).json({ error: 'Een betaalde factuur kan niet worden verwijderd (boekhouding).' });
-  if (inv.status !== 'concept' && req.user.role !== 'admin') return res.status(403).json({ error: 'Een verzonden factuur/offerte kan alleen de beheerder verwijderen.' });
+  if (inv.status === 'betaald' && inv.sentAt) return res.status(400).json({ error: 'Een verstuurde en betaalde factuur kan niet worden verwijderd (boekhouding).' });
+  const alsConcept = inv.status === 'concept' || (inv.status === 'betaald' && !inv.sentAt); // nooit verstuurd
+  if (!alsConcept && req.user.role !== 'admin') return res.status(403).json({ error: 'Een verzonden factuur/offerte kan alleen de beheerder verwijderen.' });
+  if (inv.status === 'betaald') removeAutoIncomeForInvoice(inv.id);
   db().invoices = (db().invoices || []).filter((i) => i.id !== inv.id);
   const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
   if (order && order.invoiceId === inv.id) order.invoiceId = null;
@@ -4674,7 +4679,7 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
     inv.waPdfFile = saved.file;
     const cfg = getInvoiceSettings();
     const tekst = String(req.body?.text || '').trim()
-      || `Beste ${customer.name || 'klant'},\n\nHierbij ${isQuote ? 'de offerte' : 'de factuur'} ${inv.number} van ${cfg.companyName || 'Keyservice'}.\n\nMet vriendelijke groet,\n${cfg.companyName || 'Keyservice'}`;
+      || `Beste ${customer.name || 'klant'},\n\nHierbij ${isQuote ? 'de offerte' : 'de factuur'} ${inv.number} van ${cfg.companyName || 'Keyservice'}.${!isQuote && inv.status === 'betaald' ? ' Deze is al voldaan — bedankt voor uw betaling; u ontvangt hem voor uw administratie.' : ''}\n\nMet vriendelijke groet,\n${cfg.companyName || 'Keyservice'}`;
     db().outbox.unshift({
       id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
       text: tekst, orderId: inv.orderId || undefined, status: 'queued', createdAt: now(),
@@ -4740,7 +4745,9 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
     const bedrag = `€ ${inv.totalIncl.toFixed(2).replace('.', ',')}`;
     const body = isQuote
       ? `Beste ${customer.name || 'klant'},\n\nBedankt voor uw aanvraag. In de bijlage vindt u onze offerte ${inv.number}${order ? ` voor: ${order.title}` : ''}.\nTotaalbedrag: ${bedrag} incl. btw. Deze offerte is ${cfg.quoteValidDays || 30} dagen geldig.\n\nGaat u akkoord? Reageer op deze e-mail of bel ons — dan plannen we de werkzaamheden direct in.`
-      : `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ` voor de uitgevoerde werkzaamheden (${order.title})` : ''}.\nTotaalbedrag: ${bedrag} — graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`;
+      : inv.status === 'betaald'
+        ? `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ` voor de uitgevoerde werkzaamheden (${order.title})` : ''}.\nTotaalbedrag: ${bedrag} — deze factuur is al voldaan. Bedankt voor uw betaling; u ontvangt hem voor uw administratie.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`
+        : `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ` voor de uitgevoerde werkzaamheden (${order.title})` : ''}.\nTotaalbedrag: ${bedrag} — graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`;
     await sendMail({
       afzender: afzenderVan(req),
       to, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number} — ${cfg.companyName}`,
@@ -4814,10 +4821,13 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
   // Een betaalde factuur / goedgekeurde offerte mag NIET terug naar concept/verzonden
   // (dat omzeilde de bewerk-/verwijder-vergrendeling). Alleen de beheerder mag dit,
   // voor het geval een betaling per ongeluk is aangevinkt.
-  const wasLocked = inv.status === 'betaald' || inv.status === 'goedgekeurd';
-  const wouldUnlock = wasLocked && s !== inv.status;
+  // Sinds "standaard betaald" (20 sep 2026) is betaald → "Nog niet betaald" (verzonden)
+  // een gewone handeling; alleen een VERSTUURDE betaalde factuur terug naar concept
+  // (= bewerkbaar maken) en een goedgekeurde offerte terugzetten blijven beheerder-werk.
+  const wasLocked = isVergrendeld(inv);
+  const wouldUnlock = wasLocked && s !== inv.status && (inv.status === 'goedgekeurd' || s === 'concept');
   if (wouldUnlock && req.user.role !== 'admin') {
-    return res.status(403).json({ error: `Een ${inv.status === 'betaald' ? 'betaalde factuur' : 'goedgekeurde offerte'} kan alleen de beheerder terugzetten.` });
+    return res.status(403).json({ error: `Een ${inv.status === 'betaald' ? 'verstuurde betaalde factuur' : 'goedgekeurde offerte'} kan alleen de beheerder ${inv.status === 'betaald' ? 'weer bewerkbaar maken' : 'terugzetten'}.` });
   }
   const wasPaid = inv.status === 'betaald';
   inv.status = s;

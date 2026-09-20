@@ -13,6 +13,7 @@ import { db, id, now, save, saveSoon, logActivity } from './db.js';
 import { UPLOAD_DIR } from './storage.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { getEmailSignature } from './settings.js';
+import { syncAutoIncomeForInvoice } from './finance.js';
 
 const LOGO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'img', 'logo-factuur.png');
 
@@ -40,6 +41,14 @@ export const DEFAULT_INVOICE_SETTINGS = {
   // Offerte goedgekeurd -> automatisch een factuur-CONCEPT klaarzetten (niet
   // versturen). Scheelt de assistente een handeling en voorkomt vergeten factureren.
   autoInvoiceOnAccept: true,
+  // STANDAARD BETAALD (20 sep 2026, wens eigenaar): vrijwel elke factuur wordt direct
+  // na de klus voldaan (pin/contant). Een nieuwe factuur krijgt daarom meteen de status
+  // 'betaald' (scheelt elke keer een klik); de knop in het scherm heet dan "Nog niet
+  // betaald" voor de uitzondering. Een betaalde factuur die nog NIET is verstuurd blijft
+  // gewoon bewerkbaar (isVergrendeld); pas verstuurd + betaald = vergrendeld.
+  // Uitzondering: een factuur die uit een OFFERTE komt (auto of "Maak factuur") begint
+  // als concept — daar is nog niet betaald. Uit te zetten in Instellingen → Facturen.
+  standaardBetaald: true,
   // Automatische offerte-opvolging: verzonden offerte die na X dagen nog niet is
   // goedgekeurd/afgekeurd krijgt een vriendelijke opvolgmail (met de offerte-PDF),
   // herhaald met tussenpoos en een maximum. Standaard UIT.
@@ -55,6 +64,16 @@ export const DEFAULT_INVOICE_SETTINGS = {
 export function getInvoiceSettings() {
   const s = db().settings.invoiceSettings || {};
   return { ...DEFAULT_INVOICE_SETTINGS, ...s };
+}
+// Vergrendeld = niet meer inhoudelijk te wijzigen: verstuurd én betaald, of een
+// goedgekeurde offerte. Een betaalde factuur die nog niet is verstuurd is dat NIET.
+export function isVergrendeld(inv) {
+  return (inv.status === 'betaald' && !!inv.sentAt) || inv.status === 'goedgekeurd';
+}
+// Startstatus van een nieuwe factuur volgens de instelling (offertes altijd concept).
+function startStatus(type, { alsConcept = false } = {}) {
+  if (type === 'factuur' && !alsConcept && getInvoiceSettings().standaardBetaald !== false) return { status: 'betaald', paidAt: now(), standaardBetaald: true };
+  return { status: 'concept' };
 }
 
 // ---------- Nummering: factuur 2026-0001…, offerte OFF-2026-0001… (teller per jaar) ----------
@@ -116,8 +135,8 @@ function sanitizeLines(lines, btwPct) {
 // ---------- Aanmaken / bijwerken (concept) ----------
 // Gedeeld: regels/btw/notitie op een bestaand record zetten (met vergrendel-check).
 export function saveInvoiceFields(inv, body) {
-  if (inv.status === 'betaald') return { error: 'Deze factuur is al betaald en kan niet meer worden gewijzigd.' };
   if (inv.status === 'goedgekeurd') return { error: 'Deze offerte is al goedgekeurd. Kopieer of zet om naar factuur.' };
+  if (isVergrendeld(inv)) return { error: 'Deze factuur is verstuurd én betaald en kan niet meer worden gewijzigd. Zet hem desnoods eerst op "Nog niet betaald".' };
   const btwPct = Math.max(0, Math.min(21, Number(body.btwPct ?? inv.btwPct ?? getInvoiceSettings().btwPct)));
   inv.lines = sanitizeLines(body.lines, btwPct);
   inv.btwPct = btwPct;
@@ -146,6 +165,9 @@ export function saveInvoiceFields(inv, body) {
   if (inv.status === 'verzonden') inv.editedAfterSendAt = now();
   Object.assign(inv, computeTotals(inv.lines, btwPct, inv.discount));
   inv.updatedAt = now();
+  // Staat de factuur al op betaald (standaard) en is de omzet al automatisch geboekt
+  // in Cijfers? Dan loopt die boeking mee met het nieuwe totaal.
+  if (inv.status === 'betaald') syncAutoIncomeForInvoice(inv);
   saveSoon();
   return { invoice: inv };
 }
@@ -275,7 +297,7 @@ export function upsertInvoice(order, body, actorName) {
     const type = body.type === 'offerte' ? 'offerte' : 'factuur';
     inv = {
       id: id('inv'), number: nextInvoiceNumber(type), type, orderId: order.id, customerId: order.customerId,
-      status: 'concept', createdAt: now(), createdBy: actorName || '',
+      ...startStatus(type), createdAt: now(), createdBy: actorName || '',
     };
     db().invoices.unshift(inv);
     order.invoiceId = inv.id;
@@ -289,7 +311,7 @@ export function createStandaloneInvoice({ customerId, type = 'factuur', actorNam
   const t = type === 'offerte' ? 'offerte' : 'factuur';
   const inv = {
     id: id('inv'), number: nextInvoiceNumber(t), type: t, orderId: null, customerId,
-    status: 'concept', lines: [], btwPct: getInvoiceSettings().btwPct,
+    ...startStatus(t), lines: [], btwPct: getInvoiceSettings().btwPct,
     ...computeTotals([], getInvoiceSettings().btwPct),
     createdAt: now(), createdBy: actorName, createdById,
   };
@@ -301,9 +323,10 @@ export function createStandaloneInvoice({ customerId, type = 'factuur', actorNam
 // Kopie (nieuw nummer, concept). copyType kan afwijken (offerte -> factuur = omzetten).
 export function copyInvoice(src, { actorName = '', createdById = '', copyType } = {}) {
   const t = copyType === 'offerte' ? 'offerte' : copyType === 'factuur' ? 'factuur' : (src.type || 'factuur');
+  // Offerte → factuur = nog te betalen: altijd concept. Kopie van een factuur volgt de instelling.
   const inv = {
     id: id('inv'), number: nextInvoiceNumber(t), type: t, orderId: src.orderId || null, customerId: src.customerId,
-    status: 'concept', lines: (src.lines || []).map((l) => ({ ...l })), btwPct: src.btwPct,
+    ...startStatus(t, { alsConcept: src.type === 'offerte' }), lines: (src.lines || []).map((l) => ({ ...l })), btwPct: src.btwPct,
     discount: src.discount ? { ...src.discount } : undefined,
     note: src.note || '', ...computeTotals(src.lines || [], src.btwPct, src.discount),
     createdAt: now(), createdBy: actorName, createdById, copiedFrom: src.number,
@@ -392,7 +415,7 @@ export function buildInvoicePdf(inv, order, customer) {
     doc.font('Helvetica-Bold').fontSize(12).fillColor(ink).text(`${isQuote ? 'Offerte' : 'Factuur'}: ${inv.number}`, 50, y);
     doc.font('Helvetica').fontSize(10).fillColor(muted)
       .text(`${isQuote ? 'Offertedatum' : 'Factuurdatum'}: ${nlDate(invDate)}`, 330, y - 12, { width: 215, align: 'right' })
-      .text(`Vervaldatum: ${nlDate(isQuote ? validUntil : dueDate)}`, 330, y + 2, { width: 215, align: 'right' });
+      .text(!isQuote && inv.status === 'betaald' ? `Betaald op: ${nlDate(inv.paidAt || invDate)}` : `Vervaldatum: ${nlDate(isQuote ? validUntil : dueDate)}`, 330, y + 2, { width: 215, align: 'right' });
 
     // Reparatielocatie + betreft.
     y += 26;
@@ -459,6 +482,11 @@ export function buildInvoicePdf(inv, order, customer) {
     if (isQuote) {
       doc.text(`Deze offerte is geldig tot ${nlDate(validUntil)}. Gaat u akkoord? Reageer op de e-mail, bel ons, of stuur deze pagina getekend terug — dan plannen we de werkzaamheden direct in.`, 50, y, { width: 495 });
       y += doc.heightOfString('x', { width: 495 }) + 28;
+    } else if (inv.status === 'betaald') {
+      // Betaalde factuur: geen betaalverzoek maar een bevestiging (de klant heeft al voldaan).
+      doc.font('Helvetica-Bold').text(`Dit bedrag van ${eur(inv.totalIncl)} is voldaan op ${nlDate(inv.paidAt || invDate)}. Bedankt voor uw betaling — u ontvangt deze factuur voor uw administratie.`, 50, y, { width: 495 });
+      doc.font('Helvetica');
+      y += doc.heightOfString(`x`, { width: 495 }) + 20;
     } else {
       doc.text(`Gelieve dit bedrag van ${eur(inv.totalIncl)} over te maken vóór ${nlDate(dueDate)} op rekeningnummer: ${cfg.iban} o.v.v. "Factuur ${inv.number}".`, 50, y, { width: 495 });
       y += doc.heightOfString(`x`, { width: 495 }) + 20;

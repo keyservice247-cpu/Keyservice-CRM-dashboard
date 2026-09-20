@@ -38,7 +38,9 @@ ok('testdata (klant/pakket/factuur/offerte) aangemaakt via API', setup.invId && 
 clear();
 await page.evaluate((id) => window.openStandaloneInvoice(id), setup.invId);
 await page.waitForTimeout(1500);
-ok('FACTUUR-editor opent (Concept opslaan zichtbaar)', await page.locator('#inv-save').count() > 0);
+ok('FACTUUR-editor opent (Opslaan zichtbaar)', await page.locator('#inv-save').count() > 0);
+// Standaard betaald (20 sep 2026): nieuwe factuur = betaald, knop "Nog niet betaald", geen "✓ Betaald".
+ok('nieuwe factuur staat op Betaald met knop "Nog niet betaald"', await page.locator('#inv-unpaid').count() === 1 && await page.locator('#inv-paid').count() === 0 && /Betaald/.test(await page.locator('#modal p.muted').first().textContent()));
 ok('pakket-knop zichtbaar in de editor', await page.locator('.bn-add').count() > 0);
 ok('opslaan-knoppen (Regels → prijslijst / pakket) zichtbaar', await page.locator('#il-to-pricelist, #il-to-bundle').count() >= 2);
 noErr('Factuur openen');
