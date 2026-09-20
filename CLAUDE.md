@@ -651,10 +651,15 @@ de regressie meegroeit.
 - **CONVERSIE op Cijfers (20 sep 2026, wens eigenaar "maak er iets moois van"):**
   server/conversie.js `conversieData({dagen})` — elke opdracht die in de periode is
   AANGEMAAKT (createdAt; prullenbak telt niet, ingeklapte weken wél) is een
-  binnengekomen aanvraag; afgerond = gewonnen, geannuleerd = verloren, rest = open.
-  Twee percentages, bewust allebei: **conversie (van beslist)** = afgerond /
-  (afgerond+geannuleerd) — het eerlijke getal voor een korte periode — en
-  **conversie van alles** = afgerond / binnengekomen. Verder: vorige periode + delta,
+  binnengekomen aanvraag; GEWONNEN = afgerond ÓF afspraak_ingepland (een afspraak is
+  een "ja" van de klant — akkoord eigenaar 20 sep: "ja toch?"; sets GEWONNEN/VERLOREN
+  in conversie.js, `definitie` in het antwoord), verloren = geannuleerd, rest = open.
+  Velden: gewonnen/afgerond/afspraak/verloren/open. Twee percentages, bewust allebei:
+  **conversie (van beslist)** = gewonnen / (gewonnen+verloren) — het eerlijke getal
+  voor een korte periode — en **conversie van alles** = gewonnen / binnengekomen.
+  Omzet/doorlooptijd tellen alleen écht afgeronde opdrachten. Periodes 7/14/30/90/365
+  (PERIODES; scherm standaard 30) + uitklapbaar blok "Hoe wordt dit berekend?" in
+  simpele taal (.cv-uitleg). Verder: vorige periode + delta,
   per status (kolomvolgorde), per BRON (bronVan: DRS-groep / Website / E-mail /
   WhatsApp (1-op-1) / Telefoon / Handmatig), per monteur, 12 weekcohorten (maandag
   UTC), doorlooptijd (mediaan/gemiddelde aanvraag→afgerond, →geannuleerd), waarde
@@ -683,7 +688,8 @@ de regressie meegroeit.
   het bron-veld ook), KPI-tegels tonen "vorige maand" + verschil, datumveld in het
   boekingsvenster in browsertijd, `.settings-grid` op mobiel één kolom (stond nog in
   twee smalle kolommen). Tests: test/conversie-test.mjs (36, PORT=3139) + 4
-  browser-asserties (desktop, periode-wissel, briefing-knop, 390 px).
+  browser-asserties (desktop, periode-wissel, briefing-knop, 390 px); na de
+  afspraak-regel: conversie-test 38, browser 159.
 - **FACTUUR STANDAARD BETAALD (20 sep 2026, wens eigenaar "elke factuur wordt bij na
   betaald, scheelt een handeling"):** instelling `invoiceSettings.standaardBetaald`
   (default AAN, Instellingen → Facturen → "Nieuwe facturen"). Een nieuwe FACTUUR

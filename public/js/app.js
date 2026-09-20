@@ -4117,8 +4117,8 @@ function renderFinance() {
 // ---------- CONVERSIE (20 sep 2026): van aanvraag naar uitgevoerde opdracht ----------
 // Bovenaan Cijfers. Periode (30/90/365 dagen) wordt per toestel onthouden.
 function conversieDagen() {
-  try { const v = Number(localStorage.getItem('ksConversieDagen')); if ([30, 90, 365].includes(v)) return v; } catch { /* geen opslag */ }
-  return 90;
+  try { const v = Number(localStorage.getItem('ksConversieDagen')); if ([7, 14, 30, 90, 365].includes(v)) return v; } catch { /* geen opslag */ }
+  return 30;
 }
 const pctF = (v) => (v === null || v === undefined ? '–' : `${String(v).replace('.', ',')}%`);
 function renderConversie() {
@@ -4134,14 +4134,14 @@ function renderConversie() {
     const goed = hogerIsGoed ? d > 0 : d < 0;
     return `<span class="cv-delta ${goed ? 'cv-goed' : 'cv-slecht'}">${d > 0 ? '+' : '−'}${String(Math.abs(d)).replace('.', ',')}${eenheid} t.o.v. vorige ${dagen} dagen</span>`;
   };
-  const beslist = t.afgerond + t.geannuleerd;
+  const beslist = t.gewonnen + t.verloren;
   const balk = (aantal, totaal, kleur) => `<div class="cv-balk"><div class="cv-balk-vul" style="width:${totaal ? Math.max(2, Math.round((aantal / totaal) * 100)) : 0}%;background:${kleur}"></div></div>`;
   const kleurStatus = (k) => (k === 'afgerond' ? 'var(--ok)' : k === 'geannuleerd' ? 'var(--danger)' : k === 'nieuw' ? 'var(--warn)' : 'var(--accent)');
   const rijen = (lijst, kop) => lijst.length ? `
-    <table class="cv-tabel"><thead><tr><th>${esc(kop)}</th><th>Binnen</th><th>Afgerond</th><th>Geann.</th><th>Open</th><th class="cv-th-conv">Conversie</th></tr></thead><tbody>
+    <table class="cv-tabel"><thead><tr><th>${esc(kop)}</th><th>Binnen</th><th title="Afgerond of afspraak ingepland">Gewonnen</th><th title="Geannuleerd">Verloren</th><th>Open</th><th class="cv-th-conv">Conversie</th></tr></thead><tbody>
     ${lijst.map((b) => `<tr>
-      <td><strong>${esc(b.naam)}</strong></td><td>${b.binnen}</td><td class="cv-ok">${b.afgerond}</td><td class="cv-danger">${b.geannuleerd}</td><td class="muted">${b.open}</td>
-      <td><div class="cv-conv"><span class="cv-conv-pct">${pctF(b.conversie)}</span>${balk(b.conversie || 0, 100, b.conversie === null ? 'var(--line)' : b.conversie >= 60 ? 'var(--ok)' : b.conversie >= 35 ? 'var(--warn)' : 'var(--danger)')}</div>${b.afgerond + b.geannuleerd < 5 && b.conversie !== null ? '<div class="muted small">weinig beslist</div>' : ''}</td>
+      <td><strong>${esc(b.naam)}</strong></td><td>${b.binnen}</td><td class="cv-ok">${b.gewonnen}${b.afspraak ? `<span class="muted small"> (${b.afspraak} afspr.)</span>` : ''}</td><td class="cv-danger">${b.verloren}</td><td class="muted">${b.open}</td>
+      <td><div class="cv-conv"><span class="cv-conv-pct">${pctF(b.conversie)}</span>${balk(b.conversie || 0, 100, b.conversie === null ? 'var(--line)' : b.conversie >= 60 ? 'var(--ok)' : b.conversie >= 35 ? 'var(--warn)' : 'var(--danger)')}</div>${b.gewonnen + b.verloren < 5 && b.conversie !== null ? '<div class="muted small">weinig beslist</div>' : ''}</td>
     </tr>`).join('')}
     </tbody></table>` : '<div class="muted small">Nog geen gegevens.</div>';
   const maxWeek = Math.max(1, ...c.perWeek.map((w) => w.binnen));
@@ -4149,9 +4149,9 @@ function renderConversie() {
     const h = (n) => `${Math.round((n / maxWeek) * 100)}%`;
     const d = new Date(w.week + 'T00:00:00Z');
     const lbl = `${d.getUTCDate()}/${d.getUTCMonth() + 1}`;
-    return `<div class="cv-week" title="Week van ${lbl}: ${w.binnen} binnen, ${w.afgerond} afgerond, ${w.geannuleerd} geannuleerd, ${w.open} open">
+    return `<div class="cv-week" title="Week van ${lbl}: ${w.binnen} binnen, ${w.gewonnen} gewonnen, ${w.verloren} verloren, ${w.open} open">
       <div class="cv-week-kolom"><div class="cv-week-stapel" style="height:${h(w.binnen)}">
-        <div style="flex:${w.open};background:var(--line)"></div><div style="flex:${w.geannuleerd};background:var(--danger)"></div><div style="flex:${w.afgerond};background:var(--ok)"></div>
+        <div style="flex:${w.open};background:var(--line)"></div><div style="flex:${w.verloren};background:var(--danger)"></div><div style="flex:${w.gewonnen};background:var(--ok)"></div>
       </div></div>
       <div class="cv-week-n">${w.binnen || ''}</div>
       <div class="cv-week-lbl muted small">${lbl}</div>
@@ -4164,13 +4164,24 @@ function renderConversie() {
     <div class="cv-kop">
       <div><h3 class="fin-kop" style="margin:0">Conversie — van aanvraag naar opdracht</h3>
         <div class="muted small">Alles wat als nieuwe opdracht binnenkwam in de laatste ${dagen} dagen, en wat ervan geworden is.</div></div>
-      <label class="cv-periode">Periode <select id="cvDagen">${[30, 90, 365].map((n) => `<option value="${n}" ${n === dagen ? 'selected' : ''}>${n === 365 ? 'Laatste jaar' : `Laatste ${n} dagen`}</option>`).join('')}</select></label>
+      <label class="cv-periode">Periode <select id="cvDagen">${[7, 14, 30, 90, 365].map((n) => `<option value="${n}" ${n === dagen ? 'selected' : ''}>${n === 365 ? 'Laatste jaar' : n === 30 ? 'Laatste maand (30 dagen)' : `Laatste ${n} dagen`}</option>`).join('')}</select></label>
     </div>
+    <details class="pl-collapse cv-uitleg"><summary>Hoe wordt dit berekend?</summary>
+      <ul>
+        <li><strong>Binnengekomen</strong> = elke opdracht die in deze periode als nieuw is binnengekomen (ook als hij inmiddels is afgerond of geannuleerd). De prullenbak telt niet mee.</li>
+        <li><strong>Gewonnen</strong> = de opdracht is <strong>afgerond</strong> óf er is een <strong>afspraak ingepland</strong>. Een ingeplande afspraak is een "ja" van de klant en telt dus als conversie.</li>
+        <li><strong>Verloren</strong> = geannuleerd.</li>
+        <li><strong>Nog open</strong> = nieuw, in behandeling of offerte verzonden: de klant heeft nog niet beslist.</li>
+        <li><strong>Conversie (van beslist)</strong> = gewonnen gedeeld door (gewonnen + verloren). Voorbeeld: 8 gewonnen en 2 verloren = 80%. Dit is het eerlijkste getal, want open aanvragen tellen niet mee.</li>
+        <li><strong>Conversie van alles</strong> = gewonnen gedeeld door binnengekomen. Voorbeeld: 8 gewonnen van 12 binnengekomen = 67%. Dit getal stijgt vanzelf als open aanvragen later alsnog worden gewonnen.</li>
+        <li><strong>Omzet</strong> telt alleen op écht afgeronde opdrachten (factuur excl. btw, anders het prijsveld).</li>
+      </ul>
+    </details>
     <div class="stat-grid cv-stats">
-      <div class="stat cv-stat-groot"><div class="num" style="color:${t.conversie === null ? 'inherit' : t.conversie >= 60 ? 'var(--ok)' : t.conversie >= 35 ? 'var(--warn)' : 'var(--danger)'}">${pctF(t.conversie)}</div><div class="lbl">Conversie (van beslist)</div><div class="muted small">${t.afgerond} afgerond van ${beslist} beslist</div>${deltaHtml(t.conversie, v.conversie, ' pt')}</div>
+      <div class="stat cv-stat-groot"><div class="num" style="color:${t.conversie === null ? 'inherit' : t.conversie >= 60 ? 'var(--ok)' : t.conversie >= 35 ? 'var(--warn)' : 'var(--danger)'}">${pctF(t.conversie)}</div><div class="lbl">Conversie (van beslist)</div><div class="muted small">${t.gewonnen} gewonnen van ${beslist} beslist</div>${deltaHtml(t.conversie, v.conversie, ' pt')}</div>
       <div class="stat"><div class="num">${t.binnen}</div><div class="lbl">Binnengekomen</div>${deltaHtml(t.binnen, v.binnen)}</div>
-      <div class="stat"><div class="num" style="color:var(--ok)">${t.afgerond}</div><div class="lbl">Afgerond (gewonnen)</div><div class="muted small">${pctF(t.conversieTotaal)} van alles</div></div>
-      <div class="stat"><div class="num" style="color:var(--danger)">${t.geannuleerd}</div><div class="lbl">Geannuleerd (verloren)</div><div class="muted small">${pctF(t.binnen ? Math.round((t.geannuleerd / t.binnen) * 1000) / 10 : null)} van alles</div></div>
+      <div class="stat"><div class="num" style="color:var(--ok)">${t.gewonnen}</div><div class="lbl">Gewonnen</div><div class="muted small">${t.afgerond} afgerond · ${t.afspraak} afspraak ingepland · ${pctF(t.conversieTotaal)} van alles</div></div>
+      <div class="stat"><div class="num" style="color:var(--danger)">${t.verloren}</div><div class="lbl">Verloren (geannuleerd)</div><div class="muted small">${pctF(t.binnen ? Math.round((t.verloren / t.binnen) * 1000) / 10 : null)} van alles</div></div>
       <div class="stat"><div class="num">${t.open}</div><div class="lbl">Nog open</div><div class="muted small">${c.stil ? `${c.stil} al 14+ dagen stil` : 'geen stilliggers'}</div></div>
     </div>
     <div class="settings-grid cv-grid">
@@ -4193,7 +4204,7 @@ function renderConversie() {
     </div>
     <div class="info-card cv-card"><h3>Per week binnengekomen (laatste ${c.perWeek.length} weken)</h3>
       <div class="cv-weken">${weekHtml}</div>
-      <div class="muted small" style="margin-top:8px">Hoogte = aantal aanvragen die week · groen = inmiddels afgerond · rood = geannuleerd · grijs = nog open</div>
+      <div class="muted small" style="margin-top:8px">Hoogte = aantal aanvragen die week · groen = gewonnen (afgerond of afspraak) · rood = geannuleerd · grijs = nog open</div>
     </div>
     <div class="info-card cv-card cv-briefing"><div class="cv-briefing-kop"><h3>Wekelijkse AI-briefing</h3>
       ${isAdmin ? '<button class="btn btn-sm" id="cvBriefingBtn">Nieuwe analyse</button>' : ''}</div>

@@ -547,7 +547,7 @@ export async function sendWeeklyCeoReport(toOverride = '', isTest = false) {
     const c = conversieData({ dagen: 30 });
     const t = c.totaal;
     lines.push('CONVERSIE (30 dagen)');
-    lines.push(`• Binnengekomen: ${t.binnen} · afgerond ${t.afgerond} · geannuleerd ${t.geannuleerd} · nog open ${t.open}`);
+    lines.push(`• Binnengekomen: ${t.binnen} · gewonnen ${t.gewonnen} (${t.afgerond} afgerond, ${t.afspraak} afspraak) · verloren ${t.verloren} · nog open ${t.open}`);
     lines.push(`• Conversie: ${t.conversie ?? '-'}% van de besliste aanvragen${c.delta.conversie !== null ? ` (${c.delta.conversie >= 0 ? '+' : ''}${c.delta.conversie} t.o.v. de 30 dagen ervoor)` : ''} · ${t.conversieTotaal ?? '-'}% van alles`);
     for (const p of c.patronen.slice(0, 4)) lines.push(`• ${p}`);
     const b = c.briefing;

@@ -196,10 +196,13 @@ const cvDesk = await page.evaluate(() => ({
   finKop: !!document.querySelector('#financePanel .fin-kop'),
 }));
 ok('conversie: 5 KPI-tegels, groot percentage, 2 tabellen, 12 weken, patronen, briefing-knop (admin)', cvDesk.stats === 5 && cvDesk.groot && cvDesk.tabellen === 2 && cvDesk.weken === 12 && cvDesk.patronen >= 1 && cvDesk.knop && cvDesk.finKop, JSON.stringify(cvDesk));
+ok('conversie: periodes 7/14/30/90/365 + uitleg-blok met "afspraak"', await page.evaluate(() => [...document.querySelectorAll('#cvDagen option')].map((o) => o.value).join() === '7,14,30,90,365' && /afspraak ingepland/.test((document.querySelector('.cv-uitleg') || {}).textContent || '')));
 // Periode wisselen wordt onthouden en herlaadt zonder fout.
+await page.selectOption('#cvDagen', '7');
+await page.waitForTimeout(700);
+ok('conversie: periode 7 dagen gekozen en onthouden', await page.evaluate(() => document.querySelector('#cvDagen').value === '7' && localStorage.getItem('ksConversieDagen') === '7' && /7 dagen/.test(document.querySelector('#conversiePanel .muted').textContent)));
 await page.selectOption('#cvDagen', '30');
 await page.waitForTimeout(700);
-ok('conversie: periode 30 dagen gekozen en onthouden', await page.evaluate(() => document.querySelector('#cvDagen').value === '30' && localStorage.getItem('ksConversieDagen') === '30' && /30 dagen/.test(document.querySelector('#conversiePanel .muted').textContent)));
 // Briefing maken via de knop (zonder AI-sleutel = feiten-tekst) → tekst verschijnt.
 await page.click('#cvBriefingBtn');
 await page.waitForFunction(() => !!document.querySelector('#conversiePanel .cv-briefing-tekst'), null, { timeout: 15000 });

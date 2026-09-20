@@ -4,13 +4,15 @@
 // Definities (bewust simpel en eerlijk):
 //   binnengekomen = elke opdracht die in de periode is AANGEMAAKT (createdAt),
 //                   prullenbak niet meegeteld, ingeklapte weken wél.
-//   afgerond      = status 'afgerond'  (gewonnen)
-//   geannuleerd   = status 'geannuleerd' (verloren)
-//   open          = alles daartussen (nieuw / in behandeling / offerte / afspraak)
-//   conversie beslist = afgerond / (afgerond + geannuleerd)  → "van wat al is beslist"
-//   conversie totaal  = afgerond / binnengekomen              → "van alles wat binnenkwam"
+//   gewonnen      = status 'afgerond' ÓF 'afspraak_ingepland' (een ingeplande afspraak
+//                   is een "ja" van de klant — akkoord eigenaar 20 sep 2026)
+//   verloren      = status 'geannuleerd'
+//   open          = de rest (nieuw / in behandeling / offerte verzonden): nog niet beslist
+//   conversie beslist = gewonnen / (gewonnen + verloren)  → "van wat al is beslist"
+//   conversie totaal  = gewonnen / binnengekomen           → "van alles wat binnenkwam"
 // Beide worden getoond; "beslist" is het eerlijkste getal voor een korte periode
-// (de open opdrachten drukken "totaal" anders omlaag).
+// (de open opdrachten drukken "totaal" anders omlaag). Omzet en doorlooptijd tellen
+// alleen op écht afgeronde opdrachten. Periodes: 7/14/30/90/365 dagen.
 import { db, now, save, logActivity } from './db.js';
 import { getStatuses, isWhatsappOrderGroup, getCompanyProfile } from './settings.js';
 import { conversieInsight } from './ai/categorizer.js';
@@ -32,16 +34,27 @@ export function bronVan(o, msgById) {
   return o.source;
 }
 
-function telling() { return { binnen: 0, afgerond: 0, geannuleerd: 0, open: 0, omzet: 0 }; }
+export const GEWONNEN = new Set(['afgerond', 'afspraak_ingepland']);
+export const VERLOREN = new Set(['geannuleerd']);
+export const PERIODES = [7, 14, 30, 90, 365];
+function telling() { return { binnen: 0, gewonnen: 0, afgerond: 0, afspraak: 0, verloren: 0, open: 0, omzet: 0 }; }
 function afronden(t) {
   return {
     ...t,
     omzet: r2(t.omzet),
-    conversie: pct(t.afgerond, t.afgerond + t.geannuleerd),
-    conversieTotaal: pct(t.afgerond, t.binnen),
+    conversie: pct(t.gewonnen, t.gewonnen + t.verloren),
+    conversieTotaal: pct(t.gewonnen, t.binnen),
   };
 }
-const GESLOTEN = new Set(['afgerond', 'geannuleerd']);
+// Eén plek die telt, gedeeld door totaal/bron/monteur/week.
+function telOp(t, o, invByOrder) {
+  t.binnen++;
+  if (o.status === 'afgerond') { t.gewonnen++; t.afgerond++; t.omzet += omzetVan(o, invByOrder); }
+  else if (GEWONNEN.has(o.status)) { t.gewonnen++; t.afspraak++; }
+  else if (VERLOREN.has(o.status)) t.verloren++;
+  else t.open++;
+}
+const GESLOTEN = new Set([...GEWONNEN, ...VERLOREN]);
 
 // Omzet van een afgeronde opdracht: gekoppelde factuur (excl. btw) wint van het prijsveld.
 function omzetVan(o, invByOrder) {
@@ -76,12 +89,7 @@ export function conversieData({ dagen = 90, weken = 12 } = {}) {
 
   const tel = (lijst) => {
     const t = telling();
-    for (const o of lijst) {
-      t.binnen++;
-      if (o.status === 'afgerond') { t.afgerond++; t.omzet += omzetVan(o, invByOrder); }
-      else if (o.status === 'geannuleerd') t.geannuleerd++;
-      else t.open++;
-    }
+    for (const o of lijst) telOp(t, o, invByOrder);
     return afronden(t);
   };
   const totaal = tel(huidig);
@@ -100,11 +108,7 @@ export function conversieData({ dagen = 90, weken = 12 } = {}) {
     for (const o of huidig) {
       const k = sleutel(o);
       if (!map.has(k)) map.set(k, telling());
-      const t = map.get(k);
-      t.binnen++;
-      if (o.status === 'afgerond') { t.afgerond++; t.omzet += omzetVan(o, invByOrder); }
-      else if (o.status === 'geannuleerd') t.geannuleerd++;
-      else t.open++;
+      telOp(map.get(k), o, invByOrder);
     }
     return [...map.entries()].map(([naam, t]) => ({ naam, ...afronden(t) })).sort((a, b) => b.binnen - a.binnen);
   };
@@ -123,7 +127,7 @@ export function conversieData({ dagen = 90, weken = 12 } = {}) {
   // Doorlooptijd: dagen van aanmaak tot afronding/annulering (gemiddelde + mediaan).
   const dagenTot = (o, veld) => { const e = new Date(o[veld] || o.updatedAt || 0).getTime(); const s = new Date(o.createdAt).getTime(); return e > s ? (e - s) / DAG : null; };
   const afgerondDagen = huidig.filter((o) => o.status === 'afgerond').map((o) => dagenTot(o, 'completedAt')).filter((x) => x !== null).sort((a, b) => a - b);
-  const geannDagen = huidig.filter((o) => o.status === 'geannuleerd').map((o) => dagenTot(o, 'updatedAt')).filter((x) => x !== null).sort((a, b) => a - b);
+  const geannDagen = huidig.filter((o) => VERLOREN.has(o.status)).map((o) => dagenTot(o, 'updatedAt')).filter((x) => x !== null).sort((a, b) => a - b);
   const gem = (l) => (l.length ? r2(l.reduce((s, x) => s + x, 0) / l.length) : null);
   const med = (l) => (l.length ? r2(l[Math.floor(l.length / 2)]) : null);
   const doorlooptijd = { afgerondGem: gem(afgerondDagen), afgerondMediaan: med(afgerondDagen), geannuleerdGem: gem(geannDagen), n: afgerondDagen.length };
@@ -145,6 +149,7 @@ export function conversieData({ dagen = 90, weken = 12 } = {}) {
     totaal, vorige,
     delta: { conversie: totaal.conversie !== null && vorige.conversie !== null ? r2(totaal.conversie - vorige.conversie) : null, binnen: totaal.binnen - vorige.binnen },
     perStatus, perBron, perMonteur, perWeek, doorlooptijd, waarde, stil, patronen,
+    definitie: { gewonnen: [...GEWONNEN], verloren: [...VERLOREN], periodes: PERIODES },
     briefing: db().settings._conversieBriefing || null,
   };
 }
@@ -163,7 +168,7 @@ export function herkenPatronen(d) {
     const g = Math.round(((t.binnen - d.vorige.binnen) / d.vorige.binnen) * 100);
     if (Math.abs(g) >= 20) uit.push(`Instroom ${g > 0 ? '+' : ''}${g}% t.o.v. de vorige periode (${d.vorige.binnen} → ${t.binnen} aanvragen).`);
   }
-  const beslist = d.perBron.filter((b) => b.afgerond + b.geannuleerd >= 5 && b.conversie !== null);
+  const beslist = d.perBron.filter((b) => b.gewonnen + b.verloren >= 5 && b.conversie !== null);
   if (beslist.length >= 2) {
     const best = [...beslist].sort((a, b) => b.conversie - a.conversie)[0];
     const slecht = [...beslist].sort((a, b) => a.conversie - b.conversie)[0];
@@ -171,7 +176,7 @@ export function herkenPatronen(d) {
   }
   const grootsteBron = d.perBron[0];
   if (grootsteBron && grootsteBron.binnen >= 5 && t.binnen) uit.push(`${grootsteBron.naam} levert ${Math.round((grootsteBron.binnen / t.binnen) * 100)}% van alle aanvragen.`);
-  const mBeslist = d.perMonteur.filter((m) => m.naam !== 'Geen monteur' && m.afgerond + m.geannuleerd >= 5 && m.conversie !== null);
+  const mBeslist = d.perMonteur.filter((m) => m.naam !== 'Geen monteur' && m.gewonnen + m.verloren >= 5 && m.conversie !== null);
   if (mBeslist.length >= 2) {
     const best = [...mBeslist].sort((a, b) => b.conversie - a.conversie)[0];
     const slecht = [...mBeslist].sort((a, b) => a.conversie - b.conversie)[0];
@@ -196,11 +201,11 @@ export function herkenPatronen(d) {
 export function conversieFeiten(d) {
   const t = d.totaal;
   const r = [];
-  r.push(`Periode: laatste ${d.periode.dagen} dagen. Binnengekomen ${t.binnen}, afgerond ${t.afgerond}, geannuleerd ${t.geannuleerd}, nog open ${t.open}.`);
+  r.push(`Periode: laatste ${d.periode.dagen} dagen. Binnengekomen ${t.binnen}, gewonnen ${t.gewonnen} (${t.afgerond} afgerond + ${t.afspraak} afspraak ingepland), verloren (geannuleerd) ${t.verloren}, nog open ${t.open}.`);
   r.push(`Conversie (van beslist): ${t.conversie ?? '-'}% (vorige periode ${d.vorige.conversie ?? '-'}%). Conversie van alles: ${t.conversieTotaal ?? '-'}%.`);
-  r.push(`Per bron: ${d.perBron.map((b) => `${b.naam} ${b.binnen} binnen / ${b.afgerond} afgerond / ${b.geannuleerd} geannuleerd (${b.conversie ?? '-'}%)`).join('; ')}.`);
-  r.push(`Per monteur: ${d.perMonteur.map((m) => `${m.naam} ${m.afgerond}/${m.afgerond + m.geannuleerd} (${m.conversie ?? '-'}%)`).join('; ')}.`);
-  r.push(`Per week (binnen/afgerond/geannuleerd): ${d.perWeek.map((w) => `${w.week.slice(5)}: ${w.binnen}/${w.afgerond}/${w.geannuleerd}`).join(', ')}.`);
+  r.push(`Per bron: ${d.perBron.map((b) => `${b.naam} ${b.binnen} binnen / ${b.gewonnen} gewonnen / ${b.verloren} verloren (${b.conversie ?? '-'}%)`).join('; ')}.`);
+  r.push(`Per monteur: ${d.perMonteur.map((m) => `${m.naam} ${m.gewonnen}/${m.gewonnen + m.verloren} (${m.conversie ?? '-'}%)`).join('; ')}.`);
+  r.push(`Per week (binnen/gewonnen/verloren): ${d.perWeek.map((w) => `${w.week.slice(5)}: ${w.binnen}/${w.gewonnen}/${w.verloren}`).join(', ')}.`);
   r.push(`Doorlooptijd afgerond: gem. ${d.doorlooptijd.afgerondGem ?? '-'} d, mediaan ${d.doorlooptijd.afgerondMediaan ?? '-'} d; geannuleerd gem. ${d.doorlooptijd.geannuleerdGem ?? '-'} d.`);
   r.push(`Omzet uit afgeronde opdrachten: € ${d.waarde.omzetAfgerond} (per afgeronde ${d.waarde.perAfgerond ?? '-'}, per aanvraag ${d.waarde.perAanvraag ?? '-'}); ${d.waarde.afgerondZonderFactuur} afgerond zonder factuur; ${d.stil} stilliggers.`);
   r.push(`Herkende patronen: ${d.patronen.join(' ')}`);
@@ -219,7 +224,7 @@ export async function maakConversieBriefing({ force = false, door = 'systeem' } 
   let bron = 'feiten';
   try { tekst = await conversieInsight({ facts: feiten, companyProfile: getCompanyProfile() }); if (tekst) bron = 'ai'; } catch { tekst = ''; }
   if (!tekst) {
-    tekst = [`Conversie laatste 30 dagen: ${d30.totaal.conversie ?? '-'}% van de besliste aanvragen afgerond (${d30.totaal.afgerond} van ${d30.totaal.afgerond + d30.totaal.geannuleerd}); ${d30.totaal.open} staan nog open.`, ...d30.patronen.map((p) => `• ${p}`)].join('\n');
+    tekst = [`Conversie laatste 30 dagen: ${d30.totaal.conversie ?? '-'}% van de besliste aanvragen gewonnen (${d30.totaal.gewonnen} van ${d30.totaal.gewonnen + d30.totaal.verloren}: ${d30.totaal.afgerond} afgerond + ${d30.totaal.afspraak} afspraak ingepland); ${d30.totaal.open} staan nog open.`, ...d30.patronen.map((p) => `• ${p}`)].join('\n');
   }
   const b = { at: now(), week: weekKey, tekst, bron, door, conversie30: d30.totaal.conversie, conversie90: d90.totaal.conversie };
   db().settings._conversieBriefing = b;

@@ -541,6 +541,10 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 .cv-periode { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--ink-soft); }
 .cv-periode select { width: auto; min-width: 160px; }
 .cv-stats { margin-bottom: 16px; }
+.cv-uitleg { margin: 0 0 14px; font-size: 13px; }
+.cv-uitleg summary { cursor: pointer; font-weight: 600; padding: 6px 0; color: var(--accent-ink); }
+.cv-uitleg ul { margin: 6px 0 4px; padding-left: 20px; }
+.cv-uitleg li { margin-bottom: 5px; line-height: 1.5; }
 .cv-stat-groot .num { font-size: 34px; }
 .cv-delta { display: block; margin-top: 4px; font-size: 12px; }
 .cv-goed { color: var(--ok); }

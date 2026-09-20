@@ -524,7 +524,7 @@ export async function conversieInsight({ facts, companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || !facts) return '';
   const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
-  const system = `Je bent de commerciële rechterhand van Keyservice, een sleutel-/slotenmakersbedrijf. Je krijgt de conversiecijfers uit het CRM: hoeveel aanvragen kwamen binnen en hoeveel daarvan zijn écht uitgevoerd (afgerond) of verloren (geannuleerd), per bron, per monteur en per week. Schrijf in het Nederlands een korte wekelijkse briefing voor de eigenaar:
+  const system = `Je bent de commerciële rechterhand van Keyservice, een sleutel-/slotenmakersbedrijf. Je krijgt de conversiecijfers uit het CRM: hoeveel aanvragen kwamen binnen en hoeveel daarvan zijn gewonnen (afgerond óf afspraak ingepland — een afspraak is een ja van de klant) of verloren (geannuleerd), per bron, per monteur en per week. Schrijf in het Nederlands een korte wekelijkse briefing voor de eigenaar:
 - Begin met één zin over de stand van de conversie (30 dagen) en of die beter of slechter is dan daarvoor.
 - Daarna maximaal 4 korte opsommingspunten met patronen die je herkent (welke bron of monteur converteert goed/slecht, seizoens- of weektrend, veel open of stilliggende aanvragen, doorlooptijd, omzet per aanvraag). Verwijs naar concrete aantallen.
 - Sluit af met "Aanbevolen acties:" en 2 concrete, uitvoerbare acties voor komende week.
