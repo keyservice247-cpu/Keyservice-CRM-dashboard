@@ -125,10 +125,28 @@ async function getTransporter() {
   return transporter;
 }
 
+// Herkenbare typefouten in een e-mailadres (20 sep 2026, casus "gmail.c"): een
+// afgekapt of verkeerd domein wordt door de mailserver geweigerd met een technische
+// 550-melding. Dit vangt de meest voorkomende gevallen vóór het versturen, met een
+// uitleg die de assistente meteen kan oplossen (adres corrigeren bij de klant).
+const DOMEIN_TYPO_RE = /@(gmail|hotmail|outlook|live|yahoo|icloud|ziggo|kpn|planet|hetnet|home|xs4all|telfort|casema|quicknet|upcmail|chello)\.(c|co|cm|con|nl\w|comm?[a-z]|n)$/i;
+export function emailAdresProbleem(to) {
+  const a = String(to || '').trim();
+  if (!a) return 'Geen e-mailadres opgegeven.';
+  if (DOMEIN_TYPO_RE.test(a)) return `"${a}" lijkt een typefout (bv. gmail.c i.p.v. gmail.com). Corrigeer het e-mailadres bij de klantgegevens en probeer opnieuw.`;
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(a)) return `"${a}" is geen geldig e-mailadres.`;
+  if (/\.(c|n|co|cm|con)$/i.test(a)) return `"${a}" eindigt op een onvolledige extensie. Corrigeer het e-mailadres bij de klantgegevens.`;
+  return '';
+}
+
 export async function sendMail({ to, subject, text, attachments, inReplyTo, references, afzender = null, automatisch = false }) {
   const tx = await getTransporter();
   if (!tx) throw new Error('SMTP niet geconfigureerd op de server');
   if (!to) throw new Error('Geen ontvanger (e-mailadres) opgegeven');
+  {
+    const probleem = String(to).includes(',') ? '' : emailAdresProbleem(to);
+    if (probleem) { const e = new Error(probleem); e.rejectedRecipient = true; recordMailFailure(to, subject, probleem); throw e; }
+  }
   // Automatisch gegenereerde klantmail → vaste voetregel (instelbaar, leeg = uit).
   if (automatisch) text = metDisclaimer(text);
   // Altijd een nette afzendernaam, anders tonen mail-apps alleen het kale adresdeel
@@ -155,7 +173,7 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
     // ALLE ontvangers geweigerd (accepted leeg)? Dan is de mail écht niet
     // aangekomen — fout. De verbinding zelf is gezond, dus die blijft staan.
     if (Array.isArray(info.accepted) && info.accepted.length === 0) {
-      const err = new Error(`De mailserver weigerde de ontvanger (${(info.rejected || []).join(', ') || to}). Controleer het e-mailadres.`);
+      const err = new Error(`De mailserver weigerde het e-mailadres ${(info.rejected || []).join(', ') || to} (bestaat niet of typefout). Controleer het e-mailadres bij de klantgegevens en verstuur opnieuw.`);
       err.rejectedRecipient = true; // al geregistreerd; catch hieronder slaat 'm over
       recordMailFailure(to, subject, err.message);
       throw err;
@@ -175,7 +193,9 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
     const code = err && (err.responseCode || err.code);
     const msg = String((err && err.message) || '');
     let out = err;
-    if (code === 535 || /auth|login|credential|password/i.test(msg)) {
+    if (/recipient(s)? (were )?rejected|550 5\.1\.1|user unknown|no such user|does not exist/i.test(msg)) {
+      out = new Error(`De mailserver weigerde het e-mailadres ${to} (bestaat niet of typefout). Controleer het e-mailadres bij de klantgegevens en verstuur opnieuw.`);
+    } else if (code === 535 || /auth|login|credential|password/i.test(msg)) {
       out = new Error(`E-mail versturen mislukt (inloggen geweigerd door de mailserver). Controleer op Render: SMTP_USER = het verzendadres, SMTP_PASSWORD = het HUIDIGE wachtwoord daarvan, en dat de service opnieuw is gedeployd. Serverdetail: ${msg.slice(0, 140)}`);
     } else if (code === 'ETIMEDOUT' || code === 'ECONNECTION' || /timed?out|connect/i.test(msg)) {
       out = new Error('Geen verbinding met de e-mailserver. Probeer het zo nog eens; blijft het fout, controleer SMTP_HOST/SMTP_PORT op Render.');

@@ -153,6 +153,14 @@ ok('kaart afgerond → niet meer in behandeling', klantInBehandeling('cust_discl
 db().orders.push({ id: 'ord_discl_2', customerId: 'cust_discl', status: 'nieuw', archivedWeek: '2026-W30', createdAt: new Date().toISOString() });
 ok('ingeklapte (archief) kaart telt niet', klantInBehandeling('cust_discl') === false);
 
+console.log('\n== Typefouten in e-mailadressen vóór het versturen (20 sep 2026, casus gmail.c) ==');
+const { emailAdresProbleem } = await import('../server/connectors/email-smtp.js');
+ok('gmail.c wordt herkend als typefout', /typefout/.test(emailAdresProbleem('hf.engelsman@gmail.c')));
+ok('hotmail.con wordt herkend als typefout', /typefout/.test(emailAdresProbleem('jan@hotmail.con')));
+ok('gewoon adres is in orde', emailAdresProbleem('jan@gmail.com') === '' && emailAdresProbleem('info@keyservice247.nl') === '');
+ok('adres zonder @ is ongeldig', /geen geldig/.test(emailAdresProbleem('jan.gmail.com')));
+ok('onbekend domein met .co (bv. .co.uk-achtig) wordt niet ten onrechte afgekeurd', emailAdresProbleem('jan@bedrijf.co.uk') === '');
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

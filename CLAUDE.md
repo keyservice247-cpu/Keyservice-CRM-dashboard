@@ -642,6 +642,12 @@ de regressie meegroeit.
   Instellingen → Systeem, met knop "Nu opruimen" → POST /api/attachments/cleanup-run
   {days?, doneDays?} = force + tijdelijke grenzen). Oude instelling zonder doneDays
   wordt bij boot eenmalig omgezet naar 3/3/30. Test: 9 assertions in audit-test (40).
+- **Typefout in e-mailadres vóór het versturen (20 sep 2026, casus "gmail.c"):**
+  `emailAdresProbleem(to)` in email-smtp.js herkent afgekapte/verkeerde domeinen
+  (gmail.c, hotmail.con, …) en ongeldige adressen; sendMail weigert dan mét uitleg
+  ("corrigeer bij de klantgegevens") i.p.v. de technische 550-tekst; een SMTP-
+  weigering (recipient rejected / 5.1.1) wordt óók naar die uitleg vertaald. Test:
+  5 assertions in mail-test (40).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 
