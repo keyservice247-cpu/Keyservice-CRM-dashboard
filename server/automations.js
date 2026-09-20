@@ -938,59 +938,72 @@ async function runGoogleCalendarSweep() {
 // werkbon-handtekeningen (garantie/juridisch), facturen, of iets van een nog
 // lopende kaart. Klant- en kaartgegevens zelf blijven altijd volledig staan —
 // alleen de losse bestanden op de schijf verdwijnen.
-export function runAttachmentCleanup() {
-  const cfg = getAttachmentCleanup();
-  if (!cfg.enabled) return;
-  const today = new Date().toISOString().slice(0, 10);
-  if (db().settings._attCleanupDay === today) return;
-  db().settings._attCleanupDay = today;
-  const cutoff = Date.now() - cfg.days * 86400000;
+export function runAttachmentCleanup({ force = false, override = {}, door = 'systeem' } = {}) {
+  const cfg = { ...getAttachmentCleanup(), ...override };
+  const leeg = { removed: 0, echtWeg: 0, afgerond: 0, verouderd: 0, overgeslagen: true };
+  if (!cfg.enabled && !force) return leeg;
+  // Om de N dagen (20 sep 2026, eigenaar: "standaard om de 3 dagen"), niet dagelijks.
+  const laatste = db().settings._attCleanupAt ? new Date(db().settings._attCleanupAt).getTime() : 0;
+  if (!force && Date.now() - laatste < cfg.intervalDays * 86400000) return leeg;
+  db().settings._attCleanupAt = now();
+  const nu = Date.now();
+  const doneCutoff = nu - cfg.doneDays * 86400000;   // afgerond/geannuleerd: na X dagen
+  const oudCutoff = nu - cfg.days * 86400000;        // álles ouder dan X dagen
   // Bestanden die NOOIT weg mogen: werkbon-handtekeningen.
   const keep = new Set();
   for (const o of [...(db().orders || []), ...(db().trash || [])]) {
     const sigId = o.werkbon && o.werkbon.signatureAttachmentId;
     if (sigId) keep.add(sigId);
   }
-  let removed = 0;
-  // GEDEELDE BESTANDEN (16 sep 2026): sinds de ontdubbeling wijzen meerdere kaarten/
-  // berichten naar hetzelfde bestand. Hier alleen de VERWIJZING weghalen; het bestand
+  // Alleen foto's/video's/audio (mediaOnly); documenten zoals PDF's blijven.
+  const isMedia = (a) => { const k = a.kind || String(a.mime || '').split('/')[0]; return ['image', 'video', 'audio'].includes(k); };
+  let removed = 0; let afgerond = 0; let verouderd = 0;
+  // GEDEELDE BESTANDEN (16 sep 2026): hier alleen de VERWIJZING weghalen; het bestand
   // gaat pas van schijf als niemand er meer naar wijst (ná de ronde, in één keer).
   const kandidaten = new Set();
-  const stripList = (list) => {
+  const attTijd = (a, terugval) => new Date(a.at || terugval || 0).getTime() || 0;
+  // strip(list, terugvalTijd, allesWeg): allesWeg = afgehandelde opdracht (alles mag
+  // weg, ongeacht leeftijd); anders alleen bijlages ouder dan `days`.
+  const strip = (list, terugval, allesWeg) => {
     if (!Array.isArray(list) || !list.length) return list;
     const rest = [];
     for (const att of list) {
-      if (!att || !att.file || keep.has(att.id)) { rest.push(att); continue; }
+      if (!att || !att.file || keep.has(att.id) || (cfg.mediaOnly && !isMedia(att))) { rest.push(att); continue; }
+      const oud = attTijd(att, terugval) < oudCutoff;
+      if (!allesWeg && !oud) { rest.push(att); continue; }
       kandidaten.add(att.file); removed++;
+      if (allesWeg) afgerond++; else verouderd++;
     }
     return rest;
   };
-  // Leeftijd op basis van het afrondmoment (of anders de aanmaakdatum) — bewust
-  // NIET updatedAt: die schuift op door systeemacties (archivering, badges) en zou
-  // het opruimen eindeloos uitstellen.
-  const oldDone = (o) => {
+  // Afgehandeld = afgerond/geannuleerd én minstens `doneDays` geleden (completedAt,
+  // anders updatedAt/createdAt) — bewust een korte wachttijd, zodat een foto van een
+  // gisteren afgeronde klus niet al weg is als de factuur nog gemaakt wordt.
+  const afgehandeld = (o) => {
     if (!['afgerond', 'geannuleerd'].includes(o.status)) return false;
-    const ref = o.completedAt || o.createdAt;
-    return ref && new Date(ref).getTime() < cutoff;
+    const ref = o.completedAt || o.updatedAt || o.createdAt;
+    return ref && new Date(ref).getTime() <= doneCutoff;
   };
   for (const o of [...(db().orders || []), ...(db().trash || [])]) {
-    if (!oldDone(o)) continue;
-    if (o.attachments && o.attachments.length) o.attachments = stripList(o.attachments);
+    const allesWeg = afgehandeld(o) || !!o.deletedAt;
+    if (o.attachments && o.attachments.length) o.attachments = strip(o.attachments, o.createdAt, allesWeg);
     for (const t of o.thread || []) {
-      if (t.attachments && t.attachments.length) t.attachments = stripList(t.attachments);
+      if (t.attachments && t.attachments.length) t.attachments = strip(t.attachments, t.at || o.createdAt, allesWeg);
     }
   }
-  // Losse berichten (inbox-historie) ouder dan de periode: bestanden weg, tekst blijft.
+  // Losse berichten (inbox-historie): alleen ouder dan `days`; tekst blijft.
   for (const m of db().messages || []) {
-    if (!m.receivedAt || new Date(m.receivedAt).getTime() >= cutoff) continue;
-    if (m.attachments && m.attachments.length) m.attachments = stripList(m.attachments);
+    if (m.attachments && m.attachments.length) m.attachments = strip(m.attachments, m.receivedAt, false);
   }
   const echtWeg = kandidaten.size ? verwijderBestandenAlsOngebruikt([...kandidaten]) : 0;
+  void db().orders; void db().trash; void db().messages;
+  db().settings._attCleanupLaatste = { at: now(), removed, echtWeg, afgerond, verouderd, door };
   if (removed) {
-    logActivity('systeem', 'oude bijlages opgeruimd', `${removed} verwijzing(en) van afgehandelde klussen ouder dan ${cfg.days} dagen, ${echtWeg} bestand(en) van schijf`);
-    console.log(`[bijlage-opschoning] ${removed} bestand(en) verwijderd (ouder dan ${cfg.days} dagen, alleen afgeronde/geannuleerde klussen)`);
+    logActivity(door, 'bijlages opgeruimd', `${afgerond} van afgehandelde opdrachten (>${cfg.doneDays} d), ${verouderd} ouder dan ${cfg.days} d; ${echtWeg} bestand(en) van schijf`);
+    console.log(`[bijlage-opschoning] ${removed} verwijzing(en) weg (${afgerond} afgehandeld, ${verouderd} verouderd), ${echtWeg} bestand(en) van schijf`);
   }
   saveSoon();
+  return { removed, echtWeg, afgerond, verouderd, overgeslagen: false };
 }
 
 // ---------- Starter ----------

@@ -57,7 +57,7 @@ import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens } from './automations.js';
+import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -82,8 +82,7 @@ import {
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
   getHtmlSignature, getWeeklyAiCheck, syncBundlesToPriceList, getGoogleSync,
-  noteRequiredStatusKeys,
-} from './settings.js';
+  noteRequiredStatusKeys, DEFAULT_ATTACHMENT_CLEANUP } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -1514,6 +1513,17 @@ app.post('/api/attachments/bulk-delete', requireRole('admin', 'assistent'), (req
     saveSoon();
   }
   res.json({ ok: true, removed, freedBytes, verwijzingen });
+});
+
+// Opschoning NU draaien (knop in Instellingen → Systeem; ook voor de test). Optioneel
+// met tijdelijke grenzen voor deze ene ronde (bv. doneDays:0 = alles afgerond nu).
+app.post('/api/attachments/cleanup-run', requireRole('admin'), (req, res) => {
+  const b = req.body || {};
+  const over = {};
+  if (b.days !== undefined) over.days = Math.max(0, Number(b.days) || 0);
+  if (b.doneDays !== undefined) over.doneDays = Math.max(0, Number(b.doneDays) || 0);
+  const r = runAttachmentCleanup({ force: true, override: over, door: req.user.name });
+  res.json({ ok: true, ...r });
 });
 
 // Ontdubbelen op schijf + weesbestanden opruimen (knop in Foto's & video's beheren).
@@ -3084,6 +3094,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     emailFilters: db().settings.emailFilters || '',
     emailFiltersDefault: DEFAULT_EMAIL_FILTERS.join(', '),
     attachmentCleanup: getAttachmentCleanup(),
+    attachmentCleanupLaatste: db().settings._attCleanupLaatste || null,
     emailSignature: getEmailSignature(),
     sendAddress: process.env.SMTP_FROM || process.env.SMTP_USER || '',
     imapAddress: process.env.IMAP_USER || '',
@@ -3172,10 +3183,15 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   }
   if ('attachmentCleanup' in b) {
     const a = b.attachmentCleanup || {};
+    const huidig = getAttachmentCleanup();
     db().settings.attachmentCleanup = {
       enabled: a.enabled !== false,
-      days: Math.max(90, Math.min(3650, Number(a.days) || 365)),
+      days: Math.max(7, Math.min(3650, Number(a.days) || huidig.days)),
+      doneDays: Math.max(0, Math.min(3650, Number.isFinite(Number(a.doneDays)) && a.doneDays !== undefined && a.doneDays !== null ? Number(a.doneDays) : huidig.doneDays)),
+      intervalDays: Math.max(1, Math.min(30, Number(a.intervalDays) || huidig.intervalDays)),
+      mediaOnly: a.mediaOnly !== false,
     };
+    logActivity(req.user.name, 'bijlage-opschoning ingesteld', JSON.stringify(db().settings.attachmentCleanup));
   }
   if ('groupAliases' in b) {
     // Koppelingen groeps-ID -> naam (voor als de bridge door een WhatsApp-storing geen
@@ -3422,6 +3438,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     emailFilters: db().settings.emailFilters || '',
     emailFiltersDefault: DEFAULT_EMAIL_FILTERS.join(', '),
     attachmentCleanup: getAttachmentCleanup(),
+    attachmentCleanupLaatste: db().settings._attCleanupLaatste || null,
     emailSignature: getEmailSignature(),
     autoReply: getAutoReply(),
     followUp: getFollowUp(),
@@ -5847,6 +5864,13 @@ app.listen(PORT, () => {
       save();
     }
   } catch (e) { console.error('[bijlage-dedup]', e.message); }
+  // Oude opschoon-instelling (alleen enabled+days, van vóór 20 sep) had een andere
+  // betekenis (alleen afgehandeld, na 365 d). Eén keer omzetten naar de nieuwe
+  // standaard (om de 3 d; afgehandeld na 3 d; alles ouder dan 30 d) — wens eigenaar.
+  try {
+    const ac = db().settings.attachmentCleanup;
+    if (ac && ac.doneDays === undefined) { db().settings.attachmentCleanup = { ...DEFAULT_ATTACHMENT_CLEANUP, enabled: ac.enabled !== false }; save(); console.log('[bijlage-opschoning] instelling omgezet naar nieuwe standaard (3/3/30)'); }
+  } catch (e) { console.error('[bijlage-opschoning] omzetten:', e.message); }
   // HASH-INDEX vullen (16 sep 2026): zo hergebruikt saveBuffer een bestaand bestand
   // voor een identieke foto i.p.v. nogmaals wegschrijven. Daarna, uitgesteld (de
   // server moet eerst bereikbaar zijn), ÉÉN keer alle bestaande dubbele bestanden op

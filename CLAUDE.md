@@ -630,6 +630,18 @@ de regressie meegroeit.
   en Inklappen zijn op de telefoon uit de knoppenrij (display:none); Inklappen staat
   onderaan het bord (#boardFoot/#collapseBtnFoot → klikt #collapseBtn). Knoppen/velden
   38 px hoog. Browser-test 151.
+- **Automatische opschoning foto's/filmpjes (20 sep 2026, wens eigenaar):**
+  runAttachmentCleanup (automations.js) draait nu om de `intervalDays` (default 3,
+  `settings._attCleanupAt`) i.p.v. dagelijks, en ruimt (1) alle media van afgeronde/
+  geannuleerde opdrachten (én prullenbak) die ≥ `doneDays` (default 3) geleden zijn
+  afgehandeld (completedAt→updatedAt→createdAt) en (2) ALLE media ouder dan `days`
+  (default 30, min 7) — ook op lopende opdrachten, gesprekshistorie en losse berichten.
+  `mediaOnly` (default true) = alleen image/video/audio; PDF's blijven. Werkbon-
+  handtekeningen nooit; bestanden via verwijderBestandenAlsOngebruikt (gedeelde
+  bestanden veilig). Resultaat in settings._attCleanupLaatste (zichtbaar in
+  Instellingen → Systeem, met knop "Nu opruimen" → POST /api/attachments/cleanup-run
+  {days?, doneDays?} = force + tijdelijke grenzen). Oude instelling zonder doneDays
+  wordt bij boot eenmalig omgezet naar 3/3/30. Test: 9 assertions in audit-test (40).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

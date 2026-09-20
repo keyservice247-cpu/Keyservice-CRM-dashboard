@@ -4435,11 +4435,14 @@ async function loadSettingsHtml(s) {
       <textarea id="emailFilters" rows="3" placeholder="bv. bol.com, mijn leverancier bv">${esc(s.emailFilters || '')}</textarea>
       <p class="muted small" style="margin-top:6px">Standaard al actief: ${esc(s.emailFiltersDefault || '')}</p>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveEmailFilters">Filter opslaan</button></div> </div>
-    <div data-sg="systeem" class="info-card" style="margin-bottom:18px"> <h3>Oude bijlages automatisch opruimen</h3>
-      <p class="muted small">Foto's en bestanden van <strong>afgeronde of geannuleerde</strong> opdrachten worden na de ingestelde periode van de schijf verwijderd, zodat die nooit volloopt. Klantgegevens, opdrachten, facturen en <strong>werkbon-handtekeningen blijven altijd bewaard</strong> — alleen de losse bestanden verdwijnen. Tip: garantie op producten is 3 jaar; kies 1095 dagen als je foto's daarvoor wilt kunnen terugkijken.</p>
-      <div class="row" style="align-items:center"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ac-enabled" style="width:auto" ${s.attachmentCleanup?.enabled !== false ? 'checked' : ''}>Aan</label>
-      <label>Na hoeveel dagen <input id="ac-days" type="number" min="90" max="3650" value="${esc(String(s.attachmentCleanup?.days ?? 365))}" style="max-width:120px"></label></div>
-      <div style="margin-top:12px"><button class="btn btn-primary" id="saveAttCleanup">Opslaan</button></div>
+    <div data-sg="systeem" class="info-card" style="margin-bottom:18px"> <h3>Foto's en filmpjes automatisch opruimen</h3>
+      <p class="muted small">Draait vanzelf om de paar dagen en ruimt twee dingen op: <strong>(1)</strong> alle foto's en filmpjes van <strong>afgeronde of geannuleerde</strong> opdrachten, een paar dagen na het afronden; <strong>(2)</strong> alle foto's en filmpjes <strong>ouder dan</strong> de ingestelde termijn, ook op lopende opdrachten en losse berichten. Opdrachten, klantgegevens, facturen, PDF's en <strong>werkbon-handtekeningen blijven altijd bewaard</strong>.</p>
+      <div class="row" style="align-items:center;flex-wrap:wrap;gap:12px"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ac-enabled" style="width:auto" ${s.attachmentCleanup?.enabled !== false ? 'checked' : ''}>Aan</label>
+      <label>Om de … dagen <input id="ac-interval" type="number" min="1" max="30" value="${esc(String(s.attachmentCleanup?.intervalDays ?? 3))}" style="max-width:110px"></label>
+      <label>Afgerond/geannuleerd: na … dagen <input id="ac-done" type="number" min="0" max="3650" value="${esc(String(s.attachmentCleanup?.doneDays ?? 3))}" style="max-width:110px"></label>
+      <label>Alles ouder dan … dagen <input id="ac-days" type="number" min="7" max="3650" value="${esc(String(s.attachmentCleanup?.days ?? 30))}" style="max-width:110px"></label></div>
+      <div class="muted small" style="margin-top:8px" id="ac-laatste">${s.attachmentCleanupLaatste ? `Laatste ronde: ${esc(fmtDateShort(s.attachmentCleanupLaatste.at))} — ${s.attachmentCleanupLaatste.removed} foto('s)/filmpje(s) weg (${s.attachmentCleanupLaatste.afgerond} afgehandeld, ${s.attachmentCleanupLaatste.verouderd} verouderd), ${s.attachmentCleanupLaatste.echtWeg} bestand(en) van schijf.` : 'Nog niet gedraaid.'}</div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" id="saveAttCleanup">Opslaan</button><button class="btn" id="runAttCleanup">Nu opruimen</button></div>
       <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
       <h3 style="font-size:14px">Foto's &amp; video's nu opruimen</h3>
       <p class="muted small">Wil je niet wachten op de automatische opschoning? Blader hier door alle foto's/video's van al je opdrachten, vink aan wat weg mag en verwijder in één keer — handig als de schijf snel vrij moet.</p>
@@ -4836,9 +4839,21 @@ async function loadSettingsHtml(s) {
     try { await api('/api/settings', 'PATCH', { emailFilters: $('#emailFilters').value }); toast('E-mailfilter opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
+  const acLees = () => ({ enabled: $('#ac-enabled').checked, days: Number($('#ac-days').value) || 30, doneDays: Math.max(0, Number($('#ac-done').value) || 0), intervalDays: Number($('#ac-interval').value) || 3, mediaOnly: true });
   $('#saveAttCleanup').onclick = async () => {
-    try { await api('/api/settings', 'PATCH', { attachmentCleanup: { enabled: $('#ac-enabled').checked, days: Number($('#ac-days').value) || 365 } }); toast('Bijlage-opschoning opgeslagen'); }
+    try { await api('/api/settings', 'PATCH', { attachmentCleanup: acLees() }); toast('Opschoning opgeslagen'); }
     catch (err) { toast(err.message, true); }
+  };
+  $('#runAttCleanup').onclick = async () => {
+    const c = acLees();
+    if (!confirm(`Nu opruimen met deze instellingen? Foto's en filmpjes van afgeronde/geannuleerde opdrachten (ouder dan ${c.doneDays} dagen) en alles ouder dan ${c.days} dagen worden definitief verwijderd.`)) return;
+    const b = $('#runAttCleanup'); b.disabled = true; b.textContent = 'Bezig…';
+    try {
+      await api('/api/settings', 'PATCH', { attachmentCleanup: c });
+      const r = await api('/api/attachments/cleanup-run', 'POST', {});
+      toast(`${r.removed} foto('s)/filmpje(s) opgeruimd — ${r.echtWeg} bestand(en) van schijf`);
+      loadSettings();
+    } catch (err) { toast(err.message, true); b.disabled = false; b.textContent = 'Nu opruimen'; }
   };
   $('#openAttMgr').onclick = openAttachmentManager;
   $('#saveSignature').onclick = async () => {

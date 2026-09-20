@@ -502,12 +502,20 @@ export function getEmailFilters() {
 // zodat de schijf nooit meer volloopt door oude foto's. Klantgegevens, kaarten,
 // facturen en werkbon-handtekeningen blijven ALTIJD volledig bewaard — alleen de
 // losse bestandsbijlages van oude, afgehandelde klussen verdwijnen.
-export const DEFAULT_ATTACHMENT_CLEANUP = { enabled: true, days: 365 };
+// Opschoning (20 sep 2026, wens eigenaar): elke `intervalDays` dagen gaan foto's en
+// filmpjes weg van (a) afgeronde/geannuleerde opdrachten die minstens `doneDays`
+// dagen geleden zijn afgehandeld en (b) álle bijlages ouder dan `days` dagen (ook op
+// lopende opdrachten en losse berichten). mediaOnly = alleen foto's/video's/audio;
+// documenten (PDF's) blijven staan. Werkbon-handtekeningen blijven altijd.
+export const DEFAULT_ATTACHMENT_CLEANUP = { enabled: true, days: 30, doneDays: 3, intervalDays: 3, mediaOnly: true };
 export function getAttachmentCleanup() {
   const a = db().settings.attachmentCleanup || {};
   return {
     enabled: a.enabled !== false,
-    days: Math.max(90, Math.min(3650, Number(a.days) || DEFAULT_ATTACHMENT_CLEANUP.days)),
+    days: Math.max(7, Math.min(3650, Number(a.days) || DEFAULT_ATTACHMENT_CLEANUP.days)),
+    doneDays: Math.max(0, Math.min(3650, Number.isFinite(Number(a.doneDays)) && a.doneDays !== null && a.doneDays !== undefined ? Number(a.doneDays) : DEFAULT_ATTACHMENT_CLEANUP.doneDays)),
+    intervalDays: Math.max(1, Math.min(30, Number(a.intervalDays) || DEFAULT_ATTACHMENT_CLEANUP.intervalDays)),
+    mediaOnly: a.mediaOnly !== false,
   };
 }
 
