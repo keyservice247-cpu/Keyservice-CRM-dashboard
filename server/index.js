@@ -61,6 +61,7 @@ import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm,
 import { getInvoiceSettings, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
+import { conversieData, maakConversieBriefing } from './conversie.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries, registerAttachmentFiles, ontdubbelOpSchijf, weesBestanden, fileExists, mergeAttachments } from './storage.js';
 import { alleBijlageVerwijzingen, beschermdeBijlageIds, verwijderBestandenAlsOngebruikt } from './bijlagen.js';
@@ -4873,6 +4874,16 @@ app.get('/api/finance', requirePerm('finance'), (req, res) => {
     quickExpenses: QUICK_EXPENSES,
     settings: getFinanceSettings(),
   });
+});
+// CONVERSIE (20 sep 2026): hoeveel binnengekomen aanvragen worden écht uitgevoerd?
+// Zelfde recht als Cijfers. ?dagen=30|90|365 (7..730).
+app.get('/api/conversie', requirePerm('finance'), (req, res) => {
+  res.json(conversieData({ dagen: Number(req.query.dagen) || 90 }));
+});
+// Wekelijkse AI-briefing nu opnieuw maken (admin). Zonder API-sleutel: feiten-tekst.
+app.post('/api/conversie/briefing', requireRole('admin'), async (req, res) => {
+  const b = await maakConversieBriefing({ force: true, door: req.user.name });
+  res.json({ ok: true, briefing: b });
 });
 app.post('/api/finance/settings', requirePerm('finance'), (req, res) => {
   const saved = saveFinanceSettings(req.body || {});

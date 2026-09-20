@@ -24,6 +24,7 @@ import { getFinanceSettings, weeklyReportData, bookRecurringDue, runFinanceAutoS
 import { checkMailboxQuota } from './connectors/email-imap.js';
 import { queueCrmWhatsappAlert } from './pipeline.js';
 import { onbeantwoordeGesprekken } from './gesprekken.js';
+import { conversieData, maakConversieBriefing } from './conversie.js';
 
 const custOf = (o) => db().customers.find((c) => c.id === o.customerId) || {};
 const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? ''));
@@ -539,13 +540,44 @@ export async function sendWeeklyCeoReport(toOverride = '', isTest = false) {
     `• Openstaande facturen: ${d.unpaidCount} (${eur(d.unpaidTotal)})${d.overdueCount ? ` — waarvan ${d.overdueCount} VERLOPEN` : ''}`,
     `• Opdrachten 5+ dagen stil: ${d.staleOrders}`,
     '',
-    'Open het dashboard voor de details: https://keyservice-crm.onrender.com/',
   ];
+  // CONVERSIE (20 sep 2026): hoeveel van de aanvragen van de laatste 30 dagen is
+  // écht uitgevoerd — plus de patronen (en de AI-briefing van deze week, als die er is).
+  try {
+    const c = conversieData({ dagen: 30 });
+    const t = c.totaal;
+    lines.push('CONVERSIE (30 dagen)');
+    lines.push(`• Binnengekomen: ${t.binnen} · afgerond ${t.afgerond} · geannuleerd ${t.geannuleerd} · nog open ${t.open}`);
+    lines.push(`• Conversie: ${t.conversie ?? '-'}% van de besliste aanvragen${c.delta.conversie !== null ? ` (${c.delta.conversie >= 0 ? '+' : ''}${c.delta.conversie} t.o.v. de 30 dagen ervoor)` : ''} · ${t.conversieTotaal ?? '-'}% van alles`);
+    for (const p of c.patronen.slice(0, 4)) lines.push(`• ${p}`);
+    const b = c.briefing;
+    if (b && b.tekst && Date.now() - new Date(b.at).getTime() < 8 * 86400000) {
+      lines.push('');
+      lines.push(`AI-DUIDING (${b.bron === 'ai' ? 'AI' : 'feiten'})`);
+      lines.push(String(b.tekst).trim());
+    }
+    lines.push('');
+  } catch (e) { console.error('[ceo-rapport] conversie', e.message); }
+  lines.push('Open het dashboard voor de details: https://keyservice-crm.onrender.com/');
   const sig = getEmailSignature();
   await sendMail({ to, subject: `${isTest ? '[TEST] ' : ''}Wekelijks overzicht — winst ${eur(d.thisWeek.profit)}`, text: sig ? `${lines.join('\n')}\n\n${sig}` : lines.join('\n') });
   if (!isTest) { db().settings._lastWeeklyReport = new Date().toISOString().slice(0, 10); save(); }
   logActivity('systeem', `wekelijks CEO-rapport ${isTest ? '(test) ' : ''}verstuurd`, to);
   return true;
+}
+
+// ---------- 6b2. Wekelijkse conversie-briefing (AI-duiding op de conversiecijfers) ----------
+// Elke maandag vanaf 07:00 (Europe/Amsterdam) één keer per week; de sleutel is de
+// maandag-datum (settings._conversieBriefing.week), dus een herstart maakt 'm niet dubbel.
+// Staat op Cijfers → Conversie en gaat mee in het CEO-rapport (dat later op de ochtend
+// loopt). Zonder API-sleutel: deterministische patronen-tekst (bron 'feiten').
+async function runConversieBriefing() {
+  const nl = new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', weekday: 'short' });
+  if (!/^Mon/.test(nl)) return;
+  const hour = Number(new Date().toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hour12: false }));
+  if (hour < 7) return;
+  if (!(db().orders || []).length) return;
+  await maakConversieBriefing({ door: 'systeem' }); // slaat zelf over als deze week al gedaan
 }
 
 async function runWeeklyReport() {
@@ -1023,6 +1055,7 @@ export function startAutomations({ runStatusScan } = {}) {
     try { await runNightlyScan(); } catch (e) { console.error('[auto-scan]', e.message); }
     try { bookRecurringDue(); } catch (e) { console.error('[vaste-kosten]', e.message); }
     try { runFinanceAutoSync(); } catch (e) { console.error('[cijfers-autosync]', e.message); }
+    try { await runConversieBriefing(); } catch (e) { console.error('[conversie-briefing]', e.message); }
     try { await runWeeklyReport(); } catch (e) { console.error('[ceo-rapport]', e.message); }
     try { await runMailboxQuotaCheck(); } catch (e) { console.error('[mailbox-quotum]', e.message); }
     try { runAttachmentCleanup(); } catch (e) { console.error('[bijlage-opschoning]', e.message); }

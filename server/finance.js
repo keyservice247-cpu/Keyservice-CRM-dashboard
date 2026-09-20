@@ -25,7 +25,21 @@ export const QUICK_EXPENSES = [
 
 const r2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
 const monthOf = (dateStr) => String(dateStr || '').slice(0, 7); // YYYY-MM
-const today = () => new Date().toISOString().slice(0, 10);
+// Datums in NEDERLANDSE tijd (20 sep 2026): de server draait op UTC, dus "vandaag"
+// via toISOString() was tussen 00:00 en 02:00 NL nog de dag ervoor — een boeking of
+// vaste-kostenronde op de 1e van de maand belandde zo in de vorige maand.
+export const nlDatum = (d = new Date()) => new Date(d).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+const today = () => nlDatum();
+const thisMonth = () => nlDatum().slice(0, 7);
+// Bron van een omzet-boeking; automatische boekingen hebben geen bron-veld, maar de
+// categorie zegt genoeg ("DRS opdracht" → DRS). Zo telt automatische omzet óók mee
+// in "Per bron" op Cijfers (voorheen alleen handmatige boekingen met gekozen bron).
+export function bronVanBoeking(e) {
+  if (e.source) return e.source;
+  if (/^drs/i.test(e.category || '')) return 'DRS';
+  if (/schuifpui/i.test(e.category || '')) return 'Schuifpui';
+  return 'Overig';
+}
 
 // ---------- Finance-instellingen (vaste kosten, gemiddelden, CEO-rapport) ----------
 export const DEFAULT_FINANCE_SETTINGS = {
@@ -82,7 +96,8 @@ export function saveFinanceSettings(b) {
 
 // Weeknummer-sleutel (ISO-achtig, jaar+week) voor wekelijkse vaste kosten.
 function weekKey(d = new Date()) {
-  const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const [jy, jm, jd] = nlDatum(d).split('-').map(Number);
+  const dt = new Date(Date.UTC(jy, jm - 1, jd));
   const day = dt.getUTCDay() || 7;
   dt.setUTCDate(dt.getUTCDate() + 4 - day);
   const yStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
@@ -95,7 +110,7 @@ function weekKey(d = new Date()) {
 export function bookRecurringDue(actorName = 'systeem') {
   const s = getFinanceSettings();
   let booked = 0;
-  const nowMonth = new Date().toISOString().slice(0, 7);
+  const nowMonth = thisMonth();
   const nowWeek = weekKey();
   const persisted = db().settings.financeSettings || (db().settings.financeSettings = { ...s });
   persisted.recurring = s.recurring.map((r) => {
@@ -154,6 +169,7 @@ export function collectAutoSyncEntries(since) {
       : 'Overig';
     out.push({
       kind: 'income', date, amount, category,
+      source: category === 'DRS opdracht' ? 'DRS' : category === 'Schuifpui reparatie' ? 'Schuifpui' : 'Overig',
       monteurId: (order && order.monteurId) || null, orderId: (order && order.id) || null,
       note: `Factuur ${inv.number || ''} betaald (excl. btw)${order ? ` — ${order.title}` : ''}`.trim(),
       sourceRef: ref, createdBy: 'systeem (facturen)',
@@ -192,7 +208,7 @@ export function bookAutoSyncEntries(list) {
     entries.unshift({
       id: id('fin'), kind: x.kind === 'expense' ? 'expense' : 'income',
       date: x.date, amount: r2(x.amount), category: x.category,
-      monteurId: x.monteurId || null, source: null, orderId: x.orderId || null,
+      monteurId: x.monteurId || null, source: (x.kind !== 'expense' && x.source) || null, orderId: x.orderId || null,
       note: x.note, sourceRef: x.sourceRef, auto: true,
       createdBy: x.createdBy || 'systeem', createdAt: now(),
     });
@@ -222,7 +238,7 @@ export function runFinanceAutoSync() {
 
 // Zoek €-bedragen in monteursrapporten (monteursgroepen) van een maand -> import-suggesties.
 export function suggestIncomeFromReports(month, monteurs = []) {
-  const m = /^\d{4}-\d{2}$/.test(month) ? month : new Date().toISOString().slice(0, 7);
+  const m = /^\d{4}-\d{2}$/.test(month) ? month : thisMonth();
   const groupToMonteur = new Map();
   for (const mo of monteurs) if (mo.waGroup) groupToMonteur.set(String(mo.waGroup).toLowerCase().trim(), mo);
   // Al geboekt, bewust verwijderd, óf eerder geweigerd -> nooit meer voorstellen.
@@ -331,7 +347,9 @@ export function importIncome(items, actorName = '') {
 // Data voor het wekelijkse CEO-rapport (deze week + vorige week + openstaand).
 export function weeklyReportData(monteurs = []) {
   const now2 = Date.now();
-  const startOfWeek = (offset) => { const d = new Date(); const day = (d.getDay() || 7) - 1; d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - day + offset * 7); return d.getTime(); };
+  // Weekstart = maandag 00:00 in NEDERLANDSE tijd; boekdatums (YYYY-MM-DD) worden als
+  // UTC-middernacht gelezen, dus de grens hoort óók op UTC-middernacht van die maandag.
+  const startOfWeek = (offset) => { const [y, mo, d0] = nlDatum().split('-').map(Number); const d = new Date(Date.UTC(y, mo - 1, d0)); const day = (d.getUTCDay() || 7) - 1; d.setUTCDate(d.getUTCDate() - day + offset * 7); return d.getTime(); };
   const thisStart = startOfWeek(0); const lastStart = startOfWeek(-1);
   const sum = (from, to) => {
     let inc = 0; let exp = 0;
@@ -353,7 +371,7 @@ export function weeklyReportData(monteurs = []) {
   const payDays = Number((db().settings.invoiceSettings || {}).paymentDays) || 7;
   const overdue = unpaid.filter((i) => i.sentAt && (now2 - new Date(i.sentAt).getTime()) > payDays * 86400000);
   const staleOrders = (db().orders || []).filter((o) => !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status) && new Date(o.updatedAt).getTime() < now2 - 5 * 86400000).length;
-  const monthNow = monthReport(new Date().toISOString().slice(0, 7), monteurs);
+  const monthNow = monthReport(thisMonth(), monteurs);
   return { thisWeek, lastWeek, newLeads, unpaidCount: unpaid.length, unpaidTotal, overdueCount: overdue.length, staleOrders, monthProfit: monthNow.profit, monthIncome: monthNow.income };
 }
 
@@ -389,7 +407,7 @@ export function addEntry(b, actorName) {
   const kind = b.kind === 'income' ? 'income' : 'expense';
   const amount = r2(b.amount);
   if (!(amount > 0)) return { error: 'Vul een bedrag groter dan 0 in.' };
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(b.date) ? b.date : new Date().toISOString().slice(0, 10);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(b.date) ? b.date : today();
   const cats = kind === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
   const entry = {
     id: id('fin'),
@@ -461,7 +479,7 @@ export function removeAutoIncomeForInvoice(invId) {
 
 // Maandoverzicht: entries + samenvatting (omzet/kosten/winst + uitsplitsingen).
 export function monthReport(month, monteurs = []) {
-  const m = /^\d{4}-\d{2}$/.test(month) ? month : new Date().toISOString().slice(0, 7);
+  const m = /^\d{4}-\d{2}$/.test(month) ? month : thisMonth();
   const entries = fin().entries.filter((e) => monthOf(e.date) === m)
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const nameOf = (mid) => (monteurs.find((x) => x.id === mid) || {}).name || null;
@@ -474,7 +492,8 @@ export function monthReport(month, monteurs = []) {
     if (e.kind === 'income') {
       income += e.amount;
       incomeByCat[e.category] = r2((incomeByCat[e.category] || 0) + e.amount);
-      if (e.source) bySource[e.source] = r2((bySource[e.source] || 0) + e.amount);
+      const bron = bronVanBoeking(e);
+      bySource[bron] = r2((bySource[bron] || 0) + e.amount);
     } else {
       expense += e.amount;
       expenseByCat[e.category] = r2((expenseByCat[e.category] || 0) + e.amount);
@@ -505,7 +524,7 @@ export function monthReport(month, monteurs = []) {
 
 // Trend: laatste N maanden (omzet/kosten/winst per maand) voor grafiek/CEO-rapport.
 export function trend(months = 6, endMonth) {
-  const end = /^\d{4}-\d{2}$/.test(endMonth) ? endMonth : new Date().toISOString().slice(0, 7);
+  const end = /^\d{4}-\d{2}$/.test(endMonth) ? endMonth : thisMonth();
   const [ey, em] = end.split('-').map(Number);
   const out = [];
   for (let i = months - 1; i >= 0; i--) {

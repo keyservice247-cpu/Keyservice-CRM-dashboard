@@ -534,6 +534,48 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 .fin-trend { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
 .fin-trend-item { flex: 1; min-width: 90px; text-align: center; display: flex; flex-direction: column-reverse; gap: 4px; }
 .fin-trend-bars { display: flex; flex-direction: column; gap: 3px; }
+.fin-kop { font-size: 15px; font-weight: 500; margin: 0 0 10px; }
+.fin-vorig { margin-top: 4px; }
+/* CONVERSIE (20 sep 2026) — bovenaan Cijfers */
+.cv-kop { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.cv-periode { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--ink-soft); }
+.cv-periode select { width: auto; min-width: 160px; }
+.cv-stats { margin-bottom: 16px; }
+.cv-stat-groot .num { font-size: 34px; }
+.cv-delta { display: block; margin-top: 4px; font-size: 12px; }
+.cv-goed { color: var(--ok); }
+.cv-slecht { color: var(--danger); }
+.cv-grid { margin-bottom: 16px; }
+.cv-card { margin-bottom: 16px; }
+.cv-grid .cv-card { margin-bottom: 0; }
+.cv-balk { flex: 1; height: 8px; border-radius: 4px; background: var(--line-soft); overflow: hidden; min-width: 60px; }
+.cv-balk-vul { height: 100%; border-radius: 4px; transition: width .3s ease; }
+.cv-status-rij { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+.cv-status-lbl { width: 150px; font-size: 13px; color: var(--ink-soft); flex-shrink: 0; }
+.cv-status-n { width: 74px; text-align: right; flex-shrink: 0; }
+.cv-feit { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line-soft); }
+.cv-feit:last-of-type { border-bottom: none; }
+.cv-tabel { width: 100%; }
+.cv-tabel td, .cv-tabel th { padding: 6px 6px; }
+.cv-tabel .cv-ok { color: var(--ok); }
+.cv-tabel .cv-danger { color: var(--danger); }
+.cv-th-conv { min-width: 130px; }
+.cv-conv { display: flex; align-items: center; gap: 8px; }
+.cv-conv-pct { width: 46px; font-weight: 600; flex-shrink: 0; }
+.cv-weken { display: flex; gap: 6px; align-items: flex-end; height: 150px; }
+.cv-week { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
+.cv-week-kolom { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+.cv-week-stapel { width: 100%; max-width: 34px; margin: 0 auto; display: flex; flex-direction: column; border-radius: 4px 4px 0 0; overflow: hidden; min-height: 2px; background: var(--line-soft); }
+.cv-week-stapel > div { min-height: 0; }
+.cv-week-n { font-size: 11px; font-weight: 600; height: 14px; line-height: 14px; }
+.cv-week-lbl { font-size: 10px; white-space: nowrap; }
+.cv-briefing-kop { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; }
+.cv-briefing-kop h3 { margin: 0; }
+.cv-briefing-tekst { margin: 8px 0 12px; line-height: 1.55; }
+.cv-briefing-tekst p { margin: 0 0 8px; }
+.cv-briefing-tekst ul, .cv-patronen ul { margin: 4px 0 8px; padding-left: 20px; }
+.cv-briefing-tekst li, .cv-patronen li { margin-bottom: 4px; }
+.cv-patronen { border-top: 1px solid var(--line-soft); padding-top: 10px; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(31,37,48,.38); animation: fadeIn .15s ease; }
 .modal { position: relative; background: var(--panel); border-radius: var(--radius); width: 580px; max-width: 100%; box-shadow: var(--shadow-lg); border: 1px solid var(--line); padding: 24px 26px; animation: modalIn .18s ease; }
 .modal h2 { margin-bottom: 18px; font-size: 17px; font-weight: 500; }
@@ -969,6 +1011,17 @@ table tbody tr:hover { background: var(--panel-2); }
   .fin-trend { flex-direction: column; align-items: stretch; gap: 8px; }
   .fin-trend-item { display: grid; grid-template-columns: 52px 1fr 92px; align-items: center; gap: 10px; text-align: left; }
   .fin-trend-winst { text-align: right; }
+  /* Conversie op de telefoon: alles onder elkaar, tabellen schuiven, weken smaller.
+     (.settings-grid stond op de telefoon nog in twee smalle kolommen — nu één.) */
+  .settings-grid { grid-template-columns: 1fr; gap: 12px; }
+  .cv-stat-groot { grid-column: 1 / -1; }
+  .cv-stat-groot .num { font-size: 30px; }
+  .cv-status-lbl { width: 110px; }
+  .cv-tabel { display: block; overflow-x: auto; white-space: nowrap; }
+  .cv-weken { gap: 3px; height: 120px; }
+  .cv-week:nth-child(odd) .cv-week-lbl { visibility: hidden; }
+  .cv-periode { width: 100%; }
+  .cv-periode select { flex: 1; }
   .r-select, #selectAll { width: 22px; height: 22px; }
   /* Inbox-lead compacter: correctievelden in twee kolommen i.p.v. zeven onder elkaar. */
   .review .review-actions:first-of-type { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

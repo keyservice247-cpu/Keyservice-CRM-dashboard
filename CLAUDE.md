@@ -648,6 +648,42 @@ de regressie meegroeit.
   ("corrigeer bij de klantgegevens") i.p.v. de technische 550-tekst; een SMTP-
   weigering (recipient rejected / 5.1.1) wordt óók naar die uitleg vertaald. Test:
   5 assertions in mail-test (40).
+- **CONVERSIE op Cijfers (20 sep 2026, wens eigenaar "maak er iets moois van"):**
+  server/conversie.js `conversieData({dagen})` — elke opdracht die in de periode is
+  AANGEMAAKT (createdAt; prullenbak telt niet, ingeklapte weken wél) is een
+  binnengekomen aanvraag; afgerond = gewonnen, geannuleerd = verloren, rest = open.
+  Twee percentages, bewust allebei: **conversie (van beslist)** = afgerond /
+  (afgerond+geannuleerd) — het eerlijke getal voor een korte periode — en
+  **conversie van alles** = afgerond / binnengekomen. Verder: vorige periode + delta,
+  per status (kolomvolgorde), per BRON (bronVan: DRS-groep / Website / E-mail /
+  WhatsApp (1-op-1) / Telefoon / Handmatig), per monteur, 12 weekcohorten (maandag
+  UTC), doorlooptijd (mediaan/gemiddelde aanvraag→afgerond, →geannuleerd), waarde
+  (omzet uit gekoppelde niet-concept factuur excl. btw, anders prijsveld; per
+  afgeronde / per aanvraag; afgerond zonder factuur), stilliggers (open, 14+ d
+  onaangeraakt). `herkenPatronen()` = deterministische regels (stijging/daling ≥5
+  pt, instroom ±20 %, beste/slechtste bron of monteur bij ≥5 beslist en ≥15 pt
+  verschil, ≥40 % open, stilliggers, lange doorlooptijd, afgerond zonder factuur,
+  weektrend laatste 4 vs eerder). WEKELIJKSE AI-BRIEFING: `maakConversieBriefing`
+  (feiten 30+90 d → `conversieInsight` in categorizer.js, ANTHROPIC_ANALYZE_MODEL,
+  max 180 woorden, patronen + 2 acties; zonder sleutel/fout → feiten-tekst, bron
+  'feiten') → settings._conversieBriefing {at, week(=maandag), tekst, bron, door,
+  conversie30, conversie90}; automatisch elke maandag ≥07:00 NL (runConversieBriefing
+  in automations.js, één keer per weeksleutel, niet bij 0 opdrachten); handmatig via
+  knop "Nieuwe analyse" (admin). Het CEO-rapport krijgt een blok CONVERSIE (30 dagen)
+  + de briefing van deze week. Endpoints: GET /api/conversie?dagen=30|90|365 (7..730,
+  recht 'finance'), POST /api/conversie/briefing (admin, force). Scherm: blok
+  #conversiePanel bovenaan Cijfers (periode onthouden in localStorage
+  ksConversieDagen; KPI-tegels met delta, "Waar staan ze nu?", doorlooptijd/waarde,
+  tabellen per bron/monteur met kleurbalk (≥60 groen/≥35 oranje/rood; "weinig
+  beslist" bij <5), gestapelde weekbalken, briefing-kaart met patronen). CIJFERS-
+  CORRECTIES in dezelfde ronde: alle "vandaag/deze maand/weekstart" in finance.js
+  in Europe/Amsterdam (`nlDatum`; was UTC → boeking om 00:30 NL op de 1e kwam in de
+  vorige maand), automatische factuur-omzet telt nu mee in "Per bron"
+  (`bronVanBoeking`: bron-veld, anders categorie DRS/Schuifpui/Overig; autosync zet
+  het bron-veld ook), KPI-tegels tonen "vorige maand" + verschil, datumveld in het
+  boekingsvenster in browsertijd, `.settings-grid` op mobiel één kolom (stond nog in
+  twee smalle kolommen). Tests: test/conversie-test.mjs (36, PORT=3139) + 4
+  browser-asserties (desktop, periode-wissel, briefing-knop, 390 px).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

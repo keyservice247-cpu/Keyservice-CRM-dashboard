@@ -179,6 +179,43 @@ ok('omzet-uit-rapporten-scherm opent', await page.locator('#imp-cancel').count()
 await page.evaluate(() => closeModal());
 noErr('Cijfers (historie boeken / omzet-suggesties)');
 
+// 9c) CONVERSIE (20 sep 2026): blok bovenaan Cijfers — KPI's, per bron, weken, briefing.
+clear();
+await page.evaluate(() => goView('finance'));
+await page.waitForFunction(() => document.querySelectorAll('#conversiePanel .stat').length > 0, null, { timeout: 8000 });
+const cvDesk = await page.evaluate(() => ({
+  stats: document.querySelectorAll('#conversiePanel .stat').length,
+  groot: !!document.querySelector('#conversiePanel .cv-stat-groot .num') && /%|–/.test(document.querySelector('#conversiePanel .cv-stat-groot .num').textContent),
+  tabellen: document.querySelectorAll('#conversiePanel .cv-tabel').length,
+  weken: document.querySelectorAll('#conversiePanel .cv-week').length,
+  patronen: document.querySelectorAll('#conversiePanel .cv-patronen li').length,
+  knop: !!document.querySelector('#cvBriefingBtn'),
+  periode: document.querySelector('#cvDagen') && document.querySelector('#cvDagen').value,
+  finKop: !!document.querySelector('#financePanel .fin-kop'),
+}));
+ok('conversie: 5 KPI-tegels, groot percentage, 2 tabellen, 12 weken, patronen, briefing-knop (admin)', cvDesk.stats === 5 && cvDesk.groot && cvDesk.tabellen === 2 && cvDesk.weken === 12 && cvDesk.patronen >= 1 && cvDesk.knop && cvDesk.finKop, JSON.stringify(cvDesk));
+// Periode wisselen wordt onthouden en herlaadt zonder fout.
+await page.selectOption('#cvDagen', '30');
+await page.waitForTimeout(700);
+ok('conversie: periode 30 dagen gekozen en onthouden', await page.evaluate(() => document.querySelector('#cvDagen').value === '30' && localStorage.getItem('ksConversieDagen') === '30' && /30 dagen/.test(document.querySelector('#conversiePanel .muted').textContent)));
+// Briefing maken via de knop (zonder AI-sleutel = feiten-tekst) → tekst verschijnt.
+await page.click('#cvBriefingBtn');
+await page.waitForFunction(() => !!document.querySelector('#conversiePanel .cv-briefing-tekst'), null, { timeout: 15000 });
+ok('conversie: briefing verschijnt na "Nieuwe analyse"', await page.evaluate(() => /Conversie laatste 30 dagen/.test(document.querySelector('#conversiePanel .cv-briefing-tekst').textContent)));
+// Mobiel: alles binnen 390 px, tabellen schuiven zelf (geen paginabrede overflow).
+await page.setViewportSize({ width: 390, height: 844 });
+await page.waitForTimeout(500);
+const cvMob = await page.evaluate(() => {
+  const p = document.querySelector('#conversiePanel');
+  const r = p.getBoundingClientRect();
+  const kolommen = [...document.querySelectorAll('#conversiePanel .cv-grid .cv-card')];
+  const a = kolommen[0].getBoundingClientRect(); const b = kolommen[1].getBoundingClientRect();
+  return { breedteOk: r.right <= window.innerWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1, onderElkaar: b.top >= a.bottom - 1 };
+});
+ok('conversie: mobiel binnen het scherm, kaarten onder elkaar', cvMob.breedteOk && cvMob.onderElkaar, JSON.stringify(cvMob));
+await page.setViewportSize({ width: 1280, height: 800 });
+noErr('Cijfers (conversie)');
+
 // 10) Start-pagina: AI-dagoverzicht rendert (feiten-fallback zonder AI-sleutel)
 clear();
 await page.evaluate(() => goView('overview'));

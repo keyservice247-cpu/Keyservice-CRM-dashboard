@@ -4035,9 +4035,17 @@ function renderInvoices() {
 
 // ---------- Cijfers / Financiën ----------
 const eurF = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+// Datum van VANDAAG in de tijdzone van de browser (niet UTC — 's nachts na 00:00 gaf
+// toISOString() nog gisteren, dus een boeking op de 1e belandde in de vorige maand).
+const lokaleDag = () => new Date().toLocaleDateString('sv-SE');
 async function loadFinance() {
-  if (!$('#finMonth').value) $('#finMonth').value = new Date().toISOString().slice(0, 7);
-  state._finance = await api(`/api/finance?month=${$('#finMonth').value}`);
+  if (!$('#finMonth').value) $('#finMonth').value = lokaleDag().slice(0, 7);
+  const [fin, cv] = await Promise.all([
+    api(`/api/finance?month=${$('#finMonth').value}`),
+    api(`/api/conversie?dagen=${conversieDagen()}`).catch((e) => ({ _error: e.message })),
+  ]);
+  state._finance = fin; state._conversie = cv;
+  renderConversie();
   renderFinance();
 }
 function renderFinance() {
@@ -4046,11 +4054,20 @@ function renderFinance() {
   const maxTrend = Math.max(1, ...d.trend.map((t) => Math.max(t.income, t.expense)));
   const bar = (val, color) => `<div style="height:6px;border-radius:3px;background:${color};width:${Math.round((val / maxTrend) * 100)}%;min-width:2px"></div>`;
   const catRows = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:4px 0"><span class="muted small">${esc(k)}</span><strong>${eurF(v)}</strong></div>`).join('') || '<span class="muted small">Nog niets</span>';
+  // Vergelijking met de maand ervoor (de trend eindigt op de gekozen maand).
+  const vorig = d.trend.length >= 2 ? d.trend[d.trend.length - 2] : null;
+  const vsVorig = (nu, vorige) => {
+    if (!vorig) return '';
+    const diff = Math.round((nu - vorige) * 100) / 100;
+    const kleur = diff >= 0 ? 'var(--ok)' : 'var(--danger)';
+    return `<div class="fin-vorig muted small">vorige maand ${eurF(vorige)} <span style="color:${kleur}">${diff >= 0 ? '+' : '−'}${eurF(Math.abs(diff)).replace('€ ', '€')}</span></div>`;
+  };
   $('#financePanel').innerHTML = `
+    <h3 class="fin-kop">Omzet en kosten — ${esc(r.month)}</h3>
     <div class="stat-grid" style="margin-bottom:16px">
-      <div class="stat"><div class="num" style="color:var(--ok)">${eurF(r.income)}</div><div class="lbl">Omzet deze maand</div></div>
-      <div class="stat"><div class="num" style="color:var(--danger)">${eurF(r.expense)}</div><div class="lbl">Kosten deze maand</div></div>
-      <div class="stat"><div class="num" style="color:${r.profit >= 0 ? 'var(--ok)' : 'var(--danger)'}">${eurF(r.profit)}</div><div class="lbl">Winst (${r.marginPct}% marge)</div></div>
+      <div class="stat"><div class="num" style="color:var(--ok)">${eurF(r.income)}</div><div class="lbl">Omzet deze maand</div>${vsVorig(r.income, vorig ? vorig.income : 0)}</div>
+      <div class="stat"><div class="num" style="color:var(--danger)">${eurF(r.expense)}</div><div class="lbl">Kosten deze maand</div>${vorig ? `<div class="fin-vorig muted small">vorige maand ${eurF(vorig.expense)}</div>` : ''}</div>
+      <div class="stat"><div class="num" style="color:${r.profit >= 0 ? 'var(--ok)' : 'var(--danger)'}">${eurF(r.profit)}</div><div class="lbl">Winst (${r.marginPct}% marge)</div>${vsVorig(r.profit, vorig ? vorig.profit : 0)}</div>
       <div class="stat"><div class="num">${r.count}</div><div class="lbl">Boekingen</div></div>
     </div>
     <div class="settings-grid" style="margin-bottom:16px">
@@ -4088,6 +4105,106 @@ function renderFinance() {
     try { await api(`/api/finance/${b.dataset.id}`, 'DELETE'); loadFinance(); } catch (err) { toast(err.message, true); }
   });
 }
+// ---------- CONVERSIE (20 sep 2026): van aanvraag naar uitgevoerde opdracht ----------
+// Bovenaan Cijfers. Periode (30/90/365 dagen) wordt per toestel onthouden.
+function conversieDagen() {
+  try { const v = Number(localStorage.getItem('ksConversieDagen')); if ([30, 90, 365].includes(v)) return v; } catch { /* geen opslag */ }
+  return 90;
+}
+const pctF = (v) => (v === null || v === undefined ? '–' : `${String(v).replace('.', ',')}%`);
+function renderConversie() {
+  const el = $('#conversiePanel'); if (!el) return;
+  const c = state._conversie;
+  if (!c || c._error) { el.innerHTML = `<div class="info-card cv-card" style="margin-bottom:16px"><h3>Conversie</h3><div class="muted small">${esc((c && c._error) || 'Kon de conversiecijfers niet laden.')}</div></div>`; return; }
+  const t = c.totaal; const v = c.vorige;
+  const dagen = c.periode.dagen;
+  const deltaHtml = (nu, vorige, eenheid = '', hogerIsGoed = true) => {
+    if (nu === null || vorige === null || nu === undefined || vorige === undefined) return '<span class="cv-delta muted">geen vergelijking</span>';
+    const d = Math.round((nu - vorige) * 10) / 10;
+    if (!d) return '<span class="cv-delta muted">gelijk aan vorige periode</span>';
+    const goed = hogerIsGoed ? d > 0 : d < 0;
+    return `<span class="cv-delta ${goed ? 'cv-goed' : 'cv-slecht'}">${d > 0 ? '+' : '−'}${String(Math.abs(d)).replace('.', ',')}${eenheid} t.o.v. vorige ${dagen} dagen</span>`;
+  };
+  const beslist = t.afgerond + t.geannuleerd;
+  const balk = (aantal, totaal, kleur) => `<div class="cv-balk"><div class="cv-balk-vul" style="width:${totaal ? Math.max(2, Math.round((aantal / totaal) * 100)) : 0}%;background:${kleur}"></div></div>`;
+  const kleurStatus = (k) => (k === 'afgerond' ? 'var(--ok)' : k === 'geannuleerd' ? 'var(--danger)' : k === 'nieuw' ? 'var(--warn)' : 'var(--accent)');
+  const rijen = (lijst, kop) => lijst.length ? `
+    <table class="cv-tabel"><thead><tr><th>${esc(kop)}</th><th>Binnen</th><th>Afgerond</th><th>Geann.</th><th>Open</th><th class="cv-th-conv">Conversie</th></tr></thead><tbody>
+    ${lijst.map((b) => `<tr>
+      <td><strong>${esc(b.naam)}</strong></td><td>${b.binnen}</td><td class="cv-ok">${b.afgerond}</td><td class="cv-danger">${b.geannuleerd}</td><td class="muted">${b.open}</td>
+      <td><div class="cv-conv"><span class="cv-conv-pct">${pctF(b.conversie)}</span>${balk(b.conversie || 0, 100, b.conversie === null ? 'var(--line)' : b.conversie >= 60 ? 'var(--ok)' : b.conversie >= 35 ? 'var(--warn)' : 'var(--danger)')}</div>${b.afgerond + b.geannuleerd < 5 && b.conversie !== null ? '<div class="muted small">weinig beslist</div>' : ''}</td>
+    </tr>`).join('')}
+    </tbody></table>` : '<div class="muted small">Nog geen gegevens.</div>';
+  const maxWeek = Math.max(1, ...c.perWeek.map((w) => w.binnen));
+  const weekHtml = c.perWeek.map((w) => {
+    const h = (n) => `${Math.round((n / maxWeek) * 100)}%`;
+    const d = new Date(w.week + 'T00:00:00Z');
+    const lbl = `${d.getUTCDate()}/${d.getUTCMonth() + 1}`;
+    return `<div class="cv-week" title="Week van ${lbl}: ${w.binnen} binnen, ${w.afgerond} afgerond, ${w.geannuleerd} geannuleerd, ${w.open} open">
+      <div class="cv-week-kolom"><div class="cv-week-stapel" style="height:${h(w.binnen)}">
+        <div style="flex:${w.open};background:var(--line)"></div><div style="flex:${w.geannuleerd};background:var(--danger)"></div><div style="flex:${w.afgerond};background:var(--ok)"></div>
+      </div></div>
+      <div class="cv-week-n">${w.binnen || ''}</div>
+      <div class="cv-week-lbl muted small">${lbl}</div>
+    </div>`;
+  }).join('');
+  const b = c.briefing;
+  const briefingTekst = b && b.tekst ? esc(b.tekst).split('\n').map((r) => (/^\s*[-•]\s*/.test(r) ? `<li>${r.replace(/^\s*[-•]\s*/, '')}</li>` : r.trim() ? `<p>${r}</p>` : '')).join('').replace(/(<li>.*?<\/li>)+/g, (m) => `<ul>${m}</ul>`) : '';
+  const isAdmin = state.me && state.me.role === 'admin';
+  el.innerHTML = `
+    <div class="cv-kop">
+      <div><h3 class="fin-kop" style="margin:0">Conversie — van aanvraag naar opdracht</h3>
+        <div class="muted small">Alles wat als nieuwe opdracht binnenkwam in de laatste ${dagen} dagen, en wat ervan geworden is.</div></div>
+      <label class="cv-periode">Periode <select id="cvDagen">${[30, 90, 365].map((n) => `<option value="${n}" ${n === dagen ? 'selected' : ''}>${n === 365 ? 'Laatste jaar' : `Laatste ${n} dagen`}</option>`).join('')}</select></label>
+    </div>
+    <div class="stat-grid cv-stats">
+      <div class="stat cv-stat-groot"><div class="num" style="color:${t.conversie === null ? 'inherit' : t.conversie >= 60 ? 'var(--ok)' : t.conversie >= 35 ? 'var(--warn)' : 'var(--danger)'}">${pctF(t.conversie)}</div><div class="lbl">Conversie (van beslist)</div><div class="muted small">${t.afgerond} afgerond van ${beslist} beslist</div>${deltaHtml(t.conversie, v.conversie, ' pt')}</div>
+      <div class="stat"><div class="num">${t.binnen}</div><div class="lbl">Binnengekomen</div>${deltaHtml(t.binnen, v.binnen)}</div>
+      <div class="stat"><div class="num" style="color:var(--ok)">${t.afgerond}</div><div class="lbl">Afgerond (gewonnen)</div><div class="muted small">${pctF(t.conversieTotaal)} van alles</div></div>
+      <div class="stat"><div class="num" style="color:var(--danger)">${t.geannuleerd}</div><div class="lbl">Geannuleerd (verloren)</div><div class="muted small">${pctF(t.binnen ? Math.round((t.geannuleerd / t.binnen) * 1000) / 10 : null)} van alles</div></div>
+      <div class="stat"><div class="num">${t.open}</div><div class="lbl">Nog open</div><div class="muted small">${c.stil ? `${c.stil} al 14+ dagen stil` : 'geen stilliggers'}</div></div>
+    </div>
+    <div class="settings-grid cv-grid">
+      <div class="info-card cv-card"><h3>Waar staan ze nu?</h3>
+        ${c.perStatus.length ? c.perStatus.map((s) => `<div class="cv-status-rij"><span class="cv-status-lbl">${esc(s.label)}</span>${balk(s.count, t.binnen, kleurStatus(s.key))}<span class="cv-status-n"><strong>${s.count}</strong> <span class="muted small">${pctF(s.pct)}</span></span></div>`).join('') : '<div class="muted small">Geen aanvragen in deze periode.</div>'}
+      </div>
+      <div class="info-card cv-card"><h3>Doorlooptijd en waarde</h3>
+        <div class="cv-feit"><span class="muted small">Aanvraag → afgerond (mediaan)</span><strong>${c.doorlooptijd.afgerondMediaan === null ? '–' : `${String(c.doorlooptijd.afgerondMediaan).replace('.', ',')} d`}</strong></div>
+        <div class="cv-feit"><span class="muted small">Aanvraag → afgerond (gemiddeld)</span><strong>${c.doorlooptijd.afgerondGem === null ? '–' : `${String(c.doorlooptijd.afgerondGem).replace('.', ',')} d`}</strong></div>
+        <div class="cv-feit"><span class="muted small">Aanvraag → geannuleerd (gemiddeld)</span><strong>${c.doorlooptijd.geannuleerdGem === null ? '–' : `${String(c.doorlooptijd.geannuleerdGem).replace('.', ',')} d`}</strong></div>
+        <div class="cv-feit"><span class="muted small">Omzet uit afgeronde opdrachten (excl. btw)</span><strong>${eurF(c.waarde.omzetAfgerond)}</strong></div>
+        <div class="cv-feit"><span class="muted small">Per afgeronde opdracht</span><strong>${c.waarde.perAfgerond === null ? '–' : eurF(c.waarde.perAfgerond)}</strong></div>
+        <div class="cv-feit"><span class="muted small">Per binnengekomen aanvraag</span><strong>${c.waarde.perAanvraag === null ? '–' : eurF(c.waarde.perAanvraag)}</strong></div>
+        ${c.waarde.afgerondZonderFactuur ? `<div class="muted small" style="margin-top:6px">${c.waarde.afgerondZonderFactuur} afgeronde opdracht(en) zonder factuur in het CRM — omzet is daardoor onvolledig.</div>` : ''}
+      </div>
+    </div>
+    <div class="settings-grid cv-grid">
+      <div class="info-card cv-card"><h3>Per bron</h3>${rijen(c.perBron, 'Bron')}</div>
+      <div class="info-card cv-card"><h3>Per monteur</h3>${rijen(c.perMonteur, 'Monteur')}</div>
+    </div>
+    <div class="info-card cv-card"><h3>Per week binnengekomen (laatste ${c.perWeek.length} weken)</h3>
+      <div class="cv-weken">${weekHtml}</div>
+      <div class="muted small" style="margin-top:8px">Hoogte = aantal aanvragen die week · groen = inmiddels afgerond · rood = geannuleerd · grijs = nog open</div>
+    </div>
+    <div class="info-card cv-card cv-briefing"><div class="cv-briefing-kop"><h3>Wekelijkse AI-briefing</h3>
+      ${isAdmin ? '<button class="btn btn-sm" id="cvBriefingBtn">Nieuwe analyse</button>' : ''}</div>
+      ${b && b.tekst ? `<div class="muted small">${esc(fmtDateShort(b.at))} · ${b.bron === 'ai' ? 'AI-duiding' : 'op basis van de cijfers (AI niet beschikbaar)'}</div><div class="cv-briefing-tekst">${briefingTekst}</div>`
+        : '<div class="muted small">Nog geen briefing. Elke maandagochtend maakt het systeem er automatisch één; met de knop maak je hem nu.</div>'}
+      <div class="cv-patronen"><div class="muted small" style="margin-bottom:4px">Herkende patronen (${dagen} dagen):</div><ul>${c.patronen.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></div>
+    </div>`;
+  $('#cvDagen').onchange = async () => {
+    try { localStorage.setItem('ksConversieDagen', $('#cvDagen').value); } catch { /* geen opslag */ }
+    try { state._conversie = await api(`/api/conversie?dagen=${$('#cvDagen').value}`); renderConversie(); } catch (err) { toast(err.message, true); }
+  };
+  if ($('#cvBriefingBtn')) $('#cvBriefingBtn').onclick = async () => {
+    const btn = $('#cvBriefingBtn'); btn.disabled = true; btn.textContent = 'Analyseren…';
+    try {
+      await api('/api/conversie/briefing', 'POST', {});
+      state._conversie = await api(`/api/conversie?dagen=${conversieDagen()}`);
+      renderConversie(); toast('Briefing bijgewerkt');
+    } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = 'Nieuwe analyse'; }
+  };
+}
 function openFinanceEntry(kind) {
   const d = state._finance || { monteurs: [], categories: { income: [], expense: [] }, quickExpenses: [] };
   const income = kind === 'income';
@@ -4096,7 +4213,7 @@ function openFinanceEntry(kind) {
   modal(`
     <h2>${icon(income ? 'tag' : 'mail', 16)} ${income ? 'Inkomst' : 'Uitgave'} toevoegen</h2>
     ${quick.length ? `<div class="muted small" style="margin-bottom:4px">Snel invoeren:</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${quick.map((q, i) => `<button type="button" class="chip fq" data-i="${i}" style="cursor:pointer">${esc(q.category)} · ${eurF(q.amount)}</button>`).join('')}</div>` : ''}
-    <div class="row"> <label>Bedrag (€) <input id="fe-amount" type="number" min="0" step="0.01" placeholder="0,00"></label> <label>Datum <input id="fe-date" type="date" value="${new Date().toISOString().slice(0, 10)}"></label> </div>
+    <div class="row"> <label>Bedrag (€) <input id="fe-amount" type="number" min="0" step="0.01" placeholder="0,00"></label> <label>Datum <input id="fe-date" type="date" value="${lokaleDag()}"></label> </div>
     <div class="row"> <label>Categorie <select id="fe-cat">${cats.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label> <label>Monteur (optioneel) <select id="fe-monteur"><option value="">— geen —</option>${(d.monteurs || []).map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label> </div>
     ${income ? `<label>Bron <select id="fe-source"><option value="">— kies —</option><option>DRS</option><option>Schuifpui</option><option>Overig</option></select></label>` : ''}
     <label>Notitie (optioneel) <input id="fe-note" placeholder="bv. Youssef 50% van omzet week 28"></label>

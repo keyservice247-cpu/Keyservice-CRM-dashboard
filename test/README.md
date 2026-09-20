@@ -31,6 +31,9 @@ node test/taken-test.mjs
 node test/herstart-test.mjs
 # Audit-fixes 16 sep: suggesties, samenvoegen, gedeelde bestanden, rechten, reden-achteraf (PORT=3137)
 node test/audit-test.mjs
+# Conversie (20 sep): tellingen per bron/monteur/status/week, percentages, briefing zonder AI,
+# prullenbak telt niet mee, Cijfers-correcties (bron van automatische omzet, NL-datum) (PORT=3139)
+node test/conversie-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 
