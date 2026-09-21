@@ -714,6 +714,27 @@ de regressie meegroeit.
   een betaalde factuur betaald en wist alleen de verzend-markering. Herinneringen/
   verlopen/openstaand blijven op 'verzonden' en raken betaalde facturen dus niet.
   Test: factuur-test (56, +17) + browser-assertie.
+- **PUSHMELDINGEN PER ROL (21 sep 2026, wens eigenaar "ook voor assistentes en
+  monteurs"):** elk toestel hangt aan de ingelogde gebruiker (pushSubs.userId; rol en
+  monteurId worden LIVE opgezocht in db().users). `sendPush({…, aan})` in push.js:
+  leeg/'kantoor' = admin+assistent (nieuwe aanvraag, reactie klant, samengevoegd,
+  opvolgen, bridge/mail-alarm, factuur niet bezorgd); 'admin' = alleen beheerders
+  (schijfruimte, mailbox vol); 'iedereen'; {monteurId}; {userIds}. Oud toestel zonder
+  userId = kantoor. `kiesToestellen(aan, subs, users)` is puur (unit-getest).
+  MONTEUR krijgt via `pushNaarMonteur(order, {title, body})` alleen eigen zaken:
+  opdracht toegewezen (queueToMonteur — handmatig én automatisch), reactie van zijn
+  klant (pipeline, 2 paden incl. zelfde-moment-samenvoeging), afspraak ingepland/
+  verzet/geannuleerd (PATCH + POST orders, zelfdeTijd-vergelijking; niet bij een
+  zelf aangemaakte kaart). URL = `/?open=<orderId>` → app opent de kaart direct
+  (deeplink na login, openOrderModal). Testmelding gaat alleen naar de EIGEN
+  toestellen (aan:{userIds:[jij]}); antwoord {sent, doelen}. GET /api/push/status:
+  kantoor {devices, mine, perRol}, monteur alleen {devices=mine, mine}. Scherm: blok
+  "Meldingen op dit toestel" in **Account** (openAccountModal, alle rollen, uitleg per
+  rol via pushUitlegVoorRol) + hint-balk #pushHint boven het scherm zolang dit
+  toestel niet is aangemeld (checkPushHint; "Later" = localStorage ksPushHintWeg;
+  verborgen in Berichten via body[data-view="chats"] — showView zet
+  body.dataset.view). Instellingen-kaart blijft voor de beheerder. Test:
+  test/push-test.mjs (22, deel zonder server + PORT=3141) + 2 browser-asserties.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

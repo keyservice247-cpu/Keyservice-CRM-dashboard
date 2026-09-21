@@ -280,7 +280,13 @@ function hasPerm(key) {
   // Monteur start op zijn opdrachten (Overzicht is voor hem verborgen).
   if (me.user.role === 'monteur') goView('board');
   syncPush(); // dood push-abonnement stil herstellen (fire-and-forget)
+  checkPushHint(); // meldingen nog niet aan op dit toestel? Balk met één knop (alle rollen)
   await refreshAll();
+  // Deeplink vanuit een pushmelding: /?open=<opdracht-id> opent direct die opdracht.
+  try {
+    const openId = new URLSearchParams(location.search).get('open');
+    if (openId) { history.replaceState({}, '', location.pathname); setTimeout(() => { try { openOrderModal(openId); } catch { /* kaart bestaat niet meer */ } }, 600); }
+  } catch { /* geen deeplink */ }
   // Terugkomst van de Google Agenda-koppeling.
   try {
     const gp = new URLSearchParams(location.search).get('google');
@@ -1066,6 +1072,7 @@ function showView(view, tab) {
   // Onderbalk (mobiel) active-markering synchroniseren.
   $$('.bn-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
+  document.body.dataset.view = view; // voor CSS per scherm (bv. de push-hintbalk niet in Berichten)
   // Bij een ANDER scherm bovenaan beginnen. Zonder dit hield de pagina de scrollpositie
   // van het vorige scherm vast; is het nieuwe scherm korter, dan klemt de browser die
   // positie en zie je alles verspringen (voelt als een balk die beweegt).
@@ -4551,7 +4558,7 @@ async function loadSettingsHtml(s) {
       <div style="margin-top:12px"><button class="btn btn-primary" id="ga-save">Koppelingen opslaan</button></div>
     </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('bell', 15)} Meldingen op je telefoon</h3>
-      <p class="muted small">Krijg een pushmelding op dit toestel zodra er een nieuwe aanvraag of een reactie van een klant binnenkomt — ook als de CRM dicht is. Zet het per toestel aan (telefoon én pc kan allebei).</p>
+      <p class="muted small">Krijg een pushmelding op dit toestel zodra er een nieuwe aanvraag of een reactie van een klant binnenkomt — ook als de CRM dicht is. Zet het per toestel aan (telefoon én pc kan allebei). <strong>Assistentes en monteurs</strong> zetten het zelf aan via de knop <strong>Account</strong> (of de balk bovenaan hun scherm); een monteur krijgt alleen meldingen over zijn eigen opdrachten (toegewezen, reactie van zijn klant, afspraak).</p>
       <div id="pushPanel" class="muted small" style="margin-top:10px">Laden…</div>
     </div>
     <div data-sg="koppel" class="info-card admin-only" style="margin-bottom:18px"> <h3>${icon('calendar', 15)} Google Agenda — directe 2-weg koppeling</h3>
@@ -5534,6 +5541,30 @@ async function syncPush() {
   } catch { /* stil: meldingen zijn een extraatje, nooit de app blokkeren */ }
 }
 
+// Wat krijg je op je telefoon? Verschilt per rol (server/push.js bepaalt wie wat krijgt).
+function pushUitlegVoorRol() {
+  const rol = state.me?.role;
+  if (rol === 'monteur') return 'Je krijgt een melding zodra er een <strong>opdracht aan jou</strong> wordt toegewezen, als <strong>je klant reageert</strong> en als een <strong>afspraak</strong> wordt ingepland, verzet of geannuleerd. Tikken op de melding opent de opdracht.';
+  return 'Je krijgt een melding bij een <strong>nieuwe aanvraag</strong>, een <strong>reactie van een klant</strong> en bij alarmen (bridge, e-mail). Zet het per toestel aan — telefoon én pc kan allebei.';
+}
+// Meldingen nog niet aan op dit toestel? Toon één rustige balk boven Start/het bord
+// (alle rollen — de assistente en de monteur komen anders nooit in Instellingen).
+async function checkPushHint() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (Notification.permission === 'denied') return;
+    if (localStorage.getItem('ksPushUit') === '1' || localStorage.getItem('ksPushHintWeg') === '1') return;
+    const reg = await navigator.serviceWorker.ready;
+    if (await reg.pushManager.getSubscription()) return;
+    const bar = document.getElementById('pushHint'); if (!bar) return;
+    bar.innerHTML = `<span>${icon('bell', 14)} <strong>Meldingen op dit toestel staan uit.</strong> ${state.me?.role === 'monteur' ? 'Zet ze aan om een seintje te krijgen bij een nieuwe opdracht voor jou.' : 'Zet ze aan om nieuwe aanvragen en klantreacties direct te zien.'}</span>
+      <span class="push-hint-knoppen"><button class="btn btn-sm btn-primary" id="pushHintAan">Meldingen aanzetten</button><button class="btn btn-sm btn-ghost" id="pushHintWeg" title="Niet meer tonen op dit toestel">Later</button></span>`;
+    bar.hidden = false;
+    $('#pushHintAan').onclick = async () => { await enablePush(); const r = await navigator.serviceWorker.ready; if (await r.pushManager.getSubscription()) bar.hidden = true; };
+    $('#pushHintWeg').onclick = () => { try { localStorage.setItem('ksPushHintWeg', '1'); } catch { /* geen opslag */ } bar.hidden = true; };
+  } catch { /* meldingen zijn een extraatje */ }
+}
+
 async function loadPush() {
   const box = $('#pushPanel'); if (!box) return;
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -5549,7 +5580,10 @@ async function loadPush() {
   const denied = Notification.permission === 'denied';
   // Wat de SERVER weet is de waarheid: die moet toestellen hebben om aan te leveren.
   const srv = await api('/api/push/status').catch(() => null);
-  const srvRegel = srv ? `Aangemeld bij de server: <strong>${srv.devices}</strong> toestel${srv.devices === 1 ? '' : 'len'}${srv.devices === 0 ? ' — <span class="error">niemand krijgt nu meldingen; zet ze hieronder (weer) aan</span>' : ''}` : '';
+  const rolTxt = srv && srv.perRol ? ` (beheer ${srv.perRol.admin || 0} · assistente ${srv.perRol.assistent || 0} · monteur ${srv.perRol.monteur || 0})` : '';
+  const srvRegel = srv ? (state.me?.role === 'monteur'
+    ? `Jouw aangemelde toestellen: <strong>${srv.mine}</strong>${srv.mine === 0 ? ' — <span class="error">je krijgt nu geen meldingen; zet ze hieronder aan</span>' : ''}`
+    : `Aangemeld bij de server: <strong>${srv.devices}</strong> toestel${srv.devices === 1 ? '' : 'len'}${rolTxt} · van jou: <strong>${srv.mine}</strong>${srv.devices === 0 ? ' — <span class="error">niemand krijgt nu meldingen; zet ze hieronder (weer) aan</span>' : ''}`) : '';
   box.innerHTML = `
     <div style="margin-bottom:4px">Status op dit toestel: <strong>${active ? 'aan' : 'uit'}</strong>${denied ? ' — <span class="error">meldingen geblokkeerd in je browserinstellingen</span>' : ''}</div>
     ${srvRegel ? `<div class="muted small" style="margin-bottom:8px">${srvRegel}</div>` : ''}
@@ -5561,7 +5595,7 @@ async function loadPush() {
   if ($('#push-on')) $('#push-on').onclick = enablePush;
   if ($('#push-off')) $('#push-off').onclick = disablePush;
   if ($('#push-test')) $('#push-test').onclick = async () => {
-    try { const r = await api('/api/push/test', 'POST'); toast(r.sent ? 'Testmelding verstuurd' : 'Geen toestellen aangemeld'); }
+    try { const r = await api('/api/push/test', 'POST'); toast(r.sent ? `Testmelding verstuurd naar ${r.sent} toestel${r.sent === 1 ? '' : 'len'} van jou` : (r.doelen ? 'Versturen mislukt — zet meldingen uit en weer aan' : 'Geen toestel van jou aangemeld — zet meldingen eerst aan')); }
     catch (err) { toast(err.message, true); }
   };
 }
@@ -5576,6 +5610,7 @@ async function enablePush() {
     const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
     await api('/api/push/subscribe', 'POST', sub.toJSON());
     toast('Meldingen aan op dit toestel');
+    const bar = document.getElementById('pushHint'); if (bar) bar.hidden = true;
     loadPush();
   } catch (err) { toast('Aanzetten mislukt: ' + err.message, true); }
 }
@@ -5836,7 +5871,12 @@ function openReplyModal(ctx = {}) {
 // ---------- Account / wachtwoord ----------
 function openAccountModal() {
   modal(`
-    <h2>Mijn account</h2> <p class="muted small">${esc(state.me.name)} · ${esc(state.me.email)} · rol: ${esc(state.me.role)}</p> <h3 style="margin:16px 0 10px;font-size:15px">Wachtwoord wijzigen</h3> <label>Huidig wachtwoord <input id="p-cur" type="password"></label> <label>Nieuw wachtwoord <input id="p-new" type="password" placeholder="minimaal 6 tekens"></label> <label>Herhaal nieuw wachtwoord <input id="p-new2" type="password"></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="p-cancel">Sluiten</button><button class="btn btn-primary" id="p-save">Wijzigen</button> </div></div>`);
+    <h2>Mijn account</h2> <p class="muted small">${esc(state.me.name)} · ${esc(state.me.email)} · rol: ${esc(state.me.role)}</p>
+    <h3 style="margin:16px 0 6px;font-size:15px">${icon('bell', 14)} Meldingen op dit toestel</h3>
+    <p class="muted small" style="margin:0 0 8px">${pushUitlegVoorRol()}</p>
+    <div id="pushPanel" class="muted small">Laden…</div>
+    <h3 style="margin:16px 0 10px;font-size:15px">Wachtwoord wijzigen</h3> <label>Huidig wachtwoord <input id="p-cur" type="password"></label> <label>Nieuw wachtwoord <input id="p-new" type="password" placeholder="minimaal 6 tekens"></label> <label>Herhaal nieuw wachtwoord <input id="p-new2" type="password"></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="p-cancel">Sluiten</button><button class="btn btn-primary" id="p-save">Wijzigen</button> </div></div>`);
+  loadPush();
   $('#p-cancel').onclick = closeModal;
   $('#p-save').onclick = async () => {
     const cur = $('#p-cur').value, n1 = $('#p-new').value, n2 = $('#p-new2').value;

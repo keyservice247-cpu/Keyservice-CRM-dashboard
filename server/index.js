@@ -56,8 +56,8 @@ import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTak
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
-import { getPublicKey, addSubscription, removeSubscription, sendPush } from './push.js';
-import { startAutomations, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
+import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
+import { startAutomations, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { getInvoiceSettings, isVergrendeld, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -1682,6 +1682,7 @@ app.post('/api/orders', requireAuth, requireKaartMaken, (req, res) => {
   if (order.appointmentAt) {
     syncOrderToGoogle(order); // best-effort, niet awaiten
     maybeSendAppointmentConfirm(order).catch(() => {});
+    if (order.monteurId && !zelf) pushNaarMonteur(order, { title: 'Afspraak ingepland', body: `${order.title} — ${String(order.appointmentAt).replace('T', ' ')}` });
   }
   res.json(withRelations(order));
 });
@@ -1831,6 +1832,10 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   // Auto-versturen naar monteur bij het inplannen van een afspraak (indien ingesteld).
   if ('appointmentAt' in b && b.appointmentAt) {
     maybeAutoSendToMonteur(order, 'appointment');
+    // Afspraak nieuw of verzet → melding op de telefoon van de monteur (21 sep).
+    if (order.monteurId && !zelfdeTijd(prevAppt, order.appointmentAt)) {
+      pushNaarMonteur(order, { title: prevAppt ? 'Afspraak verzet' : 'Afspraak ingepland', body: `${order.title} — ${String(order.appointmentAt).replace('T', ' ')}` });
+    }
     // Nieuwe of gewijzigde afspraak -> bevestiging met (nieuwe) datum naar de klant.
     // maybeSendAppointmentConfirm stuurt opnieuw zodra de datum/tijd verandert.
     maybeSendAppointmentConfirm(order).catch(() => {});
@@ -1838,6 +1843,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   // Afspraak weggehaald (geannuleerd): event verdwijnt via de Google-sync hieronder en
   // uit de CRM-agenda; klant krijgt (indien gevraagd) een annuleringsbericht.
   if ('appointmentAt' in b && !b.appointmentAt && prevAppt) {
+    if (order.monteurId) pushNaarMonteur(order, { title: 'Afspraak geannuleerd', body: `${order.title} — stond op ${String(prevAppt).replace('T', ' ')}` });
     maybeSendAppointmentCancel(order, prevAppt, { notify: !!b.notifyCustomer }).catch(() => {});
   }
   saveSoon();
@@ -3464,7 +3470,8 @@ app.post('/api/push/unsubscribe', requireAuth, (req, res) => {
 });
 // Testmelding naar de eigen toestellen.
 app.post('/api/push/test', requireAuth, async (req, res) => {
-  const out = await sendPush({ title: 'Keyservice CRM', body: 'Testmelding — meldingen werken!', url: '/' });
+  // Alleen naar de toestellen van de aanvrager zelf (niet het hele team wakker maken).
+  const out = await sendPush({ title: 'Keyservice CRM', body: `Testmelding voor ${req.user.name} — meldingen werken!`, url: '/', aan: { userIds: [req.user.id] } });
   res.json(out);
 });
 // Hoeveel toestellen kent de SERVER? (15 aug) Een browser-abonnement kan stil sterven
@@ -3472,7 +3479,12 @@ app.post('/api/push/test', requireAuth, async (req, res) => {
 // "aan" terwijl de server niemand meer heeft om aan te leveren. Dit maakt dat zichtbaar.
 app.get('/api/push/status', requireAuth, (req, res) => {
   const list = Array.isArray(db().pushSubs) ? db().pushSubs : [];
-  res.json({ devices: list.length, mine: list.filter((s) => s.userId && s.userId === req.user.id).length });
+  const userById = new Map((db().users || []).map((u) => [u.id, u]));
+  const mine = list.filter((s) => s.userId && s.userId === req.user.id).length;
+  // Kantoor ziet het teamtotaal per rol; een monteur alleen zijn eigen toestellen.
+  const perRol = { admin: 0, assistent: 0, monteur: 0 };
+  for (const s2 of list) { const u = userById.get(s2.userId); const r = (u && u.role) || 'admin'; perRol[r] = (perRol[r] || 0) + 1; }
+  res.json(req.user.role === 'monteur' ? { devices: mine, mine } : { devices: list.length, mine, perRol });
 });
 
 // Nu meteen een off-site back-up naar de mail sturen (test / handmatig).
@@ -3657,6 +3669,9 @@ function queueToMonteur(order, monteur, byName) {
   order.sentToMonteur = { monteurId: monteur.id, monteurName: monteur.name, at: now(), status: 'queued' };
   order.updatedAt = now();
   if (db().outbox.length > 1000) db().outbox.length = 1000;
+  // Pushmelding op de telefoon van de monteur zelf (21 sep): de opdracht staat in
+  // zijn CRM, óók als het WhatsApp-appje via de bridge nog even in de wachtrij hangt.
+  pushNaarMonteur({ ...order, monteurId: monteur.id }, { title: 'Nieuwe opdracht voor jou', body: `${order.title}${order.appointmentAt ? ` — afspraak ${order.appointmentAt.replace('T', ' ')}` : ''}` });
   return { item };
 }
 
@@ -3988,7 +4003,7 @@ function schijfBewaking() {
     const vandaag = new Date().toISOString().slice(0, 10);
     if (db()._laatsteSchijfAlarmDag === vandaag) return;
     db()._laatsteSchijfAlarmDag = vandaag;
-    sendPush({ title: '⚠ Schijfruimte bijna vol', body: `Nog maar ${freeMb} MB vrij op de server. Ruim op via Instellingen → Systeem (Foto's & video's beheren, back-ups opruimen).`, url: '/' }).catch(() => {});
+    sendPush({ title: '⚠ Schijfruimte bijna vol', body: `Nog maar ${freeMb} MB vrij op de server. Ruim op via Instellingen → Systeem (Foto's & video's beheren, back-ups opruimen).`, url: '/', aan: 'admin' }).catch(() => {});
     queueCrmWhatsappAlert(`⚠ CRM: schijfruimte bijna vol — nog ${freeMb} MB vrij. Ruim op via Instellingen → Systeem (Foto's & video's beheren).`);
     logActivity('systeem', 'schijfruimte-alarm', `${freeMb} MB vrij`);
     saveSoonQuiet();

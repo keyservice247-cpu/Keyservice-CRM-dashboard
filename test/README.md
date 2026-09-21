@@ -34,6 +34,8 @@ node test/audit-test.mjs
 # Conversie (20 sep): tellingen per bron/monteur/status/week, percentages, briefing zonder AI,
 # prullenbak telt niet mee, Cijfers-correcties (bron van automatische omzet, NL-datum) (PORT=3139)
 node test/conversie-test.mjs
+# Pushmeldingen per rol: wie krijgt wat (zonder server) + aanmelden/status/testmelding per rol (PORT=3141)
+node test/push-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 

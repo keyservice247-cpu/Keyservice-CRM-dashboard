@@ -865,7 +865,7 @@ async function runMailboxQuotaCheck() {
   logActivity('systeem', 'mailbox bijna vol', list);
   // PUSH ÉN WhatsApp (7 sep 2026): het team-appje loopt via de bridge — lag die stil,
   // dan kwam er helemaal niets aan. De pushmelding komt altijd op de telefoon.
-  sendPush({ title: '⚠ Mailbox bijna vol', body: `${list}. Ruim op via webmail.transip.nl (Verzonden + Prullenbak legen).`, url: '/' }).catch(() => {});
+  sendPush({ title: '⚠ Mailbox bijna vol', body: `${list}. Ruim op via webmail.transip.nl (Verzonden + Prullenbak legen).`, url: '/', aan: 'admin' }).catch(() => {});
   queueCrmWhatsappAlert(txt);
   console.log('[mailbox-quotum]', txt);
 }

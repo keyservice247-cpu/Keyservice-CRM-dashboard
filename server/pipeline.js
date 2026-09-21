@@ -4,7 +4,7 @@ import { db, id, now, saveSoon, logActivity } from './db.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours } from './settings.js';
 import { mergeAttachments, dedupeAttachments } from './storage.js';
-import { sendPush } from './push.js';
+import { sendPush, pushNaarMonteur } from './push.js';
 
 // ---------- WhatsApp-melding naar het team (groep "CRM meldingen" of 1-op-1) ----------
 // Anti-spam: max 1 melding per 2 minuten; wat in de tussentijd binnenkomt wordt geteld
@@ -330,6 +330,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     review.reviewedAt = now();
     logActivity(actorName, 'aanvraag automatisch samengevoegd', `${customer.name || 'klant'}: ${openOrder.title} (binnen ${mergeWindowH}u)`);
     sendPush({ title: 'Aanvraag samengevoegd', body: `${customer.name || 'Klant'}: extra aanvraag toegevoegd aan "${openOrder.title}"`, url: '/' }).catch(() => {});
+    pushNaarMonteur(openOrder, { title: 'Extra aanvraag van je klant', body: `${customer.name || 'Klant'}: toegevoegd aan "${openOrder.title}"` });
     saveSoon();
     return openOrder;
   }
@@ -892,6 +893,8 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
       saveSoon();
       logActivity('systeem', 'bericht aan bestaande opdracht', `${existingCustomer.name}: ${openOrder.title}`);
       notifyPush('Nieuwe reactie van klant', `${existingCustomer.name || 'Klant'} reageerde op: ${openOrder.title}`);
+      // Ook de monteur van de kaart (21 sep): zijn klant reageerde.
+      pushNaarMonteur(openOrder, { title: 'Reactie van je klant', body: `${existingCustomer.name || 'Klant'}: ${String(body || '').replace(/\s+/g, ' ').slice(0, 90)}` });
       if (getCrmAlerts().notifyReplies) queueCrmWhatsappAlert(`💬 CRM: ${existingCustomer.name || 'een klant'} reageerde op de lopende kaart "${openOrder.title}". Even kijken in het dashboard.`);
       return { message, review: null, mergedIntoOrder: openOrder.id, suggestion };
     }

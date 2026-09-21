@@ -181,6 +181,15 @@ ok('omzet-uit-rapporten-scherm opent', await page.locator('#imp-cancel').count()
 await page.evaluate(() => closeModal());
 noErr('Cijfers (historie boeken / omzet-suggesties)');
 
+// 9c-0) PUSHMELDINGEN PER ROL (21 sep 2026): hint-balk + meldingen-blok in "Mijn account".
+clear();
+ok('push-hintbalk bestaat (zichtbaar of verborgen, nooit een fout)', await page.locator('#pushHint').count() === 1);
+await page.evaluate(() => openAccountModal());
+await page.waitForTimeout(900);
+ok('Mijn account toont meldingen-blok + wachtwoordvelden', await page.locator('#modal #pushPanel').count() === 1 && await page.locator('#p-save').count() === 1 && /Meldingen op dit toestel/.test(await page.locator('#modal').textContent()));
+await page.evaluate(() => closeModal());
+noErr('Account (meldingen)');
+
 // 9c) CONVERSIE (20 sep 2026): blok bovenaan Cijfers — KPI's, per bron, weken, briefing.
 clear();
 await page.evaluate(() => goView('finance'));

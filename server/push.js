@@ -3,6 +3,16 @@
 //
 // Gebruikt VAPID-sleutels die één keer worden gegenereerd en in de database
 // (settings.push) bewaard, zodat je niets handmatig hoeft in te stellen.
+//
+// PER ROL (21 sep 2026, wens eigenaar "ook voor assistentes en monteurs"): elk
+// toestel hangt aan de ingelogde gebruiker (userId). Wie wat krijgt bepaalt `aan`:
+//   (leeg) / 'kantoor' → admin + assistent (nieuwe aanvraag, reactie klant, alarmen)
+//   'admin'            → alleen beheerders (schijfruimte, mailbox)
+//   'iedereen'         → alle toestellen
+//   { monteurId }      → de monteur(s) met dat monteur-record (eigen opdracht,
+//                        reactie van zijn klant, afspraak ingepland/gewijzigd)
+//   { userIds: [...] } → specifieke gebruikers (bv. de testmelding: alleen jijzelf)
+// Toestellen van vóór deze regel (zonder userId) tellen als kantoor.
 import webpush from 'web-push';
 import { db, save, saveSoon } from './db.js';
 
@@ -50,16 +60,41 @@ export function removeSubscription(endpoint) {
   if (i >= 0) { list.splice(i, 1); saveSoon(); }
 }
 
-// Stuur een melding naar alle aangemelde toestellen. Dode abonnementen (verlopen/
-// afgemeld) worden automatisch opgeruimd.
-export async function sendPush({ title, body, url = '/', tag = 'ks' }) {
+const KANTOOR = new Set(['admin', 'assistent']);
+
+// Welke toestellen horen bij `aan`? Puur (geen netwerk) zodat het te testen is.
+// users = db().users (rol en monteurId worden LIVE opgezocht — een rolwijziging
+// werkt dus meteen door, zonder opnieuw aanmelden).
+export function kiesToestellen(aan, subs, users) {
+  const userById = new Map((users || []).map((u) => [u.id, u]));
+  const rolVan = (sub) => (sub.userId && userById.get(sub.userId)) || null;
+  return (subs || []).filter((sub) => {
+    const u = rolVan(sub);
+    if (aan === 'iedereen') return true;
+    if (aan && typeof aan === 'object') {
+      if (Array.isArray(aan.userIds)) return !!sub.userId && aan.userIds.includes(sub.userId);
+      if (aan.monteurId) return !!u && u.role === 'monteur' && u.monteurId === aan.monteurId;
+      return false;
+    }
+    // Oud toestel zonder gebruiker (van vóór 21 sep) of gebruiker die niet meer
+    // bestaat: als kantoor behandelen — dat was altijd de eigenaar.
+    if (!u) return aan !== 'admin' || !sub.userId;
+    if (aan === 'admin') return u.role === 'admin';
+    return KANTOOR.has(u.role); // standaard: kantoor
+  });
+}
+
+// Stuur een melding naar de toestellen die bij `aan` horen. Dode abonnementen
+// (verlopen/afgemeld) worden automatisch opgeruimd.
+export async function sendPush({ title, body, url = '/', tag = 'ks', aan } = {}) {
   ensureKeys();
   const list = subsList();
-  if (!list.length) return { sent: 0 };
+  const doelen = kiesToestellen(aan, list, db().users || []);
+  if (!doelen.length) return { sent: 0, doelen: 0 };
   const payload = JSON.stringify({ title, body, url, tag });
   let sent = 0;
   const dead = [];
-  await Promise.all(list.map(async (sub) => {
+  await Promise.all(doelen.map(async (sub) => {
     try {
       await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, payload);
       sent++;
@@ -71,7 +106,14 @@ export async function sendPush({ title, body, url = '/', tag = 'ks' }) {
     db().pushSubs = list.filter((s) => !dead.includes(s.endpoint));
     saveSoon();
   }
-  return { sent };
+  return { sent, doelen: doelen.length };
+}
+
+// Melding voor de monteur van een opdracht (alleen als die een gekoppeld account
+// met aangemeld toestel heeft; anders gebeurt er stil niets).
+export function pushNaarMonteur(order, { title, body, url } = {}) {
+  if (!order || !order.monteurId) return Promise.resolve({ sent: 0, doelen: 0 });
+  return sendPush({ title, body, url: url || `/?open=${order.id}`, tag: `ks-${order.id}`, aan: { monteurId: order.monteurId } }).catch(() => ({ sent: 0, doelen: 0 }));
 }
 
 export function pushEnabled() {
