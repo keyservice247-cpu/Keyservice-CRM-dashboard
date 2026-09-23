@@ -482,7 +482,10 @@ async function loadChats(fromPulse) {
   if (!wrap) return;
   if (!wrap.dataset.init) {
     wrap.dataset.init = '1';
-    wrap.innerHTML = `<div id="chatStatusBar" class="chat-statusbar" hidden></div><div class="chats-layout" id="chatsLayout"><aside id="chatList" class="chat-list"></aside><section id="chatPane" class="chat-pane"><div class="cp-empty muted">Kies links een gesprek</div></section></div>`;
+    wrap.innerHTML = `<div id="chatStatusBar" class="chat-statusbar" hidden></div><div class="chats-layout" id="chatsLayout"><aside class="chat-list-kolom"><div class="chat-zoek">${icon('search', 13)}<input id="chatZoek" type="search" placeholder="Zoek klant, nummer of opdracht" autocomplete="off"></div><div id="chatList" class="chat-list"></div></aside><section id="chatPane" class="chat-pane"><div class="cp-empty muted">Kies links een gesprek</div></section></div>`;
+    // Zoeken filtert de lijst lokaal (naam / telefoon / e-mail / opdrachttitel), 150 ms debounce.
+    let zoekTimer = null;
+    $('#chatZoek').oninput = () => { clearTimeout(zoekTimer); zoekTimer = setTimeout(() => { _lastChatListHtml = ''; tekenChatLijst(_chatList); }, 150); };
   }
   if (!fromPulse) renderChatStatus();
   // Op de TELEFOON begint het scherm altijd met de lijst: het open gesprek van de
@@ -505,13 +508,31 @@ async function loadChats(fromPulse) {
   if (badge) { badge.textContent = ongelezenChats; badge.hidden = ongelezenChats === 0; }
   const bnc = $('#bnChatBadge');
   if (bnc) { bnc.textContent = ongelezenChats; bnc.hidden = ongelezenChats === 0; }
-  const listHtml = list.length ? list.map((c) => `
+  tekenChatLijst(list);
+  if (_chatActive) renderChatPane(!fromPulse);
+}
+// Gesprekkenlijst tekenen, met het zoekfilter (23 sep 2026: "zoeken naar klanten in
+// Berichten, subtiel"). Telefoon genormaliseerd (+31 ↔ 06) zodat een nummer altijd matcht.
+function chatMatcht(c, q) {
+  if (!q) return true;
+  const hooi = `${c.name || ''} ${c.phone || ''} ${c.email || ''} ${c.orderTitle || ''} ${c.lastBody || ''}`.toLowerCase();
+  if (hooi.includes(q)) return true;
+  const qd = q.replace(/\D/g, '').replace(/^(0031|31)/, '0');
+  if (qd.length < 4) return false;
+  const tel = String(c.phone || c.id || '').replace(/\D/g, '').replace(/^(0031|31)/, '0');
+  return tel.includes(qd);
+}
+function tekenChatLijst(list) {
+  const q = ($('#chatZoek')?.value || '').trim().toLowerCase();
+  const zichtbaar = (list || []).filter((c) => chatMatcht(c, q));
+  const listHtml = zichtbaar.length ? zichtbaar.map((c) => `
     <button type="button" class="chat-item ${c.id === _chatActive ? 'active' : ''}" data-cid="${esc(c.id)}">
       <div class="ci-top"><span class="ci-name">${esc(c.name)}</span><span class="muted small">${c.lastAt ? fmtDate(c.lastAt) : ''}</span></div>
       <div class="ci-bottom"><span class="ci-last">${c.lastOut ? '↦ ' : ''}${esc(c.lastBody || '')}</span>${c.unread ? `<span class="chat-unread">${c.unread}</span>` : ''}</div>
       ${c.orderTitle ? `<div class="ci-order muted small">${icon('tag', 11)} ${esc(c.orderTitle.slice(0, 48))}</div>` : ''}
     </button>`).join('')
-    : '<div class="muted small" style="padding:14px">Nog geen gesprekken. Zodra een klant appt of mailt, verschijnt het gesprek hier.</div>';
+    : (q ? `<div class="muted small" style="padding:14px">Geen gesprek gevonden voor "${esc(q)}".</div>`
+      : '<div class="muted small" style="padding:14px">Nog geen gesprekken. Zodra een klant appt of mailt, verschijnt het gesprek hier.</div>');
   const listEl = $('#chatList');
   if (listEl && listHtml !== _lastChatListHtml) {
     const scrollY = listEl.scrollTop;
@@ -520,7 +541,6 @@ async function loadChats(fromPulse) {
     _lastChatListHtml = listHtml;
     $$('.chat-item', listEl).forEach((b) => b.onclick = () => openChat(b.dataset.cid));
   }
-  if (_chatActive) renderChatPane(!fromPulse);
 }
 // Statusbalk boven Berichten (punt 9): bridge, officiële route, wachtrij en de
 // pauzeknop — zichtbaar en bedienbaar voor wie de gevolgen draagt (ook de assistente).
@@ -3981,7 +4001,7 @@ function renderInvoices() {
         <button class="btn btn-sm inv-share" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + '-' + i.number + (i.customerName ? ' ' + i.customerName : ''))}">${icon('paperclip', 13)} Deel</button>
         ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Opdracht</button>` : ''}
-        ${!quote && i.sentAt && i.orderId ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
+        ${!quote && (i.sentAt || i.status === 'betaald') ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review (mail + WhatsApp)'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
         ${!quote && (i.status === 'verzonden' || i.status === 'concept') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
         ${!quote && i.status === 'betaald' ? `<button class="btn btn-sm inv-unmark" data-id="${esc(i.id)}" data-status="${i.sentAt ? 'verzonden' : 'concept'}" title="De factuur staat dan weer open">Nog niet betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
@@ -4000,7 +4020,7 @@ function renderInvoices() {
     b.disabled = true; const oud = b.innerHTML; b.textContent = 'Versturen…';
     try {
       const r = await api(`/api/invoices/${b.dataset.id}/review-request`, 'POST', { force: alGedaan });
-      toast(`Review gevraagd — mail naar ${r.to}`);
+      toast(`Review gevraagd via ${(r.via || []).join(' + ') || 'e-mail'} — ${r.to}`);
       loadInvoices();
     } catch (err) { toast(err.message, true); b.disabled = false; b.innerHTML = oud; }
   });

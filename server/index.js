@@ -4479,9 +4479,10 @@ app.post('/api/invoices/:id/review-request', requireAuth, async (req, res) => {
   if (!inv) return res.status(404).json({ error: 'Factuur niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
   const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
-  if (!order) return res.status(400).json({ error: 'Deze factuur hangt niet aan een opdrachtkaart — vraag de review vanaf de kaart.' });
+  // Losstaande factuur (geen opdracht): review rechtstreeks naar de klant van de factuur (23 sep).
+  if (inv.type === 'offerte') return res.status(400).json({ error: 'Een review vraag je na een factuur, niet na een offerte.' });
   try {
-    const r = await sendReviewRequest(order, { actorName: req.user.name, force: !!req.body?.force });
+    const r = await sendReviewRequest(order, { actorName: req.user.name, force: !!req.body?.force, invoice: inv });
     if (r.error) return res.status(400).json(r);
     inv.reviewRequestedAt = now();
     saveSoon();

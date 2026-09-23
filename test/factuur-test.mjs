@@ -97,11 +97,15 @@ ok('prijs uit een factuurregel werkt door in prijslijst én pakket', addP.status
   && ((stP2.json.priceBundles || []).find((b) => b.name === 'Prijstest pakket')?.lines || []).some((l) => l.description === 'Voorrijkosten prijstest' && l.priceExcl === 72), JSON.stringify(addP.json.priceSync));
 
 console.log('\n== Review vragen vanaf een verzonden factuur + per monteur aan/uit ==');
-// Losstaande factuur (zonder kaart) kan geen review sturen — nette melding.
+// Losstaande factuur (zonder kaart) kan sinds 23 sep 2026 óók een review sturen: de
+// klant komt dan uit de factuur. Zonder review-link/SMTP een nette melding — maar
+// NOOIT meer "hangt niet aan een opdrachtkaart".
 const custR = await api('POST', '/api/customers', { name: 'Review Klant', email: 'review@example.nl', phone: '0612349999' });
 let invLos = (await api('POST', '/api/invoices', { customerId: custR.json.id, type: 'factuur' })).json; invLos = invLos.invoice || invLos;
 const rLos = await api('POST', `/api/invoices/${invLos.id}/review-request`, {});
-ok('losse factuur zonder kaart: nette uitleg', rLos.status === 400 && /opdrachtkaart/i.test(rLos.json.error || ''), JSON.stringify(rLos.json));
+ok('losse factuur zonder kaart: review-route werkt (alleen link/SMTP ontbreekt in de test)', rLos.status === 400 && /review-link|SMTP/i.test(rLos.json.error || '') && !/opdrachtkaart/i.test(rLos.json.error || ''), JSON.stringify(rLos.json));
+const offLos = (await api('POST', '/api/invoices', { customerId: custR.json.id, type: 'offerte' })).json;
+ok('review vanaf een offerte wordt geweigerd', (await api('POST', `/api/invoices/${(offLos.invoice || offLos).id}/review-request`, {})).status === 400);
 // Factuur die wél aan een kaart hangt.
 const ordR = await api('POST', '/api/orders', { customerId: custR.json.id, title: 'Review testklus', status: 'afgerond' });
 let invR = (await api('POST', '/api/invoices', { customerId: custR.json.id, orderId: ordR.json.id, type: 'factuur' })).json; invR = invR.invoice || invR;

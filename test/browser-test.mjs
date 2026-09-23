@@ -390,6 +390,20 @@ await page.evaluate(async () => {
 await page.evaluate(() => goView('chats'));
 await page.waitForTimeout(1500);
 ok('Berichten-scherm opent met gesprekkenlijst', await page.locator('#chatList').count() > 0);
+// ZOEKBALK in Berichten (23 sep 2026): filtert lokaal op naam/nummer/opdracht.
+{
+  const totaal = await page.locator('.chat-item').count();
+  await page.fill('#chatZoek', 'zzz-bestaat-niet');
+  await page.waitForTimeout(400);
+  ok('zoeken op onzin → "Geen gesprek gevonden"', await page.locator('.chat-item').count() === 0 && /Geen gesprek gevonden/.test(await page.locator('#chatList').textContent()));
+  await page.fill('#chatZoek', 'browserklant');
+  await page.waitForTimeout(400);
+  const nu = await page.locator('.chat-item').count();
+  ok('zoeken op naam filtert de lijst', nu >= 1 && nu <= totaal, `${nu} van ${totaal}`);
+  await page.fill('#chatZoek', '');
+  await page.waitForTimeout(400);
+  ok('zoekveld leeg → volledige lijst terug', await page.locator('.chat-item').count() === totaal);
+}
 const rij = page.locator('.chat-item', { hasText: 'Chat Browserklant' }).first();
 const rijGevonden = await rij.count() > 0 || await page.locator('.chat-item').count() > 0;
 ok('gesprek zichtbaar in de lijst', rijGevonden);

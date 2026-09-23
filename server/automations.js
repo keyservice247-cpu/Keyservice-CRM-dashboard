@@ -230,29 +230,36 @@ export function reviewAutoAllowed(order) {
 
 // Eén review-verzoek versturen naar de klant van deze kaart. Gebruikt door zowel de
 // automatische ronde als de handmatige knop bij een verzonden factuur.
-export async function sendReviewRequest(order, { actorName = 'systeem', force = false } = {}) {
+// Werkt vanaf een OPDRACHT (order) óf — sinds 23 sep 2026 — vanaf een LOSSTAANDE
+// factuur zonder opdracht: dan gaat `invoice` mee en komt de klant uit de factuur;
+// de "al gevraagd"-vlag staat dan op de factuur (reviewRequestedAt).
+export async function sendReviewRequest(order, { actorName = 'systeem', force = false, invoice = null } = {}) {
   const cfg = getReviewRequest();
   if (!cfg.link) return { error: 'Er staat nog geen review-link ingesteld (Instellingen → Automatische berichten).' };
   if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
-  if (!order) return { error: 'Geen opdracht gevonden bij deze factuur.' };
-  if (order.reviewRequested && order.reviewRequested !== 'geen-email' && !force) {
+  if (!order && !invoice) return { error: 'Geen opdracht of factuur gevonden.' };
+  if (order && order.reviewRequested && order.reviewRequested !== 'geen-email' && !force) {
     return { error: `Er is al een review gevraagd op ${String(order.reviewRequested).slice(0, 10)}.`, already: true };
   }
-  const c = custOf(order);
+  if (!order && invoice && invoice.reviewRequestedAt && !force) {
+    return { error: `Er is al een review gevraagd op ${String(invoice.reviewRequestedAt).slice(0, 10)}.`, already: true };
+  }
+  const c = order ? custOf(order) : (db().customers.find((x) => x.id === invoice.customerId) || {});
   // Het telefoonnummer van DEZE aanvraag gaat voor op het klantrecord (Regel 3).
-  const tel = ((order.intake && order.intake.phone) || c.phone || '').trim();
+  const tel = ((order && order.intake && order.intake.phone) || c.phone || '').trim();
   if (!c.email && !tel) return { error: 'Deze klant heeft geen e-mailadres én geen telefoonnummer.' };
   const vars = { naam: c.name || 'klant', link: cfg.link };
   const body = fill(cfg.body, vars);
-  order.thread = order.thread || [];
+  if (order) order.thread = order.thread || [];
   const via = [];
+  const noteer = (entry) => { if (order) order.thread.push(entry); };
 
   // 1) E-mail
   if (c.email) {
     try {
       const sig = getEmailSignature();
       await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body, automatisch: true });
-      order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (review-verzoek)', subject: fill(cfg.subject, vars), body, at: now() });
+      noteer({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (review-verzoek)', subject: fill(cfg.subject, vars), body, at: now() });
       via.push('e-mail');
     } catch (e) { console.error('[review-verzoek] mail mislukt:', e.message); }
   }
@@ -261,16 +268,15 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   if (tel) {
     db().outbox.unshift({
       id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
-      text: body, orderId: order.id, status: 'queued', createdAt: now(), by: 'review-verzoek',
+      text: body, orderId: order ? order.id : undefined, invoiceRef: invoice ? invoice.id : undefined, status: 'queued', createdAt: now(), by: 'review-verzoek',
     });
-    order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (review-verzoek)', body, at: now() });
+    noteer({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (review-verzoek)', body, at: now() });
     via.push('WhatsApp');
   }
 
   if (!via.length) return { error: 'Versturen lukte niet — controleer de e-mailinstellingen.' };
-  order.reviewRequested = now();
-  order.updatedAt = now();
-  logActivity(actorName, 'review-verzoek verstuurd', `${order.title} -> ${via.join(' + ')}`);
+  if (order) { order.reviewRequested = now(); order.updatedAt = now(); }
+  logActivity(actorName, 'review-verzoek verstuurd', `${order ? order.title : `factuur ${invoice.number || ''} (${c.name || 'klant'})`} -> ${via.join(' + ')}`);
   saveSoon();
   return { ok: true, to: [c.email, tel].filter(Boolean).join(' + '), via };
 }

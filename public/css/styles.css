@@ -1078,7 +1078,12 @@ table tbody tr:hover { background: var(--panel-2); }
 
 /* ---------- Berichten-scherm (7 aug 2026): gesprekken links, chat rechts ---------- */
 .chats-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; align-items: start; }
-.chat-list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow-y: auto; max-height: calc(100vh - 190px); overscroll-behavior: contain; }
+.chat-list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow-y: auto; max-height: calc(100vh - 236px); overscroll-behavior: contain; }
+/* Subtiele zoekbalk boven de gesprekkenlijst (23 sep 2026). */
+.chat-zoek { position: relative; margin: 0 0 8px; color: var(--muted); }
+.chat-zoek svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.chat-zoek input { width: 100%; height: 34px; padding: 0 10px 0 30px; font-size: 13px; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--panel-2); color: var(--ink); }
+.chat-zoek input:focus { outline: none; border-color: var(--accent); background: var(--panel); }
 .chat-item { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; background: transparent; border: none; border-bottom: 1px solid var(--line-soft); padding: 11px 13px; cursor: pointer; color: var(--ink); }
 .chat-item:hover { background: var(--line-soft); }
 .chat-item.active { background: var(--accent-soft); }
@@ -1099,7 +1104,7 @@ table tbody tr:hover { background: var(--panel-2); }
 @media (max-width: 820px) {
   .chats-layout { grid-template-columns: 1fr; }
   /* Mobiel: óf de lijst, óf het gesprek — nooit allebei geplet naast elkaar. */
-  .chats-layout.active-chat .chat-list { display: none; }
+  .chats-layout.active-chat .chat-list-kolom { display: none; }
   .chats-layout:not(.active-chat) .chat-pane { display: none; }
   .cp-back { display: inline-flex; }
   .cp-send .btn { min-height: 44px; }
@@ -1180,7 +1185,9 @@ table tbody tr:hover { background: var(--panel-2); }
   .chat-statusbar > span { overflow: hidden; text-overflow: ellipsis; }
   .chat-statusbar .btn { min-height: 24px; padding: 2px 8px; font-size: 12px; margin-left: auto; flex-shrink: 0; }
   .chat-statusbar .lang { display: none; }
-  .chat-list { height: calc(100dvh - 156px - env(safe-area-inset-bottom, 0px)); }
+  .chat-list { height: calc(100dvh - 200px - env(safe-area-inset-bottom, 0px)); max-height: none; }
+  .chat-zoek { margin: 6px 10px 4px; }
+  .chat-zoek input { font-size: 16px; height: 36px; }
 }
 /* ---------- Taken (8 sep 2026) — kleurlogica uit taken-dashboard.html ---------- */
 :root { --tk-zakelijk: #4a6fa5; --tk-prive: #b08d57; --tk-hoog: #c2554f; --tk-middel: #d4893a; --tk-laag: #3f9d6b; }

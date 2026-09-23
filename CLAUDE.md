@@ -759,6 +759,17 @@ de regressie meegroeit.
   = mail in naam van die medewerker naar een gekozen adres). PATCH /api/users/:id
   accepteert sigNaam/sigTel/sigEmail/sigUit (+ bestaand functie). Tests: mail-test
   (51, +11 zonder server), rollen-test (56, +7), browser (+1).
+- **Review vanaf élke betaalde factuur + zoekbalk in Berichten (23 sep 2026):**
+  (1) de Review-knop in het Facturen-overzicht verscheen alleen bij `sentAt && orderId`
+  — een LOSSTAANDE factuur (zonder opdracht) kreeg 'm nooit, en de route weigerde
+  ("hangt niet aan een opdrachtkaart"). Nu: knop zodra de factuur verstuurd óf betaald
+  is; `sendReviewRequest(order, { invoice })` werkt ook zonder opdracht (klant uit de
+  factuur, "al gevraagd"-vlag = inv.reviewRequestedAt, outbox-item met invoiceRef,
+  geen thread-notitie), offerte → 400. (2) Berichten: subtiele zoekbalk #chatZoek boven
+  de lijst (.chat-zoek, lokaal filter chatMatcht op naam/telefoon genormaliseerd/e-mail/
+  opdrachttitel/laatste bericht, 150 ms; tekenChatLijst gedeeld met de pulse;
+  .chat-list-kolom verbergt op mobiel bij een open gesprek). Tests: factuur-test 57,
+  browser 166.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 
