@@ -78,7 +78,7 @@ import {
   ensureSettings, getStatuses, getStatusLabels, getStatusKeys, getSources,
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
-  getEmailSignature, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
+  getEmailSignature, afzenderProfiel, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
@@ -207,7 +207,8 @@ app.get('/api/me', (req, res) => {
       templates: getTemplates(),
       canSendEmail: smtpConfigured(),
       autoApproveThreshold: autoApproveThreshold(),
-      emailSignature: getEmailSignature(),
+      // Persoonlijk: de assistente ziet in "Beantwoorden" haar eigen handtekening.
+      emailSignature: getEmailSignature(afzenderVan(req)),
     },
   });
 });
@@ -260,6 +261,12 @@ app.patch('/api/users/:id', requireRole('admin'), (req, res) => {
   // FUNCTIE onder de e-mailhandtekening. Verstuurt deze gebruiker een factuur of
   // antwoord, dan staat HIER zijn naam en functie onder — niet die van de eigenaar.
   if ('functie' in b) u.functie = String(b.functie || '').slice(0, 60);
+  // Persoonlijke handtekening (23 sep): naam in de mail (leeg = accountnaam), eigen
+  // telefoon/e-mail (leeg = bedrijfsgegevens), of bewust de vaste bedrijfshandtekening.
+  if ('sigNaam' in b) u.sigNaam = String(b.sigNaam || '').slice(0, 80).trim();
+  if ('sigTel' in b) u.sigTel = String(b.sigTel || '').slice(0, 30).trim();
+  if ('sigEmail' in b) u.sigEmail = String(b.sigEmail || '').slice(0, 120).trim();
+  if ('sigUit' in b) u.sigUit = !!b.sigUit;
   if (b.role) {
     if (!['admin', 'assistent', 'monteur'].includes(b.role)) return res.status(400).json({ error: 'Ongeldige rol' });
     if (u.id === req.user.id && b.role !== 'admin') return res.status(400).json({ error: 'Je kunt je eigen beheerdersrol niet afnemen' });
@@ -3139,13 +3146,10 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
 // van die van de eigenaar. Zonder ingelogde gebruiker (automatische taken) blijft de
 // standaard-handtekening staan.
 function afzenderVan(req) {
-  const u = req && req.user;
-  // ALLEEN overnemen als er voor deze gebruiker een FUNCTIE is ingevuld (Gebruikers →
-  // functie). Zonder dat blijft de vaste handtekening uit Instellingen staan. Anders
-  // kwam de accountnaam in de mail te staan — het beheerdersaccount heet "Beheerder",
-  // en dat verscheen ineens boven de handtekening in plaats van "Abdel Rafour".
-  if (!u || !u.name || !u.functie) return null;
-  return { name: u.name, role: u.functie };
+  // Sinds 23 sep: assistente/monteur automatisch onder eigen naam (functie = veld of
+  // standaard per rol); beheerder alleen met ingevulde functie/mailnaam. Zie
+  // afzenderProfiel in settings.js.
+  return afzenderProfiel(req && req.user);
 }
 
 let _lastPriceSync = null; // laatste "pakketten meegewijzigd"-melding voor het antwoord
@@ -5090,6 +5094,14 @@ app.delete('/api/finance/:id', requirePerm('finance'), (req, res) => {
   res.json(out);
 });
 
+// Handtekening-voorbeeld per medewerker (23 sep): wat komt er onder háár mails?
+app.get('/api/users/:id/handtekening', requireRole('admin'), (req, res) => {
+  const u = db().users.find((x) => x.id === req.params.id);
+  if (!u) return res.status(404).json({ error: 'Niet gevonden' });
+  const profiel = afzenderProfiel(u);
+  res.json({ profiel, tekst: getEmailSignature(profiel), eigen: !!profiel });
+});
+
 // Testmail: stuur één van de automatische mails (met voorbeeldgegevens) naar een gekozen
 // adres, zodat je ziet hoe het bij de klant binnenkomt. Verstuurt NIET naar klanten.
 app.post('/api/test-mail', requireRole('admin'), async (req, res) => {
@@ -5105,15 +5117,23 @@ app.post('/api/test-mail', requireRole('admin'), async (req, res) => {
   else if (type === 'herinnering') { const c = getAppointmentMsg(); subject = c.reminderEmailSubject; body = c.reminderBody; }
   else if (type === 'review') { const c = getReviewRequest(); subject = c.subject; body = c.body; }
   else if (type === 'annulering') { subject = 'Uw afspraak is geannuleerd'; body = `Beste ${sample.naam},\n\nUw geplande afspraak van ${sample.datum} ${sample.tijdblok} is geannuleerd. Wilt u een nieuwe afspraak inplannen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nKeyservice`; }
+  else if (type === 'handtekening') { subject = 'Voorbeeld van de e-mailhandtekening'; body = `Beste ${sample.naam},\n\nBedankt voor uw bericht. Dit is een voorbeeldmail om te laten zien hoe een antwoord vanuit ons dashboard eruitziet — met de handtekening eronder.`; }
   else return res.status(400).json({ error: 'Onbekend maildtype' });
-  const sig = getEmailSignature(afzenderVan(req));
+  // Testmail IN NAAM VAN een medewerker (23 sep): userId → handtekening van die persoon.
+  let afzender = afzenderVan(req);
+  if (req.body?.userId) {
+    const mw = db().users.find((x) => x.id === req.body.userId);
+    if (!mw) return res.status(404).json({ error: 'Medewerker niet gevonden' });
+    afzender = afzenderProfiel(mw);
+  }
+  const sig = getEmailSignature(afzender);
   let text = fill(body || '');
   text += '\n\n———\n(Dit is een TESTMAIL vanuit je eigen CRM, met voorbeeldgegevens. De echte klant krijgt exact deze opmaak, zonder deze regel.)';
   if (sig) text = `${text}\n\n${sig}`;
   try {
     // Mét de voetregel, zodat je precies ziet wat de klant ziet.
-    await sendMail({ to, subject: '[TEST] ' + fill(subject || 'Keyservice'), text, afzender: afzenderVan(req), automatisch: true });
-    logActivity(req.user.name, 'testmail verstuurd', `${type} -> ${to}`);
+    await sendMail({ to, subject: '[TEST] ' + fill(subject || 'Keyservice'), text, afzender, automatisch: type !== 'handtekening' });
+    logActivity(req.user.name, 'testmail verstuurd', `${type}${afzender ? ` als ${afzender.name}` : ''} -> ${to}`);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

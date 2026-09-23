@@ -161,6 +161,28 @@ ok('gewoon adres is in orde', emailAdresProbleem('jan@gmail.com') === '' && emai
 ok('adres zonder @ is ongeldig', /geen geldig/.test(emailAdresProbleem('jan.gmail.com')));
 ok('onbekend domein met .co (bv. .co.uk-achtig) wordt niet ten onrechte afgekeurd', emailAdresProbleem('jan@bedrijf.co.uk') === '');
 
+const { afzenderProfiel } = await import('../server/settings.js');
+console.log('\n== Persoonlijke handtekening (23 sep 2026) ==');
+{
+  const ass = afzenderProfiel({ name: 'Sara Jansen', role: 'assistent' });
+  ok('assistente zonder functie → standaard "Assistente | Key Service 24/7"', ass && ass.name === 'Sara Jansen' && ass.role === 'Assistente | Key Service 24/7', JSON.stringify(ass));
+  const mont = afzenderProfiel({ name: 'Youssef', role: 'monteur', functie: 'Slotenmaker | Key Service 24/7' });
+  ok('monteur met functie → eigen functie', mont && mont.role === 'Slotenmaker | Key Service 24/7');
+  ok('beheerder "Beheerder" zonder functie → null (vaste handtekening)', afzenderProfiel({ name: 'Beheerder', role: 'admin' }) === null);
+  ok('beheerder met functie → wél eigen naam', afzenderProfiel({ name: 'Abdel Rafour', role: 'admin', functie: 'Eigenaar | Key Service 24/7' })?.name === 'Abdel Rafour');
+  ok('sigUit → null', afzenderProfiel({ name: 'Sara', role: 'assistent', sigUit: true }) === null);
+  ok('sigNaam wint van accountnaam', afzenderProfiel({ name: 'sara.j', role: 'assistent', sigNaam: 'Sara Jansen' })?.name === 'Sara Jansen');
+  const plat = getEmailSignature(ass);
+  ok('platte handtekening: groet, naam, functie, bedrijfstelefoon, e-mail — in die volgorde', plat.startsWith('Met vriendelijke groet,\nSara Jansen\nAssistente | Key Service 24/7\n') && /085 060 2359/.test(plat) && /info@keyservice247\.nl/.test(plat), JSON.stringify(plat));
+  const eigenTel = getEmailSignature({ ...ass, phone: '06 1111 2222' });
+  ok('eigen telefoon vervangt het bedrijfsnummer', /06 1111 2222/.test(eigenTel) && !/085 060 2359/.test(eigenTel));
+  const html = wrapHtmlMail(`Beste klant,\n\nWe komen morgen.\n\n${plat}`, ass);
+  ok('HTML-mail: naam van de assistente in de nette handtekening', !!html && /Sara Jansen/.test(html) && /Assistente \|/.test(html));
+  ok('HTML-mail: platte handtekening niet dubbel (geen "Met vriendelijke groet" in de tekst)', !!html && !/Met vriendelijke groet/.test(html));
+  const md = metDisclaimer(`Hallo\n\n${plat}`, 'DIT IS AUTOMATISCH', ass);
+  ok('voetregel komt VÓÓR de persoonlijke handtekening', md.indexOf('DIT IS AUTOMATISCH') < md.indexOf('Met vriendelijke groet'), JSON.stringify(md));
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

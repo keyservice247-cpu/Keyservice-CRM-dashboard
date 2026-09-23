@@ -4599,7 +4599,11 @@ async function loadSettingsHtml(s) {
       <div class="row"> <label>Slogan <input id="hs-tagline" value="${esc(s.htmlSignature?.tagline || '')}" placeholder="Service is key"></label> <label>Tel / WhatsApp <input id="hs-phone" value="${esc(s.htmlSignature?.phone || '')}"></label> </div>
       <div class="row"> <label>E-mail <input id="hs-email" value="${esc(s.htmlSignature?.email || '')}"></label> <label>Website <input id="hs-website" value="${esc(s.htmlSignature?.website || '')}"></label> </div>
       <label style="margin-top:8px">Platte tekst-handtekening (reserve) <textarea id="emailSignature" rows="3" style="margin-top:6px">${esc(s.emailSignature || '')}</textarea></label>
-      <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div> </div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveSignature">Handtekening opslaan</button></div>
+      <div style="border-top:1px solid var(--line-soft);margin:16px 0 0;padding-top:12px"><strong>Handtekening per medewerker</strong>
+        <p class="muted small" style="margin:4px 0 8px">Mailt de assistente of een monteur vanuit het CRM (antwoord, snel antwoord, Berichten, factuur), dan staat er automatisch <strong>haar of zijn eigen naam</strong> onder — in dezelfde mooie huisstijl. De functie vul je hier in (leeg = standaard per rol); telefoon en e-mail zijn van het bedrijf, tenzij je hier een eigen nummer invult. Met de testmail zie je precies wat de klant ziet.</p>
+        <div id="sigPerUser" class="muted small">Laden…</div>
+      </div> </div>
     <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Factuurgegevens (op elke factuur-PDF)</h3>
       <p class="muted small">Deze bedrijfsgegevens komen op elke factuur die je vanuit een opdracht verstuurt (knop <strong>Factuur</strong>). Het logo staat er automatisch op. Prijzen voer je <strong>excl. btw</strong> in.</p>
       <div class="row"> <label>Bedrijfsnaam <input id="is-name" value="${esc(s.invoiceSettings?.companyName || '')}"></label> <label>Telefoon <input id="is-phone" value="${esc(s.invoiceSettings?.phone || '')}"></label> </div>
@@ -5004,6 +5008,7 @@ async function loadSettingsHtml(s) {
     } catch (err) { toast(err.message, true); b.disabled = false; b.textContent = 'Nu opruimen'; }
   };
   $('#openAttMgr').onclick = openAttachmentManager;
+  laadSigPerUser();
   $('#saveSignature').onclick = async () => {
     const htmlSignature = {
       enabled: $('#hs-enabled').checked,
@@ -5541,6 +5546,51 @@ async function syncPush() {
   } catch { /* stil: meldingen zijn een extraatje, nooit de app blokkeren */ }
 }
 
+// HANDTEKENING PER MEDEWERKER (23 sep 2026): per account functie/telefoon/e-mail,
+// voorbeeld van de platte tekst en een testmail in naam van die persoon.
+async function laadSigPerUser() {
+  const box = $('#sigPerUser'); if (!box) return;
+  let users = [];
+  try { users = await api('/api/users'); } catch (err) { box.innerHTML = `<span class="error">${esc(err.message)}</span>`; return; }
+  const rolLabel = { admin: 'Beheerder', assistent: 'Assistente', monteur: 'Monteur' };
+  const rijen = await Promise.all(users.map(async (u) => {
+    let vb = null;
+    try { vb = await api(`/api/users/${u.id}/handtekening`); } catch { /* geen voorbeeld */ }
+    return { u, vb };
+  }));
+  box.innerHTML = rijen.map(({ u, vb }) => `
+    <div class="sig-user" data-uid="${esc(u.id)}">
+      <div class="sig-user-kop"><strong>${esc(u.name)}</strong> <span class="muted small">· ${esc(rolLabel[u.role] || u.role)} · ${esc(u.email || '')}</span></div>
+      <div class="row"><label>Naam in de mail <input class="su-naam" value="${esc(u.sigNaam || '')}" placeholder="${esc(u.name)}"></label>
+        <label>Functie <input class="su-functie" value="${esc(u.functie || '')}" placeholder="${u.role === 'assistent' ? 'Assistente | Key Service 24/7' : u.role === 'monteur' ? 'Monteur | Key Service 24/7' : 'bv. Eigenaar | Key Service 24/7'}"></label></div>
+      <div class="row"><label>Eigen telefoon (leeg = bedrijf) <input class="su-tel" value="${esc(u.sigTel || '')}" placeholder="${esc(state.settings?.htmlSignature?.phone || '085 060 2359')}"></label>
+        <label>Eigen e-mail (leeg = bedrijf) <input class="su-email" value="${esc(u.sigEmail || '')}" placeholder="${esc(state.settings?.htmlSignature?.email || 'info@keyservice247.nl')}"></label></div>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" class="su-uit" style="width:auto" ${u.sigUit ? 'checked' : ''}> Vaste bedrijfshandtekening gebruiken (geen eigen naam)</label>
+      <div class="sig-user-vb muted small">Onder mails van ${esc(u.name)} komt nu:<br><span class="sig-user-tekst" style="white-space:pre-line;color:var(--ink-soft)">${esc(vb?.tekst || '')}</span></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn btn-sm btn-primary su-save">Opslaan</button><button class="btn btn-sm su-test">${icon('mail', 13)} Testmail als ${esc((u.name || '').split(' ')[0])}</button></div>
+    </div>`).join('');
+  $$('#sigPerUser .su-save').forEach((b) => b.onclick = async () => {
+    const row = b.closest('.sig-user'); const uid = row.dataset.uid;
+    const payload = { sigNaam: $('.su-naam', row).value, functie: $('.su-functie', row).value, sigTel: $('.su-tel', row).value, sigEmail: $('.su-email', row).value, sigUit: $('.su-uit', row).checked };
+    try {
+      await api(`/api/users/${uid}`, 'PATCH', payload);
+      const vb = await api(`/api/users/${uid}/handtekening`);
+      $('.sig-user-tekst', row).textContent = vb.tekst || '';
+      toast('Handtekening opgeslagen');
+      if (uid === state.me?.id) await refreshMeta();
+    } catch (err) { toast(err.message, true); }
+  });
+  $$('#sigPerUser .su-test').forEach((b) => b.onclick = async () => {
+    const row = b.closest('.sig-user'); const uid = row.dataset.uid;
+    const to = await vraagTekst({ titel: 'Testmail versturen', uitleg: 'De mail gaat met de handtekening van deze medewerker naar het adres hieronder (niet naar een klant).', label: 'Naar e-mailadres', waarde: ($('#tm-to')?.value || state.me?.email || ''), type: 'email', knop: 'Versturen', valideer: (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? '' : 'Dit is geen geldig e-mailadres' });
+    if (to === null) return;
+    b.disabled = true; const oud = b.innerHTML; b.textContent = 'Versturen…';
+    try { await api('/api/test-mail', 'POST', { to: to.trim(), type: 'handtekening', userId: uid }); toast(`Testmail verstuurd naar ${to.trim()} — check ook je spam`); }
+    catch (err) { toast(err.message, true); }
+    finally { b.disabled = false; b.innerHTML = oud; }
+  });
+}
+
 // Wat krijg je op je telefoon? Verschilt per rol (server/push.js bepaalt wie wat krijgt).
 function pushUitlegVoorRol() {
   const rol = state.me?.role;
@@ -5682,7 +5732,7 @@ function openUserPermsModal(u) {
     </div>
     <div class="form-sec">${icon('mail', 13)} Naam onder uitgaande e-mail</div>
     <label>Functie van deze persoon <input id="up-functie" value="${esc(u.functie || '')}" placeholder="bv. Monteur | Key Service 24/7">
-      <span class="muted small">Vul je dit in, dan staat onder mails die déze gebruiker verstuurt zijn eigen naam en functie — in plaats van de vaste handtekening uit Instellingen. Leeg laten = de vaste handtekening blijft staan.</span></label>
+      <span class="muted small">Staat onder mails die déze gebruiker verstuurt (eigen naam + deze functie). Leeg = standaard per rol ("Assistente | Key Service 24/7"). Meer opties (eigen telefoon, testmail) bij Instellingen → E-mail handtekening.</span></label>
     <div class="form-sec">${icon('shield', 13)} Functies</div>
     <div id="up-perms">${rows(u.role)}</div>
     <button type="button" class="btn btn-sm" id="up-reset" style="margin-top:10px">Terug naar standaard van de rol</button>

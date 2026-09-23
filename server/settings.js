@@ -527,15 +527,36 @@ Team Key Service 24/7
 export function getEmailSignature(afzender = null) {
   const s = db().settings;
   const basis = (s.emailSignature !== undefined ? s.emailSignature : DEFAULT_EMAIL_SIGNATURE);
-  // Verstuurt Youssef of de assistente de mail, dan komt HÚN naam en functie erboven —
-  // niet die van de eigenaar. De bedrijfsgegevens eronder blijven ongewijzigd.
-  // Alleen overnemen als er ÉN een naam ÉN een functie is. Zonder functie blijft de
-  // vaste handtekening staan — anders belandde de accountnaam ("Beheerder") in de mail.
-  if (!afzender || !afzender.name || !afzender.role) return basis;
+  // PERSOONLIJKE handtekening (23 sep 2026): verstuurt de assistente of een monteur de
+  // mail, dan staat onder "Met vriendelijke groet," HÚN naam en functie (+ telefoon en
+  // e-mail van het bedrijf, of een eigen nummer als dat is ingevuld). Vroeger werd de
+  // naam in de vaste tekst "vervangen" — die tekst bevatte de naam niet, dus de naam
+  // kwam BOVEN "Met vriendelijke groet" te staan. Nu wordt hij netjes opgebouwd.
+  if (!afzender || !afzender.name) return basis;
   const sig = getHtmlSignature();
-  const oudeKop = `${sig.name}${sig.role ? `\n${sig.role}` : ''}`;
-  const nieuweKop = `${afzender.name}${afzender.role ? `\n${afzender.role}` : ''}`;
-  return basis.includes(sig.name) ? basis.replace(oudeKop, nieuweKop).replace(sig.name, afzender.name) : `${nieuweKop}\n${basis}`;
+  const regels = ['Met vriendelijke groet,', afzender.name];
+  if (afzender.role) regels.push(afzender.role);
+  const tel = afzender.phone || sig.phone;
+  if (tel) regels.push(tel);
+  if (sig.email) regels.push(sig.email);
+  return regels.join('\n');
+}
+
+// Handtekening-profiel van een INGELOGDE gebruiker (23 sep 2026, wens eigenaar):
+// assistentes en monteurs mailen automatisch onder hun EIGEN naam. Functie: het veld
+// bij Gebruikers/Instellingen, anders een nette standaard per rol ("Assistente |
+// Key Service 24/7"). Beheerder: alleen als er een functie of mailnaam is ingevuld —
+// het beheerdersaccount heet soms "Beheerder", en dat hoort niet in een mail.
+// `sigUit` = deze gebruiker gebruikt bewust de vaste bedrijfshandtekening.
+export function afzenderProfiel(u) {
+  if (!u || u.sigUit) return null;
+  const naam = String(u.sigNaam || u.name || '').trim();
+  if (!naam) return null;
+  const bedrijf = (String(getHtmlSignature().role || '').split('|')[1] || 'Key Service 24/7').trim();
+  const standaardRol = u.role === 'assistent' ? `Assistente | ${bedrijf}` : u.role === 'monteur' ? `Monteur | ${bedrijf}` : '';
+  const role = String(u.functie || '').trim() || standaardRol;
+  if (u.role === 'admin' && !String(u.functie || '').trim() && !String(u.sigNaam || '').trim()) return null;
+  return { name: naam, role, phone: String(u.sigTel || '').trim(), email: String(u.sigEmail || '').trim() };
 }
 
 // Lijst met groepsnamen (stukjes) waaruit we WhatsApp-opdrachten oppakken.

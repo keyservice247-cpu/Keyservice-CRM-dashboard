@@ -18,17 +18,27 @@ import { getHtmlSignature, getEmailSignature, getAutoMailDisclaimer } from '../s
 // Voetregel onder automatisch gegenereerde klantmails (wens eigenaar 10 sep 2026).
 // Komt VÓÓR de platte handtekening te staan: wrapHtmlMail herkent de handtekening
 // alleen als die het einde van de tekst is — erachter plakken gaf 'm dubbel in HTML.
-export function metDisclaimer(text, disclaimer = getAutoMailDisclaimer()) {
+export function metDisclaimer(text, disclaimer = getAutoMailDisclaimer(), afzender = null) {
   const d = String(disclaimer || '').trim();
   let t = String(text || '');
   if (!d || t.includes(d)) return t;
-  let plain = '';
-  try { plain = String(getEmailSignature() || '').trim(); } catch { /* geen handtekening */ }
-  if (plain && t.trim().endsWith(plain)) {
+  // Zowel de vaste als de persoonlijke handtekening herkennen (23 sep).
+  const plain = plakteHandtekening(t, afzender);
+  if (plain) {
     const kern = t.trim().slice(0, t.trim().length - plain.length).trim();
     return `${kern}\n\n${d}\n\n${plain}`;
   }
   return `${t.trim()}\n\n${d}`;
+}
+
+// Eindigt de tekst op een van onze platte handtekeningen (vast of persoonlijk)? Geeft
+// die handtekening terug, anders ''.
+function plakteHandtekening(text, afzender = null) {
+  const t = String(text || '').trim();
+  const kandidaten = [];
+  try { kandidaten.push(String(getEmailSignature(afzender) || '').trim()); } catch { /* geen */ }
+  try { kandidaten.push(String(getEmailSignature() || '').trim()); } catch { /* geen */ }
+  return kandidaten.find((k) => k && t.endsWith(k)) || '';
 }
 
 let transporter = null;
@@ -74,12 +84,14 @@ export function wrapHtmlMail(text, afzender = null) {
   // Alleen overnemen als er ÉN een naam ÉN een functie is ingevuld voor die gebruiker.
   // Zonder functie blijft de vaste handtekening staan; anders kwam de accountnaam
   // ("Beheerder") boven de handtekening te staan in plaats van de eigenaar.
-  if (afzender && afzender.name && afzender.role) sig = { ...sig, name: afzender.name, role: afzender.role };
+  // Persoonlijke handtekening (23 sep): naam + functie van de afzender, eigen telefoon/
+  // e-mail als die zijn ingevuld, anders die van het bedrijf.
+  if (afzender && afzender.name) sig = { ...sig, name: afzender.name, role: afzender.role || sig.role, phone: afzender.phone || sig.phone, email: afzender.email || sig.email };
   if (!sig || !sig.enabled) return null;
   let t = String(text || '');
   try {
-    const plain = String(getEmailSignature() || '').trim();
-    if (plain && t.trim().endsWith(plain)) t = t.trim().slice(0, t.trim().length - plain.length).trim();
+    const plain = plakteHandtekening(t, afzender);
+    if (plain) t = t.trim().slice(0, t.trim().length - plain.length).trim();
   } catch { /* fallback: hele tekst tonen */ }
   // De disclaimer-alinea klein en grijs, zodat hij als voetregel leest en niet als
   // onderdeel van het bericht.
@@ -148,7 +160,7 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
     if (probleem) { const e = new Error(probleem); e.rejectedRecipient = true; recordMailFailure(to, subject, probleem); throw e; }
   }
   // Automatisch gegenereerde klantmail → vaste voetregel (instelbaar, leeg = uit).
-  if (automatisch) text = metDisclaimer(text);
+  if (automatisch) text = metDisclaimer(text, undefined, afzender);
   // Altijd een nette afzendernaam, anders tonen mail-apps alleen het kale adresdeel
   // ("info"). SMTP_FROM (compleet) of SMTP_FROM_NAME (alleen de naam) op Render
   // overschrijven de standaard.

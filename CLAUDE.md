@@ -735,6 +735,30 @@ de regressie meegroeit.
   verborgen in Berichten via body[data-view="chats"] — showView zet
   body.dataset.view). Instellingen-kaart blijft voor de beheerder. Test:
   test/push-test.mjs (22, deel zonder server + PORT=3141) + 2 browser-asserties.
+- **PERSOONLIJKE E-MAILHANDTEKENING PER MEDEWERKER (23 sep 2026, klacht eigenaar
+  "de assistente mailt nog met mijn vaste tekst"):** oorzaak: `afzenderVan(req)`
+  nam de eigen naam alleen over als bij Gebruikers een FUNCTIE was ingevuld, en de
+  platte handtekening plakte "Naam\nFunctie" BÓVEN "Met vriendelijke groet" (de
+  vaste tekst bevatte de naam niet). Nu: `afzenderProfiel(user)` in settings.js →
+  {name, role, phone, email}: naam = sigNaam || accountnaam; functie = user.functie
+  of standaard per rol ("Assistente | <bedrijf>", "Monteur | <bedrijf>", bedrijf =
+  deel na "|" van htmlSignature.role); beheerder alleen met functie/sigNaam (anders
+  stond "Beheerder" in de mail); `sigUit` = bewust de vaste bedrijfshandtekening.
+  `getEmailSignature(afzender)` bouwt de platte tekst nu netjes op: "Met vriendelijke
+  groet, / naam / functie / (eigen of bedrijfs)telefoon / bedrijfs-e-mail".
+  wrapHtmlMail neemt naam/functie/telefoon/e-mail van de afzender over in de
+  HTML-handtekening en herkent óók de persoonlijke platte handtekening aan het einde
+  (plakteHandtekening) — geen dubbele groet meer; metDisclaimer idem (afzender
+  meegegeven vanuit sendMail). Geldt automatisch voor alle mails met afzenderVan(req):
+  kaart-antwoord, Berichten (e-mail), snel antwoord, factuur/offerte per mail, testmail.
+  /api/me meta.emailSignature is nu persoonlijk (voorbeeld in "Beantwoorden").
+  BEHEER: Instellingen → E-mail handtekening → blok "Handtekening per medewerker"
+  (laadSigPerUser: rij per account met Naam in de mail, Functie, eigen telefoon/e-mail,
+  vinkje vaste handtekening, voorbeeldtekst via GET /api/users/:id/handtekening,
+  knop "Testmail als <voornaam>" → POST /api/test-mail {type:'handtekening', userId}
+  = mail in naam van die medewerker naar een gekozen adres). PATCH /api/users/:id
+  accepteert sigNaam/sigTel/sigEmail/sigUit (+ bestaand functie). Tests: mail-test
+  (51, +11 zonder server), rollen-test (56, +7), browser (+1).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

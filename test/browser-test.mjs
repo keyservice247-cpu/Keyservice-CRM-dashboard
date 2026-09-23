@@ -334,6 +334,14 @@ await page.evaluate(() => loadSettings());
 await page.waitForTimeout(1200);
 ok('instellingen openen op de laatst gekozen groep (Facturen)', await page.evaluate(() => document.querySelector('#settingsPanel .sg-chip.on')?.dataset.g === 'facturen'));
 await page.waitForTimeout(1800);
+// HANDTEKENING PER MEDEWERKER (23 sep): blok gevuld met een rij per account + testmail-knop.
+await page.click('#settingsPanel .sg-chip[data-g="bericht"]');
+await page.waitForFunction(() => document.querySelectorAll('#sigPerUser .sig-user').length > 0, null, { timeout: 8000 });
+const sigRij = await page.evaluate(() => ({ rijen: document.querySelectorAll('#sigPerUser .sig-user').length, test: document.querySelectorAll('#sigPerUser .su-test').length, voorbeeld: [...document.querySelectorAll('#sigPerUser .sig-user-tekst')].some((e) => /Met vriendelijke groet/.test(e.textContent)) }));
+ok('handtekening per medewerker: rij per account, testmail-knop, voorbeeldtekst', sigRij.rijen >= 2 && sigRij.test === sigRij.rijen && sigRij.voorbeeld, JSON.stringify(sigRij));
+await page.click('#settingsPanel .sg-chip[data-g="facturen"]'); // terug naar de groep van de volgende asserties
+await page.evaluate(() => loadSettings()); // opnieuw opbouwen → koppelkaartje wordt weer geladen
+await page.waitForTimeout(2000);
 ok('koppel-kaartje zichtbaar op telefoonformaat', await page.locator('#wa-pair-card').isVisible());
 ok('de code staat er leesbaar in', (await page.locator('#pair-code').textContent().catch(() => '')) === 'V6AF-P2CR');
 const past = await page.evaluate(() => {

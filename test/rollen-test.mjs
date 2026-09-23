@@ -58,6 +58,27 @@ ok('status-scan mag', (await api('GET', '/api/digest')).status === 200);
 ok('instellingen wijzigen mag NIET', (await api('PATCH', '/api/settings', { whatsappPaused: false })).status === 403);
 ok('pauzeknop via Berichten mag WEL', (await api('POST', '/api/whatsapp/pause', { paused: false })).status === 200);
 ok('onbeantwoord-lijst', Array.isArray((await api('GET', '/api/chats/onbeantwoord')).json));
+// HANDTEKENING PER MEDEWERKER (23 sep): de assistente mailt automatisch onder eigen naam.
+{
+  const me = (await api('GET', '/api/me')).json;
+  const sig = String(me?.meta?.emailSignature || '');
+  ok('assistente: /api/me toont haar EIGEN handtekening (naam + standaardfunctie)', /Met vriendelijke groet,\nAssistente Test\nAssistente \| Key Service 24\/7/.test(sig), JSON.stringify(sig));
+  ok('assistente: geen "Team Key Service" meer onder haar mails', !/Team Key Service/.test(sig));
+  const assUser = (await (async () => { cookie = adminCookie; const l = (await api('GET', '/api/users')).json; cookie = ''; return l; })()).find((u) => u.email === 'assistente@keyservice.nl');
+  cookie = adminCookie;
+  ok('beheerder: voorbeeld per medewerker (GET /api/users/:id/handtekening)', (await api('GET', `/api/users/${assUser.id}/handtekening`)).json?.eigen === true);
+  await api('PATCH', `/api/users/${assUser.id}`, { functie: 'Officemanager | Key Service 24/7', sigTel: '06 1234 5678' });
+  const vb = (await api('GET', `/api/users/${assUser.id}/handtekening`)).json;
+  ok('beheerder: functie + eigen telefoon werken door in haar handtekening', /Officemanager \| Key Service 24\/7\n06 1234 5678/.test(vb.tekst || ''), JSON.stringify(vb));
+  await api('PATCH', `/api/users/${assUser.id}`, { sigUit: true });
+  const vb2 = (await api('GET', `/api/users/${assUser.id}/handtekening`)).json;
+  ok('"vaste bedrijfshandtekening" → geen eigen naam, vaste tekst', vb2.eigen === false && /Team Key Service/.test(vb2.tekst || ''), JSON.stringify(vb2));
+  await api('PATCH', `/api/users/${assUser.id}`, { sigUit: false });
+  ok('beheerder zelf ("Beheerder" zonder functie) houdt de vaste handtekening', /Team Key Service/.test(String((await api('GET', '/api/me')).json?.meta?.emailSignature || '')));
+  const tm = await api('POST', '/api/test-mail', { to: 'x@example.nl', type: 'handtekening', userId: assUser.id });
+  ok('testmail als medewerker: route bestaat (zonder SMTP nette 400, geen 404/500)', tm.status === 400 && /SMTP/.test(tm.json?.error || ''), JSON.stringify(tm.json));
+  await login('assistente@keyservice.nl', 'assist123');
+}
 ok('afgewezen bericht definitief verwijderen: inbox-recht volstaat (404 = auth ok)', (await api('DELETE', '/api/reviews/bestaat-niet')).status === 404);
 ok('cijfers mag NIET', (await api('GET', '/api/finance')).status === 403);
 ok('factuur bereikbaar (alle facturen zien staat standaard aan)', (await api('GET', `/api/invoices/${invId}`)).status === 200);
