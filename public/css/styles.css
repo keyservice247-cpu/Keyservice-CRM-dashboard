@@ -383,6 +383,8 @@ tr:last-child td { border-bottom: none; }
 .sent-monteur { background: var(--ok-soft); color: var(--ok); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 12px; margin: -6px 0 14px; display: inline-block; }
 /* Suggestie-banners (lead-instroom wetten): het systeem beslist nooit zelf —
    deze balken vragen om een menselijke keuze (samenvoegen / bijwerken / negeren). */
+.ai-modeltest { width: 100%; }
+.ai-modeltest td { padding: 6px 8px 6px 0; vertical-align: top; }
 .sig-user { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 10px; background: var(--panel-2); }
 .sig-user-kop { margin-bottom: 6px; }
 .sig-user .row { gap: 10px; }

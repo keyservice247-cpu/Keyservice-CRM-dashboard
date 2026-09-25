@@ -1277,7 +1277,7 @@ async function loadOverview() {
   const renderDayOverview = (d) => {
     const body = $('#dayov-body'); if (!body) return;
     const meta = $('#dayov-meta');
-    if (meta && d.at) meta.textContent = `${d.engine && /opus/i.test(d.engine) ? 'Opus · ' : ''}gemaakt ${fmtDate(d.at)}`;
+    if (meta && d.at) meta.textContent = `${d.engine ? `${modelNaam(d.engine)}${d.terugvalVan ? ` (i.p.v. ${modelNaam(d.terugvalVan)})` : ''} · ` : ''}gemaakt ${fmtDate(d.at)}`;
     const viewOf = { inbox: 'inbox', opdrachten: 'board', facturen: 'invoices', agenda: 'agenda', klanten: 'customers' };
     const prioDot = { hoog: '#ef4444', middel: '#f59e0b', laag: '#10b981' };
     if (d.data) {
@@ -4069,6 +4069,15 @@ function renderInvoices() {
   quickStatus('.inv-ok', 'goedgekeurd', 'Offerte goedgekeurd ✓');
 }
 
+// Leesbare modelnaam ("claude-opus-5-5" → "Opus 5.5").
+function modelNaam(id) {
+  const m = String(id || '').replace(/^ai:/, '');
+  if (/opus-5-5/.test(m)) return 'Opus 5.5';
+  if (/opus-5\b|opus-5$/.test(m)) return 'Opus 5';
+  if (/sonnet-5/.test(m)) return 'Sonnet 5';
+  if (/haiku/.test(m)) return 'Haiku 4.5';
+  return m;
+}
 // ---------- Cijfers / Financiën ----------
 const eurF = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
 // Datum van VANDAAG in de tijdzone van de browser (niet UTC — 's nachts na 00:00 gaf
@@ -4803,7 +4812,9 @@ async function loadSettingsHtml(s) {
         <option value="opus" ${s.aiOverviewModel !== 'standaard' ? 'selected' : ''}>Opus 5.5 (standaard) — scherpst, ± €0,20 per keer</option>
         <option value="standaard" ${s.aiOverviewModel === 'standaard' ? 'selected' : ''}>Sonnet 5 — goedkoper, ± €0,10 per keer</option>
       </select></label>
-      <div style="margin-top:12px"><button class="btn btn-primary" id="saveOvModel">Opslaan</button></div>
+      <p class="muted small" style="margin:8px 0 0">De ochtendbriefing gebruikt hetzelfde overzicht, dus die leest óók WhatsApp en e-mail. Werkt Opus 5.5 even niet, dan schakelt het CRM vanzelf over naar Opus 5 of Sonnet 5 — het overzicht valt nooit stil.</p>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" id="saveOvModel">Opslaan</button><button class="btn" id="testAiModellen" title="Stuurt één piepkleine vraag naar elk AI-model (kost minder dan 1 cent)">${icon('check', 13)} Test AI-modellen</button></div>
+      <div id="aiModelTest" class="muted small" style="margin-top:10px"></div>
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>Opdrachten naar monteur (WhatsApp)</h3> <p class="muted small">Stuur opdrachten naar de WhatsApp-groep van een monteur. Handmatig via de knop op een opdracht, of automatisch volgens onderstaande regels. Koppel eerst per monteur een WhatsApp-groep (bij Monteurs).</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="md-auto" style="width:auto"> Automatisch versturen aanzetten</label>
@@ -5102,6 +5113,20 @@ async function loadSettingsHtml(s) {
   $('#saveWachtOpAntwoord').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { wachtOpAntwoordDagen: Number($('#woa-dagen').value) }); toast('Termijn "Wacht op antwoord" opgeslagen'); }
     catch (err) { toast(err.message, true); }
+  };
+  $('#testAiModellen').onclick = async () => {
+    const btn = $('#testAiModellen'); const box = $('#aiModelTest');
+    btn.disabled = true; const oud = btn.innerHTML; btn.textContent = 'Testen…';
+    box.textContent = 'Elk model krijgt één korte vraag…';
+    try {
+      const r = await api('/api/ai/modeltest', 'POST', {});
+      box.innerHTML = `<table class="ai-modeltest"><tbody>${(r.modellen || []).map((m) => `<tr>
+        <td>${m.ok ? '<span class="inv-st betaald">werkt ✓</span>' : '<span class="inv-st verlopen">werkt niet</span>'}</td>
+        <td><strong>${esc(m.naam || m.model)}</strong><div class="muted small">${esc(m.rol)}</div></td>
+        <td class="muted small">${m.ok ? `${(m.ms / 1000).toFixed(1).replace('.', ',')} s` : `${esc(m.fout || '')}${m.terugval && m.terugval.length ? `<br>Geen probleem: het CRM gebruikt dan automatisch ${esc(m.terugval.map(modelNaam).join(' of '))}.` : ''}`}</td>
+      </tr>`).join('')}</tbody></table>`;
+    } catch (err) { box.innerHTML = `<span class="error">${esc(err.message)}</span>`; }
+    finally { btn.disabled = false; btn.innerHTML = oud; }
   };
   $('#saveOvModel').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { aiOverviewModel: $('#ov-model').value }); toast('AI-dagoverzicht-instelling opgeslagen'); }

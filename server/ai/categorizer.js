@@ -434,6 +434,87 @@ export function effortVoor(model, level = 'low') {
   return /sonnet-5|opus-5|opus-4-[678]|fable/i.test(String(model || '')) ? { output_config: { effort: level } } : {};
 }
 
+// ---------- TERUGVAL + MODELTEST (25 sep 2026) ----------
+// Opus 5.5 is nieuw. Weigert de API het model (bestaat niet op dit account, 404/400
+// over het model) of blijft het overbelast, dan gaat het verzoek automatisch naar het
+// volgende model in de ketting. Zo valt het dagoverzicht of de briefing NOOIT stil
+// door een modelkeuze; welk model het werd staat in 'engine' en in het logboek.
+export function modelKetting(model) {
+  const m = String(model || '');
+  if (/opus-5-5/.test(m)) return [m, MODELLEN.opus, MODELLEN.analyse];
+  if (/opus-5$/.test(m)) return [m, MODELLEN.analyse];
+  return [m];
+}
+const TIJDELIJK = [429, 500, 502, 503, 529];
+// Eén model aanroepen met herkansing bij tijdelijke fouten. Geeft {ok, json, status, fout}.
+async function roepModel(apiKey, bodyObj, { timeoutMs = 120000, pogingen = 3 } = {}) {
+  let status = 0; let fout = '';
+  for (let poging = 0; poging < pogingen; poging++) {
+    if (poging) await new Promise((r) => setTimeout(r, poging * 2500));
+    let resp;
+    try {
+      resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify(bodyObj),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) { status = 0; fout = `netwerkfout: ${e.message}`; continue; }
+    if (resp.ok) return { ok: true, json: await resp.json(), status: resp.status };
+    status = resp.status;
+    const det = await resp.text().catch(() => '');
+    let uitleg = '';
+    try { uitleg = (JSON.parse(det).error || {}).message || ''; } catch { uitleg = det.slice(0, 160); }
+    fout = `Claude API status ${resp.status}${uitleg ? ` — ${uitleg}` : ''}`;
+    if (!TIJDELIJK.includes(resp.status)) break; // niet-tijdelijk: niet herhalen
+  }
+  return { ok: false, status, fout };
+}
+// Mag dit falen naar een ander model? Ja bij "model bestaat niet / niet ondersteund"
+// (404, of 400 dat over het model of een parameter gaat) en bij aanhoudende overbelasting.
+function magTerugvallen(r) {
+  if (r.ok) return false;
+  if (r.status === 404 || r.status === 0 || TIJDELIJK.includes(r.status)) return true;
+  return r.status === 400 && /model|not[ _]found|not supported|niet ondersteund|effort|thinking|output_config/i.test(r.fout || '');
+}
+// Verzoek met terugval over de ketting. bouwBody(model) maakt het verzoek per model
+// (effort verschilt per model). Geeft {ok, json, model, terugvalVan, fout}.
+export async function vraagMetTerugval(apiKey, model, bouwBody, opts = {}) {
+  let laatste = null;
+  for (const m of modelKetting(model)) {
+    const r = await roepModel(apiKey, bouwBody(m), opts);
+    if (r.ok) {
+      recordAIUsage(r.json.usage, m);
+      if (m !== model) {
+        try { (await import('../db.js')).logActivity('systeem', 'AI-terugval', `${model} niet bruikbaar (${String(laatste?.fout || '').slice(0, 120)}) — ${m} gebruikt`); } catch { /* nooit blokkeren */ }
+        console.warn(`[ai] terugval ${model} → ${m}: ${laatste?.fout || ''}`);
+      }
+      return { ok: true, json: r.json, model: m, terugvalVan: m !== model ? model : '' };
+    }
+    laatste = r;
+    if (!magTerugvallen(r)) break;
+  }
+  return { ok: false, fout: laatste?.fout || 'AI niet bereikbaar' };
+}
+// MODELTEST (knop in Instellingen → AI): één piepkleine vraag per model, zonder
+// terugval, zodat je ziet welk model écht werkt op dit account. Kost < 1 cent.
+export async function testAiModellen() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const lijst = [
+    { rol: 'Inbox-indeling', model: process.env.ANTHROPIC_MODEL || MODELLEN.snel },
+    { rol: 'Analyses, statusscan, concept-antwoord', model: process.env.ANTHROPIC_ANALYZE_MODEL || MODELLEN.analyse },
+    { rol: 'Dagoverzicht + ochtendbriefing', model: process.env.ANTHROPIC_BRIEFING_MODEL || MODELLEN.opus55 },
+  ];
+  if (!apiKey) return lijst.map((x) => ({ ...x, ok: false, fout: 'Geen ANTHROPIC_API_KEY op de server' }));
+  return Promise.all(lijst.map(async (x) => {
+    const t0 = Date.now();
+    const r = await roepModel(apiKey, { model: x.model, max_tokens: 400, ...effortVoor(x.model, 'low'), messages: [{ role: 'user', content: 'Antwoord alleen met: OK' }] }, { timeoutMs: 60000, pogingen: 2 });
+    if (r.ok) recordAIUsage(r.json.usage, x.model);
+    const tekst = r.ok ? (r.json.content || []).map((c) => c.text || '').join('').trim() : '';
+    return { ...x, ok: r.ok, ms: Date.now() - t0, antwoord: tekst.slice(0, 40), fout: r.ok ? '' : r.fout, terugval: modelKetting(x.model).slice(1) };
+  }));
+}
+
 export async function suggestReply({ customerName, problem, history = '', templates = [], companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const model = process.env.ANTHROPIC_REPLY_MODEL || MODELLEN.analyse; // Sonnet 5: beter Nederlands voor de klant
@@ -521,15 +602,9 @@ export async function morningInsight({ facts, companyProfile = '', tone = 'coach
     : 'Coachend en menselijk, alsof een slimme rechterhand even meedenkt.';
   const system = `Je bent de operationeel rechterhand van Keyservice, een sleutel-/slotenmakersbedrijf. Je krijgt de feiten van vanochtend uit het CRM, soms aangevuld met wat er in WhatsApp en e-mail speelt. Schrijf in het Nederlands een korte duiding van 2 à 3 zinnen: waar moet vandaag de focus liggen en waarom. Verwijs naar concrete aantallen of namen uit de feiten. Geen opsomming, geen begroeting, geen emoji. ${stijl}${companyProfile ? `\n\nOver het bedrijf:\n${String(companyProfile).slice(0, 1500)}` : ''}`;
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model, max_tokens: 2000, ...effortVoor(model, 'low'), system, messages: [{ role: 'user', content: `Feiten van vanochtend:\n${facts}` }] }),
-    });
-    if (!resp.ok) return '';
-    const json = await resp.json();
-    recordAIUsage(json.usage, model);
-    return (json.content || []).map((c) => c.text || '').join('').trim();
+    const r = await vraagMetTerugval(apiKey, model, (m) => ({ model: m, max_tokens: 2000, ...effortVoor(m, 'low'), system, messages: [{ role: 'user', content: `Feiten van vanochtend:\n${facts}` }] }));
+    if (!r.ok) { console.error('[ochtendbriefing] AI-duiding mislukt:', r.fout); return ''; }
+    return (r.json.content || []).map((c) => c.text || '').join('').trim();
   } catch { return ''; }
 }
 
@@ -621,37 +696,15 @@ Antwoord UITSLUITEND met geldige JSON (geen tekst eromheen, geen markdown):
  "kansen":["..."],
  "risicos":["..."]}
 Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar = "inbox"|"opdrachten"|"facturen"|"agenda"|"klanten"). "beantwoorden" = jouw ADVISEURSROL: max 5 berichten/mails uit het verkeer die een antwoord verwachten of te belangrijk zijn om te missen (wachtende klanten, vragen zonder reactie, boze of dringende toon, zakelijke kansen; kanaal = "email"|"whatsapp"; urgent alleen bij echte haast) — sla over wat al beantwoord lijkt. Max 3 kansen (omzet/vervolgklussen die je in het verkeer ziet), max 3 risico's (dingen die stil dreigen mis te gaan). Wees CONCREET: gebruik namen, plaatsen en bedragen uit de gegevens. Nederlands, geen emoji, geen verzinsels — alleen wat je echt ziet.`;
-  // Overbelasting/rate-limit (429/529) is tijdelijk: kort wachten en opnieuw,
-  // zodat één drukke minuut bij Anthropic niet je hele dagoverzicht kost.
-  // Ruime antwoordlimiet: met 2500 werd de JSON regelmatig middenin afgekapt
-  // (stop_reason max_tokens) en was het hele dagoverzicht onbruikbaar.
+  // Herkansing bij tijdelijke fouten én terugval naar een ander model (vraagMetTerugval):
+  // één drukke minuut of een nog niet beschikbaar Opus 5.5 kost nooit het dagoverzicht.
   // 16000: Opus 5.5 / Sonnet 5 denken eerst na en dat telt mee voor de limiet.
   // Effort 'medium' expliciet (Opus 5.5 default, Sonnet 5 zou anders 'high' doen).
-  const body = JSON.stringify({ model: useModel, max_tokens: 16000, ...effortVoor(useModel, 'medium'), system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] });
-  let resp = null; let lastErr = '';
-  for (let poging = 0; poging < 3; poging++) {
-    if (poging) await new Promise((r) => setTimeout(r, poging * 2500));
-    try {
-      resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body,
-        // Veel berichten + nadenken kan langer duren dan de globale 120 s.
-        signal: AbortSignal.timeout(240000),
-      });
-    } catch (e) { lastErr = `netwerkfout: ${e.message}`; resp = null; continue; }
-    if (resp.ok) break;
-    // Foutdetails van de API meenemen — anders blijft het gissen.
-    const det = await resp.text().catch(() => '');
-    let uitleg = '';
-    try { uitleg = (JSON.parse(det).error || {}).message || ''; } catch { uitleg = det.slice(0, 160); }
-    lastErr = `Claude API status ${resp.status}${uitleg ? ` — ${uitleg}` : ''}`;
-    if (![429, 500, 502, 503, 529].includes(resp.status)) break; // niet-tijdelijk: stoppen
-    resp = null;
-  }
-  if (!resp || !resp.ok) throw new Error(lastErr || 'AI niet bereikbaar');
-  const json = await resp.json();
-  recordAIUsage(json.usage, useModel);
+  // Veel berichten + nadenken kan langer duren dan de globale 120 s → 240 s.
+  const r = await vraagMetTerugval(apiKey, useModel, (m) => ({ model: m, max_tokens: 16000, ...effortVoor(m, 'medium'), system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] }), { timeoutMs: 240000 });
+  if (!r.ok) throw new Error(r.fout || 'AI niet bereikbaar');
+  const json = r.json;
+  const gebruikt = r.model;
   const text = (json.content || []).map((c) => c.text || '').join('').trim();
   // Afgekapt/omringd antwoord redden: pak het buitenste JSON-blok.
   // Pak het JSON-blok; is het antwoord afgekapt, dan staat er geen sluit-accolade
@@ -680,7 +733,7 @@ Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar =
     kansen: arr(parsed.kansen, 3).map((k) => String(k).slice(0, 200)).filter(Boolean),
     risicos: arr(parsed.risicos, 3).map((k) => String(k).slice(0, 200)).filter(Boolean),
   };
-  return { data, engine: `ai:${useModel}` };
+  return { data, engine: `ai:${gebruikt}`, terugvalVan: r.terugvalVan || '' };
 }
 
 // AI-vraagbaak: beantwoordt een vrije vraag op basis van de opgeslagen WhatsApp/

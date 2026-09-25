@@ -338,6 +338,7 @@ await page.waitForTimeout(1800);
 await page.click('#settingsPanel .sg-chip[data-g="bericht"]');
 await page.waitForFunction(() => document.querySelectorAll('#sigPerUser .sig-user').length > 0, null, { timeout: 8000 });
 const sigRij = await page.evaluate(() => ({ rijen: document.querySelectorAll('#sigPerUser .sig-user').length, test: document.querySelectorAll('#sigPerUser .su-test').length, voorbeeld: [...document.querySelectorAll('#sigPerUser .sig-user-tekst')].some((e) => /Met vriendelijke groet/.test(e.textContent)) }));
+ok('Instellingen → AI: knop "Test AI-modellen" aanwezig', await page.locator('#testAiModellen').count() === 1);
 ok('handtekening per medewerker: rij per account, testmail-knop, voorbeeldtekst', sigRij.rijen >= 2 && sigRij.test === sigRij.rijen && sigRij.voorbeeld, JSON.stringify(sigRij));
 await page.click('#settingsPanel .sg-chip[data-g="facturen"]'); // terug naar de groep van de volgende asserties
 await page.evaluate(() => loadSettings()); // opnieuw opbouwen → koppelkaartje wordt weer geladen

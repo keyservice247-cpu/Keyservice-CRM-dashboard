@@ -90,6 +90,44 @@ await auto.sendMorningBriefing({ isTest: true });
 const zonder = (db().outbox || []).find((o) => o.by === 'ochtendbriefing');
 ok('AI faalt → briefing gaat toch uit, zonder WhatsApp/e-mailblok', !!zonder && /Ochtendbriefing/.test(zonder.text) && !/UIT WHATSAPP/.test(zonder.text), zonder && zonder.text.slice(0, 120));
 
+console.log('\n== Terugval: Opus 5.5 geweigerd → volgend model neemt over ==');
+{
+  const aanvragen = [];
+  const weiger = new Set(['claude-opus-5-5']);
+  globalThis.fetch = async (url, opts = {}) => {
+    const body = JSON.parse(opts.body || '{}'); aanvragen.push(body.model);
+    if (weiger.has(body.model)) return new Response(JSON.stringify({ type: 'error', error: { type: 'not_found_error', message: `model: ${body.model}` } }), { status: 404 });
+    const tekst = /JSON/.test(String(body.system || '')) ? DAG_JSON : 'OK';
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: tekst }], usage: { input_tokens: 10, output_tokens: 5 } }), { status: 200 });
+  };
+  const d1 = await ai.dayOverview({ corpus: 'x', facts: 'y', model: ai.MODELLEN.opus55 });
+  ok('dagoverzicht: Opus 5.5 404 → Opus 5 levert, engine + terugvalVan kloppen', d1.data && d1.engine === 'ai:claude-opus-5' && d1.terugvalVan === 'claude-opus-5-5' && aanvragen.join() === 'claude-opus-5-5,claude-opus-5', JSON.stringify({ e: d1.engine, t: d1.terugvalVan, a: aanvragen }));
+  aanvragen.length = 0; weiger.add('claude-opus-5');
+  const t1 = await ai.morningInsight({ facts: 'Afspraken: 1' });
+  ok('ochtendbriefing: Opus 5.5 én Opus 5 weg → Sonnet 5 schrijft de duiding', t1 === 'OK' && aanvragen.join() === 'claude-opus-5-5,claude-opus-5,claude-sonnet-5', aanvragen.join());
+  aanvragen.length = 0;
+  globalThis.fetch = async (url, opts = {}) => { aanvragen.push(JSON.parse(opts.body).model); return new Response(JSON.stringify({ error: { message: 'messages: text content blocks must be non-empty' } }), { status: 400 }); };
+  const d2 = await ai.dayOverview({ corpus: 'x', facts: 'y', model: ai.MODELLEN.opus55 }).catch((e) => ({ fout: e.message }));
+  ok('fout in ons eigen verzoek (400, niet over het model) → géén zinloze terugval', aanvragen.length === 1 && /400/.test(d2.fout || ''), JSON.stringify({ a: aanvragen, d2 }));
+  aanvragen.length = 0;
+  globalThis.fetch = async (url, opts = {}) => { const m = JSON.parse(opts.body).model; aanvragen.push(m); return m === 'claude-opus-5-5' ? new Response('{"error":{"message":"Overloaded"}}', { status: 529 }) : new Response(JSON.stringify({ content: [{ type: 'text', text: DAG_JSON }], usage: {} }), { status: 200 }); };
+  const d3 = await ai.dayOverview({ corpus: 'x', facts: 'y', model: ai.MODELLEN.opus55 });
+  ok('Opus 5.5 aanhoudend overbelast (3 pogingen) → Opus 5', d3.engine === 'ai:claude-opus-5' && aanvragen.filter((m) => m === 'claude-opus-5-5').length === 3, aanvragen.join());
+}
+
+console.log('\n== Modeltest (knop Instellingen → AI) ==');
+{
+  globalThis.fetch = async (url, opts = {}) => { const m = JSON.parse(opts.body).model; return m === 'claude-opus-5-5' ? new Response(JSON.stringify({ error: { message: 'model: claude-opus-5-5 not found' } }), { status: 404 }) : new Response(JSON.stringify({ content: [{ type: 'text', text: 'OK' }], usage: {} }), { status: 200 }); };
+  const r = await ai.testAiModellen();
+  ok('drie modellen getest: Haiku, Sonnet 5, Opus 5.5', r.length === 3 && r.map((x) => x.model).join() === 'claude-haiku-4-5-20251001,claude-sonnet-5,claude-opus-5-5', r.map((x) => x.model).join());
+  ok('werkende modellen: ok + antwoord', r[0].ok && r[1].ok && r[1].antwoord === 'OK');
+  ok('Opus 5.5 niet beschikbaar: eerlijke fout + welke terugval het CRM dan gebruikt', !r[2].ok && /404/.test(r[2].fout) && r[2].terugval.join() === 'claude-opus-5,claude-sonnet-5', JSON.stringify(r[2]));
+  delete process.env.ANTHROPIC_API_KEY;
+  const r2 = await ai.testAiModellen();
+  ok('zonder sleutel op de server: duidelijke melding, geen crash', r2.every((x) => !x.ok && /ANTHROPIC_API_KEY/.test(x.fout)));
+  process.env.ANTHROPIC_API_KEY = 'test-sleutel';
+}
+
 console.log('\n== Kostenteller: actuele prijzen ==');
 const u = await import('../server/usage.js');
 const r2 = (x) => Math.round(x * 100) / 100;

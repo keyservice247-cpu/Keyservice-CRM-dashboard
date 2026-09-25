@@ -680,7 +680,7 @@ export async function haalDagoverzicht({ refresh = false } = {}) {
       try { logActivity('systeem', 'AI-dagoverzicht mislukt', String(out.error || '').slice(0, 180)); } catch { /* nooit blokkeren */ }
       console.error('[dagoverzicht]', out.error);
     }
-    const payload = { day: today, at: now(), data: out.data || null, engine: out.engine || '', error: out.data ? '' : (out.error || 'ai-fout'), facts: factsData };
+    const payload = { day: today, at: now(), data: out.data || null, engine: out.engine || '', terugvalVan: out.terugvalVan || '', error: out.data ? '' : (out.error || 'ai-fout'), facts: factsData };
     if (out.data) { db()._dayOverview = payload; _dayOvErr = null; saveSoon(); }
     else _dayOvErr = { at: Date.now(), payload };
     return payload;

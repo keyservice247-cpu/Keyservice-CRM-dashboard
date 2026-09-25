@@ -802,8 +802,17 @@ de regressie meegroeit.
   klaar op Start (cache). Faalt de AI, dan gaat de briefing gewoon zonder dit blok uit.
   KOSTENTELLER (usage.js) op actuele prijzen: Haiku $1/$5, Sonnet 5 $2/$10 (was 3/15),
   Opus 5 $5/$25 (was 15/75), Opus 5.5 $4/$20 als eigen regel (tier opus55, label in
-  perModel). Test: test/ai-modellen-test.mjs (24, zonder server, fetch onderschept —
-  géén echte AI-kosten).
+  perModel). TERUGVAL (zelfde dag, na klacht eigenaar "je laat het liggen"): Opus 5.5 is
+  nieuw en kon niet live getest worden (geen API-sleutel in de ontwikkelomgeving) →
+  `vraagMetTerugval(apiKey, model, bouwBody)` in categorizer.js loopt de `modelKetting`
+  af (Opus 5.5 → Opus 5 → Sonnet 5) bij 404, 400 over model/parameter, netwerkfout of
+  aanhoudende overbelasting (3 pogingen); een 400 over ons eigen verzoek valt bewust
+  NIET terug. Logboekregel "AI-terugval"; dagoverzicht-payload draagt terugvalVan en
+  Start toont "Opus 5 (i.p.v. Opus 5.5)". Gebruikt door dagoverzicht + ochtendbriefing.
+  MODELTEST: knop "Test AI-modellen" in Instellingen → AI → POST /api/ai/modeltest
+  (admin; testAiModellen: één vraag van <1 cent per model, zonder terugval) → tabel
+  "werkt ✓ / werkt niet + welke terugval". Test: test/ai-modellen-test.mjs (32, zonder
+  server, fetch onderschept — géén echte AI-kosten) + browser (+1).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

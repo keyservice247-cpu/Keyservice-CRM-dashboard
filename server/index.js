@@ -43,7 +43,7 @@ import {
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
   can, requirePerm, PERM_KEYS,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import { amsterdamParts } from './week.js';
 import {
@@ -4941,6 +4941,16 @@ app.post('/api/finance/import-income', requirePerm('finance'), (req, res) => {
 // AVG: het dagoverzicht bevat klantnamen/omzet uit het HELE bedrijf — niet voor de
 // monteur-rol. Fout-antwoorden worden kort (15 min) in het geheugen onthouden i.p.v.
 // de hele dag gecachet, en parallelle aanvragen delen één AI-call (in-flight guard).
+// Modeltest (Instellingen → AI): werkt elk AI-model écht op dit account? Eén
+// piepkleine vraag per model (< 1 cent), zonder terugval — zodat je het ziet.
+app.post('/api/ai/modeltest', requireRole('admin'), async (req, res) => {
+  const namen = { 'claude-opus-5-5': 'Opus 5.5', 'claude-opus-5': 'Opus 5', 'claude-sonnet-5': 'Sonnet 5' };
+  const lijst = await testAiModellen();
+  const modellen = lijst.map((m) => ({ ...m, naam: namen[m.model] || (/haiku/.test(m.model) ? 'Haiku 4.5' : m.model) }));
+  logActivity(req.user.name, 'AI-modellen getest', modellen.map((m) => `${m.naam}: ${m.ok ? 'ok' : 'FOUT'}`).join(', '));
+  res.json({ modellen });
+});
+
 // Het dagoverzicht zelf (cache, fout-rem, AI-aanroep) woont sinds 25 sep 2026 in
 // automations.js (haalDagoverzicht), zodat de ochtendbriefing dezelfde uitkomst kan
 // gebruiken — die leest daardoor óók wat er in WhatsApp en e-mail speelt.
