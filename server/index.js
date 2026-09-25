@@ -3251,6 +3251,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       enabled: !!bm.enabled,
       email: String(bm.email || '').slice(0, 200).trim(),
       hour: Math.max(0, Math.min(23, Number(bm.hour) >= 0 ? Number(bm.hour) : 6)),
+      frequentie: ['halfmaand', 'week', 'dag'].includes(bm.frequentie) ? bm.frequentie : 'halfmaand',
     };
   }
   if ('terugkoppeling' in b) {

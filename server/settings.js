@@ -397,7 +397,12 @@ export function getReviewRequest() {
 
 // Dagelijkse off-site back-up: stuurt een kopie van de database als bijlage naar
 // een e-mailadres, zodat er altijd een verse kopie buiten de server staat.
-export const DEFAULT_BACKUP_MAIL = { enabled: false, email: '', hour: 6 };
+// frequentie (25 sep 2026, wens eigenaar "dagelijks volgestampt met back-ups"):
+// 'halfmaand' = 2x per maand (op/na de 1e en de 15e) — STANDAARD; 'week' = elke
+// maandag; 'dag' = elke dag (het oude gedrag). De back-ups op de server zelf (elke
+// 6 uur, db.js backupNow) lopen los hiervan altijd door.
+export const BACKUP_MAIL_FREQUENTIES = ['halfmaand', 'week', 'dag'];
+export const DEFAULT_BACKUP_MAIL = { enabled: false, email: '', hour: 6, frequentie: 'halfmaand' };
 
 export function getBackupMail() {
   const b = db().settings.backupMail || {};
@@ -405,6 +410,7 @@ export function getBackupMail() {
     enabled: !!b.enabled,
     email: b.email || '',
     hour: Math.max(0, Math.min(23, Number(b.hour) >= 0 ? Number(b.hour) : DEFAULT_BACKUP_MAIL.hour)),
+    frequentie: BACKUP_MAIL_FREQUENTIES.includes(b.frequentie) ? b.frequentie : DEFAULT_BACKUP_MAIL.frequentie,
   };
 }
 

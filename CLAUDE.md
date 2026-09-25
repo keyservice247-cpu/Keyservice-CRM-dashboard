@@ -770,6 +770,18 @@ de regressie meegroeit.
   opdrachttitel/laatste bericht, 150 ms; tekenChatLijst gedeeld met de pulse;
   .chat-list-kolom verbergt op mobiel bij een open gesprek). Tests: factuur-test 57,
   browser 166.
+- **Back-up-mail 2x per maand i.p.v. dagelijks (25 sep 2026, klacht eigenaar "dagelijks
+  volgestampt met back-ups"):** settings.backupMail.frequentie = 'halfmaand' (STANDAARD:
+  op/na de 1e en de 15e) | 'week' (maandag) | 'dag' (oud gedrag); keuzelijst #bm-freq in
+  Instellingen → Systeem. backup-mail.js: `backupPeriode(datum, freq)` (Europe/Amsterdam;
+  "YYYY-MM-a"/"-b", "week-<maandag>", datum), `backupMailVerschuldigd` (puur, uur in NL-
+  tijd), één mail per periode via settings._backupMailPeriode (pas NÁ succes gezet →
+  SMTP-storing = volgende kwartier opnieuw; server plat op de 15e → 16e alsnog). Eenmalige
+  migratie: ligt _backupMailDay in de huidige periode, dan geldt die als gedaan (geen
+  extra mail direct na de update). Watchdog-alarm schaalt mee (dag 36 u, week 8 d,
+  halfmaand 17 d). De server-back-ups (db.js backupNow, elke 6 u, laatste 10) lopen los
+  hiervan door. Test: 11 assertions in mail-test (62) — o.a. oktober doorgerekend =
+  precies 2 mails.
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

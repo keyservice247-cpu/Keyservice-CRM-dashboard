@@ -183,6 +183,34 @@ console.log('\n== Persoonlijke handtekening (23 sep 2026) ==');
   ok('voetregel komt VÓÓR de persoonlijke handtekening', md.indexOf('DIT IS AUTOMATISCH') < md.indexOf('Met vriendelijke groet'), JSON.stringify(md));
 }
 
+console.log('\n== Back-up-mail 2x per maand (25 sep 2026) ==');
+{
+  const { backupPeriode, backupMailVerschuldigd } = await import('../server/backup-mail.js');
+  const { getBackupMail } = await import('../server/settings.js');
+  ok('standaard frequentie = 2x per maand', getBackupMail().frequentie === 'halfmaand', getBackupMail().frequentie);
+  // Tijden in UTC; NL = UTC+2 in september, UTC+1 in januari.
+  ok('periode 1e t/m 14e = "a", 15e en later = "b"', backupPeriode(new Date('2026-09-03T10:00:00Z')) === '2026-09-a' && backupPeriode(new Date('2026-09-15T10:00:00Z')) === '2026-09-b' && backupPeriode(new Date('2026-09-30T10:00:00Z')) === '2026-09-b');
+  ok('periode volgt NL-tijd (31 aug 23:30 UTC = 1 sep NL)', backupPeriode(new Date('2026-08-31T23:30:00Z')) === '2026-09-a');
+  const cfg = { enabled: true, hour: 6, frequentie: 'halfmaand' };
+  const dag = (iso, laatste) => backupMailVerschuldigd({ datum: new Date(iso), cfg, laatstePeriode: laatste });
+  ok('1e van de maand na 06:00 NL → mail', dag('2026-10-01T05:00:00Z', '2026-09-b') === true);
+  ok('1e van de maand vóór 06:00 NL → nog niet', dag('2026-10-01T03:00:00Z', '2026-09-b') === false);
+  ok('2e t/m 14e (al verstuurd deze periode) → géén mail', ['2026-10-02', '2026-10-07', '2026-10-14'].every((d) => dag(`${d}T10:00:00Z`, '2026-10-a') === false));
+  ok('15e → weer een mail', dag('2026-10-15T10:00:00Z', '2026-10-a') === true);
+  ok('server lag plat op de 15e → 16e alsnog', dag('2026-10-16T10:00:00Z', '2026-10-a') === true);
+  // Een hele maand doorlopen: precies 2 mails.
+  let laatste = '2026-09-b'; let n = 0;
+  for (let d = 1; d <= 31; d++) for (const uur of [4, 8, 12, 20]) {
+    const iso = `2026-10-${String(d).padStart(2, '0')}T${String(uur).padStart(2, '0')}:00:00Z`;
+    if (backupMailVerschuldigd({ datum: new Date(iso), cfg, laatstePeriode: laatste })) { n++; laatste = backupPeriode(new Date(iso), 'halfmaand'); }
+  }
+  ok('oktober doorgerekend (4 checks per dag): precies 2 back-up-mails', n === 2, String(n));
+  let nDag = 0; let lD = '';
+  for (let d = 1; d <= 7; d++) { const iso = `2026-10-0${d}T10:00:00Z`; if (backupMailVerschuldigd({ datum: new Date(iso), cfg: { ...cfg, frequentie: 'dag' }, laatstePeriode: lD })) { nDag++; lD = backupPeriode(new Date(iso), 'dag'); } }
+  ok('frequentie "dag" blijft mogelijk: 7 mails in 7 dagen', nDag === 7, String(nDag));
+  ok('uit = nooit', backupMailVerschuldigd({ datum: new Date('2026-10-01T10:00:00Z'), cfg: { ...cfg, enabled: false }, laatstePeriode: '' }) === false);
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

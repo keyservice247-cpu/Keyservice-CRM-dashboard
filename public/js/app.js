@@ -4530,13 +4530,14 @@ async function loadSettingsHtml(s) {
       </div>
       <p class="muted small" style="margin-top:8px">Loopt de schijf vol? De foto-opschoning staat bij "Opslag &amp; opschonen" (Systeem-pil). Blijft het krap, vergroot dan de schijf in het <strong>Render-dashboard → jouw service → Disks</strong> (± $0,25 per GB per maand) — dat is veiliger dan agressief opruimen. Onder de 150 MB vrij krijg je automatisch een alarm.</p>
       <hr style="border:none;border-top:1px solid var(--line-soft);margin:16px 0">
-      <h3 style="font-size:14px">Dagelijkse off-site back-up per e-mail</h3>
-      <p class="muted small">Stuurt elke dag automatisch een volledige kopie van alle gegevens als bijlage naar je e-mail. Zo heb je altijd een verse back-up <strong>buiten</strong> de server — gratis en zonder eraan te denken.</p>
-      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="bm-enabled" style="width:auto" ${s.backupMail?.enabled ? 'checked' : ''}> Dagelijkse back-up-mail aanzetten</label>
+      <h3 style="font-size:14px">Off-site back-up per e-mail</h3>
+      <p class="muted small">Stuurt automatisch een volledige kopie van alle gegevens als bijlage naar je e-mail, zodat er altijd een back-up <strong>buiten</strong> de server staat. Standaard <strong>2x per maand</strong> (op de 1e en de 15e). Los daarvan maakt het CRM zelf elke 6 uur een back-up op de server — die blijven daar staan en komen niet in je mail.</p>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="bm-enabled" style="width:auto" ${s.backupMail?.enabled ? 'checked' : ''}> Back-up-mail aanzetten</label>
       <div class="row">
-        <label>E-mailadres <input id="bm-email" type="email" value="${esc(s.backupMail?.email || '')}" placeholder="bv. ${esc(state.me?.email || 'jij@voorbeeld.nl')}"></label>
+        <label>Hoe vaak <select id="bm-freq">${[['halfmaand', '2x per maand (1e en 15e)'], ['week', 'Elke week (maandag)'], ['dag', 'Elke dag']].map(([k, l]) => `<option value="${k}" ${(s.backupMail?.frequentie || 'halfmaand') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <label>Tijdstip (uur) <input id="bm-hour" type="number" min="0" max="23" value="${esc(String(s.backupMail?.hour ?? 6))}" style="max-width:120px"></label>
       </div>
+      <label>E-mailadres <input id="bm-email" type="email" value="${esc(s.backupMail?.email || '')}" placeholder="bv. ${esc(state.me?.email || 'jij@voorbeeld.nl')}"></label>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
         <button class="btn btn-primary" id="saveBackupMail">Opslaan</button>
         <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
@@ -5195,7 +5196,7 @@ async function loadSettingsHtml(s) {
     catch (err) { toast(err.message, true); }
   };
   $('#saveBackupMail').onclick = async () => {
-    const backupMail = { enabled: $('#bm-enabled').checked, email: $('#bm-email').value.trim(), hour: Number($('#bm-hour').value) };
+    const backupMail = { enabled: $('#bm-enabled').checked, email: $('#bm-email').value.trim(), hour: Number($('#bm-hour').value), frequentie: $('#bm-freq').value };
     if (backupMail.enabled && !backupMail.email) return toast('Vul een e-mailadres in', true);
     try { await api('/api/settings', 'PATCH', { backupMail }); toast('Back-up-mail opgeslagen'); }
     catch (err) { toast(err.message, true); }

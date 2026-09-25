@@ -30,7 +30,8 @@ export async function sendBackupMail(toOverride) {
     klanten: (db().customers || []).length,
     berichten: (db().messages || []).length,
   };
-  const text = `Hierbij de dagelijkse back-up van het Keyservice CRM (${stamp}).
+  const freqTxt = { halfmaand: 'halfmaandelijkse', week: 'wekelijkse', dag: 'dagelijkse' }[getBackupMail().frequentie] || 'periodieke';
+  const text = `Hierbij de ${freqTxt} back-up van het Keyservice CRM (${stamp}).
 
 Inhoud: ${counts.opdrachten} opdrachten, ${counts.klanten} klanten, ${counts.berichten} berichten.
 
@@ -47,7 +48,30 @@ Bewaar deze e-mail; de bijlage is een volledige kopie van alle gegevens en kan g
   return { ok: true, to, counts };
 }
 
-// Eén keer per dag op het ingestelde uur automatisch versturen.
+// Periodesleutel in NEDERLANDSE tijd: bij 'dag' de datum, bij 'week' de maandag van
+// die week, bij 'halfmaand' "YYYY-MM-a" (1e t/m 14e) of "YYYY-MM-b" (15e t/m eind).
+// Er gaat één mail per periode — op of ná het ingestelde uur, zodra die periode begint.
+// Lag de server op de 1e/15e plat, dan gaat hij bij de eerstvolgende ronde alsnog.
+export function backupPeriode(datum = new Date(), frequentie = 'halfmaand') {
+  const nl = new Date(datum).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }); // YYYY-MM-DD
+  if (frequentie === 'dag') return nl;
+  if (frequentie === 'week') {
+    const [y, m, d] = nl.split('-').map(Number);
+    const t = new Date(Date.UTC(y, m - 1, d));
+    t.setUTCDate(t.getUTCDate() - ((t.getUTCDay() || 7) - 1));
+    return `week-${t.toISOString().slice(0, 10)}`;
+  }
+  return `${nl.slice(0, 7)}-${Number(nl.slice(8, 10)) < 15 ? 'a' : 'b'}`;
+}
+export const nlUur = (datum = new Date()) => Number(new Date(datum).toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hour12: false })) % 24;
+// Moet er NU een back-up-mail uit? (puur, voor de test)
+export function backupMailVerschuldigd({ datum = new Date(), cfg, laatstePeriode }) {
+  if (!cfg || !cfg.enabled) return false;
+  if (nlUur(datum) < cfg.hour) return false;
+  return backupPeriode(datum, cfg.frequentie) !== laatstePeriode;
+}
+
+// Op het ingestelde uur automatisch versturen, één keer per periode (standaard 2x per maand).
 export function startBackupMail() {
   const tick = async () => {
     try {
@@ -55,18 +79,22 @@ export function startBackupMail() {
       // 'email' hoeft niet meer ingevuld: bij aan-staan valt hij terug op de beheerder.
       if (!cfg.enabled || !backupTarget()) return;
       const d = new Date();
-      const day = d.toISOString().slice(0, 10);
       const s = db().settings;
-      // Op of ná het ingestelde uur, en nog niet gelukt vandaag. De "gelukt vandaag"-
-      // markering staat in de DB (restart-veilig) en wordt pas NÁ succes gezet — dus
-      // een tijdelijke SMTP-storing zorgt niet dat de hele dag wordt overgeslagen: de
-      // volgende tick (elk kwartier) probeert het gewoon opnieuw.
-      if (d.getHours() >= cfg.hour && s._backupMailDay !== day) {
+      // Eenmalig: oude installaties hebben alleen _backupMailDay. Ligt die in de huidige
+      // periode, dan is deze periode al gedaan (geen extra mail direct na de update).
+      if (!s._backupMailPeriode && s._backupMailDay && backupPeriode(new Date(`${s._backupMailDay}T12:00:00Z`), cfg.frequentie) === backupPeriode(d, cfg.frequentie)) {
+        s._backupMailPeriode = backupPeriode(d, cfg.frequentie);
+      }
+      // De "gelukt"-markering staat in de DB (herstart-veilig) en wordt pas NÁ succes
+      // gezet — een tijdelijke SMTP-storing slaat de periode dus niet over: de volgende
+      // tick (elk kwartier) probeert het gewoon opnieuw.
+      if (backupMailVerschuldigd({ datum: d, cfg, laatstePeriode: s._backupMailPeriode })) {
         const r = await sendBackupMail();
-        s._backupMailDay = day;
+        s._backupMailPeriode = backupPeriode(d, cfg.frequentie);
+        s._backupMailDay = d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
         delete s._backupMailError;
         save();
-        console.log('[backup-mail] dagelijkse back-up verstuurd naar', r.to);
+        console.log(`[backup-mail] back-up (${cfg.frequentie}) verstuurd naar`, r.to);
       }
     } catch (e) {
       console.error('[backup-mail] versturen mislukt (wordt volgende kwartier opnieuw geprobeerd):', e.message);

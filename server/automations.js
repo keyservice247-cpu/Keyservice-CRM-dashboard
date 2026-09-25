@@ -506,15 +506,17 @@ async function runWatchdog() {
       delete s._alerts.mailFailDay; save();
     }
   } catch { /* watchdog mag nooit crashen */ }
-  // Off-site back-up-mail: als hij AAN staat maar al >36 uur niet is gelukt, alarm.
+  // Off-site back-up-mail: als hij AAN staat maar langer dan de periode + marge niet
+  // is gelukt, alarm (dag: 36 u, week: 8 dagen, 2x per maand: 17 dagen).
   try {
     if (s.backupMail && s.backupMail.enabled && smtpConfigured()) {
       const last = s._backupMailDay ? new Date(s._backupMailDay + 'T12:00:00Z').getTime() : 0;
-      const stale = Date.now() - last > 36 * 3600000;
+      const grensUur = { dag: 36, week: 8 * 24, halfmaand: 17 * 24 }[getBackupMail().frequentie] || 36;
+      const stale = Date.now() - last > grensUur * 3600000;
       const today = new Date().toISOString().slice(0, 10);
       if (stale && s._alerts.backupMailDay !== today) {
         s._alerts.backupMailDay = today; save();
-        await alertAdmins('Off-site back-up mislukt', `De dagelijkse back-up-mail is al meer dan een dag niet verstuurd${s._backupMailError ? ` (${s._backupMailError.message})` : ''}. Controleer e-mail versturen (SMTP) — je klantdata heeft dan geen verse kopie buiten de server.`);
+        await alertAdmins('Off-site back-up mislukt', `De back-up-mail is langer dan gepland niet verstuurd${s._backupMailError ? ` (${s._backupMailError.message})` : ''}. Controleer e-mail versturen (SMTP) — je klantdata heeft dan geen verse kopie buiten de server.`);
       } else if (!stale && s._alerts.backupMailDay) {
         delete s._alerts.backupMailDay; save();
       }
