@@ -419,9 +419,24 @@ export function aiMode() {
 
 // Stelt een concept-antwoord voor een klant op, op basis van het probleem,
 // de gesprekshistorie en (optioneel) je standaardsjablonen. Vereist de AI-modus.
+// ---------- Modellen per taak (25 sep 2026, advies + akkoord eigenaar) ----------
+// snel    = Haiku 4.5: inbox-indeling (hoog volume), systeemcheck
+// analyse = Sonnet 5: analyses, statusscan, assistent, concept-antwoorden
+// opus55  = Opus 5.5: dagoverzicht (leest alle WhatsApp + e-mail) en ochtendbriefing
+// Env-overrides blijven werken (ANTHROPIC_MODEL / ANTHROPIC_ANALYZE_MODEL /
+// ANTHROPIC_REPLY_MODEL / ANTHROPIC_BRIEFING_MODEL).
+export const MODELLEN = { snel: 'claude-haiku-4-5-20251001', analyse: 'claude-sonnet-5', opus: 'claude-opus-5', opus55: 'claude-opus-5-5' };
+// Denkdiepte (effort). Sonnet 5 / Opus 5 / Opus 5.5 "denken" standaard eerst na, en
+// dat telt mee voor max_tokens — bij een korte limiet kon de tekst halverwege
+// afgekapt worden. 'low' voor korte teksten; Haiku en oudere modellen kennen de
+// parameter niet (400), dus daar sturen we hem niet mee.
+export function effortVoor(model, level = 'low') {
+  return /sonnet-5|opus-5|opus-4-[678]|fable/i.test(String(model || '')) ? { output_config: { effort: level } } : {};
+}
+
 export async function suggestReply({ customerName, problem, history = '', templates = [], companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+  const model = process.env.ANTHROPIC_REPLY_MODEL || MODELLEN.analyse; // Sonnet 5: beter Nederlands voor de klant
   if (!apiKey) {
     // Demo-modus: geen AI -> geef het meest relevante sjabloon terug (of leeg).
     const t = templates[0];
@@ -447,7 +462,7 @@ ${history ? `\nGesprekshistorie:\n${history.slice(0, 2000)}` : ''}`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 700, system, messages: [{ role: 'user', content: user }] }),
+    body: JSON.stringify({ model, max_tokens: 2000, ...effortVoor(model, 'low'), system, messages: [{ role: 'user', content: user }] }),
   });
   if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
   const json = await resp.json();
@@ -498,16 +513,18 @@ Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je zie
 export async function morningInsight({ facts, companyProfile = '', tone = 'coachend' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || !facts) return '';
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  // Opus 5.5 (25 sep 2026, keuze eigenaar): de feiten bevatten sinds vandaag ook de
+  // samenvatting van al het WhatsApp- en e-mailverkeer uit het dagoverzicht.
+  const model = process.env.ANTHROPIC_BRIEFING_MODEL || MODELLEN.opus55;
   const stijl = tone === 'zakelijk'
     ? 'Zakelijk en puntig, alleen de kern.'
     : 'Coachend en menselijk, alsof een slimme rechterhand even meedenkt.';
-  const system = `Je bent de operationeel rechterhand van Keyservice, een sleutel-/slotenmakersbedrijf. Je krijgt de feiten van vanochtend uit het CRM. Schrijf in het Nederlands een korte duiding van 2 à 3 zinnen: waar moet vandaag de focus liggen en waarom. Verwijs naar concrete aantallen of namen uit de feiten. Geen opsomming, geen begroeting, geen emoji. ${stijl}${companyProfile ? `\n\nOver het bedrijf:\n${String(companyProfile).slice(0, 1500)}` : ''}`;
+  const system = `Je bent de operationeel rechterhand van Keyservice, een sleutel-/slotenmakersbedrijf. Je krijgt de feiten van vanochtend uit het CRM, soms aangevuld met wat er in WhatsApp en e-mail speelt. Schrijf in het Nederlands een korte duiding van 2 à 3 zinnen: waar moet vandaag de focus liggen en waarom. Verwijs naar concrete aantallen of namen uit de feiten. Geen opsomming, geen begroeting, geen emoji. ${stijl}${companyProfile ? `\n\nOver het bedrijf:\n${String(companyProfile).slice(0, 1500)}` : ''}`;
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model, max_tokens: 300, system, messages: [{ role: 'user', content: `Feiten van vanochtend:\n${facts}` }] }),
+      body: JSON.stringify({ model, max_tokens: 2000, ...effortVoor(model, 'low'), system, messages: [{ role: 'user', content: `Feiten van vanochtend:\n${facts}` }] }),
     });
     if (!resp.ok) return '';
     const json = await resp.json();
@@ -533,7 +550,7 @@ Wees eerlijk over kleine aantallen (bij minder dan 5 besliste aanvragen is een p
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model, max_tokens: 600, system, messages: [{ role: 'user', content: `Conversiecijfers:\n${facts}` }] }),
+      body: JSON.stringify({ model, max_tokens: 2000, ...effortVoor(model, 'low'), system, messages: [{ role: 'user', content: `Conversiecijfers:\n${facts}` }] }),
     });
     if (!resp.ok) return '';
     const json = await resp.json();
@@ -608,7 +625,9 @@ Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar =
   // zodat één drukke minuut bij Anthropic niet je hele dagoverzicht kost.
   // Ruime antwoordlimiet: met 2500 werd de JSON regelmatig middenin afgekapt
   // (stop_reason max_tokens) en was het hele dagoverzicht onbruikbaar.
-  const body = JSON.stringify({ model: useModel, max_tokens: 8000, system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] });
+  // 16000: Opus 5.5 / Sonnet 5 denken eerst na en dat telt mee voor de limiet.
+  // Effort 'medium' expliciet (Opus 5.5 default, Sonnet 5 zou anders 'high' doen).
+  const body = JSON.stringify({ model: useModel, max_tokens: 16000, ...effortVoor(useModel, 'medium'), system, messages: [{ role: 'user', content: `FEITEN (dashboard):\n${facts}\n\nBERICHTEN:\n${corpus || '(geen recente berichten)'}` }] });
   let resp = null; let lastErr = '';
   for (let poging = 0; poging < 3; poging++) {
     if (poging) await new Promise((r) => setTimeout(r, poging * 2500));
@@ -617,6 +636,8 @@ Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar =
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
         body,
+        // Veel berichten + nadenken kan langer duren dan de globale 120 s.
+        signal: AbortSignal.timeout(240000),
       });
     } catch (e) { lastErr = `netwerkfout: ${e.message}`; resp = null; continue; }
     if (resp.ok) break;

@@ -4,21 +4,27 @@
 import { db, saveSoon } from './db.js';
 
 // Prijsindicatie per 1M tokens (USD), per modeltier. Overschrijfbaar via env.
-// Standaarden: Haiku 4.5 ~ $1/$5, Sonnet 5 ~ $3/$15, Opus ~ $15/$75.
+// Bijgewerkt 25 sep 2026 (stond nog op oude prijzen: Sonnet $3/$15 en Opus $15/$75 —
+// de teller overschatte Sonnet 1,5x en Opus 3x): Haiku 4.5 $1/$5, Sonnet 5 $2/$10,
+// Opus 5 $5/$25, Opus 5.5 $4/$20.
 const PRICES = {
   haiku: { in: Number(process.env.AI_PRICE_HAIKU_IN || 1.0), out: Number(process.env.AI_PRICE_HAIKU_OUT || 5.0) },
-  sonnet: { in: Number(process.env.AI_PRICE_SONNET_IN || 3.0), out: Number(process.env.AI_PRICE_SONNET_OUT || 15.0) },
-  opus: { in: Number(process.env.AI_PRICE_OPUS_IN || 15.0), out: Number(process.env.AI_PRICE_OPUS_OUT || 75.0) },
-  overig: { in: Number(process.env.AI_PRICE_IN || 3.0), out: Number(process.env.AI_PRICE_OUT || 15.0) },
+  sonnet: { in: Number(process.env.AI_PRICE_SONNET_IN || 2.0), out: Number(process.env.AI_PRICE_SONNET_OUT || 10.0) },
+  opus: { in: Number(process.env.AI_PRICE_OPUS_IN || 5.0), out: Number(process.env.AI_PRICE_OPUS_OUT || 25.0) },
+  opus55: { in: Number(process.env.AI_PRICE_OPUS55_IN || 4.0), out: Number(process.env.AI_PRICE_OPUS55_OUT || 20.0) },
+  overig: { in: Number(process.env.AI_PRICE_IN || 2.0), out: Number(process.env.AI_PRICE_OUT || 10.0) },
 };
+export const TIER_LABELS = { haiku: 'Haiku 4.5', sonnet: 'Sonnet 5', opus: 'Opus 5', opus55: 'Opus 5.5', overig: 'overig' };
 
-function tierOf(model) {
+export function tierOf(model) {
   const m = String(model || '').toLowerCase();
   if (m.includes('haiku')) return 'haiku';
   if (m.includes('sonnet')) return 'sonnet';
+  if (m.includes('opus-5-5')) return 'opus55';
   if (m.includes('opus')) return 'opus';
   return 'overig';
 }
+export const kostenVan = (tier, inputTokens, outputTokens) => costOf({ inputTokens, outputTokens }, tier);
 
 function bucket() {
   const u = db().usage || (db().usage = {});
@@ -59,7 +65,7 @@ export function usageSummary() {
     for (const [tier, b] of Object.entries(byModel)) {
       const c = costOf(b, tier);
       estCost += c;
-      perModel.push({ tier, calls: b.calls, inputTokens: b.inputTokens, outputTokens: b.outputTokens, estCostUsd: Math.round(c * 100) / 100 });
+      perModel.push({ tier, label: TIER_LABELS[tier] || tier, calls: b.calls, inputTokens: b.inputTokens, outputTokens: b.outputTokens, estCostUsd: Math.round(c * 100) / 100 });
     }
     perModel.sort((a, b) => b.estCostUsd - a.estCostUsd);
   } else {

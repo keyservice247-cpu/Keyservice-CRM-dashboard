@@ -8,7 +8,7 @@ import {
   getAttachmentCleanup, getMorningBriefing, getCrmAlerts, getCompanyProfile,
   getWeeklyAiCheck,
 } from './settings.js';
-import { morningInsight, askAssistant } from './ai/categorizer.js';
+import { morningInsight, askAssistant, dayOverview, MODELLEN } from './ai/categorizer.js';
 import { syncOrderToGoogle, isConnected as googleIsConnected, calendarAlarmDecision, testingModusVermoeden } from './google.js';
 import { deleteFile } from './storage.js';
 import { verwijderBestandenAlsOngebruikt } from './bijlagen.js';
@@ -636,6 +636,58 @@ export function morningBriefingData() {
   return { appts, unanswered, stale, quoteStale, overdueCount: overdue.length, overdueTotal, pendingLeads, week };
 }
 
+// ---------- AI-dagoverzicht (verhuisd uit index.js, 25 sep 2026) ----------
+// Leest WhatsApp (7 dagen) + e-mail (14 dagen) + de dashboardfeiten en maakt er één
+// overzicht van. 1x per dag bewaard (db()._dayOverview); een fout wordt 15 min
+// onthouden zodat niet elke pulse een dure aanroep doet. Model: Opus 5.5
+// (standaard, keuze eigenaar) of Sonnet 5 (Instellingen → AI → "standaard").
+let _dayOvPromise = null;
+let _dayOvErr = null; // { at, payload }
+export async function haalDagoverzicht({ refresh = false } = {}) {
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const cache = db()._dayOverview;
+  if (!refresh && cache && cache.day === today && cache.data) return { ...cache, cached: true };
+  if (!refresh && _dayOvErr && Date.now() - _dayOvErr.at < 15 * 60000) return _dayOvErr.payload;
+  if (_dayOvPromise) { try { return await _dayOvPromise; } catch { /* nieuwe poging */ } }
+  const factsData = morningBriefingData();
+  const facts = [
+    `Afspraken vandaag: ${factsData.appts.length}${factsData.appts.length ? ' — ' + factsData.appts.map((a) => `${a.time} ${a.name || a.title}${a.place ? ` (${a.place})` : ''}${a.confirmed ? '' : ' [NIET bevestigd]'}`).join('; ') : ''}`,
+    `Onbeantwoorde klantreacties: ${factsData.unanswered}`,
+    `Nieuwe leads te controleren: ${factsData.pendingLeads}`,
+    `Offertes 4+ dagen stil: ${factsData.quoteStale}`,
+    `Facturen verlopen: ${factsData.overdueCount} (samen € ${factsData.overdueTotal.toFixed(2)})`,
+    `Kaarten 5+ dagen stil: ${factsData.stale}`,
+    `Deze week: omzet € ${factsData.week.thisWeek.income.toFixed(2)}, winst € ${factsData.week.thisWeek.profit.toFixed(2)}, openstaand € ${factsData.week.unpaidTotal.toFixed(2)} (${factsData.week.unpaidCount})`,
+  ].join('\n');
+  _dayOvPromise = (async () => {
+    let out = { error: 'geen-ai' };
+    try {
+      const nowMs = Date.now();
+      const msgs = (db().messages || []).filter((m) => {
+        if (!m.receivedAt || !m.body || m.skipped || m.bounce) return false;
+        const age = nowMs - new Date(m.receivedAt).getTime();
+        if (m.channel === 'whatsapp') return age <= 7 * 86400000;
+        if (m.channel === 'email') return age <= 14 * 86400000;
+        return false;
+      }).slice(-220);
+      const corpus = msgs.map((m) => `[${String(m.receivedAt).slice(5, 16).replace('T', ' ')}] (${m.channel}${m.group ? ' groep ' + String(m.group).slice(0, 28) : ''}) ${String(m.sender || '').slice(0, 30)}: ${String(m.body).replace(/\s+/g, ' ').slice(0, m.group ? 500 : 350)}`).join('\n').slice(0, 90000);
+      const model = db().settings.aiOverviewModel === 'standaard' ? MODELLEN.analyse : MODELLEN.opus55;
+      out = await dayOverview({ corpus, facts, companyProfile: getCompanyProfile(), model });
+    } catch (e) {
+      out = { error: String(e.message || 'onbekende fout').slice(0, 200) };
+    }
+    if (!out.data && out.error !== 'geen-ai') {
+      try { logActivity('systeem', 'AI-dagoverzicht mislukt', String(out.error || '').slice(0, 180)); } catch { /* nooit blokkeren */ }
+      console.error('[dagoverzicht]', out.error);
+    }
+    const payload = { day: today, at: now(), data: out.data || null, engine: out.engine || '', error: out.data ? '' : (out.error || 'ai-fout'), facts: factsData };
+    if (out.data) { db()._dayOverview = payload; _dayOvErr = null; saveSoon(); }
+    else _dayOvErr = { at: Date.now(), payload };
+    return payload;
+  })();
+  try { return await _dayOvPromise; } finally { _dayOvPromise = null; }
+}
+
 export async function sendMorningBriefing({ isTest = false } = {}) {
   const cfg = getMorningBriefing();
   const d = morningBriefingData();
@@ -669,6 +721,21 @@ export async function sendMorningBriefing({ isTest = false } = {}) {
   if (d.stale) acts.push(`${d.stale} kaart(en) 5+ dagen niet aangeraakt`);
   lines.push('', acts.length ? 'VRAAGT OM ACTIE' : 'VRAAGT OM ACTIE: niets — alles loopt.');
   for (const a of acts) lines.push(`• ${a}`);
+  // UIT WHATSAPP & E-MAIL (25 sep 2026, wens eigenaar "de briefing moet door alles
+  // heen gaan"): het dagoverzicht leest al het berichtenverkeer; de briefing neemt
+  // de kern daarvan over (en maakt het dagoverzicht meteen klaar voor Start). Lukt
+  // de AI even niet, dan gaat de briefing gewoon zonder dit blok uit.
+  try {
+    const ov = await haalDagoverzicht();
+    const dv = ov && ov.data;
+    if (dv) {
+      lines.push('', 'UIT WHATSAPP & E-MAIL');
+      if (dv.kop) lines.push(`• ${dv.kop}`);
+      for (const b of (dv.beantwoorden || []).slice(0, 3)) lines.push(`• Antwoord nodig: ${b.wie || 'onbekend'} (${b.kanaal === 'whatsapp' ? 'WhatsApp' : 'e-mail'})${b.waarover ? ` — ${b.waarover}` : ''}${b.urgent ? ' [URGENT]' : ''}`);
+      for (const r of (dv.risicos || []).slice(0, 2)) lines.push(`• Risico: ${r}`);
+      for (const k of (dv.kansen || []).slice(0, 2)) lines.push(`• Kans: ${k}`);
+    }
+  } catch { /* briefing gaat altijd uit */ }
   lines.push('', 'GELD DEZE WEEK', `• Omzet ${eur(d.week.thisWeek.income)} · Winst ${eur(d.week.thisWeek.profit)} · Openstaand ${eur(d.week.unpaidTotal)} (${d.week.unpaidCount} factuur/facturen)`);
   // AI-duiding op basis van dezelfde feiten; mag nooit de briefing blokkeren.
   let insight = '';

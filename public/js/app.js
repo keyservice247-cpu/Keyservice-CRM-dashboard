@@ -4468,7 +4468,7 @@ async function loadSubs() {
   const u = d.usage;
   $('#subsPanel').innerHTML = `
     <div class="stat-grid"> <div class="stat"><div class="num">${u.calls}</div><div class="lbl">AI-aanroepen deze maand (${esc(u.month)})</div></div> <div class="stat"><div class="num">$${u.estimatedCostUsd.toFixed(2)}</div><div class="lbl">Geschatte AI-kosten (indicatie)</div></div> <div class="stat"><div class="num">${(u.inputTokens + u.outputTokens).toLocaleString('nl-NL')}</div><div class="lbl">Tokens verbruikt</div></div> </div>
-    ${(u.perModel && u.perModel.length) ? `<div class="muted small" style="margin:-6px 0 8px"><strong>Per model deze maand:</strong> ${u.perModel.map((p) => `${esc(p.tier)}: ${p.calls}× · ${(p.inputTokens + p.outputTokens).toLocaleString('nl-NL')} tokens · ~$${p.estCostUsd.toFixed(2)}`).join(' &nbsp;·&nbsp; ')}</div>` : ''}
+    ${(u.perModel && u.perModel.length) ? `<div class="muted small" style="margin:-6px 0 8px"><strong>Per model deze maand:</strong> ${u.perModel.map((p) => `${esc(p.label || p.tier)}: ${p.calls}× · ${(p.inputTokens + p.outputTokens).toLocaleString('nl-NL')} tokens · ~$${p.estCostUsd.toFixed(2)}`).join(' &nbsp;·&nbsp; ')}</div>` : ''}
     <p class="muted small" style="margin:0 0 16px">De AI-kosten zijn een <strong>schatting</strong> van het verbruik via dit dashboard (Haiku voor sorteren per bericht, Sonnet 5 voor de statusscan/assistent). Het officiële verbruik/tegoed zie je altijd in de <strong>Claude Console</strong> → Usage.</p> <div class="card-grid"> ${d.services.map((s) => `
         <div class="info-card"> <h3>${esc(s.name)}</h3> <div class="muted small">${esc(s.what)}</div> <div style="margin:8px 0"><span class="chip">${esc(s.cost)}</span></div> <div class="small">${esc(s.note)}</div> ${s.manageUrl ? `<div style="margin-top:10px"><a class="btn btn-sm" href="${esc(s.manageUrl)}" target="_blank" rel="noopener">Beheer / verbruik </a></div>` : ''}
         </div>`).join('')}
@@ -4800,8 +4800,8 @@ async function loadSettingsHtml(s) {
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>${icon('sparkles', 15)} AI-dagoverzicht (Start-pagina)</h3>
       <p class="muted small">Het blok "Jouw dag in één oogopslag" bovenaan Start scant elke dag het échte verkeer (<strong>WhatsApp tot 7 dagen</strong>, <strong>e-mail tot 14 dagen</strong> terug) plus alle opdrachten, afspraken en facturen — en zet daar de belangrijkste acties, kansen en risico's uit op een rij. Wordt 1x per dag gemaakt; met de Ververs-knop op Start forceer je een nieuwe scan.</p>
       <label>AI-niveau <select id="ov-model">
-        <option value="standaard" ${s.aiOverviewModel !== 'opus' ? 'selected' : ''}>Standaard (Sonnet) — ± €0,10 per scan</option>
-        <option value="opus" ${s.aiOverviewModel === 'opus' ? 'selected' : ''}>Hoogste niveau (Opus) — scherper, ± €0,50 per scan</option>
+        <option value="opus" ${s.aiOverviewModel !== 'standaard' ? 'selected' : ''}>Opus 5.5 (standaard) — scherpst, ± €0,20 per keer</option>
+        <option value="standaard" ${s.aiOverviewModel === 'standaard' ? 'selected' : ''}>Sonnet 5 — goedkoper, ± €0,10 per keer</option>
       </select></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveOvModel">Opslaan</button></div>
     </div>

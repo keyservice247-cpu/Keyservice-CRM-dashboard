@@ -36,6 +36,9 @@ node test/audit-test.mjs
 node test/conversie-test.mjs
 # Pushmeldingen per rol: wie krijgt wat (zonder server) + aanmelden/status/testmelding per rol (PORT=3141)
 node test/push-test.mjs
+# AI-modellen per taak: model/effort/limiet per onderdeel, briefing leest het dagoverzicht,
+# kostenteller (GEEN server, GEEN echte AI-kosten — fetch wordt onderschept)
+node test/ai-modellen-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 

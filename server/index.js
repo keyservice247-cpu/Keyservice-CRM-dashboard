@@ -57,7 +57,7 @@ import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
-import { startAutomations, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
+import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { getInvoiceSettings, isVergrendeld, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -3133,7 +3133,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     autoMergeWindowHours: getAutoMergeWindowHours(),
     wachtOpAntwoordDagen: wachtOpAntwoordDagen(),
     htmlSignature: getHtmlSignature(),
-    aiOverviewModel: db().settings.aiOverviewModel === 'opus' ? 'opus' : 'standaard',
+    aiOverviewModel: db().settings.aiOverviewModel === 'standaard' ? 'standaard' : 'opus',
     invoiceSettings: getInvoiceSettings(),
     priceList: getPriceList(),
     priceBundles: getPriceBundles(),
@@ -3343,7 +3343,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     };
   }
   if ('aiOverviewModel' in b) {
-    db().settings.aiOverviewModel = b.aiOverviewModel === 'opus' ? 'opus' : 'standaard';
+    db().settings.aiOverviewModel = b.aiOverviewModel === 'standaard' ? 'standaard' : 'opus';
   }
   if ('htmlSignature' in b) {
     const h = b.htmlSignature || {};
@@ -4941,63 +4941,12 @@ app.post('/api/finance/import-income', requirePerm('finance'), (req, res) => {
 // AVG: het dagoverzicht bevat klantnamen/omzet uit het HELE bedrijf — niet voor de
 // monteur-rol. Fout-antwoorden worden kort (15 min) in het geheugen onthouden i.p.v.
 // de hele dag gecachet, en parallelle aanvragen delen één AI-call (in-flight guard).
-let _dayOvPromise = null;
-let _dayOvErr = null; // { at, payload } — korte fout-cache
+// Het dagoverzicht zelf (cache, fout-rem, AI-aanroep) woont sinds 25 sep 2026 in
+// automations.js (haalDagoverzicht), zodat de ochtendbriefing dezelfde uitkomst kan
+// gebruiken — die leest daardoor óók wat er in WhatsApp en e-mail speelt.
 app.get('/api/day-overview', requireRole('admin', 'assistent'), async (req, res) => {
-  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-  const cache = db()._dayOverview;
   const refresh = req.query.refresh === '1';
-  if (!refresh && cache && cache.day === today && cache.data) return res.json({ ...cache, cached: true });
-  const factsData = morningBriefingData();
-  // Recente fout? Niet elke pulse opnieuw een (dure) AI-call doen — maar wel
-  // korter dan een dag, zodat een tijdelijke storing zichzelf herstelt.
-  if (!refresh && _dayOvErr && Date.now() - _dayOvErr.at < 15 * 60000) return res.json(_dayOvErr.payload);
-  if (_dayOvPromise) { try { return res.json(await _dayOvPromise); } catch { /* val door naar nieuwe poging */ } }
-  const facts = [
-    `Afspraken vandaag: ${factsData.appts.length}${factsData.appts.length ? ' — ' + factsData.appts.map((a) => `${a.time} ${a.name || a.title}${a.place ? ` (${a.place})` : ''}${a.confirmed ? '' : ' [NIET bevestigd]'}`).join('; ') : ''}`,
-    `Onbeantwoorde klantreacties: ${factsData.unanswered}`,
-    `Nieuwe leads te controleren: ${factsData.pendingLeads}`,
-    `Offertes 4+ dagen stil: ${factsData.quoteStale}`,
-    `Facturen verlopen: ${factsData.overdueCount} (samen € ${factsData.overdueTotal.toFixed(2)})`,
-    `Kaarten 5+ dagen stil: ${factsData.stale}`,
-    `Deze week: omzet € ${factsData.week.thisWeek.income.toFixed(2)}, winst € ${factsData.week.thisWeek.profit.toFixed(2)}, openstaand € ${factsData.week.unpaidTotal.toFixed(2)} (${factsData.week.unpaidCount})`,
-  ].join('\n');
-  _dayOvPromise = (async () => {
-    let out = { error: 'geen-ai' };
-    try {
-      const nowMs = Date.now();
-      const msgs = (db().messages || []).filter((m) => {
-        if (!m.receivedAt || !m.body || m.skipped || m.bounce) return false;
-        const age = nowMs - new Date(m.receivedAt).getTime();
-        if (m.channel === 'whatsapp') return age <= 7 * 86400000;
-        if (m.channel === 'email') return age <= 14 * 86400000;
-        return false;
-      }).slice(-220);
-      const corpus = msgs.map((m) => `[${String(m.receivedAt).slice(5, 16).replace('T', ' ')}] (${m.channel}${m.group ? ' groep ' + String(m.group).slice(0, 28) : ''}) ${String(m.sender || '').slice(0, 30)}: ${String(m.body).replace(/\s+/g, ' ').slice(0, m.group ? 500 : 350)}`).join('\n').slice(0, 90000);
-      const modelPref = db().settings.aiOverviewModel === 'opus' ? 'claude-opus-5' : '';
-      out = await dayOverview({ corpus, facts, companyProfile: getCompanyProfile(), model: modelPref });
-    } catch (e) {
-      out = { error: String(e.message || 'onbekende fout').slice(0, 200) };
-    }
-    // Fout ALTIJD vastleggen in het logboek — anders blijft "het lukte even niet"
-    // een raadsel en kunnen we niets gericht oplossen.
-    if (!out.data) {
-      try { logActivity('systeem', 'AI-dagoverzicht mislukt', String(out.error || '').slice(0, 180)); } catch { /* nooit blokkeren */ }
-      console.error('[dagoverzicht]', out.error);
-    }
-    const payload = { day: today, at: now(), data: out.data || null, engine: out.engine || '', error: out.data ? '' : (out.error || 'ai-fout'), facts: factsData };
-    if (out.data) {
-      // Alleen een GESLAAGDE scan een hele dag bewaren; een fout mag de dag niet gijzelen.
-      db()._dayOverview = payload;
-      _dayOvErr = null;
-      saveSoon();
-    } else {
-      _dayOvErr = { at: Date.now(), payload };
-    }
-    return payload;
-  })();
-  let payload;
-  try { payload = await _dayOvPromise; } finally { _dayOvPromise = null; }
+  const payload = await haalDagoverzicht({ refresh });
   if (refresh) logActivity(req.user.name, 'AI-dagoverzicht ververst', payload.engine || payload.error || '');
   res.json(payload);
 });

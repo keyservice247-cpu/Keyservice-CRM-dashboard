@@ -109,6 +109,9 @@ export function ensureSettings() {
   if (s.autoReply === undefined) s.autoReply = structuredClone(DEFAULT_AUTOREPLY);
   if (s.followUp === undefined) s.followUp = structuredClone(DEFAULT_FOLLOWUP);
   if (s.backupMail === undefined) s.backupMail = structuredClone(DEFAULT_BACKUP_MAIL);
+  // Eenmalig (25 sep 2026, keuze eigenaar): dagoverzicht op Opus 5.5 — ook als er ooit
+  // expliciet "standaard" (Sonnet) was opgeslagen. Daarna is het weer een vrije keuze.
+  if (!s._aiModelV2) { s._aiModelV2 = true; s.aiOverviewModel = 'opus'; }
   // Eenmalige migratie: zet de dagelijkse off-site back-up-mail AAN als hij nog nooit
   // is aangeraakt (stond standaard uit). Klantdata is heilig en verdient een kopie
   // BUITEN de server. Gaat naar het beheerder-adres tenzij anders ingesteld. De

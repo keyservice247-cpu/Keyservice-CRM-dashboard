@@ -142,7 +142,7 @@ de regressie meegroeit.
   `/api/pulse` (5s polling, geen handmatig verversen).
 - **Inbox / AI-controlewachtrij:** AI deelt in; mens keurt goed/wijst af. Filters:
   Te controleren / Overige (geklets) / Prullenbak (afgewezen).
-- **AI (Claude Haiku):** categorisatie + extractie (naam/tel/e-mail/adres/probleem).
+- **AI (Claude Haiku 4.5; zie AI-MODELLEN PER TAAK):** categorisatie + extractie (naam/tel/e-mail/adres/probleem).
   Bepaalt `isOpdracht`; bij "geen opdracht" (incasso/leverancier/reclame/factuur) → confidence
   max 0.15, naar Overige, nooit auto-geaccepteerd. Regelfilter `NOT_ORDER_WORDS` als extra net.
 - **Feedback-leren:** elke afwijzing (ook zonder reden) + elke correctie permanent opgeslagen,
@@ -782,6 +782,28 @@ de regressie meegroeit.
   halfmaand 17 d). De server-back-ups (db.js backupNow, elke 6 u, laatste 10) lopen los
   hiervan door. Test: 11 assertions in mail-test (62) — o.a. oktober doorgerekend =
   precies 2 mails.
+- **AI-MODELLEN PER TAAK (25 sep 2026, advies + akkoord eigenaar):** `MODELLEN` in
+  categorizer.js: snel = Haiku 4.5 (inbox-indeling, systeemcheck — ongewijzigd),
+  analyse = Sonnet 5 (statusscan/nachtscan, assistent, dagcheck, klantsamenvatting,
+  weekcontrole, conversie, verkeer/filterregels), opus55 = **Opus 5.5** (dagoverzicht
+  én ochtendbriefing-duiding). Concept-antwoord (Snel antwoord) Haiku → **Sonnet 5**
+  (env ANTHROPIC_REPLY_MODEL); ochtendbriefing env ANTHROPIC_BRIEFING_MODEL; de
+  assistent-knop "Opus" blijft claude-opus-5. `effortVoor(model, level)`: Sonnet 5/
+  Opus 5/5.5 denken standaard eerst na en dat telt mee voor max_tokens — korte teksten
+  (briefing 300, conversie 600, concept 700 tokens) konden daardoor afgekapt worden;
+  nu effort 'low' + limiet 2000. Haiku krijgt géén effort (400). Dagoverzicht: effort
+  'medium', max_tokens 16000, eigen time-out 240 s. Instelling aiOverviewModel:
+  standaard nu 'opus' (= Opus 5.5), 'standaard' = Sonnet 5; eenmalige migratie
+  _aiModelV2 zet hem op Opus 5.5. DAGOVERZICHT VERHUISD naar automations.js
+  `haalDagoverzicht({refresh})` (route GET /api/day-overview is nu dun) zodat de
+  OCHTENDBRIEFING hem gebruikt: nieuw blok "UIT WHATSAPP & E-MAIL" (kop, max 3
+  "Antwoord nodig" met kanaal/[URGENT], max 2 risico's, max 2 kansen), dat blok gaat
+  ook mee in de feiten voor de Opus-duiding, en het dagoverzicht staat daarna meteen
+  klaar op Start (cache). Faalt de AI, dan gaat de briefing gewoon zonder dit blok uit.
+  KOSTENTELLER (usage.js) op actuele prijzen: Haiku $1/$5, Sonnet 5 $2/$10 (was 3/15),
+  Opus 5 $5/$25 (was 15/75), Opus 5.5 $4/$20 als eigen regel (tier opus55, label in
+  perModel). Test: test/ai-modellen-test.mjs (24, zonder server, fetch onderschept —
+  géén echte AI-kosten).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 
