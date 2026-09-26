@@ -813,6 +813,25 @@ de regressie meegroeit.
   (admin; testAiModellen: één vraag van <1 cent per model, zonder terugval) → tabel
   "werkt ✓ / werkt niet + welke terugval". Test: test/ai-modellen-test.mjs (32, zonder
   server, fetch onderschept — géén echte AI-kosten) + browser (+1).
+- **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
+  (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek
+  alleen naar de OFFERTE (status 'verzonden'), nooit naar de OPDRACHT. Nu
+  `offerteOpvolgingBlokkade(inv, {handmatig})` in invoices.js: HARD (ook de knop)
+  opdracht geannuleerd / afgerond / in de prullenbak / verdwenen; alleen AUTOMATISCH
+  ook: afspraak ingepland (status of toekomstige appointmentAt) en klant reageerde ná
+  de offerte (order.lastCustomerReplyAt > quoteFollowupAt||sentAt). sendQuoteFollowup
+  controleert zelf (handmatige route geeft handmatig:true; weigering met tip "zet de
+  offerte op Afgekeurd"). `trekOpvolgingenIn(orderId, reden)`: klaarstaande outbox-items
+  met by 'offerte-opvolging'/'follow-up' → failed "ingetrokken: …" bij PATCH-status
+  geannuleerd/afgerond en bij DELETE (prullenbak); andere berichten (afspraak e.d.)
+  blijven staan; logboek "opvolg-bericht ingetrokken". followup.js slaat ook deletedAt
+  over. runQuoteFollowups is nu geëxporteerd (test). (2) KLACHT "omzet Youssef €0 bij 13
+  afgerond": het weekrapport (GET /api/report/week) telde ALLEEN het prijsveld, nooit
+  facturen. Nu `omzetVan(o, factuurPerOpdracht())` uit conversie.js (factuur excl. btw,
+  niet-concept, voorkeur order.invoiceId; anders prijsveld via `leesPrijs` — de oude
+  conversie-lezer maakte van "1.250,50" niets); perMonteur.zonderBedrag + totaal
+  zonderBedrag → UI "X zonder bedrag" + voetregel. Tests: mail-test 75 (+13), factuur-
+  test 62 (+5), conversie-test 41 (+3).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

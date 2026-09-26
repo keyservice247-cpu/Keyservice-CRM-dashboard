@@ -58,10 +58,10 @@ import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
-import { getInvoiceSettings, isVergrendeld, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup } from './invoices.js';
+import { getInvoiceSettings, isVergrendeld, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
-import { conversieData, maakConversieBriefing } from './conversie.js';
+import { conversieData, maakConversieBriefing, omzetVan, factuurPerOpdracht } from './conversie.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries, registerAttachmentFiles, ontdubbelOpSchijf, weesBestanden, fileExists, mergeAttachments } from './storage.js';
 import { alleBijlageVerwijzingen, beschermdeBijlageIds, verwijderBestandenAlsOngebruikt } from './bijlagen.js';
@@ -1824,6 +1824,8 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   order.updatedAt = now();
   if (changedStatus) {
     logActivity(req.user.name, `status gewijzigd${b.aiSuggested ? ' (AI-voorstel)' : ''}`, `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
+    // Geannuleerd of afgerond → klaarstaande opvolg-appjes intrekken (26 sep 2026).
+    if (['geannuleerd', 'afgerond'].includes(order.status)) trekOpvolgingenIn(order.id, `opdracht op ${getStatusLabels()[order.status] || order.status} gezet`);
     if (order.status === 'afgerond' && !order.completedAt) order.completedAt = now();
     // Kwam deze status uit een AI-STATUSVOORSTEL? Leg dat vast met de vorige status,
     // zodat er een weg terug is ("Toch niet"-knop op de kaart). Zonder dit was een
@@ -1926,6 +1928,7 @@ app.delete('/api/orders/:id', requirePerm('deleteOrders'), (req, res) => {
   const i = orders.findIndex((o) => o.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   const [removed] = orders.splice(i, 1);
+  trekOpvolgingenIn(removed.id, 'opdracht naar de prullenbak');
   removed.deletedAt = now();
   removed.deletedBy = req.user.name;
   if (removed.googleEvent) removeOrderFromGoogle(removed); // event uit Google halen
@@ -4825,7 +4828,7 @@ app.post('/api/invoices/:id/quote-followup', requireAuth, async (req, res) => {
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze offerte' });
   try {
-    const r = await sendQuoteFollowup(inv, { by: req.user.name });
+    const r = await sendQuoteFollowup(inv, { by: req.user.name, handmatig: true });
     if (r.error) return res.status(400).json({ error: r.error });
     res.json({ ok: true, via: r.via, to: r.to, invoice: inv });
   } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
@@ -5735,10 +5738,13 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
   const wk = weekBounds(ref);
   const inWeek = (d) => { const t = new Date(d).getTime(); return !isNaN(t) && t >= wk.start && t < wk.end; };
 
-  const monteurMap = new Map(db().monteurs.map((m) => [m.id, { id: m.id, name: m.name, afgerond: 0, omzet: 0, afspraken: 0, actief: 0 }]));
-  const none = { id: '', name: 'Geen monteur', afgerond: 0, omzet: 0, afspraken: 0, actief: 0 };
+  const monteurMap = new Map(db().monteurs.map((m) => [m.id, { id: m.id, name: m.name, afgerond: 0, omzet: 0, zonderBedrag: 0, afspraken: 0, actief: 0 }]));
+  const none = { id: '', name: 'Geen monteur', afgerond: 0, omzet: 0, zonderBedrag: 0, afspraken: 0, actief: 0 };
+  // Omzet = factuur van de opdracht (excl. btw), anders het prijsveld (26 sep 2026).
+  // Vroeger ALLEEN het prijsveld → wie factureert maar het prijsveld leeg laat stond op €0.
+  const invByOrder = factuurPerOpdracht();
 
-  let newOrders = 0, doneCount = 0, cancelCount = 0, omzet = 0, apptCount = 0;
+  let newOrders = 0, doneCount = 0, cancelCount = 0, omzet = 0, apptCount = 0, zonderBedrag = 0;
   for (const o of db().orders) {
     const row = monteurMap.get(o.monteurId) || none;
     if (inWeek(o.createdAt)) newOrders++;
@@ -5746,8 +5752,9 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
     const doneAt = o.completedAt || (o.status === 'afgerond' ? o.updatedAt : null);
     if (o.status === 'afgerond' && doneAt && inWeek(doneAt)) {
       doneCount++; row.afgerond++;
-      const p = parsePrice(o.price);
+      const p = omzetVan(o, invByOrder);
       omzet += p; row.omzet += p;
+      if (!(p > 0)) { zonderBedrag++; row.zonderBedrag++; }
     }
     if (o.status === 'geannuleerd' && inWeek(o.updatedAt)) cancelCount++;
     if (!o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status) && o.monteurId && monteurMap.has(o.monteurId)) {
@@ -5756,10 +5763,11 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
   }
   const aanvragen = db().reviews.filter((r) => inWeek(r.createdAt)).length;
   const perMonteur = [...monteurMap.values(), ...(none.afgerond || none.afspraken || none.omzet ? [none] : [])]
+    .map((m) => ({ ...m, omzet: Math.round(m.omzet * 100) / 100 }))
     .sort((a, b) => b.omzet - a.omzet || b.afgerond - a.afgerond);
   res.json({
     weekStart: new Date(wk.start).toISOString(), weekEnd: new Date(wk.end).toISOString(),
-    aanvragen, newOrders, apptCount, doneCount, cancelCount,
+    aanvragen, newOrders, apptCount, doneCount, cancelCount, zonderBedrag,
     omzet: Math.round(omzet * 100) / 100,
     conversie: newOrders ? Math.round((doneCount / newOrders) * 100) : null,
     perMonteur,

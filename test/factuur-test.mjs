@@ -74,6 +74,27 @@ await api('POST', `/api/invoices/${off2.id}/status`, { status: 'verzonden' });
 const fu2 = await api('POST', `/api/invoices/${off2.id}/quote-followup`, {});
 ok('zonder e-mail en 06: nette foutmelding', fu2.status === 400 && /telefoonnummer/.test(fu2.json.error || ''), JSON.stringify(fu2.json));
 
+console.log('\n== Offerte-opvolging + geannuleerde opdracht (26 sep 2026) ==');
+{
+  const custG = await api('POST', '/api/customers', { name: 'Annuleer Klant', phone: '0612399911' });
+  const ordG = (await api('POST', '/api/orders', { customerId: custG.json.id, title: 'Rhenen — offerte annuleren', status: 'nieuw' })).json;
+  let offG = (await api('POST', '/api/invoices', { customerId: custG.json.id, type: 'offerte', orderId: ordG.id })).json; offG = offG.invoice || offG;
+  await api('PATCH', `/api/invoices/${offG.id}`, { lines: [{ description: 'Cilinders', qty: 2, priceExcl: 90 }], btwPct: 21, note: '' });
+  await api('POST', `/api/invoices/${offG.id}/status`, { status: 'verzonden' });
+  const fuG = await api('POST', `/api/invoices/${offG.id}/quote-followup`, {});
+  ok('opvolging voor lopende opdracht → appje in de wachtrij', fuG.json?.ok === true, JSON.stringify(fuG.json));
+  const zoek = async () => ((await (await fetch(`${BASE}/api/whatsapp/outbox-status?full=1`, { headers: { cookie } })).json()) || []).find((x) => x.by === 'offerte-opvolging' && x.phone === '0612399911');
+  ok('appje staat klaar (queued)', (await zoek())?.status === 'queued');
+  await api('PATCH', `/api/orders/${ordG.id}`, { status: 'geannuleerd' });
+  // outbox-status?full=1 toont alleen wat nog KLAARSTAAT — ingetrokken = eruit.
+  const naAnnuleren = await zoek();
+  ok('opdracht op Geannuleerd → klaarstaand opvolg-appje ingetrokken (staat niet meer in de wachtrij)', !naAnnuleren, JSON.stringify(naAnnuleren));
+  const log = (await api('GET', '/api/activity')).json;
+  ok('logboek: "opvolg-bericht ingetrokken"', (Array.isArray(log) ? log : log?.items || []).some((a) => /opvolg-bericht ingetrokken/.test(JSON.stringify(a))));
+  const fuG2 = await api('POST', `/api/invoices/${offG.id}/quote-followup`, {});
+  ok('nieuwe opvolging voor geannuleerde opdracht → geweigerd met uitleg', fuG2.status === 400 && /Geannuleerd/.test(fuG2.json?.error || ''), JSON.stringify(fuG2.json));
+}
+
 console.log('\n== Prijswijziging werkt door in prijslijst ÉN pakketten ==');
 // Klacht 28 jul: "ik had prijzen gewijzigd maar die komen niet door in facturen en
 // offertes". Oorzaak: pakketten (bundels) hadden hun eigen kopie van de prijs.

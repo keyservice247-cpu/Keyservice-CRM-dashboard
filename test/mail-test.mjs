@@ -211,6 +211,58 @@ console.log('\n== Back-up-mail 2x per maand (25 sep 2026) ==');
   ok('uit = nooit', backupMailVerschuldigd({ datum: new Date('2026-10-01T10:00:00Z'), cfg: { ...cfg, enabled: false }, laatstePeriode: '' }) === false);
 }
 
+console.log('\n== Offerte-opvolging stopt bij geannuleerde opdracht (26 sep 2026) ==');
+{
+  const { runQuoteFollowups } = await import('../server/automations.js');
+  const { offerteOpvolgingBlokkade, trekOpvolgingenIn, sendQuoteFollowup } = await import('../server/invoices.js');
+  const d = db();
+  const dagenGeleden = (n) => new Date(Date.now() - n * 86400000).toISOString();
+  d.settings.invoiceSettings = { ...(d.settings.invoiceSettings || {}), autoQuoteFollowup: true, quoteFollowupAfterDays: 3, quoteFollowupRepeatDays: 5, quoteFollowupMax: 2 };
+  delete d.settings._quoteFollowupDay;
+  d.outbox = [];
+  const klant = (n) => ({ id: `cust-q${n}`, name: `Offerte Klant ${n}`, phone: `0612300${String(n).padStart(3, '0')}`, email: '' });
+  const maak = (n, orderStatus, extra = {}) => {
+    d.customers.push(klant(n));
+    const ord = { id: `ord-q${n}`, title: `Rhenen — offerte ${n}`, status: orderStatus, customerId: `cust-q${n}`, createdAt: dagenGeleden(10), updatedAt: dagenGeleden(10), thread: [], ...extra };
+    d.orders.push(ord);
+    const inv = { id: `inv-q${n}`, number: `OFF-TEST-${n}`, type: 'offerte', status: 'verzonden', orderId: ord.id, customerId: `cust-q${n}`, sentAt: dagenGeleden(6), totalIncl: 500, lines: [] };
+    d.invoices.push(inv);
+    return { ord, inv };
+  };
+  const a = maak(1, 'offerte_verzonden');                        // loopt nog → wél opvolgen
+  const b = maak(2, 'geannuleerd');                              // de klacht → NIET
+  const c = maak(3, 'afgerond');                                 // klus al gedaan → NIET
+  const e = maak(4, 'offerte_verzonden', { lastCustomerReplyAt: dagenGeleden(1) }); // klant reageerde → NIET
+  const f = maak(5, 'afspraak_ingepland');                       // afspraak staat → NIET
+  const g = maak(6, 'offerte_verzonden');
+  d.orders = d.orders.filter((o) => o.id !== g.ord.id); d.trash = [...(d.trash || []), { ...g.ord, deletedAt: dagenGeleden(1) }]; // prullenbak → NIET
+  ok('blokkade: lopende opdracht → vrij', offerteOpvolgingBlokkade(a.inv) === '');
+  ok('blokkade: geannuleerd', /Geannuleerd/.test(offerteOpvolgingBlokkade(b.inv)));
+  ok('blokkade: afgerond', /afgerond/.test(offerteOpvolgingBlokkade(c.inv)));
+  ok('blokkade: klant reageerde na de offerte', /gereageerd/.test(offerteOpvolgingBlokkade(e.inv)));
+  ok('blokkade: afspraak ingepland', /afspraak/.test(offerteOpvolgingBlokkade(f.inv)));
+  ok('blokkade: opdracht in de prullenbak', /prullenbak/.test(offerteOpvolgingBlokkade(g.inv)));
+  await runQuoteFollowups();
+  const naar = (d.outbox || []).filter((x) => x.by === 'offerte-opvolging').map((x) => x.orderId).sort();
+  ok('automatische ronde: ALLEEN de lopende offerte krijgt een opvolging', naar.join() === 'ord-q1', naar.join());
+  ok('geannuleerde klant: géén opvolging, teller onaangeroerd', !b.inv.quoteFollowupAt && !b.inv.quoteFollowupCount);
+  // Handmatige knop: geannuleerd blijft hard geblokkeerd, "klant reageerde" mag de mens zelf beslissen.
+  const hB = await sendQuoteFollowup(b.inv, { by: 'test', handmatig: true });
+  ok('handmatige knop bij geannuleerde opdracht → nette weigering met tip "Afgekeurd"', !!hB.error && /Geannuleerd/.test(hB.error) && /Afgekeurd/.test(hB.error), hB.error);
+  const hE = await sendQuoteFollowup(e.inv, { by: 'test', handmatig: true });
+  ok('handmatige knop bij "klant reageerde" → mag wél (mens beslist)', hE.ok === true, JSON.stringify(hE));
+  // Klaarstaand appje intrekken zodra de opdracht alsnog geannuleerd wordt.
+  const item = d.outbox.find((x) => x.orderId === 'ord-q1' && x.by === 'offerte-opvolging');
+  ok('opvolg-appje van de lopende offerte staat in de wachtrij', item && item.status === 'queued');
+  a.ord.status = 'geannuleerd';
+  const n = trekOpvolgingenIn('ord-q1', 'opdracht op Geannuleerd gezet');
+  ok('annuleren trekt het klaarstaande appje in (niet meer versturen)', n === 1 && item.status === 'failed' && item.ingetrokken && /ingetrokken/.test(item.lastResult));
+  const ander = { id: 'out-ander', orderId: 'ord-q1', by: 'afspraakbevestiging', status: 'queued' };
+  d.outbox.push(ander);
+  trekOpvolgingenIn('ord-q1', 'x');
+  ok('andere berichten (bv. afspraakbevestiging) worden NIET ingetrokken', ander.status === 'queued');
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

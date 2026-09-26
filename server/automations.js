@@ -16,7 +16,7 @@ import { verwijderBestandenAlsOngebruikt } from './bijlagen.js';
 // Afspraaktijden op TIJDSTIP vergelijken, niet op tekst (de kaart-modal kapt af op
 // 16 tekens). Gedeeld door bevestiging, herinnering en ochtendbriefing (audit 16 sep).
 export const zelfdeTijd = (a, b) => !!(a && b) && new Date(a).getTime() === new Date(b).getTime();
-import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup } from './invoices.js';
+import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup, offerteOpvolgingBlokkade } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
 import { lastHealth } from './health.js';
@@ -986,7 +986,7 @@ async function runInvoiceAutoReminders() {
 // Verzonden offertes die na de ingestelde periode nog niet zijn goedgekeurd/
 // afgekeurd krijgen een vriendelijke opvolgmail (met de offerte-PDF), herhaald met
 // tussenpoos en een maximum. Zelfde vangrails als de betaalherinnering.
-async function runQuoteFollowups() {
+export async function runQuoteFollowups() {
   const cfg = getInvoiceSettings();
   // Geen SMTP-gate hier: de opvolging kan óók via WhatsApp (klant met alleen een 06);
   // sendQuoteFollowup kiest zelf het kanaal en meldt netjes als beide ontbreken.
@@ -1004,6 +1004,9 @@ async function runQuoteFollowups() {
     if ((inv.quoteFollowupCount || 0) >= (cfg.quoteFollowupMax || 2)) continue;
     const last = inv.quoteFollowupAt ? new Date(inv.quoteFollowupAt).getTime() : 0;
     if (nowMs - last < (cfg.quoteFollowupRepeatDays || 5) * 86400000) continue;
+    // Opdracht geannuleerd/afgerond/prullenbak, afspraak al gepland of klant reageerde
+    // al → overslaan (26 sep 2026). Vóór de verzendfunctie, zodat er ook geen fout-log komt.
+    if (offerteOpvolgingBlokkade(inv)) continue;
     try {
       const r = await sendQuoteFollowup(inv, { by: 'systeem (automatische offerte-opvolging)' });
       if (r.ok) n++;

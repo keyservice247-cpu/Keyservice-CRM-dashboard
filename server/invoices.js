@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { db, id, now, save, saveSoon, logActivity } from './db.js';
 import { UPLOAD_DIR } from './storage.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
-import { getEmailSignature } from './settings.js';
+import { getEmailSignature, appointmentStatusKey } from './settings.js';
 import { syncAutoIncomeForInvoice } from './finance.js';
 
 const LOGO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'img', 'logo-factuur.png');
@@ -235,9 +235,56 @@ export function autoConvertQuoteToInvoice(inv, actorName = 'systeem') {
 // offerte-PDF opnieuw als bijlage); heeft de klant geen (geldig) e-mailadres maar
 // wél een 06, dan gaat de herinnering als WhatsApp-appje via de bridge (tekst —
 // een PDF kan daar niet mee). Teller voorkomt te vaak opvolgen.
-export async function sendQuoteFollowup(inv, { by = 'systeem' } = {}) {
+// Mag er (nog) een opvolging uit voor deze offerte? (26 sep 2026, klacht eigenaar:
+// "klanten die al op geannuleerd staan krijgen alsnog een vervolg"). De ronde keek
+// alleen naar de OFFERTE (nog "verzonden") en nooit naar de OPDRACHT — annuleren op
+// het bord hield de opvolging dus niet tegen. Geeft een reden terug, of ''.
+//   hard (ook handmatig geblokkeerd): opdracht geannuleerd / afgerond / in de prullenbak
+//   alleen automatisch: afspraak al ingepland, of de klant reageerde ná de offerte
+export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
+  if (!inv || inv.type !== 'offerte') return 'geen offerte';
+  if (inv.status !== 'verzonden') return 'offerte is niet (meer) open';
+  if (!inv.orderId) return ''; // losse offerte zonder opdracht: niets om tegen te checken
+  const order = (db().orders || []).find((o) => o.id === inv.orderId);
+  if (!order) {
+    const inPrullenbak = (db().trash || []).some((o) => o.id === inv.orderId);
+    return inPrullenbak ? 'de opdracht staat in de prullenbak' : 'de opdracht bestaat niet meer';
+  }
+  if (order.status === 'geannuleerd') return 'de opdracht staat op Geannuleerd';
+  if (order.status === 'afgerond') return 'de opdracht is al afgerond';
+  if (handmatig) return '';
+  const afspraakKey = appointmentStatusKey();
+  if ((afspraakKey && order.status === afspraakKey) || (order.appointmentAt && new Date(order.appointmentAt).getTime() > Date.now())) return 'er staat al een afspraak';
+  const sinds = new Date(inv.quoteFollowupAt || inv.sentAt || 0).getTime();
+  if (order.lastCustomerReplyAt && new Date(order.lastCustomerReplyAt).getTime() > sinds) return 'de klant heeft na de offerte al gereageerd';
+  return '';
+}
+
+// Klaarstaande (nog niet verstuurde) opvolg-appjes van een opdracht intrekken — bij
+// annuleren, afronden of naar de prullenbak. Anders ging een appje dat al in de
+// wachtrij stond (bv. bridge even offline) alsnog de deur uit. Geeft het aantal terug.
+export function trekOpvolgingenIn(orderId, reden = 'opdracht gesloten') {
+  if (!orderId) return 0;
+  let n = 0;
+  for (const it of db().outbox || []) {
+    if (it.orderId !== orderId || it.status !== 'queued') continue;
+    if (!['offerte-opvolging', 'follow-up'].includes(it.by)) continue;
+    it.status = 'failed';
+    it.lastResult = `ingetrokken: ${reden}`;
+    it.ingetrokken = true;
+    n++;
+  }
+  if (n) { saveSoon(); logActivity('systeem', 'opvolg-bericht ingetrokken', `${n}× — ${reden}`); }
+  return n;
+}
+
+export async function sendQuoteFollowup(inv, { by = 'systeem', handmatig = false } = {}) {
   if (inv.type !== 'offerte') return { error: 'Alleen voor offertes.' };
   if (inv.status !== 'verzonden') return { error: 'Alleen voor verzonden (nog niet beantwoorde) offertes.' };
+  {
+    const blok = offerteOpvolgingBlokkade(inv, { handmatig });
+    if (blok) return { error: `Geen opvolging: ${blok}.${/Geannuleerd/.test(blok) ? ' Zet de offerte op "Afgekeurd" om hem af te sluiten.' : ''}`, geblokkeerd: blok };
+  }
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   const cfg = getInvoiceSettings();
   const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || null) : null;

@@ -57,11 +57,33 @@ function telOp(t, o, invByOrder) {
 const GESLOTEN = new Set([...GEWONNEN, ...VERLOREN]);
 
 // Omzet van een afgeronde opdracht: gekoppelde factuur (excl. btw) wint van het prijsveld.
-function omzetVan(o, invByOrder) {
+// Gedeeld met het Weekrapport op Start (26 sep 2026: dat keek alleen naar het
+// prijsveld → monteurs die wel factureren maar het prijsveld leeg laten stonden op €0).
+// Prijsveld ("740", "€ 740,-", "1.250,50") → euro's; 0 als onleesbaar. (Oude lezer
+// maakte van "1.250,50" niets en van "€ 740,-" soms NaN.)
+export function leesPrijs(str) {
+  let t = String(str || '').replace(/[^\d.,]/g, '');
+  if (!t) return 0;
+  if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(t)) t = t.replace(/\./g, ''); // 1.250 → 1250
+  t = t.replace(',', '.');
+  const n = parseFloat(t);
+  return Number.isFinite(n) ? n : 0;
+}
+export function omzetVan(o, invByOrder) {
   const inv = invByOrder.get(o.id);
   if (inv && Number.isFinite(Number(inv.totalExcl))) return Number(inv.totalExcl);
-  const p = Number(String(o.price || '').replace(/[^\d,.-]/g, '').replace(',', '.'));
-  return Number.isFinite(p) ? p : 0;
+  return leesPrijs(o.price);
+}
+// Factuur per opdracht: alleen echte facturen (geen offerte), niet-concept. Heeft de
+// opdracht er meerdere, dan wint die waar order.invoiceId naar wijst.
+export function factuurPerOpdracht() {
+  const map = new Map();
+  for (const i of db().invoices || []) if (i.orderId && i.type !== 'offerte' && i.status !== 'concept') map.set(i.orderId, i);
+  for (const o of db().orders || []) {
+    const hoofd = o.invoiceId && (db().invoices || []).find((i) => i.id === o.invoiceId && i.type !== 'offerte' && i.status !== 'concept');
+    if (hoofd) map.set(o.id, hoofd);
+  }
+  return map;
 }
 
 function maandag(ms) {
@@ -76,8 +98,7 @@ export function conversieData({ dagen = 90, weken = 12 } = {}) {
   const van = nu - dagen * DAG;
   const vorigVan = van - dagen * DAG;
   const msgById = new Map((db().messages || []).map((m) => [m.id, m]));
-  const invByOrder = new Map();
-  for (const i of db().invoices || []) if (i.orderId && i.type !== 'offerte' && i.status !== 'concept') invByOrder.set(i.orderId, i);
+  const invByOrder = factuurPerOpdracht();
   const monteurNaam = new Map((db().monteurs || []).map((m) => [m.id, m.name]));
   const statussen = getStatuses();
   const label = (k) => (statussen.find((s) => s.key === k) || {}).label || k;

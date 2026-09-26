@@ -120,6 +120,24 @@ ok('GET geeft dezelfde briefing terug', c4.briefing && c4.briefing.at === b.at &
 const act = (await api('GET', '/api/activity')).json;
 ok('logboekregel "conversie-briefing gemaakt"', (Array.isArray(act) ? act : act.items || []).some((a) => /conversie-briefing/.test(a.action || a.text || JSON.stringify(a))));
 
+console.log('\n== Weekrapport op Start: omzet uit factuur, anders prijsveld (26 sep 2026) ==');
+{
+  const mw = (await api('POST', '/api/monteurs', { name: 'Week Monteur', phone: '0613131313' })).json;
+  const mwId = mw?.id || mw?.monteur?.id;
+  const nieuw = async (naam, tel, extra = {}) => (await api('POST', '/api/orders', { title: `Rhenen — ${naam}`, status: 'nieuw', description: 't', source: 'Handmatig', customerName: naam, customerPhone: tel, ...extra })).json;
+  const k1 = await nieuw('Week Factuur', '0614141401');          // factuur 200 excl., géén prijsveld
+  const k2 = await nieuw('Week Prijs', '0614141402');            // alleen prijsveld "€ 1.250,50"
+  const k3 = await nieuw('Week Niks', '0614141403');             // niets → zonder bedrag
+  for (const [k, prijs] of [[k1, ''], [k2, '€ 1.250,50'], [k3, '']]) await api('PATCH', `/api/orders/${k.id}`, { status: 'afgerond', monteurId: mwId, ...(prijs ? { price: prijs } : {}) });
+  let f = (await api('POST', '/api/invoices', { customerId: k1.customerId, type: 'factuur', orderId: k1.id })).json; f = f.invoice || f;
+  await api('PATCH', `/api/invoices/${f.id}`, { lines: [{ description: 'Slot', qty: 1, priceExcl: 200 }], btwPct: 21, note: '' });
+  const wr = (await api('GET', '/api/report/week?offset=0')).json;
+  const rij = (wr.perMonteur || []).find((m) => m.name === 'Week Monteur');
+  ok('weekrapport: 3 afgerond voor de monteur', rij && rij.afgerond === 3, JSON.stringify(rij));
+  ok('omzet = factuur 200 (excl. btw, prijsveld leeg) + prijsveld 1250,50 = 1450,50', rij && rij.omzet === 1450.5, JSON.stringify(rij));
+  ok('1 afgeronde opdracht zonder factuur én prijs wordt gemeld', rij && rij.zonderBedrag === 1 && wr.zonderBedrag >= 1, JSON.stringify({ rij: rij?.zonderBedrag, tot: wr.zonderBedrag }));
+}
+
 console.log('\n== Cijfers-correcties ==');
 const fe = (await api('POST', '/api/finance', { kind: 'income', amount: 120, category: 'DRS opdracht', note: 'zonder bron' })).json;
 ok('boeking zonder datum krijgt de datum van vandaag in NL-tijd', fe && fe.date === nlVandaag(), JSON.stringify(fe?.date));

@@ -20,7 +20,7 @@ export async function runFollowUps() {
   const noReplyCutoff = Date.now() - cfg.noReplyDays * 86400000;
   let count = 0;
   for (const o of db().orders) {
-    if (o.archivedWeek || ['afgerond', 'geannuleerd'].includes(o.status)) continue;
+    if (o.archivedWeek || o.deletedAt || ['afgerond', 'geannuleerd'].includes(o.status)) continue;
     if (o.followUpAt) continue;                       // al een follow-up gestuurd
     const c = db().customers.find((x) => x.id === o.customerId) || {};
 

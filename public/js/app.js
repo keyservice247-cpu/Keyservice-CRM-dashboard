@@ -1342,12 +1342,12 @@ async function loadOverview() {
             <div class="wr-kpi"><span class="wr-num">${r.newOrders}</span><span>nieuwe opdrachten</span></div>
             <div class="wr-kpi"><span class="wr-num">${r.apptCount}</span><span>afspraken</span></div>
             <div class="wr-kpi"><span class="wr-num">${r.doneCount}</span><span>afgerond</span></div>
-            <div class="wr-kpi"><span class="wr-num">${euro(r.omzet)}</span><span>omzet (prijsveld)</span></div>
+            <div class="wr-kpi"><span class="wr-num">${euro(r.omzet)}</span><span>omzet (excl. btw)</span></div>
             <div class="wr-kpi"><span class="wr-num">${r.conversie === null ? '—' : r.conversie + '%'}</span><span>conversie</span></div>
           </div>
           <table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th><th>Omzet</th><th>Afspraken</th><th>Nu actief</th></tr></thead>
-          <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table>
-          <p class="muted small" style="margin-top:8px">Omzet komt uit het <strong>prijsveld</strong> op afgeronde opdrachten — vul die in voor een kloppend rapport.</p>`;
+          <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table>
+          <p class="muted small" style="margin-top:8px">Omzet = de <strong>factuur</strong> van de afgeronde opdracht (excl. btw); zonder factuur telt het <strong>prijsveld</strong>.${r.zonderBedrag ? ` <strong>${r.zonderBedrag} afgeronde opdracht(en) hebben nog geen factuur en geen prijs</strong> — die tellen als € 0. Maak de factuur of vul de prijs in.` : ''}</p>`;
       } catch (err) { box.innerHTML = `<span class="error">${esc(err.message)}</span>`; }
     };
     $('#wr-offset').onchange = loadWeek;
