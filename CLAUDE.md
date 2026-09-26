@@ -816,12 +816,13 @@ de regressie meegroeit.
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek
   alleen naar de OFFERTE (status 'verzonden'), nooit naar de OPDRACHT. Nu
-  `offerteOpvolgingBlokkade(inv, {handmatig})` in invoices.js: HARD (ook de knop)
-  opdracht geannuleerd / afgerond / in de prullenbak / verdwenen; alleen AUTOMATISCH
-  ook: afspraak ingepland (status of toekomstige appointmentAt) en klant reageerde ná
-  de offerte (order.lastCustomerReplyAt > quoteFollowupAt||sentAt). sendQuoteFollowup
-  controleert zelf (handmatige route geeft handmatig:true; weigering met tip "zet de
-  offerte op Afgekeurd"). `trekOpvolgingenIn(orderId, reden)`: klaarstaande outbox-items
+  `offerteOpvolgingBlokkade(inv, {handmatig})` in invoices.js: AUTOMATISCH geblokkeerd
+  bij opdracht geannuleerd / afgerond / in de prullenbak / verdwenen, afspraak
+  ingepland (status of toekomstige appointmentAt) en klant reageerde ná de offerte
+  (order.lastCustomerReplyAt > quoteFollowupAt||sentAt). De HANDMATIGE knop
+  "Herinnering" mag ALTIJD zolang de offerte op 'verzonden' staat — ook bij een
+  geannuleerde opdracht (wens eigenaar 26 sep: "handmatige herinneringen moeten
+  blijven kunnen"). sendQuoteFollowup controleert zelf (route geeft handmatig:true). `trekOpvolgingenIn(orderId, reden)`: klaarstaande outbox-items
   met by 'offerte-opvolging'/'follow-up' → failed "ingetrokken: …" bij PATCH-status
   geannuleerd/afgerond en bij DELETE (prullenbak); andere berichten (afspraak e.d.)
   blijven staan; logboek "opvolg-bericht ingetrokken". followup.js slaat ook deletedAt

@@ -239,11 +239,15 @@ export function autoConvertQuoteToInvoice(inv, actorName = 'systeem') {
 // "klanten die al op geannuleerd staan krijgen alsnog een vervolg"). De ronde keek
 // alleen naar de OFFERTE (nog "verzonden") en nooit naar de OPDRACHT — annuleren op
 // het bord hield de opvolging dus niet tegen. Geeft een reden terug, of ''.
-//   hard (ook handmatig geblokkeerd): opdracht geannuleerd / afgerond / in de prullenbak
-//   alleen automatisch: afspraak al ingepland, of de klant reageerde ná de offerte
+//   automatisch: opdracht geannuleerd / afgerond / in de prullenbak, afspraak al
+//   ingepland, of de klant reageerde ná de offerte
+//   HANDMATIG (knop "Herinnering"): altijd toegestaan zolang de offerte open staat —
+//   de mens beslist (wens eigenaar 26 sep: "handmatige herinneringen ondanks
+//   geannuleerde opdrachten moet blijven kunnen").
 export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
   if (!inv || inv.type !== 'offerte') return 'geen offerte';
   if (inv.status !== 'verzonden') return 'offerte is niet (meer) open';
+  if (handmatig) return '';
   if (!inv.orderId) return ''; // losse offerte zonder opdracht: niets om tegen te checken
   const order = (db().orders || []).find((o) => o.id === inv.orderId);
   if (!order) {
@@ -252,7 +256,6 @@ export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
   }
   if (order.status === 'geannuleerd') return 'de opdracht staat op Geannuleerd';
   if (order.status === 'afgerond') return 'de opdracht is al afgerond';
-  if (handmatig) return '';
   const afspraakKey = appointmentStatusKey();
   if ((afspraakKey && order.status === afspraakKey) || (order.appointmentAt && new Date(order.appointmentAt).getTime() > Date.now())) return 'er staat al een afspraak';
   const sinds = new Date(inv.quoteFollowupAt || inv.sentAt || 0).getTime();

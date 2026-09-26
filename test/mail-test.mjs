@@ -246,9 +246,9 @@ console.log('\n== Offerte-opvolging stopt bij geannuleerde opdracht (26 sep 2026
   const naar = (d.outbox || []).filter((x) => x.by === 'offerte-opvolging').map((x) => x.orderId).sort();
   ok('automatische ronde: ALLEEN de lopende offerte krijgt een opvolging', naar.join() === 'ord-q1', naar.join());
   ok('geannuleerde klant: géén opvolging, teller onaangeroerd', !b.inv.quoteFollowupAt && !b.inv.quoteFollowupCount);
-  // Handmatige knop: geannuleerd blijft hard geblokkeerd, "klant reageerde" mag de mens zelf beslissen.
+  // Handmatige knop: de mens beslist — mag óók bij een geannuleerde opdracht.
   const hB = await sendQuoteFollowup(b.inv, { by: 'test', handmatig: true });
-  ok('handmatige knop bij geannuleerde opdracht → nette weigering met tip "Afgekeurd"', !!hB.error && /Geannuleerd/.test(hB.error) && /Afgekeurd/.test(hB.error), hB.error);
+  ok('handmatige knop bij geannuleerde opdracht → mag wél (mens beslist)', hB.ok === true, JSON.stringify(hB));
   const hE = await sendQuoteFollowup(e.inv, { by: 'test', handmatig: true });
   ok('handmatige knop bij "klant reageerde" → mag wél (mens beslist)', hE.ok === true, JSON.stringify(hE));
   // Klaarstaand appje intrekken zodra de opdracht alsnog geannuleerd wordt.

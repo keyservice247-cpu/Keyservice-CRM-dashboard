@@ -92,7 +92,7 @@ console.log('\n== Offerte-opvolging + geannuleerde opdracht (26 sep 2026) ==');
   const log = (await api('GET', '/api/activity')).json;
   ok('logboek: "opvolg-bericht ingetrokken"', (Array.isArray(log) ? log : log?.items || []).some((a) => /opvolg-bericht ingetrokken/.test(JSON.stringify(a))));
   const fuG2 = await api('POST', `/api/invoices/${offG.id}/quote-followup`, {});
-  ok('nieuwe opvolging voor geannuleerde opdracht → geweigerd met uitleg', fuG2.status === 400 && /Geannuleerd/.test(fuG2.json?.error || ''), JSON.stringify(fuG2.json));
+  ok('handmatige herinnering bij geannuleerde opdracht → mag wél (mens beslist)', fuG2.json?.ok === true, JSON.stringify(fuG2.json));
 }
 
 console.log('\n== Prijswijziging werkt door in prijslijst ÉN pakketten ==');
