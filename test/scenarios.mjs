@@ -239,6 +239,14 @@ ok('lead zelf gaat DOOR ondanks bijlage-fouten', r2.status === 200 && j2.ok && j
 ok('txt geweigerd (type) én jpg geweigerd (te groot)', (j2.bijlagen?.geweigerd || []).length === 2 && j2.bijlagen?.opgeslagen === 0, JSON.stringify(j2.bijlagen));
 const pre = await fetch(`${BASE}/api/ingest/form`, { method: 'OPTIONS' });
 ok('OPTIONS-preflight antwoordt 204', pre.status === 204);
+// Stad-websites zonder token: toegestane afkomst wordt doorgelaten (lege aanvraag -> 400,
+// dus NIET 401 en er ontstaat geen lead), onbekende afkomst krijgt 401.
+for (const site of ['https://schuifpuireparatie-almere.nl', 'https://www.schuifpuireparatie-denhaag.nl', 'https://schuifpuireparatie-eindhoven.nl']) {
+  const rs = await fetch(`${BASE}/api/ingest/form`, { method: 'POST', headers: { 'content-type': 'application/json', origin: site }, body: '{}' });
+  ok(`stadssite ${site} toegestaan zonder token (400 lege aanvraag, geen 401)`, rs.status === 400, String(rs.status));
+}
+const rOnb = await fetch(`${BASE}/api/ingest/form`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://onbekende-site.example' }, body: '{}' });
+ok('onbekende afkomst zonder token geweigerd (401)', rOnb.status === 401, String(rOnb.status));
 
 // ---------- Opdracht 2: site+mail-dedup binnen 15 min ----------
 console.log('\n== O2. Zelfde aanvraag via site én (FormSubmit-)mail -> één lead ==');

@@ -1182,6 +1182,11 @@ Hier werken we naartoe; elke feature moet hieraan bijdragen:
   formulier-lead rechtstreeks naar dit CRM: `POST /api/ingest/form`.
 - Endpoint accepteert leads van het eigen domein ZONDER token (origin-check op
   keyservice247.nl; instelbaar via env `FORM_ALLOWED_ORIGINS`), of met FORM_TOKEN/INGEST_TOKEN.
+- Ook toegestaan zonder token (basislijst `ALLOWED_ORIGINS` in server/index.js): schuifpuiservice.com
+  en ALLE schuifpui-stadssites `schuifpuireparatie-<stad>.nl` (+ `.pages.dev`): amsterdam, rotterdam,
+  utrecht en sinds 27 sep 2026 ook almere, denhaag, amersfoort, lelystad, hilversum, breda, tilburg,
+  roosendaal, eindhoven (statische sites in repo schuifpuiservice `sites/<stad>`, POST JSON met
+  `site: "schuifpuireparatie-<stad>.nl"`). Nieuwe stadssite = hier toevoegen, anders 401 "Niet toegestaan".
 - Velden: name, phone, email, subject, message (of comment), formType. Leads komen altijd
   eerst in de te-controleren inbox (nooit auto-opdracht). Zie docs/WEBSITE-CRM-KOPPELING.md.
 - Website-kant: `axios.post` in `src/hooks/useFormSubmission.js` + `connect-src`-regel in
