@@ -616,8 +616,10 @@ de regressie meegroeit.
   mobiele kopbalk 222 px → `.layout{grid-template-rows:auto 1fr;align-content:
   start}` (assertie < 90 px); zijbalk compacter onder 860 px hoog + scroll-
   schaduw, Uitloggen niet meer afgekapt; bord-knoppenrij WRAPT op mobiel met het
-  zoekveld op een eigen regel; Opslaan-rij van de kaart-modal plakt onderaan
-  (.modal-actions-vast; .modal overflow-x:clip i.p.v. hidden); inbox-correctie-
+  zoekveld op een eigen regel; Opslaan-rij van de kaart-modal plakte onderaan
+  (.modal-actions-vast — TERUGGEDRAAID 28 sep 2026, wens eigenaar "als ik scroll gaan
+  die knoppen allemaal mee": 13 knoppen schoven op de pc over de halve inhoud; nu
+  staan ze vast onderaan de opdracht, op mobiel waren ze dat al); inbox-correctie-
   velden in 2 kolommen op mobiel, "Bekende klant"-chip breekt af, checkboxes 22 px,
   kolom-tabs 44 px; Cijfers-tabellen schuiven zelf; toast niet boven een open
   venster (behalve fouten); Navigeer-knop zonder adres legt uit i.p.v. verdwijnt;

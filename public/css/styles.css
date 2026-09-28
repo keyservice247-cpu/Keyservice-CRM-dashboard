@@ -531,12 +531,11 @@ body[data-view="chats"] .push-hint { display: none; }
 
 /* Modal */
 .modal-root { position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-.modal { overflow-x: clip; } /* clip i.p.v. hidden: geen scroll-container, zodat de vaste Opslaan-rij aan het venster plakt */
+.modal { overflow-x: clip; } /* clip i.p.v. hidden: het paneel wordt geen eigen scroll-container */
 /* Achtergrond vastzetten zodra een venster open is (voorkomt meescrollen/doorzien).
    position:fixed + top (gezet door modal() in app.js) is de enige lock die op iOS
    betrouwbaar werkt; de scrollpositie wordt bij sluiten exact hersteld. */
 body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 100%; }
-.modal-actions-vast { position: sticky; bottom: 0; background: var(--panel); padding-top: 10px; padding-bottom: 10px; margin-top: 14px; z-index: 3; border-top: 1px solid var(--line-soft); }
 /* Eigen invoervenster (vraagTekst) — ligt boven een open modal. */
 .mini-dialog-root { position: fixed; inset: 0; z-index: 400; background: rgba(31,37,48,.42); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .mini-dialog { background: var(--panel); color: var(--ink); border-radius: 14px; border: 1px solid var(--line); box-shadow: var(--shadow-lg); width: 420px; max-width: 100%; padding: 20px 22px; }
