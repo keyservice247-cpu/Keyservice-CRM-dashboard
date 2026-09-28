@@ -2389,6 +2389,8 @@ app.post('/api/whatsapp/heartbeat', checkIngestToken, (req, res) => {
   // Bridge-versie: zo zien we in het dashboard of de VPS al de nieuwe bridge draait
   // (v2 = kan groepen per id versturen + leert groeps-koppelingen automatisch).
   if (b.version) db().settings.whatsappBridgeVersion = Number(b.version) || 0;
+  // v10: staat de media-reparatie (foto's/PDF's versturen) erin? Zichtbaar in de status.
+  if (b.mediaFix) db().settings.whatsappMediaFix = String(b.mediaFix).slice(0, 40);
   // STIL opslaan: de hartslag komt elke 60 seconden binnen en verandert niets wat je
   // op het scherm ziet. Met een gewone saveSoon() herlaadde elk geopend scherm van
   // elke gebruiker daardoor de klok rond — dat was de bron van het "geknipper".
@@ -2513,6 +2515,9 @@ app.get('/api/whatsapp/status', requireAuth, (req, res) => {
     paused: !!db().settings.whatsappPaused,
     cloud: cloudSendAan(),
     wachtrij: (db().outbox || []).filter((o) => o.status === 'queued').length,
+    // Welke bridge draait er, en kan hij weer foto's/PDF's versturen (v10, 28 sep)?
+    bridgeVersie: Number(db().settings.whatsappBridgeVersion) || null,
+    mediaFix: db().settings.whatsappMediaFix || null,
   });
 });
 // Pauzeknop ook voor de ASSISTENTE (punt 9): zij draagt de gevolgen van de wachtrij,
@@ -3657,8 +3662,31 @@ function buildMonteurMessage(order) {
   if (order.description) lines.push(`Omschrijving: ${order.description}`);
   if (order.appointmentAt) lines.push(`Afspraak: ${order.appointmentAt.replace('T', ' ')}`);
   if (order.price) lines.push(`Prijs: ${order.price}`);
-  if (order.attachments?.length) lines.push(`(${order.attachments.length} foto's/bestanden in het dashboard)`);
+  const bijlagen = monteurBijlagen(order);
+  if (bijlagen.length) {
+    // Bridge v10+: een link naar ÁLLE foto's van de opdracht (28 sep 2026, "het CRM
+    // stuurt geen foto's meer mee"). Werkt altijd — ook als bijlagen versturen in
+    // WhatsApp stuk is, bij meer dan 6 foto's, bij video's en bij foto's die later nog
+    // binnenkomen. Oudere bridges kunnen het link-voorbeeld niet uitzetten (een extra
+    // stap in WhatsApp Web die de hele tekst kan laten mislukken): die houden de oude regel.
+    const alleenFotos = bijlagen.every((a) => /^image\//.test(a.mime || ''));
+    lines.push(bridgeKanFotoLink()
+      ? `${alleenFotos ? "Foto's" : "Foto's/bestanden"} (${bijlagen.length}): ${fotoLinkVoor(order)}`
+      : `(${order.attachments.length} foto's/bestanden in het dashboard)`);
+  }
   return lines.join('\n');
+}
+
+// Bijlagen die de monteur mag zien: alles op de kaart behalve de handtekening van de
+// klant onder de werkbon (die staat nooit in een link).
+function monteurBijlagen(order) {
+  const sigId = order.werkbon && order.werkbon.signatureAttachmentId;
+  const sigFile = sigId ? ((order.attachments || []).find((a) => a && a.id === sigId) || {}).file : '';
+  return (order.attachments || []).filter((a) => a && a.file && a.id !== sigId && (!sigFile || a.file !== sigFile));
+}
+// Kan de bridge die nu draait de fotolink veilig meesturen (v10: zonder link-voorbeeld)?
+function bridgeKanFotoLink() {
+  return Number(db().settings.whatsappBridgeVersion || 0) >= 10;
 }
 
 // Mag er nu (vandaag) automatisch naar de monteur verstuurd worden?
@@ -3693,7 +3721,9 @@ function queueToMonteur(order, monteur, byName) {
     by: byName,
   };
   db().outbox.unshift(item);
-  order.sentToMonteur = { monteurId: monteur.id, monteurName: monteur.name, at: now(), status: 'queued' };
+  // outboxId: alleen DÍT wachtrij-item zet straks de verstuurstatus op de kaart (een
+  // onderweg-appje of factuur op dezelfde kaart hoort daar niet op door te werken).
+  order.sentToMonteur = { monteurId: monteur.id, monteurName: monteur.name, at: now(), status: 'queued', outboxId: item.id };
   order.updatedAt = now();
   if (db().outbox.length > 1000) db().outbox.length = 1000;
   // Pushmelding op de telefoon van de monteur zelf (21 sep): de opdracht staat in
@@ -4332,8 +4362,29 @@ app.post('/api/outbox/:id/done', checkIngestToken, (req, res) => {
       item.doneAt = now();
     }
   }
+  // Bridge v10 meldt hoeveel bijlagen (foto's, factuur-PDF) er écht aankwamen. Sinds de
+  // WhatsApp-Web-versies van 17 sep 2026 ging dat stil mis: de tekst kwam aan, het item
+  // stond op "verstuurd", maar de foto's ontbraken — en niemand zag het.
+  const m = req.body?.media;
+  if (m && typeof m === 'object') {
+    const gevraagd = Math.max(0, Math.min(20, Math.round(Number(m.gevraagd) || 0)));
+    const verstuurd = Math.max(0, Math.min(gevraagd, Math.round(Number(m.verstuurd) || 0)));
+    item.mediaResultaat = { gevraagd, verstuurd, fout: String(m.fout || '').slice(0, 160), terugval: !!m.terugval, at: now() };
+  }
   const order = db().orders.find((o) => o.id === item.orderId);
-  if (order && order.sentToMonteur) order.sentToMonteur.status = item.status;
+  // Alleen het wachtrij-item van de opdracht-verzending zelf zet de status op de kaart
+  // (oudere kaarten zonder outboxId: zoals voorheen).
+  const isDispatchItem = !!(order && order.sentToMonteur && (!order.sentToMonteur.outboxId || order.sentToMonteur.outboxId === item.id));
+  if (isDispatchItem) {
+    order.sentToMonteur.status = item.status;
+    if (item.mediaResultaat) order.sentToMonteur.fotos = { gevraagd: item.mediaResultaat.gevraagd, verstuurd: item.mediaResultaat.verstuurd };
+  }
+  const mr = item.mediaResultaat;
+  if (mr && m && mr.verstuurd < mr.gevraagd) {
+    const wat = item.invoiceId ? 'PDF-bijlage' : "foto's";
+    logActivity('bridge', `${wat} niet (allemaal) meegestuurd`,
+      `${order ? order.title : (item.monteurName || item.group || item.phone || '')}: ${mr.verstuurd} van ${mr.gevraagd}${mr.fout ? ` — ${mr.fout}` : ''}${mr.terugval ? ' (downloadlink als tekst nagestuurd)' : ''}`.slice(0, 300));
+  }
   // Bij het her-wachtrijen niet elke 8s naar schijf schrijven (de oude bridge probeert
   // het snel opnieuw): 1x per 20 pogingen is genoeg — de teller is geen kritieke data.
   if (item.status !== 'queued' || (item.attempts % 20) === 1) saveSoon();
@@ -4700,6 +4751,54 @@ app.get('/bon/:id/:sig/pdf', async (req, res) => {
   } catch (e) { res.status(500).send('PDF maken mislukt — probeer het later opnieuw.'); }
 });
 
+// ---------- FOTOPAGINA VOOR DE MONTEUR (28 sep 2026) ----------
+// Casus "het CRM stuurt geen foto's meer mee": sinds de WhatsApp-Web-versies van 17 sep
+// kon de bridge geen bijlagen meer versturen; de monteur kreeg de opdracht zonder
+// foto's. Het opdrachtbericht krijgt nu een link naar deze pagina met ÁLLE foto's van
+// de opdracht — die werkt altijd, ook als bijlagen versturen stuk is, bij meer dan 6
+// foto's, bij video's en bij foto's die later nog binnenkomen. Geen login nodig; de
+// handtekening in de link hoort bij precies één opdracht (zelfde principe als /bon).
+// De handtekening van de klant onder de werkbon staat er nooit op.
+const fotoSig = (orderId) => crypto.createHmac('sha256', LINK_SECRET())
+  .update(`fotos:${orderId}`).digest('hex').slice(0, 24);
+function fotoLinkVoor(order) { return `${CLOUD_UIT_ADRES()}/fotos/${order.id}/${fotoSig(order.id)}`; }
+const htmlTekst = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+app.get('/fotos/:id/:sig', (req, res) => {
+  const oid = String(req.params.id || '');
+  const goed = Buffer.from(fotoSig(oid));
+  const gegeven = Buffer.from(String(req.params.sig || ''));
+  const order = (/^[\w-]{3,80}$/.test(oid) && gegeven.length === goed.length && crypto.timingSafeEqual(gegeven, goed))
+    ? (db().orders || []).find((o) => o.id === oid) : null;
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+  const pagina = (titel, inhoud) => `<!doctype html><html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>${htmlTekst(titel)}</title>
+<style>body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f4f6f9;color:#10161f;padding:16px}
+h1{font-size:18px;margin:4px 0}p{color:#56616f;margin:0 0 14px;font-size:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.grid a{display:block;border-radius:10px;overflow:hidden;background:#dde3ea}
+.grid img{width:100%;height:auto;display:block}
+video{width:100%;border-radius:10px;background:#000;margin-top:10px}
+.bestand{display:block;padding:12px 14px;background:#fff;border-radius:10px;margin-top:10px;color:#1d4f9c;text-decoration:none;font-weight:600;word-break:break-all}</style>
+</head><body>${inhoud}</body></html>`;
+  if (!order) return res.status(404).type('html').send(pagina('Niet gevonden', '<h1>Deze foto\'s zijn niet (meer) beschikbaar</h1><p>De opdracht bestaat niet meer of de link klopt niet.</p>'));
+  const bestanden = monteurBijlagen(order).filter((a) => /^att_[a-zA-Z0-9_.]+$/.test(a.file) && fileExists(a.file));
+  const src = (a) => `/uploads/${a.file}?sig=${uploadSig(a.file)}`;
+  const fotos = bestanden.filter((a) => /^image\//.test(a.mime || '') || a.kind === 'image');
+  const videos = bestanden.filter((a) => !fotos.includes(a) && (/^video\//.test(a.mime || '') || a.kind === 'video'));
+  const rest = bestanden.filter((a) => !fotos.includes(a) && !videos.includes(a));
+  const telling = [fotos.length && `${fotos.length} foto${fotos.length === 1 ? '' : "'s"}`, videos.length && `${videos.length} video${videos.length === 1 ? '' : "'s"}`, rest.length && `${rest.length} bestand${rest.length === 1 ? '' : 'en'}`].filter(Boolean).join(' · ');
+  const inhoud = `<h1>${htmlTekst(order.title || 'Opdracht')}</h1>
+<p>${bestanden.length ? `${telling} — tik op een foto voor het origineel` : 'Er staan (nog) geen foto\'s bij deze opdracht.'}</p>
+${fotos.length ? `<div class="grid">${fotos.map((a) => `<a href="${src(a)}"><img src="${src(a)}" alt="" loading="lazy"></a>`).join('')}</div>` : ''}
+${videos.map((a) => `<video controls preload="metadata" src="${src(a)}"></video>`).join('')}
+${rest.map((a) => `<a class="bestand" href="${src(a)}">${htmlTekst(a.filename || a.file)}</a>`).join('')}`;
+  res.type('html').send(pagina(`Foto's — ${order.title || 'opdracht'}`, inhoud));
+});
+
 app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
@@ -4723,6 +4822,7 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
     const cfg = getInvoiceSettings();
     const tekst = String(req.body?.text || '').trim()
       || `Beste ${customer.name || 'klant'},\n\nHierbij ${isQuote ? 'de offerte' : 'de factuur'} ${inv.number} van ${cfg.companyName || 'Keyservice'}.${!isQuote && inv.status === 'betaald' ? ' Deze is al voldaan — bedankt voor uw betaling; u ontvangt hem voor uw administratie.' : ''}\n\nMet vriendelijke groet,\n${cfg.companyName || 'Keyservice'}`;
+    const bonLink = `${CLOUD_UIT_ADRES()}/bon/${inv.id}/${bonSig(inv.id)}`;
     db().outbox.unshift({
       id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
       text: tekst, orderId: inv.orderId || undefined, status: 'queued', createdAt: now(),
@@ -4731,7 +4831,10 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
       media: [{ url: saved.url, name: saved.filename, mime: 'application/pdf', file: saved.file }],
       // Korte klantlink naar de bon-pagina: gaat mee in het sjabloon i.p.v. de lange
       // uploads-link, en werkt zonder login. De PDF wordt daar altijd vers opgebouwd.
-      bonLink: `${CLOUD_UIT_ADRES()}/bon/${inv.id}/${bonSig(inv.id)}`,
+      bonLink,
+      // Reservetekst voor de bridge (v10): lukt de PDF-bijlage niet (zoals sinds de
+      // WhatsApp-Web-versies van 17 sep), dan krijgt de klant alsnog deze downloadlink.
+      mediaTerugval: `U kunt ${isQuote ? 'de offerte' : 'de factuur'} ${inv.number} hier openen en downloaden: ${bonLink}`,
     });
     // Factuurdatum alleen bij de EERSTE verzending zetten (anders schuift de
     // betaaltermijn op); wel bijhouden wanneer er voor het laatst iets uitging.

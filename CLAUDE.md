@@ -124,6 +124,25 @@ de regressie meegroeit.
   herstarts heen; gewist bij ready); daarboven alleen de passieve QR + uitleg in
   het CRM (Instellingen → Koppelingen). Telefoon tijdelijk buiten bereik? Dan
   `pm2 stop wa` (later `pm2 start wa`): geen enkele aanvraag richting WhatsApp.
+  BRIDGE v10 (28 sep 2026, "het CRM stuurt geen foto's meer mee"): sinds de
+  WhatsApp-Web-versies van 17 sep faalt in whatsapp-web.js 1.34.7 ELKE verzending met
+  een bijlage (foto/video/PDF: "Data passed to getter must include an id property");
+  tekst gaat gewoon, dus items stonden op "verstuurd" zonder foto's (ook factuur-PDF's
+  via de bridge). Oorzaak: het media-model draagt een eigen __x_id die bij het
+  samenstellen van het bericht de échte id overschrijft. Fix = upstream PR
+  wwebjs#201923 (`delete message.__x_id`, door meerdere gebruikers in productie
+  bevestigd; nog geen release): whatsapp-bridge/mediafix.js zet die regel bij ELKE
+  start in node_modules/whatsapp-web.js/src/util/Injected/Utils.js (idempotent; anker =
+  commentaarregel "Bot's won't reply…", reserve = einde van `const message = {…};`).
+  bridge.js laadt de bibliotheek daarom DYNAMISCH (`await import`) ná de reparatie —
+  een statische import laadt vóór alle code en zou de reparatie omzeilen (de test
+  bewaakt dat). Verder: elke bijlage met time-out (ophalen 60 s, versturen 90 s); /done
+  meldt `media {gevraagd, verstuurd, fout, terugval}`; lukt een bijlage niet, dan
+  stuurt de bridge `item.mediaTerugval` als tekst (factuur: de /bon-downloadlink);
+  groepsberichten met linkPreview:false (het CRM zet er nu een fotolink in); heartbeat
+  meldt mediaFix (zichtbaar in GET /api/whatsapp/status als bridgeVersie + mediaFix).
+  Na een push komt v10 vanzelf binnen via de zelf-update (≤ 6 uur) of direct met
+  `cd /root/ksbridge` / `git pull` / `pm2 restart wa` (losse regels!).
   STRATEGIE (besproken 14 sep, eigenaar akkoord "klinkt goed"): de bridge is
   structureel breekbaar; waterdicht = (1) DRS-opdrachten óók per e-mail laten
   sturen (bestaande mail-instroom), (2) monteur-dispatch + CRM-meldingen via het
@@ -833,6 +852,26 @@ de regressie meegroeit.
   conversie-lezer maakte van "1.250,50" niets); perMonteur.zonderBedrag + totaal
   zonderBedrag → UI "X zonder bedrag" + voetregel. Tests: mail-test 75 (+13), factuur-
   test 62 (+5), conversie-test 41 (+3).
+- **Foto's naar de monteur (28 sep 2026, klacht "het CRM stuurt geen foto's meer mee"):**
+  oorzaak zat in de bridge (zie BRIDGE v10). CRM-kant: (1) FOTOLINK in het
+  opdrachtbericht — `Foto's (N): <APP_URL>/fotos/<orderId>/<sig>` (fotoSig =
+  HMAC(LINK_SECRET, 'fotos:'+id), 24 hex; geen login, zelfde principe als /bon): pagina
+  met ÁLLE foto's/video's/bestanden van de kaart (monteurBijlagen: NOOIT de werkbon-
+  handtekening; alleen bestaande bestanden via ondertekende /uploads-links), noindex +
+  strikte CSP + no-store, 404 bij verkeerde handtekening of kaart in de prullenbak.
+  Werkt ook als bijlagen versturen stuk is, bij >6 foto's, video's en later
+  binnengekomen foto's. ALLEEN bij bridge v10+ (bridgeKanFotoLink; oudere bridges halen
+  een link-voorbeeld op dat de hele tekst kan laten mislukken) — anders de oude regel
+  "(N foto's/bestanden in het dashboard)". (2) Verstuur-venster: foto's staan standaard
+  AAN (eerste 6), knop geen/alles, een 7e aanvinken kan niet (toast), waarschuwing "Al
+  verstuurd naar X" bij opnieuw versturen (casus: opdracht 2× in de groep). (3) Kaart
+  toont "N foto's ✓" of opvallend "foto's: X van N aangekomen" (fotoStatusHTML, uit
+  order.sentToMonteur.fotos) + logboekregel bij mislukte bijlagen. (4)
+  order.sentToMonteur.outboxId: alleen het dispatch-item zet de verstuurstatus (een
+  mislukt onderweg-appje op dezelfde kaart maakte de dispatch voorheen "mislukt").
+  Automatische dispatch stuurt bewust nog steeds GEEN bijlagen mee (alleen de link).
+  Tests: test/bridge-mediafix-test.mjs (26, zonder server — o.a. gedrag vóór/na de
+  reparatie met een nagebootst media-model), klanten-test (65, +20), browser (177, +10).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

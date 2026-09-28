@@ -85,3 +85,7 @@ Stuur vanaf een ander toestel een WhatsApp naar het wegwerp-nummer (of post iets
 - **"Doorsturen mislukt 401":** `INGEST_TOKEN` komt niet overeen met die in Render.
 - **Steeds opnieuw QR:** de map `wa-session` mag niet verwijderd worden; draai met `pm2` zodat de sessie bewaard blijft.
 - **Nummer geblokkeerd:** gebruik een ander wegwerp-nummer; stuur geen spam, houd het rustig.
+- **Foto's/PDF's komen niet mee (tekst wel):** kijk in de log bij de start naar de regel
+  `[media] reparatie foto's/bijlagen actief`. Die reparatie (`mediafix.js`, sinds v10) zet
+  bij elke start één regel in whatsapp-web.js; zonder die regel faalt elke bijlage sinds de
+  WhatsApp-Web-versies van 17 sep 2026. Het CRM toont per opdracht hoeveel foto's er écht aankwamen.

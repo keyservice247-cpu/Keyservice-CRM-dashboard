@@ -167,6 +167,66 @@ ok('geen kapotte verwijzing op kaart A of B', !kapot);
 await page.evaluate(() => closeModal());
 noErr('Klanten-tools (dossier/import/campagne/bijlagen-beheren)');
 
+// Naar monteur sturen (28 sep 2026, "het CRM stuurt geen foto's meer mee"): foto's staan
+// standaard AAN (max 6), "geen"/"alles"-knop, een 7e aanvinken kan niet, waarschuwing als
+// de opdracht al eens is verstuurd, en de kaart toont hoeveel foto's er écht aankwamen.
+clear();
+const smSetup = await page.evaluate(async () => {
+  const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const m = await post('/api/monteurs', { name: 'Browser Monteur', phone: '0612000111', waGroup: 'Browser Groep' });
+  const cust = await post('/api/customers', { name: 'Fotomonteur Klant', phone: '0611000088' });
+  const o = await post('/api/orders', { customerId: cust.id, title: 'Rotterdam — hefschuifpui browsertest', status: 'nieuw', monteurId: m.id });
+  for (let i = 0; i < 7; i++) {
+    const c = document.createElement('canvas'); c.width = 6; c.height = 6;
+    const g = c.getContext('2d'); g.fillStyle = `rgb(${20 + i * 30},${120 - i * 10},200)`; g.fillRect(0, 0, 6, 6);
+    await post(`/api/orders/${o.id}/attachments`, { filename: `kozijn${i + 1}.png`, mime: 'image/png', dataBase64: c.toDataURL('image/png') });
+  }
+  state.monteurs = await fetch('/api/monteurs').then((r) => r.json());
+  state.orders = await fetch('/api/orders').then((r) => r.json());
+  return { orderId: o.id, monteurId: m.id, fotos: (state.orders.find((x) => x.id === o.id)?.attachments || []).length };
+});
+ok('testopdracht met 7 foto\'s', smSetup.fotos === 7, JSON.stringify(smSetup));
+const smStaat = () => page.evaluate(() => ({ totaal: document.querySelectorAll('.sm-img').length, aan: document.querySelectorAll('.sm-img:checked').length, knop: (document.querySelector('#sm-imgall') || {}).textContent, al: !!document.querySelector('.sm-al-verstuurd') }));
+await page.evaluate((id) => openSendMonteurModal(state.orders.find((o) => o.id === id)), smSetup.orderId);
+await page.waitForTimeout(300);
+const sm1 = await smStaat();
+ok('verstuur-venster: de eerste 6 foto\'s staan standaard aan, knop "geen"', sm1.totaal === 7 && sm1.aan === 6 && sm1.knop === 'geen' && !sm1.al, JSON.stringify(sm1));
+await page.locator('.sm-img').nth(6).click({ force: true });
+await page.waitForTimeout(150);
+const sm2 = await smStaat();
+ok('7e foto aanvinken kan niet (max 6), met uitleg', sm2.aan === 6 && !(await page.locator('.sm-img').nth(6).isChecked()) && /Hooguit 6/.test(await page.locator('#toast').textContent()), JSON.stringify(sm2));
+await page.click('#sm-imgall');
+const sm3 = await smStaat();
+ok('"geen" zet alle foto\'s uit, knop wordt "alles"', sm3.aan === 0 && sm3.knop === 'alles', JSON.stringify(sm3));
+await page.click('#sm-imgall');
+const sm4 = await smStaat();
+ok('"alles" zet er weer 6 aan', sm4.aan === 6 && sm4.knop === 'geen', JSON.stringify(sm4));
+for (const n of [2, 3, 4, 5]) await page.locator('.sm-img').nth(n).click({ force: true });
+ok('losse foto\'s uitzetten werkt (2 over)', (await smStaat()).aan === 2);
+await page.selectOption('#sm-monteur', smSetup.monteurId);
+await page.click('#sm-send');
+await page.waitForTimeout(700);
+const smItem = await page.evaluate(async (oid) => {
+  const q = await fetch('/api/whatsapp/outbox-status?full=1').then((r) => r.json());
+  return (q || []).find((x) => x.orderId === oid && x.group === 'Browser Groep') || null;
+}, smSetup.orderId);
+ok('versturen: 2 aangevinkte foto\'s gaan als bijlage mee', !!smItem && (smItem.media || []).length === 2, JSON.stringify(smItem && smItem.media));
+// Bridge meldt terug: 1 van de 2 foto's kwam aan → de kaart laat dat zien.
+await page.evaluate(async (itemId) => {
+  await fetch(`/api/outbox/${itemId}/done`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ ok: true, detail: 'groep', media: { gevraagd: 2, verstuurd: 1, fout: 'test' } }) });
+  state.orders = await fetch('/api/orders').then((r) => r.json());
+}, smItem && smItem.id);
+await page.evaluate((id) => openOrderModal(id), smSetup.orderId);
+await page.waitForTimeout(700);
+ok('kaart toont "foto\'s: 1 van 2 aangekomen" (opvallend)', /1 van 2 aangekomen/.test(await page.locator('.sent-monteur .sm-foto-mislukt').textContent().catch(() => '')));
+await page.evaluate((id) => openSendMonteurModal(state.orders.find((o) => o.id === id)), smSetup.orderId);
+await page.waitForTimeout(300);
+ok('opnieuw openen: waarschuwing "Al verstuurd naar Browser Monteur"', /Al verstuurd naar Browser Monteur/.test(await page.locator('.sm-al-verstuurd').textContent().catch(() => '')));
+await page.click('#sm-cancel');
+await page.waitForTimeout(500);
+await page.evaluate(() => closeModal());
+noErr('Naar monteur sturen (foto\'s)');
+
 // 9b) Cijfers: historie-boeken en omzet-suggesties openen zonder JS-fout
 clear();
 await page.evaluate(() => goView('finance'));

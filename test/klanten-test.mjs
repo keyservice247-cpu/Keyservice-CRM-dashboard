@@ -181,6 +181,71 @@ const clist = await api('GET', '/api/customers');
 const kk = (clist.json || []).find((c) => c.id === kaartKlant.json.id);
 ok('klantenlijst geeft kaart-adressen mee voor het zoekveld (searchPlaces)', !!kk && /Kesteren/.test(kk.searchPlaces || ''), JSON.stringify(kk?.searchPlaces));
 
+console.log('\n== Foto\'s naar de monteur (28 sep 2026): fotolink, terugmelding, reservelink factuur ==');
+// Casus: sinds de WhatsApp-Web-versies van 17 sep kwamen de aangevinkte foto's niet meer
+// aan (tekst wel). Bridge v10 repareert dat, meldt terug hoeveel er écht aankwamen, en
+// het bericht krijgt een link naar álle foto's die altijd werkt.
+const ingest = (pad, body) => fetch(`${BASE}${pad}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify(body) });
+const wachtrij = async () => (await (await fetch(`${BASE}/api/whatsapp/outbox-status?full=1`, { headers: { cookie } })).json()) || [];
+// Het eerdere dispatch-item (hierboven) ging uit toen er nog geen v10-bridge was.
+ok('oude bridge: bericht houdt de oude foto-regel, zónder link', !!item && /foto's\/bestanden in het dashboard/.test(item.text) && !/\/fotos\//.test(item.text), item && item.text);
+const hb10 = await ingest('/api/whatsapp/heartbeat', { state: 'CONNECTED', version: 10, mediaFix: 'toegepast' });
+ok('heartbeat van bridge v10 (met media-reparatie) geaccepteerd', hb10.status === 200);
+const wst = await api('GET', '/api/whatsapp/status');
+ok('status toont bridge v10 + media-reparatie', wst.json?.bridgeVersie === 10 && wst.json?.mediaFix === 'toegepast', JSON.stringify({ v: wst.json?.bridgeVersie, m: wst.json?.mediaFix }));
+
+const fk = await api('POST', '/api/orders', { customerId: piet.id, title: 'Rotterdam — hefschuifpui fototest', status: 'nieuw' });
+const pngVan = (tail) => Buffer.from(`89504e470d0a1a0a0000000d494844520000000${tail}`, 'hex').toString('base64');
+await api('POST', `/api/orders/${fk.json.id}/attachments`, { filename: 'kozijn1.png', mime: 'image/png', dataBase64: pngVan('5000000050806000000a1b2c3d4') });
+await api('POST', `/api/orders/${fk.json.id}/attachments`, { filename: 'kozijn2.png', mime: 'image/png', dataBase64: pngVan('6000000060806000000a1b2c3d5') });
+const fu3 = await api('POST', `/api/orders/${fk.json.id}/attachments`, { filename: 'handtekening-klant.png', mime: 'image/png', dataBase64: pngVan('7000000070806000000a1b2c3d6') });
+const fAtts = fu3.json.attachments || [];
+const fA = fAtts.find((a) => a.filename === 'kozijn1.png'); const fB = fAtts.find((a) => a.filename === 'kozijn2.png');
+const fSig = fAtts.find((a) => a.filename === 'handtekening-klant.png');
+ok('3 losse bestanden op de testopdracht', !!fA && !!fB && !!fSig && new Set([fA.file, fB.file, fSig.file]).size === 3);
+await api('POST', `/api/orders/${fk.json.id}/werkbon`, { work: 'Test', materials: '', signatureAttachmentId: fSig.id });
+const fd1 = await api('POST', `/api/orders/${fk.json.id}/send-monteur`, { monteurId: fm.id, attachmentIds: [fA.id, fB.id] });
+ok('dispatch met 2 foto\'s geaccepteerd', fd1.status === 200, JSON.stringify(fd1.json));
+const itF = (await wachtrij()).find((x) => x.orderId === fk.json.id && x.group && x.group !== '__klant_dm__');
+const lk = ((itF && itF.text) || '').match(/https?:\/\/\S+?\/fotos\/([\w-]+)\/([a-f0-9]{24})/);
+ok('v10: bericht bevat "Foto\'s (2): <link>" (handtekening telt niet mee)', !!lk && /Foto's \(2\): https?:\/\//.test(itF.text) && lk[1] === fk.json.id, itF && itF.text);
+ok('de 2 aangevinkte foto\'s gaan als bijlage mee', !!itF && (itF.media || []).length === 2);
+const fpad = lk ? `/fotos/${lk[1]}/${lk[2]}` : '/fotos/x/y';
+const pg = await fetch(`${BASE}${fpad}`);   // bewust ZONDER login-cookie
+const pgHtml = await pg.text();
+ok('fotopagina opent zonder inloggen', pg.status === 200 && /hefschuifpui fototest/.test(pgHtml), `status=${pg.status}`);
+ok('fotopagina toont de 2 foto\'s en NIET de handtekening van de klant', (pgHtml.match(/<img /g) || []).length === 2 && pgHtml.includes(fA.file) && pgHtml.includes(fB.file) && !pgHtml.includes(fSig.file));
+ok('fotopagina: niet indexeren + strikte CSP + geen cache', /noindex/.test(pg.headers.get('x-robots-tag') || '') && /default-src 'none'/.test(pg.headers.get('content-security-policy') || '') && /no-store/.test(pg.headers.get('cache-control') || ''));
+const imgSrc = ((pgHtml.match(/<img src="([^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
+const imgRes = await fetch(`${BASE}${imgSrc}`);
+ok('foto achter de link laadt zonder login (ondertekende link)', /^\/uploads\/att_[\w.]+\?sig=[a-f0-9]+$/.test(imgSrc) && imgRes.status === 200, `${imgSrc} → ${imgRes.status}`);
+ok('verkeerde handtekening → 404', (await fetch(`${BASE}/fotos/${fk.json.id}/000000000000000000000000`)).status === 404);
+ok('handtekening van een ándere opdracht opent deze niet → 404', (await fetch(`${BASE}/fotos/${ord.json.id}/${lk ? lk[2] : 'x'}`)).status === 404);
+
+// Bridge meldt: tekst verstuurd, maar 0 van de 2 foto's kwam aan.
+const doneF = await ingest(`/api/outbox/${itF.id}/done`, { ok: true, detail: 'groep', media: { gevraagd: 2, verstuurd: 0, fout: 'Data passed to getter must include an id property' } });
+ok('terugmelding met media-resultaat geaccepteerd', doneF.status === 200);
+const naF = (await api('GET', '/api/orders')).json.find((o) => o.id === fk.json.id);
+ok('kaart weet het: verstuurd, 0 van 2 foto\'s aangekomen', naF.sentToMonteur?.status === 'sent' && naF.sentToMonteur?.fotos?.gevraagd === 2 && naF.sentToMonteur?.fotos?.verstuurd === 0, JSON.stringify(naF.sentToMonteur));
+const logF = (await api('GET', '/api/activity')).json || [];
+ok('logboek: "foto\'s niet (allemaal) meegestuurd" met aantal en reden', logF.some((a) => /foto's niet \(allemaal\) meegestuurd/.test(a.action || '') && /0 van 2/.test(a.detail || '') && /getter/.test(a.detail || '')), JSON.stringify(logF.slice(0, 3)));
+// Een ánder wachtrij-item op dezelfde kaart (onderweg-appje) mag de monteur-status niet omzetten.
+await api('POST', `/api/orders/${fk.json.id}/onderweg`, {});
+const itO = (await wachtrij()).find((x) => x.orderId === fk.json.id && x.group === '__klant_dm__');
+ok('onderweg-appje staat in de wachtrij', !!itO);
+if (itO) await ingest(`/api/outbox/${itO.id}/done`, { ok: false, detail: 'test: klant-appje mislukt' });
+const naO = (await api('GET', '/api/orders')).json.find((o) => o.id === fk.json.id);
+ok('mislukt onderweg-appje zet de monteur-verzending NIET op "mislukt"', naO.sentToMonteur?.status === 'sent', JSON.stringify(naO.sentToMonteur));
+
+// Factuur via WhatsApp: lukt de PDF-bijlage niet, dan stuurt de bridge deze reservetekst.
+const fInvR = await api('POST', '/api/invoices', { customerId: piet.id, type: 'factuur', orderId: fk.json.id });
+const fInv = fInvR.json?.invoice || fInvR.json;
+await api('PATCH', `/api/invoices/${fInv.id}`, { lines: [{ description: 'Hefschuifpui reparatie', qty: 1, priceExcl: 100 }], btwPct: 21, note: '' });
+const fsw = await api('POST', `/api/invoices/${fInv.id}/send-whatsapp`, { phone: '0611223344' });
+ok('factuur via WhatsApp klaargezet', fsw.status === 200, JSON.stringify(fsw.json));
+const itI = (await wachtrij()).find((x) => x.invoiceId === fInv.id);
+ok('factuur-item: PDF als bijlage + reservetekst met downloadlink', !!itI && (itI.media || []).length === 1 && /\/bon\/[\w-]+\/[a-f0-9]{24}$/.test(itI.mediaTerugval || ''), itI && itI.mediaTerugval);
+
 console.log('\n== AI-klantsamenvatting: nette fout zonder AI-sleutel ==');
 const sum1 = await api('POST', `/api/customers/${zc.json.id}/summary`, {});
 ok('zonder AI-sleutel: nette 400 met uitleg (geen crash)', sum1.status === 400 && /AI/i.test(sum1.json.error || ''), JSON.stringify(sum1.json));

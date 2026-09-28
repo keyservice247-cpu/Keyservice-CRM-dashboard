@@ -1981,24 +1981,40 @@ function statusOptionsHTML(selected) {
 function openSendMonteurModal(order) {
   const opts = state.monteurs.map((m) => `<option value="${m.id}" ${order.monteurId === m.id ? 'selected' : ''} ${!m.waGroup ? 'disabled' : ''}>${esc(m.name)}${m.waGroup ? ' — ' + esc(m.waGroup) : ' (geen WhatsApp-groep)'}</option>`).join('');
   const imgs = (order.attachments || []).filter((a) => /^image\//.test(a.mime || ''));
+  // Foto's staan standaard AAN (28 sep 2026, "het CRM stuurt geen foto's meer mee"): wie
+  // een opdracht doorstuurt wil de foto's er vrijwel altijd bij. Hooguit 6 als bijlage.
+  const MAX_FOTOS = 6;
+  const aan = new Set(imgs.slice(0, MAX_FOTOS).map((a) => a.id));
+  const al = order.sentToMonteur;
   modal(`
     <h2>Naar monteur sturen</h2>
     <p class="muted small">De opdracht wordt als nette samenvatting naar de WhatsApp-groep van de monteur gestuurd via de bridge.</p>
+    ${al ? `<div class="sm-al-verstuurd">Al verstuurd naar ${esc(al.monteurName || 'de monteur')} · ${fmtDateShort(al.at)}. Nogmaals versturen zet het bericht opnieuw in de groep.</div>` : ''}
     <label>Monteur <select id="sm-monteur">${opts || '<option>(geen monteurs)</option>'}</select></label>
     ${imgs.length ? `
-    <label style="margin-top:10px">Foto's meesturen <span class="muted small">— vink aan wat de monteur moet zien (max 6)</span>
-      <button type="button" class="btn btn-sm" id="sm-imgall" style="margin-left:8px">alles</button></label>
+    <label style="margin-top:10px">Foto's meesturen <span class="muted small">— staan aan; tik op een foto om hem weg te laten (max ${MAX_FOTOS})</span>
+      <button type="button" class="btn btn-sm" id="sm-imgall" style="margin-left:8px">${aan.size ? 'geen' : 'alles'}</button></label>
     <div class="attach-grid" style="margin-top:6px">${imgs.map((a) => `
       <label class="sm-imgpick" style="position:relative;cursor:pointer;display:block">
-        <input type="checkbox" class="sm-img" value="${esc(a.id)}" style="position:absolute;top:6px;left:6px;width:18px;height:18px;z-index:2;accent-color:var(--accent)">
-        <img src="${esc(a.url)}" alt="" style="width:100%;height:90px;object-fit:cover;border-radius:8px;display:block;border:2px solid transparent">
+        <input type="checkbox" class="sm-img" value="${esc(a.id)}" ${aan.has(a.id) ? 'checked' : ''} style="position:absolute;top:6px;left:6px;width:18px;height:18px;z-index:2;accent-color:var(--accent)">
+        <img src="${esc(a.url)}" alt="" style="width:100%;height:90px;object-fit:cover;border-radius:8px;display:block;border:2px solid ${aan.has(a.id) ? 'var(--accent)' : 'transparent'}">
       </label>`).join('')}</div>` : ''}
     <p class="muted small">Heeft de monteur nog geen WhatsApp-groep? Stel die in bij Monteurs.</p>
     <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="sm-cancel">Annuleren</button> <button class="btn btn-primary" id="sm-send">Versturen</button> </div></div>`);
-  // Aangevinkte foto krijgt een blauw kader (duidelijk op mobiel).
-  $$('.sm-img').forEach((c) => c.addEventListener('change', () => { c.nextElementSibling.style.borderColor = c.checked ? 'var(--accent)' : 'transparent'; }));
+  // Aangevinkte foto krijgt een blauw kader (duidelijk op mobiel). Meer dan 6 kan niet
+  // als bijlage — dan de laatste tik terugdraaien met uitleg i.p.v. stil afkappen.
+  const kader = (c) => { c.nextElementSibling.style.borderColor = c.checked ? 'var(--accent)' : 'transparent'; };
   const allBtn = $('#sm-imgall');
-  if (allBtn) allBtn.onclick = () => $$('.sm-img').forEach((c) => { c.checked = true; c.nextElementSibling.style.borderColor = 'var(--accent)'; });
+  const knopTekst = () => { if (allBtn) allBtn.textContent = $$('.sm-img:checked').length ? 'geen' : 'alles'; };
+  $$('.sm-img').forEach((c) => c.addEventListener('change', () => {
+    if (c.checked && $$('.sm-img:checked').length > MAX_FOTOS) { c.checked = false; toast(`Hooguit ${MAX_FOTOS} foto's als bijlage — zet er eerst een uit.`, true); }
+    kader(c); knopTekst();
+  }));
+  if (allBtn) allBtn.onclick = () => {
+    const iets = $$('.sm-img:checked').length > 0;
+    $$('.sm-img').forEach((c, i) => { c.checked = !iets && i < MAX_FOTOS; kader(c); });
+    knopTekst();
+  };
   $('#sm-cancel').onclick = () => openOrderModal(order.id);
   $('#sm-send').onclick = async () => {
     const monteurId = $('#sm-monteur').value;
@@ -2009,6 +2025,15 @@ function openSendMonteurModal(order) {
       closeModal(); toast(`In de wachtrij gezet${attachmentIds.length ? ` met ${attachmentIds.length} foto('s)` : ''} — wordt verstuurd`); loadBoard();
     } catch (err) { toast(err.message, true); }
   };
+}
+
+// Kwamen de foto's écht aan? De bridge (v10) meldt het terug — sinds de WhatsApp-Web-
+// versies van 17 sep 2026 ging dat stil mis en leek alles verstuurd.
+function fotoStatusHTML(s) {
+  const f = s && s.fotos;
+  if (!f || !f.gevraagd) return '';
+  if (f.verstuurd >= f.gevraagd) return ` · ${f.gevraagd} foto${f.gevraagd === 1 ? '' : "'s"} ✓`;
+  return ` · <span class="sm-foto-mislukt">foto's: ${f.verstuurd} van ${f.gevraagd} aangekomen</span>`;
 }
 
 function openMergeModal(primary) {
@@ -2063,7 +2088,7 @@ function openOrderModal(id, pool) {
 
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
-    ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}</div>` : ''}
+    ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}${fotoStatusHTML(o.sentToMonteur)}</div>` : ''}
     ${o && isMonteur ? `<div class="snelbalk">
       ${(o.intake?.phone || o.customer?.phone) ? `<a class="btn sb" href="tel:${esc(String(o.intake?.phone || o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 15)} Bellen</a><a class="btn sb" target="_blank" rel="noopener" href="https://wa.me/${esc(String(o.intake?.phone || o.customer.phone).replace(/\D/g, '').replace(/^0/, '31'))}">${icon('whatsapp', 15)} Appen</a>` : ''}
       ${(o.intake?.address || o.customer?.address) ? `<a class="btn sb" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}">${icon('pin', 15)} Navigeer</a>` : `<button type="button" class="btn sb" onclick="toast('Geen adres bekend — vul het adres in bij de klantgegevens hieronder', true); document.querySelector('#f-ccaddress')?.focus()" title="Geen adres bekend">${icon('pin', 15)} Navigeer <span class="muted small">(geen adres)</span></button>`}

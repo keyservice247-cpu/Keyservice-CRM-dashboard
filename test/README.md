@@ -39,6 +39,9 @@ node test/push-test.mjs
 # AI-modellen per taak: model/effort/limiet per onderdeel, briefing leest het dagoverzicht,
 # kostenteller (GEEN server, GEEN echte AI-kosten — fetch wordt onderschept)
 node test/ai-modellen-test.mjs
+# WhatsApp-bridge v10: media-reparatie (foto's/PDF's) in whatsapp-web.js, idempotent,
+# bibliotheek pas ná de reparatie geladen (GEEN server, GEEN whatsapp-web.js nodig)
+node test/bridge-mediafix-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 

@@ -14,7 +14,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import qrcode from 'qrcode-terminal';
-import pkg from 'whatsapp-web.js';
+import { pasMediaFixToe } from './mediafix.js';
+
+// v10 (28 sep 2026): EERST de media-reparatie (foto's/PDF's versturen faalde sinds de
+// WhatsApp-Web-versies van 17 sep — zie mediafix.js), DAN pas de bibliotheek laden.
+// Daarom hier een dynamische import: een gewone `import` bovenaan wordt vóór alle
+// code uitgevoerd en zou de bibliotheek al laden vóórdat de reparatie erin staat.
+const MEDIA_FIX = pasMediaFixToe();
+if (MEDIA_FIX.status === 'toegepast' || MEDIA_FIX.status === 'al-aanwezig') {
+  console.log(`[media] reparatie foto's/bijlagen actief (${MEDIA_FIX.status}, whatsapp-web.js ${MEDIA_FIX.versie || '?'})`);
+} else {
+  console.error(`[media] reparatie foto's/bijlagen NIET gelukt (${MEDIA_FIX.status}: ${MEDIA_FIX.detail}) — tekst gaat gewoon door; foto's mogelijk niet.`);
+}
+const { default: pkg } = await import('whatsapp-web.js');
 const { Client, LocalAuth, MessageMedia } = pkg;
 
 // --- eenvoudige .env-lader (geen extra dependency) ---
@@ -241,7 +253,9 @@ client.on('qr', async (qr) => {
 // seint het CRM vooraf in, en de update-controle loopt óók als WhatsApp nooit "ready"
 // wordt (voorheen startte die pas bij ready — een vastgelopen bridge bleef dus hangen).
 // v6: vaste WhatsApp-Web-versie (zie bovenaan) — de oorzaak van het vasthangen.
-const BRIDGE_VERSION = 9;
+// v10 (28 sep 2026): media-reparatie (foto's/PDF's gingen sinds 17 sep niet meer mee),
+// per foto een time-out, en de bridge meldt het CRM hoeveel foto's er écht aankwamen.
+const BRIDGE_VERSION = 10;
 
 // ---- START-WACHTER (v5) ----
 // Casus 10 sep 2026: na de zelf-update-herstart kwam de bridge tot "Gekoppeld" maar
@@ -478,7 +492,7 @@ function startHeartbeat() {
       await fetch(`${DASHBOARD_URL}/api/whatsapp/heartbeat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
-        body: JSON.stringify({ at: new Date().toISOString(), state, lastIncomingAt, version: BRIDGE_VERSION }),
+        body: JSON.stringify({ at: new Date().toISOString(), state, lastIncomingAt, version: BRIDGE_VERSION, mediaFix: MEDIA_FIX.status }),
       });
     } catch (e) { /* netwerkfout: volgende keer opnieuw */ }
   };
@@ -560,6 +574,35 @@ function toChatId(phone) {
   if (n.length < 10) return null;
   return `${n}@c.us`;
 }
+// Bijlagen na de tekst versturen, één voor één en elk met een time-out: een hangende
+// verzending (in whatsapp-web.js bekend bij video) mag de wachtrij niet eindeloos
+// vasthouden. Geeft terug hoeveel er gevraagd/verstuurd zijn + de eerste foutreden.
+async function verstuurMedia(target, lijst) {
+  const uit = { gevraagd: lijst.length, verstuurd: 0, fout: '' };
+  for (const m of lijst) {
+    try {
+      const rMedia = await metTimeout(fetch(`${DASHBOARD_URL}${m.url}`, { headers: { 'x-ingest-token': INGEST_TOKEN } }), 60000, null);
+      if (!rMedia || !rMedia.ok) {
+        const waarom = rMedia ? `ophalen mislukt (${rMedia.status})` : 'ophalen duurde te lang';
+        uit.fout = uit.fout || waarom;
+        console.error(`[outbox] foto ${waarom}: ${m.url}`);
+        continue;
+      }
+      const data = await metTimeout(rMedia.arrayBuffer(), 60000, null);
+      if (!data) { uit.fout = uit.fout || 'ophalen duurde te lang'; console.error(`[outbox] foto ophalen duurde te lang: ${m.url}`); continue; }
+      const mm = new MessageMedia(m.mime || 'image/jpeg', Buffer.from(data).toString('base64'), m.name || 'foto.jpg');
+      const r = await metTimeout(client.sendMessage(target, mm).then(() => 'OK'), 90000, 'TIMEOUT');
+      if (r === 'TIMEOUT') { uit.fout = uit.fout || 'versturen duurde te lang'; console.error('[outbox] foto versturen duurde langer dan 90 s — overgeslagen'); continue; }
+      uit.verstuurd++;
+    } catch (eM) {
+      uit.fout = uit.fout || String(eM?.message || eM).slice(0, 140);
+      console.error('[outbox] foto meesturen mislukt:', eM?.message || eM);
+    }
+  }
+  console.log(`[outbox] -> ${uit.verstuurd} van ${uit.gevraagd} foto('s)/bijlage(n) meegestuurd${uit.fout ? ` (eerste fout: ${uit.fout})` : ''}`);
+  return uit;
+}
+
 function startOutbox() {
   console.log(`[outbox] poller actief — checkt ${DASHBOARD_URL}/api/outbox elke 8s`);
   let warned = false;
@@ -592,6 +635,11 @@ function startOutbox() {
         // Klant-DM's gaan altijd 1-op-1. Groeps-items (monteur-dispatch, terugkoppeling,
         // CRM-meldingen) proberen éérst de groep; het telefoonnummer daarop is een NOODPAD.
         const isKlantDm = it.kind === 'whatsapp_customer' || it.group === '__klant_dm__' || (!it.group && it.phone);
+        // v10: groepsberichten (opdracht naar de monteur, CRM-meldingen) zonder link-
+        // voorbeeld. Het CRM zet nu een fotolink in de opdracht; zo'n voorbeeld ophalen
+        // is een extra stap in WhatsApp Web die bij een wijziging dáár de hele tekst kan
+        // laten mislukken — en de opdracht zelf moet altijd aankomen.
+        const tekstOpties = isKlantDm ? {} : { linkPreview: false };
         try {
           if (isKlantDm) {
             const chatId = toChatId(it.phone);
@@ -613,7 +661,7 @@ function startOutbox() {
             if (!gid) gid = await resolveGroupId(it.group);
             if (!gid) gid = await resolveGroupId(it.group, true); // cache verversen en opnieuw
             if (gid) {
-              try { await client.sendMessage(gid, it.text); ok = true; target = gid; detail = 'groep'; console.log(`[outbox] -> verstuurd naar groep "${it.group}" (${gid})`); }
+              try { await client.sendMessage(gid, it.text, tekstOpties); ok = true; target = gid; detail = 'groep'; console.log(`[outbox] -> verstuurd naar groep "${it.group}" (${gid})`); }
               catch (eSend) { detail = 'groep-verzending mislukt: ' + eSend.message; console.error(`[outbox] ${detail}`); }
             } else {
               detail = `groep niet gevonden: "${it.group}"`;
@@ -622,32 +670,33 @@ function startOutbox() {
             if (!ok && it.phone) {
               const chatId = toChatId(it.phone);
               if (chatId) {
-                await client.sendMessage(chatId, it.text);
+                await client.sendMessage(chatId, it.text, tekstOpties);
                 ok = true; target = chatId; detail = '1-op-1 noodpad (groep niet bereikbaar)';
                 console.log(`[outbox] -> NOODPAD: 1-op-1 verstuurd naar ${it.phone} omdat de groep niet lukte`);
               }
             }
           }
         } catch (e) { detail = detail || ('versturen mislukt: ' + e.message); console.error('[outbox] versturen mislukt:', e.message); }
-        // Foto's meesturen (door de assistente aangevinkt op de kaart). Tekst is al
-        // bezorgd; een foutje bij een foto maakt het item dus NIET mislukt.
+        // Foto's/bijlagen meesturen (aangevinkt op de kaart, of de PDF van een factuur).
+        // Tekst is al bezorgd; een foutje bij een foto maakt het item dus NIET mislukt —
+        // maar het CRM hoort nu wél hoeveel er écht aankwamen (v10; sinds 17 sep ging
+        // dat stil mis en leek alles verstuurd).
+        let media = null;
         if (ok && target && Array.isArray(it.media) && it.media.length) {
-          let nFoto = 0;
-          for (const m of it.media.slice(0, 6)) {
+          media = await verstuurMedia(target, it.media.slice(0, 6));
+          // Lukte een bijlage niet, dan de reservetekst van het CRM (bv. de downloadlink
+          // van de factuur) alsnog als gewone tekst — tekst werkt ook als media stuk is.
+          if (media.verstuurd < media.gevraagd && it.mediaTerugval) {
             try {
-              const rMedia = await fetch(`${DASHBOARD_URL}${m.url}`, { headers: { 'x-ingest-token': INGEST_TOKEN } });
-              if (!rMedia.ok) { console.error(`[outbox] foto ophalen mislukt (${rMedia.status}): ${m.url}`); continue; }
-              const buf = Buffer.from(await rMedia.arrayBuffer());
-              const mm = new MessageMedia(m.mime || 'image/jpeg', buf.toString('base64'), m.name || 'foto.jpg');
-              await client.sendMessage(target, mm);
-              nFoto++;
-            } catch (eM) { console.error('[outbox] foto meesturen mislukt:', eM.message); }
+              await client.sendMessage(target, String(it.mediaTerugval), { linkPreview: false });
+              media.terugval = true;
+              console.log('[outbox] -> bijlage lukte niet; reservetekst met link nagestuurd');
+            } catch (eT) { console.error('[outbox] reservetekst versturen mislukt:', eT.message); }
           }
-          if (nFoto) console.log(`[outbox] -> ${nFoto} foto('s) meegestuurd`);
         }
         await fetch(`${DASHBOARD_URL}/api/outbox/${it.id}/done`, {
           method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': INGEST_TOKEN },
-          body: JSON.stringify({ ok, detail }),
+          body: JSON.stringify({ ok, detail, ...(media ? { media } : {}) }),
         }).catch((e) => console.error('[outbox] terugmelden mislukt:', e.message));
       }
     } catch (e) {
