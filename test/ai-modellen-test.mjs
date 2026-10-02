@@ -20,9 +20,14 @@ const DAG_JSON = JSON.stringify({
   beantwoorden: [{ wie: 'Jansen', kanaal: 'whatsapp', waarover: 'vraagt om afspraak', urgent: true }, { wie: 'De Vries', kanaal: 'email', waarover: 'offerte schuifpui', urgent: false }],
   kansen: ['VvE Utrecht vraagt naar 12 cilinders'], risicos: ['Offerte Mulder verloopt'],
 });
+let leegAntwoorden = 0; // >0: zoveel keer een antwoord met alleen denkwerk (stop_reason max_tokens)
 globalThis.fetch = async (url, opts = {}) => {
   const body = JSON.parse(opts.body || '{}');
   verzoeken.push({ url, body, heeftSignal: !!opts.signal });
+  if (leegAntwoorden > 0) {
+    leegAntwoorden--;
+    return new Response(JSON.stringify({ content: [{ type: 'thinking', thinking: '' }], usage: { input_tokens: 1000, output_tokens: 16000 }, stop_reason: 'max_tokens' }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
   const tekst = /dagoverzicht|JSON/.test(String(body.system || '')) ? DAG_JSON : 'Focus vandaag op Jansen.';
   return new Response(JSON.stringify({ content: [{ type: 'text', text: tekst }], usage: { input_tokens: 1000, output_tokens: 200 }, stop_reason: 'end_turn' }), { status: 200, headers: { 'content-type': 'application/json' } });
 };
@@ -48,6 +53,20 @@ ok('conversie-briefing → Sonnet 5, effort low, limiet ≥ 2000', laatste().bod
 const dov = await ai.dayOverview({ corpus: 'x', facts: 'y', model: ai.MODELLEN.opus55 });
 ok('dagoverzicht → Opus 5.5, effort medium, limiet 16000, eigen time-out', laatste().body.model === 'claude-opus-5-5' && laatste().body.output_config?.effort === 'medium' && laatste().body.max_tokens === 16000 && laatste().heeftSignal, JSON.stringify({ m: laatste().body.model, e: laatste().body.output_config, t: laatste().body.max_tokens }));
 ok('dagoverzicht-antwoord wordt gelezen', dov.data && dov.data.kop === 'Drukke dag met twee wachtende klanten' && dov.engine === 'ai:claude-opus-5-5', JSON.stringify(dov).slice(0, 150));
+
+console.log('\n== AI-vraagbaak: nooit meer een leeg antwoord (2 okt 2026) ==');
+const vb = { question: 'Hoeveel opdrachten heeft Youssef afgerond?', messages: [{ body: 'klus klaar', receivedAt: new Date().toISOString(), group: 'DRS' }], dashboard: 'kaarten…', model: 'claude-sonnet-5' };
+const a1 = await ai.askAssistant(vb);
+ok('vraagbaak: limiet 16000 (denken telt mee), effort medium, eigen time-out', laatste().body.max_tokens === 16000 && laatste().body.output_config?.effort === 'medium' && laatste().heeftSignal, JSON.stringify([laatste().body.max_tokens, laatste().body.output_config]));
+ok('vraagbaak: antwoord komt terug', a1.text === 'Focus vandaag op Jansen.' && a1.engine === 'ai:claude-sonnet-5', JSON.stringify(a1));
+leegAntwoorden = 1;
+const a2 = await ai.askAssistant(vb);
+ok('alleen denkwerk, geen tekst → automatisch opnieuw met effort low en tóch een antwoord', a2.text === 'Focus vandaag op Jansen.' && laatste().body.output_config?.effort === 'low', JSON.stringify([a2.text, laatste().body.output_config]));
+leegAntwoorden = 2;
+let fout = '';
+try { await ai.askAssistant(vb); } catch (e) { fout = e.message; }
+ok('twee keer leeg → duidelijke foutmelding i.p.v. een leeg vak', /kortere periode/.test(fout), fout);
+leegAntwoorden = 0;
 
 console.log('\n== Denkdiepte alleen waar het model het kent ==');
 ok('Haiku krijgt GEEN effort (anders 400)', JSON.stringify(ai.effortVoor('claude-haiku-4-5-20251001')) === '{}');

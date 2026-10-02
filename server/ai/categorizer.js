@@ -802,21 +802,25 @@ ALGEMEEN:
     const a = String(h?.a || '').slice(0, 6000).trim();
     if (q && a) { turns.push({ role: 'user', content: q }, { role: 'assistant', content: a }); }
   }
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 6000, system, messages: [...turns, { role: 'user', content: inhoud }] }),
-  });
-  if (!resp.ok) {
-    const det = await resp.text().catch(() => '');
-    let uitleg = '';
-    try { uitleg = (JSON.parse(det).error || {}).message || ''; } catch { uitleg = det.slice(0, 160); }
-    throw new Error(`Claude API status ${resp.status}${uitleg ? ` — ${uitleg}` : ''}`);
+  // LEEG ANTWOORD (2 okt 2026, klacht eigenaar "ik krijg maar geen resultaat"):
+  // Sonnet 5 / Opus 5 DENKEN standaard eerst (diepte 'high') en dat denkwerk telt mee
+  // voor max_tokens. Met de oude limiet van 6000 ging bij een zware telvraag over 1500
+  // berichten ALLES op aan nadenken: stop_reason max_tokens, nul tekst, een leeg vak in
+  // het scherm. Nu: ruime limiet + denkdiepte 'medium', eigen time-out van 4 min, en
+  // komt er tóch geen tekst, dan één nieuwe poging met 'low'. Nooit meer stil leeg.
+  const bouw = (effort) => (m) => ({ model: m, max_tokens: 16000, ...effortVoor(m, effort), system, messages: [...turns, { role: 'user', content: inhoud }] });
+  const tekstVan = (j) => ((j && j.content) || []).filter((c) => c.type === 'text').map((c) => c.text || '').join('').trim();
+  let r = await vraagMetTerugval(apiKey, model, bouw('medium'), { timeoutMs: 240000, pogingen: 2 });
+  if (!r.ok) throw new Error(r.fout || 'AI niet bereikbaar');
+  let text = tekstVan(r.json);
+  if (!text) {
+    console.warn(`[assistent] leeg antwoord (stop_reason ${r.json?.stop_reason}) — opnieuw met denkdiepte low`);
+    const r2 = await vraagMetTerugval(apiKey, model, bouw('low'), { timeoutMs: 240000, pogingen: 1 });
+    if (r2.ok && tekstVan(r2.json)) { r = r2; text = tekstVan(r2.json); }
   }
-  const json = await resp.json();
-  recordAIUsage(json.usage, model);
-  const text = (json.content || []).map((c) => c.text || '').join('').trim();
-  return { text, engine: `ai:${model}`, searched: Math.min(messages.length, 1500) };
+  if (!text) throw new Error('de AI kwam niet tot een antwoord (te veel om door te rekenen). Kies een kortere periode of één groep, of splits de vraag op.');
+  if (r.json.stop_reason === 'max_tokens') text += '\n\n(Let op: het antwoord is afgekapt — vraag het eventueel in kleinere stukken.)';
+  return { text, engine: `ai:${r.model}`, searched: Math.min(messages.length, 1500) };
 }
 
 // AI-statusscan: leest recente (groeps)berichten, matcht ze aan lopende opdrachten en
