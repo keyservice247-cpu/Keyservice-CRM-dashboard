@@ -334,6 +334,29 @@ ok('termijn instelbaar (7 dagen) en terug te lezen', woa.status === 200 && woaGe
 const woaFout = await api('PATCH', '/api/settings', { wachtOpAntwoordDagen: 0 });
 ok('ongeldige termijn valt terug op 14', woaFout.status === 200 && (await api('GET', '/api/settings')).json.wachtOpAntwoordDagen === 14);
 
+console.log('\n== Snel antwoord via WhatsApp (2 okt 2026) ==');
+// Vanuit de opdracht een appje sturen: via de gewone wachtrij, naar het nummer van
+// DEZE aanvraag (intake gaat voor het klantrecord), en als notitie op de kaart.
+cookie = ''; await api('POST', '/api/login', { email: 'admin@keyservice.nl', password: 'admin123' });
+const saKlant = await api('POST', '/api/customers', { name: 'Snel Antwoord', phone: '0611112222' });
+const saKaart = await api('POST', '/api/orders', { customerId: saKlant.json.id, title: 'Utrecht — schuifpui loopt zwaar', status: 'nieuw' });
+await api('PATCH', `/api/orders/${saKaart.json.id}`, { intake: { phone: '0633334444' } });
+const saLeeg = await api('POST', `/api/orders/${saKaart.json.id}/whatsapp-antwoord`, { text: '  ' });
+ok('leeg antwoord geweigerd', saLeeg.status === 400);
+const saFoutNr = await api('POST', `/api/orders/${saKaart.json.id}/whatsapp-antwoord`, { text: 'Hoi', phone: '12' });
+ok('ongeldig nummer geweigerd met uitleg', saFoutNr.status === 400 && /06-nummer/.test(saFoutNr.json?.error || ''), JSON.stringify(saFoutNr.json));
+const saOk = await api('POST', `/api/orders/${saKaart.json.id}/whatsapp-antwoord`, { text: 'We komen morgen tussen 10 en 12 uur.' });
+ok('antwoord geaccepteerd, naar het nummer van DEZE aanvraag (intake)', saOk.status === 200 && saOk.json?.phone === '0633334444', JSON.stringify(saOk.json));
+const saQ = ((await api('GET', '/api/whatsapp/outbox-status?full=1')).json || []).find((x) => x.id === saOk.json?.id);
+ok('staat in de gewone WhatsApp-wachtrij (klant-DM, gekoppeld aan de opdracht)', !!saQ && saQ.group === '__klant_dm__' && saQ.orderId === saKaart.json.id && saQ.status === 'queued', JSON.stringify(saQ));
+const saNa = (await api('GET', '/api/orders')).json.find((o) => o.id === saKaart.json.id);
+ok('als uitgaande WhatsApp-notitie in het gesprek op de kaart', (saNa.thread || []).some((t) => t.channel === 'whatsapp' && t.outgoing && t.outboxId === saOk.json.id && /morgen/.test(t.body)));
+ok('kaart van Nieuw naar In behandeling (zoals bij een e-mailantwoord)', saNa.status === 'open', saNa.status);
+await api('POST', '/api/login', { email: 'monteur2@keyservice.nl', password: 'monteur123' });
+const saMont = await api('POST', `/api/orders/${saKaart.json.id}/whatsapp-antwoord`, { text: 'test' });
+ok('monteur mag geen vrij antwoord typen (403)', saMont.status === 403, String(saMont.status));
+cookie = ''; await api('POST', '/api/login', { email: 'admin@keyservice.nl', password: 'admin123' });
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

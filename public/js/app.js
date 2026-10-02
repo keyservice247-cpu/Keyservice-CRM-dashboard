@@ -2616,7 +2616,7 @@ function openOrderModal(id, pool) {
       toast('Bericht verwijderd uit historie');
     } catch (err) { toast(err.message, true); }
   });
-  if (o && $('#f-reply')) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
+  if (o && $('#f-reply')) $('#f-reply').onclick = () => openReplyModal({ name: o.customer?.name, email: o.customer?.email, phone: o.intake?.phone || o.customer?.phone, orderId: o.id, title: o.title, thread: o.thread || [] });
   // "Zet in Google Agenda": gebruikt de actuele velden in het formulier op het moment van klikken.
   if (o) { const g = $('#f-gcal'); if (g) g.onclick = (e) => {
     const appt = $('#f-appt')?.value;
@@ -6417,18 +6417,20 @@ function openReplyModal(ctx = {}) {
     <div class="reply-head">Gesprek</div>
     ${threadHTML}
     <div class="row" style="margin-top:12px"> <label>Aan <input id="rep-to" value="${esc(ctx.email || '')}" placeholder="e-mailadres klant"></label> <label>Onderwerp <input id="rep-subject" value="${esc(subj)}"></label> </div>
+    <label>WhatsApp-nummer <input id="rep-phone" value="${esc(ctx.phone || '')}" placeholder="06-nummer klant (voor Via WhatsApp)" inputmode="tel"></label>
     <label>Sjabloon invoegen <select id="rep-select">${opts}</select></label>
     <label>Jouw antwoord <textarea id="rep-body" rows="7" placeholder="Typ hier je antwoord aan de klant…"></textarea></label>
     <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:4px"><input type="checkbox" id="rep-quote" style="width:auto"> Vorig bericht citeren onder mijn antwoord</label>
     ${sig ? `<p class="muted small" style="margin:8px 0 0">Onder je antwoord komt automatisch:<br><span style="white-space:pre-line;color:var(--ink-soft)">${esc(sig)}</span></p>` : ''}
     <div class="modal-actions"> ${ctx.orderId ? `<button class="btn" id="rep-ai">${icon('sparkles', 14)} AI-concept</button>` : '<span></span>'}
       <div class="right"> <button class="btn" id="rep-close">Sluiten</button> <button class="btn" id="rep-copy">${icon('copy', 14)} Kopieer</button> ${ctx.email ? `<a class="btn" id="rep-mail" href="#" target="_blank" rel="noopener">${icon('mail', 14)} Open in e-mail</a>` : ''}
-        ${canSend ? '<button class="btn btn-primary" id="rep-send">Verzenden</button>' : ''}
+        <button class="btn ${canSend ? '' : 'btn-primary'}" id="rep-wa">${icon('whatsapp', 14)} Via WhatsApp</button>
+        ${canSend ? '<button class="btn btn-primary" id="rep-send">Per e-mail</button>' : ''}
       </div> </div>
     <p class="muted small" id="rep-hint" style="margin-top:10px">${
-      canSend ? 'Wordt direct vanuit het dashboard verstuurd, met je naam als afzender. Het hele gesprek blijft op de opdracht bewaard.'
-      : ctx.email ? 'Direct versturen staat nog uit (SMTP). Gebruik “Open in e-mail” of kopieer de tekst.'
-      : 'Geen e-mailadres bekend — kopieer de tekst en plak hem in WhatsApp.'
+      canSend ? '“Per e-mail” verstuurt direct met je naam en handtekening; “Via WhatsApp” zet alleen je antwoord (zonder handtekening) in de WhatsApp-wachtrij. Het gesprek blijft op de opdracht bewaard.'
+      : ctx.email ? 'E-mail direct versturen staat nog uit (SMTP): gebruik “Via WhatsApp”, “Open in e-mail” of kopieer de tekst.'
+      : 'Geen e-mailadres bekend — verstuur je antwoord “Via WhatsApp”.'
     }</p> `);
 
   // Bouwt de volledige tekst: jouw antwoord + nette handtekening + (optioneel) citaat.
@@ -6480,6 +6482,25 @@ function openReplyModal(ctx = {}) {
   if (mailBtn) mailBtn.onclick = () => {
     mailBtn.href = `mailto:${encodeURIComponent($('#rep-to').value)}?subject=${encodeURIComponent($('#rep-subject').value)}&body=${encodeURIComponent(fullText())}`;
   };
+  // VIA WHATSAPP (2 okt 2026, keuze eigenaar): alleen het getypte antwoord — een
+  // e-mailhandtekening of citaat hoort niet in een appje. Gaat via de normale
+  // WhatsApp-wachtrij (pauzeknop/snelheidsrem gelden); bij een opdracht komt het ook
+  // in het gesprek op de kaart.
+  const waBtn = $('#rep-wa');
+  if (waBtn) waBtn.onclick = () => eenKeer(waBtn, async () => {
+    const text = $('#rep-body').value.trim();
+    if (!text) return toast('Typ eerst een antwoord', true);
+    const phone = $('#rep-phone').value.trim();
+    if (phone.replace(/\D/g, '').length < 6) { toast('Vul eerst het 06-nummer van de klant in', true); $('#rep-phone').focus(); return; }
+    try {
+      const out = ctx.orderId
+        ? await api(`/api/orders/${ctx.orderId}/whatsapp-antwoord`, 'POST', { text, phone })
+        : await api(`/api/chats/nummer/${encodeURIComponent(phone)}/send`, 'POST', { text });
+      modalSchoon(); closeModal();
+      toast(out.paused ? 'Klaargezet — de WhatsApp-pauze staat aan, het appje gaat pas uit als die eraf is' : 'In de WhatsApp-wachtrij gezet — wordt zo verstuurd');
+      if (ctx.orderId) loadBoard();
+    } catch (err) { toast(err.message, true); }
+  });
   const sendBtn = $('#rep-send');
   if (sendBtn) sendBtn.onclick = async () => {
     if (!$('#rep-body').value.trim()) return toast('Typ eerst een antwoord', true);

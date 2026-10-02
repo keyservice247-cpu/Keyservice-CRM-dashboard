@@ -902,7 +902,17 @@ de regressie meegroeit.
   Berichten-lijst sneller, sw.js alleen nog voor wat hij echt cachet. 'Nog te
   factureren' telt alleen een echte factuur (geen offerte/lege €0 zonder regels).
   NIET gedaan (keuze eigenaar): kaartvolgorde "laatst bijgewerkt", factuur-knop opent
-  offerte, Snel antwoord via WhatsApp, smallere/lagere kaarten, thumbnails.
+  offerte, smallere/lagere kaarten, Opslaan bovenin, thumbnails, langere back-ups.
+- **Snel antwoord via WhatsApp (2 okt 2026, keuze 5 van de eigenaar):** knop "Via
+  WhatsApp" + veld "WhatsApp-nummer" (vooraf: intake-nummer, anders klantrecord) in
+  openReplyModal. Vanuit een opdracht → POST /api/orders/:id/whatsapp-antwoord
+  {text, phone?} (admin+assistent; monteur 403): outbox-item whatsapp_customer
+  (__klant_dm__, orderId, threaded) via de GEWONE wachtrij (pauze/snelheidsrem/dubbel-
+  filter gelden), WhatsApp-notitie op de kaart, Nieuw → In behandeling, klantreactie-
+  badge weg — zelfde gevolgen als een e-mailantwoord. Zonder opdracht (inbox) → de
+  bestaande /api/chats/nummer/:phone/send. Alleen het getypte antwoord gaat mee (geen
+  e-mailhandtekening/citaat); de e-mailknop heet nu "Per e-mail". Tests: chat-test 78
+  (+7), browser 233 (+3).
   Tests: browser 230, audit 79, opslag 40, klanten 65 (+ alle overige groen).
 - **AI-vraagbaak leeg antwoord (2 okt 2026):** Sonnet 5/Opus 5 denken eerst en dat telde
   mee voor max_tokens 6000 → bij een zware vraag alleen denkwerk, leeg vak. Nu 16000 +

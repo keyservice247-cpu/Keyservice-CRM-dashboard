@@ -306,6 +306,21 @@ await page.waitForTimeout(500);
 await page.evaluate(() => closeModal());
 noErr('Naar monteur sturen (foto\'s)');
 
+// Snel antwoord via WhatsApp (2 okt 2026): knop in het antwoordvenster van een opdracht,
+// nummer vooraf ingevuld, alleen het getypte antwoord gaat de wachtrij in.
+clear();
+await page.evaluate((id) => openOrderModal(id), smSetup.orderId);
+await page.waitForTimeout(500);
+await page.click('#f-reply');
+await page.waitForTimeout(300);
+ok('Snel antwoord: knop "Via WhatsApp" + 06-nummer vooraf ingevuld', await page.locator('#rep-wa').count() === 1 && (await page.inputValue('#rep-phone')) === '0611000088', await page.inputValue('#rep-phone').catch(() => '?'));
+await page.fill('#rep-body', 'Browsertest: we komen morgen om 10 uur.');
+await page.click('#rep-wa');
+await page.waitForTimeout(700);
+const saItem = await page.evaluate(async () => ((await fetch('/api/whatsapp/outbox-status?full=1').then((r) => r.json())) || []).find((x) => /Browsertest: we komen morgen/.test(x.text || '')) || null);
+ok('Via WhatsApp: alleen het antwoord (zonder handtekening) staat in de wachtrij, venster dicht', !!saItem && saItem.text === 'Browsertest: we komen morgen om 10 uur.' && saItem.group === '__klant_dm__' && await page.locator('#rep-wa').count() === 0, JSON.stringify(saItem));
+noErr('Snel antwoord via WhatsApp');
+
 // 9b) Cijfers: historie-boeken en omzet-suggesties openen zonder JS-fout
 clear();
 await page.evaluate(() => goView('finance'));

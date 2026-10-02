@@ -5375,6 +5375,46 @@ app.post('/api/test-mail', requireRole('admin'), async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// SNEL ANTWOORD VIA WHATSAPP (2 okt 2026, keuze eigenaar uit de audit): de assistente
+// moest een antwoord kopiëren en in WhatsApp plakken, of naar Berichten. Nu vanuit de
+// opdracht zelf. Loopt ALTIJD via de bestaande outbox (pauzeknop, snelheidsrem,
+// dubbelfilter en vervaltermijn gelden onverkort; officiële route als die aan staat).
+// Nummer: het opgegeven nummer, anders dat van DEZE aanvraag (intake, WET 3), anders
+// het klantrecord. Het bericht komt als notitie in het gesprek op de kaart.
+app.post('/api/orders/:id/whatsapp-antwoord', requireRole('admin', 'assistent'), (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Opdracht niet gevonden' });
+  const text = String(req.body?.text || '').trim().slice(0, 4000);
+  if (!text) return res.status(400).json({ error: 'Typ eerst een antwoord' });
+  const customer = db().customers.find((c) => c.id === order.customerId) || {};
+  const phone = String(req.body?.phone || order.intake?.phone || customer.phone || '').trim();
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 6 || digits.length > 13) {
+    return res.status(400).json({ error: 'Geen geldig 06-nummer bij deze opdracht. Vul het telefoonnummer in, of verstuur per e-mail.' });
+  }
+  const item = {
+    id: id('out'), kind: 'whatsapp_customer', phone, group: '__klant_dm__',
+    text, customerId: order.customerId || undefined, orderId: order.id,
+    threaded: true, // staat ook als notitie op de kaart (geen dubbel in de historie)
+    status: 'queued', createdAt: now(), by: `snel antwoord (${req.user.name})`,
+  };
+  db().outbox = db().outbox || [];
+  db().outbox.unshift(item);
+  if (db().outbox.length > 1000) db().outbox.length = 1000;
+  order.thread = order.thread || [];
+  order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: req.user.name, body: text, at: now(), outboxId: item.id });
+  // Zelfde gevolgen als een antwoord per e-mail.
+  order.lastReplyAt = now();
+  if (order.status === 'nieuw' && isValidStatus('open')) order.status = 'open';
+  order.openedAt = order.openedAt || now();
+  order.customerReplied = false;
+  order.unreadReplies = 0;
+  order.updatedAt = now();
+  logActivity(req.user.name, 'WhatsApp-antwoord via Snel antwoord', `${order.title}: ${text.slice(0, 60)}`);
+  saveSoon();
+  res.json({ ok: true, id: item.id, phone, paused: !!db().settings.whatsappPaused && !cloudSendAan() });
+});
+
 app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) => {
   const { to, subject, text, orderId } = req.body || {};
   if (!smtpConfigured()) return res.status(503).json({ error: 'E-mail versturen is nog niet ingesteld (SMTP). Zie docs/INTEGRATIES.md.' });
