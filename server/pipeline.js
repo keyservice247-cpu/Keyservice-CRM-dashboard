@@ -594,7 +594,9 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
       const order = rev ? db().orders.find((o) => o.id === rev.orderId && !o.archivedWeek) : null;
       if (order) {
         order.thread = order.thread || [];
-        order.thread.push({ id: id('thr'), channel, sender: sender || '', subject: subject || '', body: body || '', at: now(), attachments: attachments || [] });
+        // Uit een GROEP (doorgestuurd DRS → monteursgroep) is dit letterlijk dezelfde tekst:
+        // niet nóg een keer in de gesprekshistorie (2 okt 2026 — stond er dubbel in).
+        if (!group) order.thread.push({ id: id('thr'), channel, sender: sender || '', subject: subject || '', body: body || '', at: now(), attachments: attachments || [] });
         if (attachments?.length) order.attachments = mergeAttachments(order.attachments || [], attachments);
         order.updatedAt = now();
         saveSoon();
@@ -723,10 +725,16 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   // de plank mis". Dit is nu een VASTE regel, geen AI-oordeel: een bericht met minstens
   // één statuskopje op een eigen regel én twee of meer postcode-regels is een RAPPORT.
   // Zo'n bericht is nooit een aanvraag — het is bewijsmateriaal voor de statusscan.
-  const RAPPORT_KOP_RE = /^\s*(afgerond|gereden|klaar|offerte[s]?|afspra(?:ak|ken)|geannuleerd|geen gehoor|niet gedaan|open(?:staand)?)\s*:?\s*$/im;
-  const POSTCODE_REGEL_RE = /^\s*\d{4}\s?[A-Za-z]{2}\b/gm;
-  const postcodeRegels = (String(body || '').match(POSTCODE_REGEL_RE) || []).length;
-  const isEigenRapport = RAPPORT_KOP_RE.test(String(body || '')) && postcodeRegels >= 2;
+  // 2 okt 2026 (casus "*Maandag 28-09* / *Afgrond:* / 4007 RS - Tiel / 7091 DV Dinxperlo"
+  // werd een kaart): WhatsApp-opmaak (*vet*, _schuin_, ~doorgehaald~) eerst weghalen en
+  // tikfouten in het kopje ("Afgrond", "Afgeront") toestaan. Een kopje mag ook direct
+  // gevolgd worden door de eerste postcode ("Afgerond: 4007 RS Tiel").
+  const rapportTekst = String(body || '').replace(/[*_~]/g, '');
+  const RAPPORT_KOP = '(?:af\\s?ge?ro?n[dt]e?|afgehandeld|gereden|klaar|gedaan|offerte[s]?|afspra(?:ak|ken)|geannuleerd|annulering(?:en)?|geen gehoor|niet gedaan|open(?:staand)?)';
+  const RAPPORT_KOP_RE = new RegExp(`^\\s*${RAPPORT_KOP}\\s*:?\\s*(?:\\d{4}\\s?[A-Za-z]{2}\\b.*)?$`, 'im');
+  const POSTCODE_REGEL_RE = new RegExp(`^\\s*(?:${RAPPORT_KOP}\\s*:?\\s*)?\\d{4}\\s?[A-Za-z]{2}\\b`, 'gim');
+  const postcodeRegels = (rapportTekst.match(POSTCODE_REGEL_RE) || []).length;
+  const isEigenRapport = RAPPORT_KOP_RE.test(rapportTekst) && postcodeRegels >= 2;
 
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
@@ -739,8 +747,26 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   // overzichtelijk én missen we geen echte intake.
   const fromOtherGroup = channel === 'whatsapp' && group && !isWhatsappOrderGroup(group);
   const hasIntakeData = !!(suggestion.customerPhone && (suggestion.customerAddress || hasPostcode));
-  const otherGroupButOrder = fromOtherGroup && hasIntakeData;
-  const blockAsChatter = fromOtherGroup && !hasIntakeData;
+  // GROEPSBERICHT = ALLEEN EEN OPDRACHT ALS HIJ COMPLEET IS (2 okt 2026, wens eigenaar:
+  // "opdrachten komen 1 keer compleet binnen; aanvullingen regelt de assistente").
+  // Casus: "klant in Geertruidenberg … kan je me een kostenoverzichtje geven?" (DRS-
+  // collega die iets vraagt) en ons eigen dagrapport werden een kaart en gingen naar de
+  // monteur. In een groep (DRS of monteur) telt een bericht nu ALLEEN als aanvraag met
+  // een telefoonnummer dat LETTERLIJK in de tekst staat (niet door de AI verzonnen of
+  // uit een plaatsnaam afgeleid) én een postcode of straat + huisnummer. Al het andere
+  // groepsverkeer is gesprek → Overige (zichtbaar in de inbox, nooit een kaart).
+  const tekstCijfers = String(body || '').replace(/[^\d]/g, '');
+  const telDigits = String(suggestion.customerPhone || '').replace(/[^\d]/g, '');
+  // Ook zonder AI (storing) deterministisch: een 06-/vast nummer in de tekst telt (myPhone),
+  // net als een regel "Adres: Straat 12".
+  const telInTekst = (telDigits.length >= 9 && tekstCijfers.includes(telDigits.slice(-9))) || !!(myPhone && !COMPANY_PHONES.includes(myPhone));
+  const adresMetNummer = /[a-zà-ÿ]{3,}\.?\s+\d{1,5}\s?[a-z]?\b/i.test(String(suggestion.customerAddress || ''))
+    || /^\s*\*?(adres|straat)\*?\s*:\s*\S.*\d/im.test(String(body || ''));
+  const groepIntakeCompleet = telInTekst && (hasPostcode || adresMetNummer);
+  const isGroepsbericht = channel === 'whatsapp' && !!group;
+  const groepsGesprek = isGroepsbericht && !groepIntakeCompleet;
+  const otherGroupButOrder = fromOtherGroup && groepIntakeCompleet;
+  const blockAsChatter = fromOtherGroup && !groepIntakeCompleet;
   // OPDRACHT-GROEP MET VOLLEDIGE KLANTGEGEVENS = ALTIJD een aanvraag (17 aug 2026).
   // Een echte DRS-doorzending (naam + adres + telefoon) belandde in Overige omdat er
   // "factuur DRS" in de opmerking stond — het woordfilter (NOT_ORDER_WORDS: "factuur")
@@ -748,7 +774,7 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   // wél als opdracht herkend (otherGroupButOrder), maar uit de opdracht-groep zelf
   // niet. Deterministisch, geen AI-oordeel nodig. Eigen rapporten (isEigenRapport/
   // looksReport) winnen hier nog steeds van — die check staat eerder in de keten.
-  const orderGroupIntake = channel === 'whatsapp' && !!group && isWhatsappOrderGroup(group) && hasIntakeData;
+  const orderGroupIntake = channel === 'whatsapp' && !!group && isWhatsappOrderGroup(group) && groepIntakeCompleet;
   // De AI mag overrulen: zegt hij expliciet 'geen opdracht' (incasso/leverancier/
   // reclame), dan is het niet relevant — ongeacht wat de regels zeggen.
   const aiSaysNotOrder = suggestion.aiNotOrder === true;
@@ -782,7 +808,7 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   const onsVerkeer = antwoordOpOnzeMail || eigenKlantReply;
   suggestion.relevant = (looksSupplier && !onsVerkeer) ? false
     : emailIntake ? true
-    : (aiSaysNotOrder || looksMarketing || looksReport || isEigenRapport) ? false
+    : (aiSaysNotOrder || looksMarketing || looksReport || isEigenRapport || groepsGesprek) ? false
     : (blockAsChatter ? false : ((otherGroupButOrder || orderGroupIntake) ? true : rel.relevant));
   // Website-formulieren (offerte/contact), ook als ze via FormSubmit worden doorgestuurd
   // vanaf een noreply-adres, zijn ALTIJD een echte aanvraag. Herken de kenmerkende
@@ -813,7 +839,9 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
     ? 'Status-/afrond-rapport van een medewerker — geen nieuwe opdracht (naar Overige).'
     : looksMarketing
     ? 'Reclame/marketing of nieuwsbrief (bv. Bing/Microsoft/advertenties) — naar Overige.'
+    : isEigenRapport ? 'Eigen dagrapport (statuskopje + postcodes) — geen opdracht; de statusscan leest het wel.'
     : blockAsChatter ? `Collega-bericht uit groep "${group}" zonder duidelijke klantgegevens — naar Overige.`
+    : groepsGesprek ? `Gesprek in groep "${group}" — geen complete opdracht (telefoonnummer + adres/postcode ontbreken). Geen kaart; naar Overige.`
     : orderGroupIntake ? `Opdracht-groep "${group}" met volledige klantgegevens (telefoon + adres) — als opdracht voorgesteld.`
     : otherGroupButOrder ? `Klantgegevens (telefoon + adres) herkend in groep "${group}" — als opdracht voorgesteld.`
     : aiSaysNotOrder ? 'AI: dit is geen klantopdracht (bv. incasso/leverancier/reclame).' : rel.reason;
@@ -842,7 +870,11 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   // boven alles gaan, en aanvraag-verkeer blijft een nieuwe kaart (Regel 1).
   const hardSender = (isEmailReply && fromEmail ? findCustomerStrong({ email: fromEmail }) : null)
     || (waFrom ? findCustomerStrong({ phone: waFrom }) : null);
-  const existingCustomer = (isNewAanvraag || (looksSupplier && !isFormLead && !onsVerkeer)) ? null
+  // GROEPSBERICHTEN worden NOOIT automatisch aan een lopende kaart gehangen (2 okt 2026,
+  // wens eigenaar "automatische aanvullingen hebben we geen behoefte aan"): een collega
+  // die in de monteursgroep een klantnummer noemt, werd anders als "reactie van de
+  // klant" in een oude opdracht gezet. Alleen 1-op-1 en e-mail van de klant zelf.
+  const existingCustomer = (isNewAanvraag || isGroepsbericht || (looksSupplier && !isFormLead && !onsVerkeer)) ? null
     : (hardSender
       || ((looksMarketing && !isFormLead && !onsVerkeer) ? null
         : findCustomerStrong({ phone: suggestion.customerPhone, email: suggestion.customerEmail })));
@@ -964,7 +996,26 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
     && review.status === 'pending' && !isEmailReply && !looksMarketing && !isOrderGroupMsg && !forceRelevant
     && !!(suggestion.customerPhone || suggestion.customerEmail)
     && !isGenericName(suggestion.customerName);
-  if ((isOrderGroupMsg || formAutoOk || losAutoOk) && !isEigenRapport && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  // Heeft de klant van een GROEPSbericht al een open opdracht? Dan nooit automatisch
+  // goedkeuren — anders hangt het zelfde-moment-venster hem stil aan die kaart en gaat er
+  // een "Aanvulling" naar de monteur. De assistente beslist (inbox toont "Bekende klant").
+  // Precies het geval waarin applyReview hem anders STIL zou samenvoegen (zelfde-moment-
+  // venster, zelfde adres); buiten het venster of bij een ander adres wordt het gewoon een
+  // nieuwe kaart met samenvoeg-suggestie (Regel 1) en mag de automatiek door.
+  const groepKlantOpen = isGroepsbericht && (() => {
+    const k = findCustomerStrong({ phone: suggestion.customerPhone, email: suggestion.customerEmail });
+    const vensterH = getAutoMergeWindowHours();
+    if (!k || !(vensterH > 0)) return false;
+    const open = db().orders
+      .filter((o) => o.customerId === k.id && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status))
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0];
+    if (!open) return false;
+    const t = new Date(open.createdAt || open.updatedAt).getTime();
+    if (!(Date.now() - t < vensterH * 3600000)) return false;
+    return !(suggestion.customerAddress && addressDiffers((open.intake && open.intake.address) || k.address, suggestion.customerAddress));
+  })();
+  if (groepKlantOpen) review.autoOvergeslagen = 'klant heeft al een open opdracht — handmatig beoordelen';
+  if ((isOrderGroupMsg || formAutoOk || losAutoOk) && !isEigenRapport && !groepsGesprek && !groepKlantOpen && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 

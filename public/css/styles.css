@@ -576,6 +576,16 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 .cv-kop { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .cv-periode { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--ink-soft); }
 .cv-periode select { width: auto; min-width: 160px; }
+.cf-balk { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
+.cf-rij { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.cf-rij label { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--ink-soft); }
+.cf-rij select { width: auto; min-width: 150px; }
+.cf-titel { font-weight: 600; font-size: 13px; }
+.cf-actief { margin-top: 8px; color: var(--ink-soft); }
+.cf-chip { font-size: 11px; padding: 1px 8px; vertical-align: middle; }
+.fin-btw { font-size: 11px; font-weight: 500; color: var(--ink-soft); white-space: nowrap; }
+.fin-uitleg { margin: -4px 0 10px; }
+.cv-zonder-drs { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
 .cv-stats { margin-bottom: 16px; }
 .cv-uitleg { margin: 0 0 14px; font-size: 13px; }
 .cv-uitleg summary { cursor: pointer; font-weight: 600; padding: 6px 0; color: var(--accent-ink); }
@@ -1075,6 +1085,8 @@ table tbody tr:hover { background: var(--panel-2); }
   .cv-weken { gap: 3px; height: 120px; }
   .cv-week:nth-child(odd) .cv-week-lbl { visibility: hidden; }
   .cv-periode { width: 100%; }
+  .cf-rij label { width: 100%; }
+  .cf-rij select { flex: 1; min-width: 0; }
   .cv-periode select { flex: 1; }
   .r-select, #selectAll { width: 22px; height: 22px; }
   /* Inbox-lead compacter: correctievelden in twee kolommen i.p.v. zeven onder elkaar. */

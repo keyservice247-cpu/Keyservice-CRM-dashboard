@@ -2292,6 +2292,9 @@ function maybeIntakeAutoSend(result) {
   let order = null;
   const review = result && result.review;
   if (review && review.status === 'pending' && review.suggestion?.relevant) {
+    // Klant heeft al een open opdracht (2 okt 2026, wens eigenaar "geen automatische
+    // aanvullingen")? Dan beslist de assistente in de inbox — nooit stil samenvoegen.
+    if (review.autoOvergeslagen) { console.log('[intake] klant heeft al een open opdracht — handmatig beoordelen'); return; }
     const msg = db().messages.find((m) => m.id === review.messageId);
     if (cfg.onlyDrs !== false && !(msg && isWhatsappOrderGroup(msg.group))) { console.log('[intake] niet uit DRS-groep, overgeslagen'); return; }
     order = applyReview(review, { actorName: 'AI (volautomatisch)', auto: true });
@@ -5168,14 +5171,19 @@ app.get('/api/invoices', requireAuth, (req, res) => {
 
 
 // ---------- Financiën / Cijfers (admin) ----------
+// Filters op Cijfers (2 okt 2026): ?monteur=<id>|geen&bron=<label>|eigen&website=<host>.
+function cijferFilter(req) {
+  const q = req.query || {};
+  return { monteur: String(q.monteur || '').slice(0, 80), bron: String(q.bron || '').slice(0, 80), website: String(q.website || '').slice(0, 120) };
+}
 app.get('/api/finance', requirePerm('finance'), (req, res) => {
   const month = String(req.query.month || '').slice(0, 7);
   const monteurs = db().monteurs || [];
   // Vaste kosten worden door de uurlijkse automatisering geboekt — niet meer als
   // verrassing bij het openen van deze pagina (GET hoort geen boekingen te doen).
   res.json({
-    report: monthReport(month, monteurs),
-    trend: trend(6, month),
+    report: monthReport(month, monteurs, cijferFilter(req)),
+    trend: trend(6, month, cijferFilter(req)),
     monteurs: monteurs.map((m) => ({ id: m.id, name: m.name })),
     categories: { income: INCOME_CATEGORIES, expense: EXPENSE_CATEGORIES },
     quickExpenses: QUICK_EXPENSES,
@@ -5185,7 +5193,7 @@ app.get('/api/finance', requirePerm('finance'), (req, res) => {
 // CONVERSIE (20 sep 2026): hoeveel binnengekomen aanvragen worden écht uitgevoerd?
 // Zelfde recht als Cijfers. ?dagen=30|90|365 (7..730).
 app.get('/api/conversie', requirePerm('finance'), (req, res) => {
-  res.json(conversieData({ dagen: Number(req.query.dagen) || 90 }));
+  res.json(conversieData({ dagen: Number(req.query.dagen) || 90, ...cijferFilter(req) }));
 });
 // Wekelijkse AI-briefing nu opnieuw maken (admin). Zonder API-sleutel: feiten-tekst.
 app.post('/api/conversie/briefing', requireRole('admin'), async (req, res) => {

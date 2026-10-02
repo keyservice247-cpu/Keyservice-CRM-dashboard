@@ -926,6 +926,43 @@ de regressie meegroeit.
   afgewezen berichten mee. Advies (niet gebouwd, keuze eigenaar): alleen verstuurde
   facturen tellen, "excl. btw" op de tegel, één definitie, offerte-conversie meten,
   DRS apart in conversie, weekrapport-"conversie" hernoemen. Test: conversie-test 42.
+- **Groepsgesprekken worden geen opdracht meer (2 okt 2026, klacht eigenaar: "vage
+  gesprekken als kaart / als aanvulling aan oude opdracht"):** casussen "klant in
+  Geertruidenberg … kostenoverzichtje?" (DRS-collega die iets vraagt) en ons eigen
+  dagrapport "*Maandag 28-09* / *Afgrond:* / 4007 RS - Tiel / 7091 DV Dinxperlo" werden
+  kaarten en gingen naar Youssef. Oorzaak: maybeIntakeAutoSend (trigger 'intake') keurde
+  ELK relevant pending groepsbericht goed, en het rapport-kopje herkende geen *opmaak* of
+  tikfout. Nu (pipeline.js): (1) GROEPSBERICHT = ALLEEN OPDRACHT ALS HIJ COMPLEET IS:
+  telefoonnummer dat letterlijk in de tekst staat (AI-nummer óf regex, nooit ons
+  bedrijfsnummer) + postcode of straat met huisnummer (`groepIntakeCompleet`); anders
+  `groepsGesprek` → Overige (geen kaart, geen push). (2) Rapport-herkenning op tekst
+  zonder `*_~`, kopjes tolerant (afgrond/afgeront/annulering, kopje + postcode op één
+  regel). (3) Groepsberichten worden NOOIT meer via de klant-match aan een lopende kaart
+  gehangen (`existingCustomer` = null bij elk groepsbericht; collega die een klantnummer
+  noemt ≠ reactie van de klant). (4) `groepKlantOpen`: zou het zelfde-moment-venster een
+  groepsbericht stil samenvoegen (open kaart binnen het venster, zelfde adres), dan GEEN
+  automatisch goedkeuren (ook niet via maybeIntakeAutoSend) — `review.autoOvergeslagen`,
+  blijft pending; de assistente beslist (handmatig goedkeuren voegt wél samen). Buiten
+  het venster / ander adres: gewoon nieuwe kaart + suggestie (Regel 1). (5) Identieke
+  doorgestuurde groepstekst komt niet nog eens in de gesprekshistorie. Bestaande foute
+  kaarten zijn NIET automatisch weggehaald (eigenaar: zelf naar de prullenbak). Tests:
+  scenarios 119 (+9: Geertruidenberg, *Afgrond:*, rapport met nummers, collega noemt
+  klantnummer, complete DRS-opdracht wél, venster-casus nu pending → handmatig).
+- **Cijfers: filters + excl. btw (2 okt 2026, keuze eigenaar):** filterbalk bovenaan
+  Cijfers (#cijfersFilter: monteur / bron incl. "Eigen leads (zonder DRS)" / website;
+  localStorage ksCijfersFilter) werkt op Conversie én omzet. Server: conversieData
+  accepteert {monteur ('geen'|id), bron ('eigen'|label), website}; `websiteVan()` leest de
+  site uit "Nieuwe aanvraag via de website <site>" / "via <site>" / "(<site>)", anders
+  "onbekende site"; antwoord heeft perWebsite, zonderDrs (alleen zonder bronfilter),
+  filter, gefilterd, opties {monteurs, bronnen, websites}. finance.js:
+  `herkomstVanBoeking` (orderId / inv:<id> / drsfee:<id> → bron+website van de opdracht;
+  losse boeking: DRS-categorie = DRS-groep, anders "Handmatige boeking"),
+  `maakBoekingFilter` (kosten zonder opdracht vallen weg bij bron/website-filter),
+  monthReport/trend nemen het filter; report.byHerkomst (vervangt "Per bron" op het
+  scherm), byWebsite, monteurRows[].aantal. Scherm: "excl. btw" op omzettegel/kolommen,
+  uitlegregel, "Zonder DRS: X%" onder het grote conversiecijfer, kolom Omzet in de
+  conversietabellen, blok Per website. Weekrapport-"conversie" heet nu "afgerond t.o.v.
+  nieuw". Tests: conversie-test 60 (+18), browser 237 (+4).
 - **AI-vraagbaak leeg antwoord (2 okt 2026):** Sonnet 5/Opus 5 denken eerst en dat telde
   mee voor max_tokens 6000 → bij een zware vraag alleen denkwerk, leeg vak. Nu 16000 +
   effort medium + 4 min time-out, bij leeg nog één poging met effort low, anders een
@@ -954,6 +991,11 @@ server/pipeline.js — er bestaat geen pad eromheen.
    onderwerp of In-Reply-To-header (isEmailReply — wint van intake-herkenning én
    van de website-dedup; matching op het échte afzenderadres). Fwd: telt bewust
    NIET als reactie. Anders sterven chat-weergave en "Nieuw bericht"-badge.
+   AANSCHERPING 2 okt 2026 (wens Abdel): uit een WhatsApp-GROEP wordt alleen een
+   COMPLETE opdracht (telefoon in de tekst + postcode/straat met nummer) een kaart; al
+   het andere groepsverkeer is gesprek (Overige). Groepsberichten worden nooit
+   automatisch aan een lopende kaart gehangen; een groepsbericht dat het zelfde-moment-
+   venster zou samenvoegen blijft in de inbox voor de assistente.
 2. Klant-matching ALLEEN op harde identificatoren: e-mail exact óf telefoon
    genormaliseerd (matchPhone: +31/0031 ↔ 0). Naam is NOOIT koppelgrond.
    Bij 1-op-1 WhatsApp is het ÉCHTE afzendernummer de hardste identificator

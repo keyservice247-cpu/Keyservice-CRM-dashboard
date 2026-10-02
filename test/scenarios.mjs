@@ -325,6 +325,16 @@ const sW2 = await api('POST', '/api/ingest/whatsapp', {
   externalId: 'w2',
 }, true);
 ok('tweede aanvraag binnen venster -> GEEN nieuwe kaart', (await orders()).length === ordersBeforeW2, `${ordersBeforeW2} -> ${(await orders()).length}`);
+// 2 okt 2026 (wens eigenaar "automatische aanvullingen hebben we geen behoefte aan"):
+// een groepsbericht van een klant MET open opdracht wordt nooit meer stil aan die kaart
+// gehangen — het blijft in de inbox; de assistente beslist.
+ok('klant met open opdracht binnen het venster: groepsbericht blijft in de inbox (pending)', sW2.json?.status === 'pending', JSON.stringify(sW2.json));
+const oWvoor = (await orders()).find((o) => (o.intake?.phone || '').includes('0633334444'));
+ok('niets automatisch aan de kaart toegevoegd', oWvoor && !(oWvoor.thread || []).some((t) => /reservesleutel/i.test(t.body || '')));
+ok('geen automatische aanvulling naar de monteur', !(await outboxAll()).some((x) => x.orderId === oWvoor?.id && x.by === 'samenvoegen-aanvulling'));
+// De assistente keurt goed -> zelfde-moment-venster hangt hem aan de kaart (mens beslist).
+await api('POST', `/api/reviews/${sW2.json.reviewId}/approve`, {});
+ok('handmatig goedkeuren binnen venster -> GEEN nieuwe kaart', (await orders()).length === ordersBeforeW2);
 const oW = (await orders()).find((o) => (o.intake?.phone || '').includes('0633334444'));
 ok('tweede bericht in de thread + systeemnotitie samenvoegen', oW && (oW.thread || []).some((t) => /reservesleutel/i.test(t.body || '')) && (oW.thread || []).some((t) => /automatisch aan deze kaart/i.test(t.body || '')));
 const obW = (await outboxAll()).filter((x) => x.orderId === oW?.id);
@@ -332,13 +342,54 @@ ok('geen dubbele volledige dispatch, wél aanvulling naar de monteur', obW.filte
 ok('kaart kreeg "Nieuw bericht"-badge bij samenvoegen (nooit stil)', oW && oW.customerReplied === true && (oW.unreadReplies || 0) >= 1);
 // Ander adres binnen het venster -> tóch een nieuwe kaart (andere klus, Regel 1).
 const ordersBeforeW3 = (await orders()).length;
-await api('POST', '/api/ingest/whatsapp', {
+const sW3 = await api('POST', '/api/ingest/whatsapp', {
   group: `groep ${RAF_ID}`, name: 'Vera Venster',
   body: 'Vera Venster, Havenkade 55, 8011 AB Zwolle, 0633334444, schuifpui vakantiehuis klemt',
   externalId: 'w3',
 }, true);
 ok('zelfde klant, ANDER adres -> wél nieuwe kaart (andere klus)', (await orders()).length === ordersBeforeW3 + 1, `${ordersBeforeW3} -> ${(await orders()).length}`);
 await api('PATCH', '/api/settings', { autoMergeWindowHours: 0 }); // terug voor de rest
+
+// ---------- Groepsgesprek is geen opdracht (2 okt 2026, casus Geertruidenberg + Tiel) ----------
+console.log('\n== Groepsgesprek / eigen dagrapport wordt nooit een kaart ==');
+await api('PATCH', '/api/settings', { aiAutoApproveThreshold: 0.5 });
+const ordersBeforeGG = (await orders()).length;
+const sGG = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Kim drs',
+  body: 'klant in Geertruidenberg heeft zelf dit geplaatst maar moet een langere cilinder hebben in zij vraagt naar kosten kan je me kostenoverzichtje geven?',
+  externalId: 'gg1',
+}, true);
+ok('vraag van DRS-collega zonder telefoon/adres -> Overige, geen kaart', sGG.json?.status === 'overige' && (await orders()).length === ordersBeforeGG, JSON.stringify(sGG.json));
+const sRap = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Key Service 24/7',
+  body: '*Maandag 28-09*\n\n*Afgrond:*\n\n4007 RS - Tiel\n\n7091 DV Dinxperlo',
+  externalId: 'gg2',
+}, true);
+ok('eigen dagrapport met *Afgrond:* (opmaak + tikfout) -> Overige, geen kaart', sRap.json?.status === 'overige' && (await orders()).length === ordersBeforeGG, JSON.stringify(sRap.json));
+const sRap2 = await api('POST', '/api/ingest/whatsapp', {
+  group: 'Youssef Keyservice247', name: 'Youssef',
+  body: 'Afgerond: 4007 RS Tiel 0612121212\nOfferte: 7091 DV Dinxperlo 0613131313',
+  externalId: 'gg3',
+}, true);
+ok('rapport mét telefoonnummers in monteursgroep -> geen kaart', sRap2.json?.status === 'overige' && (await orders()).length === ordersBeforeGG, JSON.stringify(sRap2.json));
+// Collega noemt in de monteursgroep het nummer van een klant met een open kaart:
+// dat is GEEN reactie van de klant en hoort niet in die kaart (geen aanvulling).
+const oKlant = (await orders()).find((o) => (o.intake?.phone || '').includes('0611111111'));
+const threadVoor = (oKlant?.thread || []).length;
+const sCol = await api('POST', '/api/ingest/whatsapp', {
+  group: 'Youssef Keyservice247', name: 'Youssef',
+  body: 'klant 0611111111 neemt niet op, morgen nog een keer proberen',
+  externalId: 'gg4',
+}, true);
+const oKlantNa = (await orders()).find((o) => o.id === oKlant?.id);
+ok('collega-bericht met klantnummer -> niet in de kaart van die klant', !!oKlant && (oKlantNa?.thread || []).length === threadVoor && !/reviewId/.test('') && (await orders()).length === ordersBeforeGG, JSON.stringify(sCol.json));
+const sEcht = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Kim drs',
+  body: 'Naam: Gert Groep\nAdres: Stationsstraat 14\nWoonplaats: Geertruidenberg\nTelefoon: 0622223333\nOpmerkingen: langere cilinder nodig',
+  externalId: 'gg5',
+}, true);
+ok('complete DRS-opdracht (naam/adres/telefoon) -> wél een kaart', sEcht.json?.status === 'auto_approved' && (await orders()).length === ordersBeforeGG + 1, JSON.stringify(sEcht.json));
+await api('PATCH', '/api/settings', { aiAutoApproveThreshold: 0 });
 
 // ---------- Website-lead boven drempel -> automatisch kaart (verfijning 27 jul) ----------
 console.log('\n== Website-lead boven drempel -> automatisch kaart + tweede formulier dedupt ==');

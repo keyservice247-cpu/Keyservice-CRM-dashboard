@@ -358,7 +358,7 @@ const cvDesk = await page.evaluate(() => ({
   periode: document.querySelector('#cvDagen') && document.querySelector('#cvDagen').value,
   finKop: !!document.querySelector('#financePanel .fin-kop'),
 }));
-ok('conversie: 5 KPI-tegels, groot percentage, 2 tabellen, 12 weken, patronen, briefing-knop (admin)', cvDesk.stats === 5 && cvDesk.groot && cvDesk.tabellen === 2 && cvDesk.weken === 12 && cvDesk.patronen >= 1 && cvDesk.knop && cvDesk.finKop, JSON.stringify(cvDesk));
+ok('conversie: 5 KPI-tegels, groot percentage, 2 tabellen, 12 weken, patronen, briefing-knop (admin)', cvDesk.stats === 5 && cvDesk.groot && cvDesk.tabellen >= 2 && cvDesk.weken === 12 && cvDesk.patronen >= 1 && cvDesk.knop && cvDesk.finKop, JSON.stringify(cvDesk));
 ok('conversie: periodes 7/14/30/90/365 + uitleg-blok met "afspraak"', await page.evaluate(() => [...document.querySelectorAll('#cvDagen option')].map((o) => o.value).join() === '7,14,30,90,365' && /afspraak ingepland/.test((document.querySelector('.cv-uitleg') || {}).textContent || '')));
 // Periode wisselen wordt onthouden en herlaadt zonder fout.
 await page.selectOption('#cvDagen', '7');
@@ -370,6 +370,19 @@ await page.waitForTimeout(700);
 await page.click('#cvBriefingBtn');
 await page.waitForFunction(() => !!document.querySelector('#conversiePanel .cv-briefing-tekst'), null, { timeout: 15000 });
 ok('conversie: briefing verschijnt na "Nieuwe analyse"', await page.evaluate(() => /Conversie laatste 30 dagen/.test(document.querySelector('#conversiePanel .cv-briefing-tekst').textContent)));
+// FILTERS + excl. btw (2 okt 2026): filterbalk boven Cijfers, werkt op conversie én omzet.
+const cfInfo = await page.evaluate(() => ({
+  balk: !!document.querySelector('#cijfersFilter #cfMonteur') && !!document.querySelector('#cfBron') && !!document.querySelector('#cfWebsite'),
+  eigen: [...document.querySelectorAll('#cfBron option')].some((o) => o.value === 'eigen'),
+  btw: /Omzet deze maand\s*excl\. btw/.test(document.querySelector('#financePanel').textContent),
+}));
+ok('cijfers: filterbalk (monteur/bron/website) + "excl. btw" op de omzettegel', cfInfo.balk && cfInfo.eigen && cfInfo.btw, JSON.stringify(cfInfo));
+await page.selectOption('#cfBron', 'eigen');
+await page.waitForFunction(() => /eigen leads/.test((document.querySelector('.cf-actief') || {}).textContent || ''), null, { timeout: 8000 });
+ok('cijfers: filter "eigen leads" toont uitleg + "gefilterd" bij conversie en omzet, onthouden', await page.evaluate(() => document.querySelectorAll('.cf-chip').length >= 2 && JSON.parse(localStorage.getItem('ksCijfersFilter')).bron === 'eigen'));
+await page.click('#cfWis');
+await page.waitForFunction(() => !document.querySelector('.cf-actief'), null, { timeout: 8000 });
+ok('cijfers: "Wis filters" zet alles terug', await page.evaluate(() => document.querySelector('#cfBron').value === '' && !document.querySelector('.cf-chip')));
 // Mobiel: alles binnen 390 px, tabellen schuiven zelf (geen paginabrede overflow).
 await page.setViewportSize({ width: 390, height: 844 });
 await page.waitForTimeout(500);
@@ -1156,6 +1169,7 @@ noErr('Mobiel plakkende balken');
     return { vak: vak.getBoundingClientRect().right, kaart: kaart.getBoundingClientRect().right, docW: document.documentElement.scrollWidth, vw: window.innerWidth, schuift: getComputedStyle(vak).overflowX };
   });
   ok('mobiel: weekrapport-tabel valt binnen de kaart en schuift zelf', !!wr && wr.vak <= wr.kaart + 1 && wr.docW <= wr.vw + 1 && wr.schuift === 'auto', JSON.stringify(wr));
+  ok('weekrapport: "conversie" heet nu "afgerond t.o.v. nieuw"', await page.evaluate(() => /afgerond t\.o\.v\. nieuw/.test(document.querySelector('#wr-body').textContent) && !/\bconversie\b/i.test([...document.querySelectorAll('#wr-body .wr-kpi span:last-child')].map((x) => x.textContent).join(' '))));
   noErr('Weekrapport mobiel');
 
   // g) Zelf-herlaad na een deploy: daarna hetzelfde scherm, dezelfde kolom-tab en

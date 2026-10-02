@@ -4,6 +4,7 @@
 // en AI-suggesties. Bewust simpel en stabiel — geen boekhoudpakket, wél clarity.
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { isWhatsappOrderGroup } from './settings.js';
+import { bronVan, websiteVan } from './conversie.js';
 
 // Vaste categorieën (het bedrijfsmodel van de eigenaar). Uitbreidbaar via 'Overig'.
 export const INCOME_CATEGORIES = ['DRS opdracht', 'Schuifpui reparatie', 'Overig'];
@@ -498,11 +499,51 @@ export function removeAutoIncomeForInvoice(invId) {
   return before - fin().entries.length;
 }
 
+// HERKOMST van een boeking (2 okt 2026, filters op Cijfers): via welke opdracht kwam dit
+// geld binnen? Automatische boekingen dragen orderId of sourceRef inv:<id>/drsfee:<id>;
+// dan geldt de bron/website van die opdracht (zelfde labels als bij Conversie). Een
+// handmatige boeking zonder opdracht: DRS-categorie/-bron = DRS-groep, anders
+// "Handmatige boeking".
+function herkomstContext() {
+  return {
+    orders: new Map([...(db().trash || []), ...(db().orders || [])].map((o) => [o.id, o])),
+    invoices: new Map((db().invoices || []).map((i) => [i.id, i])),
+    msgs: new Map((db().messages || []).map((x) => [x.id, x])),
+  };
+}
+export function herkomstVanBoeking(e, ctx) {
+  let orderId = e.orderId || null;
+  const ref = String(e.sourceRef || '');
+  if (!orderId && ref.startsWith('inv:')) orderId = (ctx.invoices.get(ref.slice(4)) || {}).orderId || null;
+  if (!orderId && ref.startsWith('drsfee:')) orderId = ref.slice(7);
+  const order = orderId ? ctx.orders.get(orderId) : null;
+  if (order) return { bron: bronVan(order, ctx.msgs), website: websiteVan(order, ctx.msgs), order: true };
+  return { bron: bronVanBoeking(e) === 'DRS' ? 'DRS-groep' : 'Handmatige boeking', website: null, order: false };
+}
+// Filter op boekingen: monteur kijkt naar de geboekte monteur; bron/website naar de
+// herkomst. Kosten zonder opdracht (Google Ads, benzine…) horen bij geen enkele bron —
+// die vallen bij een bron-/websitefilter dus weg.
+export function maakBoekingFilter(f = {}, ctx) {
+  const monteur = String(f.monteur || ''); const bron = String(f.bron || ''); const website = String(f.website || '');
+  return (e) => {
+    if (monteur === 'geen' ? !!e.monteurId : (monteur && e.monteurId !== monteur)) return false;
+    if (!bron && !website) return true;
+    const h = herkomstVanBoeking(e, ctx);
+    if (e.kind !== 'income' && !h.order) return false;
+    if (bron && (bron === 'eigen' ? h.bron === 'DRS-groep' : h.bron !== bron)) return false;
+    if (website && h.website !== website) return false;
+    return true;
+  };
+}
+
 // Maandoverzicht: entries + samenvatting (omzet/kosten/winst + uitsplitsingen).
-export function monthReport(month, monteurs = []) {
+export function monthReport(month, monteurs = [], filter = {}) {
   const m = /^\d{4}-\d{2}$/.test(month) ? month : thisMonth();
-  const entries = fin().entries.filter((e) => monthOf(e.date) === m)
+  const ctx = herkomstContext();
+  const pastFilter = maakBoekingFilter(filter, ctx);
+  const entries = fin().entries.filter((e) => monthOf(e.date) === m && pastFilter(e))
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const byHerkomst = {}; const byWebsite = {};
   const nameOf = (mid) => (monteurs.find((x) => x.id === mid) || {}).name || null;
 
   let income = 0; let expense = 0;
@@ -515,19 +556,23 @@ export function monthReport(month, monteurs = []) {
       incomeByCat[e.category] = r2((incomeByCat[e.category] || 0) + e.amount);
       const bron = bronVanBoeking(e);
       bySource[bron] = r2((bySource[bron] || 0) + e.amount);
+      const h = herkomstVanBoeking(e, ctx);
+      byHerkomst[h.bron] = r2((byHerkomst[h.bron] || 0) + e.amount);
+      if (h.website) byWebsite[h.website] = r2((byWebsite[h.website] || 0) + e.amount);
     } else {
       expense += e.amount;
       expenseByCat[e.category] = r2((expenseByCat[e.category] || 0) + e.amount);
     }
     if (who) {
-      const b = byMonteur[who] || { income: 0, expense: 0 };
+      const b = byMonteur[who] || { income: 0, expense: 0, n: 0 };
       b[e.kind] = r2(b[e.kind] + e.amount);
+      if (e.kind === 'income') b.n++;
       byMonteur[who] = b;
     }
   }
   // Per monteur ook het netto (omzet - kosten die aan hem hangen).
   const monteurRows = Object.entries(byMonteur).map(([name, v]) => ({
-    name, income: v.income, expense: v.expense, net: r2(v.income - v.expense),
+    name, income: v.income, expense: v.expense, net: r2(v.income - v.expense), aantal: v.n,
   })).sort((a, b) => b.income - a.income);
 
   return {
@@ -536,15 +581,18 @@ export function monthReport(month, monteurs = []) {
     expense: r2(expense),
     profit: r2(income - expense),
     marginPct: income > 0 ? Math.round(((income - expense) / income) * 100) : 0,
-    incomeByCat, expenseByCat, bySource,
+    incomeByCat, expenseByCat, bySource, byHerkomst, byWebsite,
     monteurRows,
+    filter: { monteur: String(filter.monteur || ''), bron: String(filter.bron || ''), website: String(filter.website || '') },
+    gefilterd: !!(filter.monteur || filter.bron || filter.website),
     entries: entries.map((e) => ({ ...e, monteurName: e.monteurId ? nameOf(e.monteurId) : null })),
     count: entries.length,
   };
 }
 
 // Trend: laatste N maanden (omzet/kosten/winst per maand) voor grafiek/CEO-rapport.
-export function trend(months = 6, endMonth) {
+export function trend(months = 6, endMonth, filter = {}) {
+  const pastFilter = maakBoekingFilter(filter, herkomstContext());
   const end = /^\d{4}-\d{2}$/.test(endMonth) ? endMonth : thisMonth();
   const [ey, em] = end.split('-').map(Number);
   const out = [];
@@ -552,7 +600,7 @@ export function trend(months = 6, endMonth) {
     let y = ey; let mo = em - i;
     while (mo <= 0) { mo += 12; y -= 1; }
     const key = `${y}-${String(mo).padStart(2, '0')}`;
-    const es = fin().entries.filter((e) => monthOf(e.date) === key);
+    const es = fin().entries.filter((e) => monthOf(e.date) === key && pastFilter(e));
     let inc = 0; let exp = 0;
     for (const e of es) { if (e.kind === 'income') inc += e.amount; else exp += e.amount; }
     out.push({ month: key, income: r2(inc), expense: r2(exp), profit: r2(inc - exp) });

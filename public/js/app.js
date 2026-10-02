@@ -1526,7 +1526,7 @@ async function laadWeekrapport(stil = false) {
           <div class="wr-kpi"><span class="wr-num">${r.apptCount}</span><span>afspraken</span></div>
           <div class="wr-kpi"><span class="wr-num">${r.doneCount}</span><span>afgerond</span></div>
           <div class="wr-kpi"><span class="wr-num">${euro(r.omzet)}</span><span>omzet (excl. btw)</span></div>
-          <div class="wr-kpi"><span class="wr-num">${r.conversie === null ? '—' : r.conversie + '%'}</span><span>conversie</span></div>
+          <div class="wr-kpi" title="Afgeronde opdrachten deze week gedeeld door nieuwe opdrachten deze week. Geen echte conversie (kan boven 100% komen) — die staat op Cijfers."><span class="wr-num">${r.conversie === null ? '—' : r.conversie + '%'}</span><span>afgerond t.o.v. nieuw</span></div>
         </div>
         <div class="wr-tabel"><table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th><th>Omzet</th><th>Afspraken</th><th>Nu actief</th></tr></thead>
         <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table></div>
@@ -4607,13 +4607,72 @@ const eurF = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
 // Datum van VANDAAG in de tijdzone van de browser (niet UTC — 's nachts na 00:00 gaf
 // toISOString() nog gisteren, dus een boeking op de 1e belandde in de vorige maand).
 const lokaleDag = () => new Date().toLocaleDateString('sv-SE');
+// ---------- Filters op Cijfers (2 okt 2026, wens eigenaar "slimme filters") ----------
+// Eén balk voor de hele pagina: monteur / bron / website. Werkt op Conversie én op de
+// omzet. Keuze per toestel onthouden (localStorage ksCijfersFilter).
+function cijfersFilter() {
+  if (!state._cf) {
+    try { state._cf = JSON.parse(localStorage.getItem('ksCijfersFilter') || '{}') || {}; } catch { state._cf = {}; }
+  }
+  return state._cf;
+}
+function zetCijfersFilter(f) {
+  state._cf = { monteur: f.monteur || '', bron: f.bron || '', website: f.website || '' };
+  try { localStorage.setItem('ksCijfersFilter', JSON.stringify(state._cf)); } catch { /* geen opslag */ }
+}
+function cijfersFilterQs() {
+  const f = cijfersFilter(); const p = new URLSearchParams();
+  for (const k of ['monteur', 'bron', 'website']) if (f[k]) p.set(k, f[k]);
+  const q = p.toString();
+  return q ? `&${q}` : '';
+}
+function cijfersFilterTekst() {
+  const f = cijfersFilter(); const o = (state._conversie && state._conversie.opties) || {};
+  const delen = [];
+  if (f.monteur) delen.push(f.monteur === 'geen' ? 'zonder monteur' : `monteur ${((o.monteurs || []).find((m) => m.id === f.monteur) || {}).naam || 'onbekend'}`);
+  if (f.bron) delen.push(f.bron === 'eigen' ? 'eigen leads (zonder DRS)' : `bron ${f.bron}`);
+  if (f.website) delen.push(`website ${f.website}`);
+  return delen.join(' · ');
+}
+function renderCijfersFilter() {
+  const el = $('#cijfersFilter'); if (!el) return;
+  const c = state._conversie && !state._conversie._error ? state._conversie : null;
+  const o = (c && c.opties) || { monteurs: ((state._finance && state._finance.monteurs) || []).map((m) => ({ id: m.id, naam: m.name })), bronnen: [], websites: [] };
+  const f = cijfersFilter();
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${v === (cur || '') ? 'selected' : ''}>${esc(l)}</option>`;
+  // Een opgeslagen keuze die (nog) niet in de lijst staat blijft zichtbaar.
+  const metHuidig = (lijst, cur) => (cur && !lijst.includes(cur) ? [...lijst, cur] : lijst);
+  const bronnen = metHuidig(o.bronnen || [], f.bron && f.bron !== 'eigen' ? f.bron : '');
+  const websites = metHuidig(o.websites || [], f.website);
+  const actief = !!(f.monteur || f.bron || f.website);
+  el.innerHTML = `
+    <div class="cf-rij">
+      <span class="cf-titel">Filter</span>
+      <label>Monteur <select id="cfMonteur">${opt('', 'Alle monteurs', f.monteur)}${(o.monteurs || []).map((m) => opt(m.id, m.naam, f.monteur)).join('')}${opt('geen', 'Zonder monteur', f.monteur)}</select></label>
+      <label>Bron <select id="cfBron">${opt('', 'Alle bronnen', f.bron)}${opt('eigen', 'Eigen leads (zonder DRS)', f.bron)}${bronnen.map((b) => opt(b, b, f.bron)).join('')}</select></label>
+      <label>Website <select id="cfWebsite">${opt('', websites.length ? 'Alle websites' : 'Nog geen website-leads', f.website)}${websites.map((w) => opt(w, w, f.website)).join('')}</select></label>
+      ${actief ? '<button class="btn btn-sm" id="cfWis" type="button">Wis filters</button>' : ''}
+    </div>
+    ${actief ? `<div class="cf-actief small">Je ziet nu alleen: <strong>${esc(cijfersFilterTekst())}</strong>. Kosten die niet bij een opdracht horen (zoals Google Ads) tellen bij een bron- of websitefilter niet mee.</div>` : ''}`;
+  const wissel = () => {
+    const nieuw = { monteur: $('#cfMonteur').value, bron: $('#cfBron').value, website: $('#cfWebsite').value };
+    // Een website kiezen = vanzelf een website-lead; een tegenstrijdige bron vervalt.
+    if (nieuw.website && nieuw.bron && !['Website', 'eigen'].includes(nieuw.bron)) nieuw.bron = '';
+    zetCijfersFilter(nieuw);
+    loadFinance().catch((err) => toast(err.message, true));
+  };
+  ['#cfMonteur', '#cfBron', '#cfWebsite'].forEach((sel) => { $(sel).onchange = wissel; });
+  if ($('#cfWis')) $('#cfWis').onclick = () => { zetCijfersFilter({}); loadFinance().catch((err) => toast(err.message, true)); };
+}
 async function loadFinance() {
   if (!$('#finMonth').value) $('#finMonth').value = lokaleDag().slice(0, 7);
+  const qs = cijfersFilterQs();
   const [fin, cv] = await Promise.all([
-    api(`/api/finance?month=${$('#finMonth').value}`),
-    api(`/api/conversie?dagen=${conversieDagen()}`).catch((e) => ({ _error: e.message })),
+    api(`/api/finance?month=${$('#finMonth').value}${qs}`),
+    api(`/api/conversie?dagen=${conversieDagen()}${qs}`).catch((e) => ({ _error: e.message })),
   ]);
   state._finance = fin; state._conversie = cv;
+  renderCijfersFilter();
   renderConversie();
   renderFinance();
 }
@@ -4632,20 +4691,21 @@ function renderFinance() {
     return `<div class="fin-vorig muted small">vorige maand ${eurF(vorige)} <span style="color:${kleur}">${diff >= 0 ? '+' : '−'}${eurF(Math.abs(diff)).replace('€ ', '€')}</span></div>`;
   };
   $('#financePanel').innerHTML = `
-    <h3 class="fin-kop">Omzet en kosten — ${esc(r.month)}</h3>
+    <h3 class="fin-kop">Omzet en kosten — ${esc(r.month)}${r.gefilterd ? ' <span class="chip cf-chip">gefilterd</span>' : ''}</h3>
+    <div class="muted small fin-uitleg">Omzet = betaalde facturen (bedrag <strong>excl. btw</strong>, op de betaaldatum) + handmatige boekingen. Btw is geen omzet: die draag je af.</div>
     <div class="stat-grid" style="margin-bottom:16px">
-      <div class="stat"><div class="num" style="color:var(--ok)">${eurF(r.income)}</div><div class="lbl">Omzet deze maand</div>${vsVorig(r.income, vorig ? vorig.income : 0)}</div>
+      <div class="stat"><div class="num" style="color:var(--ok)">${eurF(r.income)}</div><div class="lbl">Omzet deze maand <span class="fin-btw">excl. btw</span></div>${vsVorig(r.income, vorig ? vorig.income : 0)}</div>
       <div class="stat"><div class="num" style="color:var(--danger)">${eurF(r.expense)}</div><div class="lbl">Kosten deze maand</div>${vorig ? `<div class="fin-vorig muted small">vorige maand ${eurF(vorig.expense)}</div>` : ''}</div>
       <div class="stat"><div class="num" style="color:${r.profit >= 0 ? 'var(--ok)' : 'var(--danger)'}">${eurF(r.profit)}</div><div class="lbl">Winst (${r.marginPct}% marge)</div>${vsVorig(r.profit, vorig ? vorig.profit : 0)}</div>
       <div class="stat"><div class="num">${r.count}</div><div class="lbl">Boekingen</div></div>
     </div>
     <div class="settings-grid" style="margin-bottom:16px">
-      <div class="info-card"><h3>Omzet per categorie</h3>${catRows(r.incomeByCat)}${Object.keys(r.bySource).length ? `<hr style="border:none;border-top:1px solid var(--line-soft);margin:10px 0"><div class="muted small" style="margin-bottom:4px">Per bron:</div>${catRows(r.bySource)}` : ''}</div>
+      <div class="info-card"><h3>Omzet per categorie <span class="fin-btw">excl. btw</span></h3>${catRows(r.incomeByCat)}${Object.keys(r.byHerkomst || {}).length ? `<hr style="border:none;border-top:1px solid var(--line-soft);margin:10px 0"><div class="muted small" style="margin-bottom:4px">Per bron (waar kwam de opdracht vandaan):</div>${catRows(r.byHerkomst)}` : ''}${Object.keys(r.byWebsite || {}).length ? `<hr style="border:none;border-top:1px solid var(--line-soft);margin:10px 0"><div class="muted small" style="margin-bottom:4px">Per website:</div>${catRows(r.byWebsite)}` : ''}</div>
       <div class="info-card"><h3>Kosten per categorie</h3>${catRows(r.expenseByCat)}</div>
     </div>
     ${r.monteurRows.length ? `<div class="info-card" style="margin-bottom:16px"><h3>Per monteur</h3>
-      <table><thead><tr><th>Monteur</th><th>Omzet</th><th>Kosten</th><th>Netto</th></tr></thead><tbody>
-      ${r.monteurRows.map((m) => `<tr><td><strong>${esc(m.name)}</strong></td><td>${eurF(m.income)}</td><td>${eurF(m.expense)}</td><td><strong style="color:${m.net >= 0 ? 'var(--ok)' : 'var(--danger)'}">${eurF(m.net)}</strong></td></tr>`).join('')}
+      <table><thead><tr><th>Monteur</th><th>Omzet <span class="fin-btw">excl. btw</span></th><th title="Aantal omzet-boekingen (meestal: betaalde facturen)">Facturen</th><th>Kosten</th><th>Netto</th></tr></thead><tbody>
+      ${r.monteurRows.map((m) => `<tr><td><strong>${esc(m.name)}</strong></td><td>${eurF(m.income)}</td><td>${m.aantal || 0}</td><td>${eurF(m.expense)}</td><td><strong style="color:${m.net >= 0 ? 'var(--ok)' : 'var(--danger)'}">${eurF(m.net)}</strong></td></tr>`).join('')}
       </tbody></table></div>` : ''}
     <div class="info-card" style="margin-bottom:16px"><h3>Verloop (laatste 6 maanden)</h3>
       <div class="fin-trend">${d.trend.map((t) => `
@@ -4654,7 +4714,7 @@ function renderFinance() {
           <div class="fin-trend-bars">${bar(t.income, 'var(--ok)')}${bar(t.expense, 'var(--danger)')}</div>
           <div class="muted small fin-trend-winst">${eurF(t.profit)}</div>
         </div>`).join('')}</div>
-      <div class="muted small" style="margin-top:8px">Groen = omzet · rood = kosten · getal = winst</div>
+      <div class="muted small" style="margin-top:8px">Groen = omzet (excl. btw) · rood = kosten · getal = winst</div>
     </div>
     <div class="info-card"><h3>Boekingen (${r.month})</h3>
       ${r.entries.length ? `<table><thead><tr><th>Datum</th><th>Soort</th><th>Categorie</th><th>Monteur/bron</th><th>Notitie</th><th style="text-align:right">Bedrag</th><th></th></tr></thead><tbody>
@@ -4698,10 +4758,11 @@ function renderConversie() {
   const balk = (aantal, totaal, kleur) => `<div class="cv-balk"><div class="cv-balk-vul" style="width:${totaal ? Math.max(2, Math.round((aantal / totaal) * 100)) : 0}%;background:${kleur}"></div></div>`;
   const kleurStatus = (k) => (k === 'afgerond' ? 'var(--ok)' : k === 'geannuleerd' ? 'var(--danger)' : k === 'nieuw' ? 'var(--warn)' : 'var(--accent)');
   const rijen = (lijst, kop) => lijst.length ? `
-    <table class="cv-tabel"><thead><tr><th>${esc(kop)}</th><th>Binnen</th><th title="Afgerond of afspraak ingepland">Gewonnen</th><th title="Geannuleerd">Verloren</th><th>Open</th><th class="cv-th-conv">Conversie</th></tr></thead><tbody>
+    <table class="cv-tabel"><thead><tr><th>${esc(kop)}</th><th>Binnen</th><th title="Afgerond of afspraak ingepland">Gewonnen</th><th title="Geannuleerd">Verloren</th><th>Open</th><th class="cv-th-conv">Conversie</th><th title="Omzet van de afgeronde opdrachten (factuur, anders prijsveld)">Omzet <span class="fin-btw">excl. btw</span></th></tr></thead><tbody>
     ${lijst.map((b) => `<tr>
       <td><strong>${esc(b.naam)}</strong></td><td>${b.binnen}</td><td class="cv-ok">${b.gewonnen}${b.afspraak ? `<span class="muted small"> (${b.afspraak} afspr.)</span>` : ''}</td><td class="cv-danger">${b.verloren}</td><td class="muted">${b.open}</td>
       <td><div class="cv-conv"><span class="cv-conv-pct">${pctF(b.conversie)}</span>${balk(b.conversie || 0, 100, b.conversie === null ? 'var(--line)' : b.conversie >= 60 ? 'var(--ok)' : b.conversie >= 35 ? 'var(--warn)' : 'var(--danger)')}</div>${b.gewonnen + b.verloren < 5 && b.conversie !== null ? '<div class="muted small">weinig beslist</div>' : ''}</td>
+      <td>${eurF(b.omzet)}</td>
     </tr>`).join('')}
     </tbody></table>` : '<div class="muted small">Nog geen gegevens.</div>';
   const maxWeek = Math.max(1, ...c.perWeek.map((w) => w.binnen));
@@ -4722,7 +4783,7 @@ function renderConversie() {
   const isAdmin = state.me && state.me.role === 'admin';
   el.innerHTML = `
     <div class="cv-kop">
-      <div><h3 class="fin-kop" style="margin:0">Conversie — van aanvraag naar opdracht</h3>
+      <div><h3 class="fin-kop" style="margin:0">Conversie — van aanvraag naar opdracht${c.gefilterd ? ' <span class="chip cf-chip">gefilterd</span>' : ''}</h3>
         <div class="muted small">Alles wat als nieuwe opdracht binnenkwam in de laatste ${dagen} dagen, en wat ervan geworden is.</div></div>
       <label class="cv-periode">Periode <select id="cvDagen">${[7, 14, 30, 90, 365].map((n) => `<option value="${n}" ${n === dagen ? 'selected' : ''}>${n === 365 ? 'Laatste jaar' : n === 30 ? 'Laatste maand (30 dagen)' : `Laatste ${n} dagen`}</option>`).join('')}</select></label>
     </div>
@@ -4738,7 +4799,7 @@ function renderConversie() {
       </ul>
     </details>
     <div class="stat-grid cv-stats">
-      <div class="stat cv-stat-groot"><div class="num" style="color:${t.conversie === null ? 'inherit' : t.conversie >= 60 ? 'var(--ok)' : t.conversie >= 35 ? 'var(--warn)' : 'var(--danger)'}">${pctF(t.conversie)}</div><div class="lbl">Conversie (van beslist)</div><div class="muted small">${t.gewonnen} gewonnen van ${beslist} beslist</div>${deltaHtml(t.conversie, v.conversie, ' pt')}</div>
+      <div class="stat cv-stat-groot"><div class="num" style="color:${t.conversie === null ? 'inherit' : t.conversie >= 60 ? 'var(--ok)' : t.conversie >= 35 ? 'var(--warn)' : 'var(--danger)'}">${pctF(t.conversie)}</div><div class="lbl">Conversie (van beslist)</div><div class="muted small">${t.gewonnen} gewonnen van ${beslist} beslist</div>${deltaHtml(t.conversie, v.conversie, ' pt')}${c.zonderDrs && c.zonderDrs.binnen && c.zonderDrs.binnen !== t.binnen ? `<div class="cv-zonder-drs small" title="DRS-opdrachten krijg je toegewezen en zijn dus bijna altijd gewonnen. Dit is je conversie op eigen leads (website, e-mail, telefoon, WhatsApp).">Zonder DRS: <strong>${pctF(c.zonderDrs.conversie)}</strong> <span class="muted">(${c.zonderDrs.gewonnen} van ${c.zonderDrs.gewonnen + c.zonderDrs.verloren} beslist)</span></div>` : ''}</div>
       <div class="stat"><div class="num">${t.binnen}</div><div class="lbl">Binnengekomen</div>${deltaHtml(t.binnen, v.binnen)}</div>
       <div class="stat"><div class="num" style="color:var(--ok)">${t.gewonnen}</div><div class="lbl">Gewonnen</div><div class="muted small">${t.afgerond} afgerond · ${t.afspraak} afspraak ingepland · ${pctF(t.conversieTotaal)} van alles</div></div>
       <div class="stat"><div class="num" style="color:var(--danger)">${t.verloren}</div><div class="lbl">Verloren (geannuleerd)</div><div class="muted small">${pctF(t.binnen ? Math.round((t.verloren / t.binnen) * 1000) / 10 : null)} van alles</div></div>
@@ -4762,6 +4823,7 @@ function renderConversie() {
       <div class="info-card cv-card"><h3>Per bron</h3>${rijen(c.perBron, 'Bron')}</div>
       <div class="info-card cv-card"><h3>Per monteur</h3>${rijen(c.perMonteur, 'Monteur')}</div>
     </div>
+    ${(c.perWebsite || []).length ? `<div class="info-card cv-card"><h3>Per website</h3>${rijen(c.perWebsite, 'Website')}</div>` : ''}
     <div class="info-card cv-card"><h3>Per week binnengekomen (laatste ${c.perWeek.length} weken)</h3>
       <div class="cv-weken">${weekHtml}</div>
       <div class="muted small" style="margin-top:8px">Hoogte = aantal aanvragen die week · groen = gewonnen (afgerond of afspraak) · rood = geannuleerd · grijs = nog open</div>
@@ -4774,13 +4836,13 @@ function renderConversie() {
     </div>`;
   $('#cvDagen').onchange = async () => {
     try { localStorage.setItem('ksConversieDagen', $('#cvDagen').value); } catch { /* geen opslag */ }
-    try { state._conversie = await api(`/api/conversie?dagen=${$('#cvDagen').value}`); renderConversie(); } catch (err) { toast(err.message, true); }
+    try { state._conversie = await api(`/api/conversie?dagen=${$('#cvDagen').value}${cijfersFilterQs()}`); renderConversie(); } catch (err) { toast(err.message, true); }
   };
   if ($('#cvBriefingBtn')) $('#cvBriefingBtn').onclick = async () => {
     const btn = $('#cvBriefingBtn'); btn.disabled = true; btn.textContent = 'Analyseren…';
     try {
       await api('/api/conversie/briefing', 'POST', {});
-      state._conversie = await api(`/api/conversie?dagen=${conversieDagen()}`);
+      state._conversie = await api(`/api/conversie?dagen=${conversieDagen()}${cijfersFilterQs()}`);
       renderConversie(); toast('Briefing bijgewerkt');
     } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = 'Nieuwe analyse'; }
   };

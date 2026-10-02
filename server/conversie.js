@@ -34,6 +34,46 @@ export function bronVan(o, msgById) {
   return o.source;
 }
 
+// Van welke WEBSITE kwam een website-lead? (2 okt 2026, wens eigenaar: per website kunnen
+// filteren). Het formulier-endpoint zet "Nieuwe aanvraag via de website <site> (…)" boven
+// de aanvraag en "… via <site>" in het onderwerp; een FormSubmit-mail noemt de site vaak
+// tussen haakjes. Geen site te vinden → "onbekende site". Geen website-lead → null.
+const SITE_RE = '((?:www\\.)?[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.(?:nl|com|be|eu|dev|net|org))';
+export function websiteVan(o, msgById) {
+  if (bronVan(o, msgById) !== 'Website') return null;
+  const m = o.messageId && msgById ? msgById.get(o.messageId) : null;
+  const tekst = m ? `${m.subject || ''}\n${m.body || ''}` : '';
+  const r = tekst.match(new RegExp(`aanvraag via de website\\s+${SITE_RE}`, 'i'))
+    || tekst.match(new RegExp(`\\bvia\\s+${SITE_RE}\\b`, 'i'))
+    || tekst.match(new RegExp(`\\(${SITE_RE}\\)`, 'i'));
+  return r ? r[1].toLowerCase().replace(/^www\./, '') : 'onbekende site';
+}
+
+// FILTERS (2 okt 2026): monteur ('' = alle, 'geen', of monteur-id), bron ('' = alle,
+// 'eigen' = alles behalve de DRS-groep, of een bron-label) en website ('' of host).
+export function maakOrderFilter(f = {}, msgById) {
+  const monteur = String(f.monteur || ''); const bron = String(f.bron || ''); const website = String(f.website || '');
+  return (o) => {
+    if (monteur === 'geen' ? !!o.monteurId : (monteur && o.monteurId !== monteur)) return false;
+    if (bron) { const b = bronVan(o, msgById); if (bron === 'eigen' ? b === 'DRS-groep' : b !== bron) return false; }
+    if (website && websiteVan(o, msgById) !== website) return false;
+    return true;
+  };
+}
+// Keuzes voor de filterbalk: alle bronnen/websites die in het CRM voorkomen.
+export function filterOpties(msgById) {
+  const bronnen = new Set(); const websites = new Set();
+  for (const o of [...(db().orders || []), ...(db().trash || [])]) {
+    bronnen.add(bronVan(o, msgById));
+    const w = websiteVan(o, msgById); if (w) websites.add(w);
+  }
+  return {
+    monteurs: (db().monteurs || []).map((m) => ({ id: m.id, naam: m.name })),
+    bronnen: [...bronnen].filter(Boolean).sort(),
+    websites: [...websites].sort(),
+  };
+}
+
 export const GEWONNEN = new Set(['afgerond', 'afspraak_ingepland']);
 export const VERLOREN = new Set(['geannuleerd']);
 export const PERIODES = [7, 14, 30, 90, 365];
@@ -96,7 +136,7 @@ function maandag(ms) {
   return d.getTime();
 }
 
-export function conversieData({ dagen = 90, weken = 12 } = {}) {
+export function conversieData({ dagen = 90, weken = 12, monteur = '', bron = '', website = '' } = {}) {
   dagen = Math.max(7, Math.min(730, Number(dagen) || 90));
   const nu = Date.now();
   const van = nu - dagen * DAG;
@@ -107,7 +147,11 @@ export function conversieData({ dagen = 90, weken = 12 } = {}) {
   const statussen = getStatuses();
   const label = (k) => (statussen.find((s) => s.key === k) || {}).label || k;
 
-  const alle = (db().orders || []).filter((o) => o.createdAt);
+  const filter = { monteur: String(monteur || ''), bron: String(bron || ''), website: String(website || '') };
+  const gefilterd = !!(filter.monteur || filter.bron || filter.website);
+  const pastFilter = maakOrderFilter(filter, msgById);
+  const alleOngefilterd = (db().orders || []).filter((o) => o.createdAt);
+  const alle = alleOngefilterd.filter(pastFilter);
   const inVenster = (o, a, b) => { const t = new Date(o.createdAt).getTime(); return t >= a && t < b; };
   const huidig = alle.filter((o) => inVenster(o, van, nu + DAG));
   const vorig = alle.filter((o) => inVenster(o, vorigVan, van));
@@ -139,6 +183,10 @@ export function conversieData({ dagen = 90, weken = 12 } = {}) {
   };
   const perBron = groepeer((o) => bronVan(o, msgById));
   const perMonteur = groepeer((o) => (o.monteurId && monteurNaam.get(o.monteurId)) || 'Geen monteur');
+  const perWebsite = groepeer((o) => websiteVan(o, msgById) || '').filter((w) => w.naam);
+  // Conversie ZONDER de DRS-groep (DRS-opdrachten worden toegewezen en zijn dus bijna
+  // altijd "gewonnen" — dat kleurt het hoofdcijfer). Alleen zinvol zonder bronfilter.
+  const zonderDrs = filter.bron ? null : tel(huidig.filter((o) => bronVan(o, msgById) !== 'DRS-groep'));
 
   // Per week (cohort op aanmaakweek): hoeveel kwam er binnen en wat is ervan geworden?
   const perWeek = [];
@@ -173,7 +221,8 @@ export function conversieData({ dagen = 90, weken = 12 } = {}) {
     periode: { dagen, van: new Date(van).toISOString(), tot: new Date(nu).toISOString() },
     totaal, vorige,
     delta: { conversie: totaal.conversie !== null && vorige.conversie !== null ? r2(totaal.conversie - vorige.conversie) : null, binnen: totaal.binnen - vorige.binnen },
-    perStatus, perBron, perMonteur, perWeek, doorlooptijd, waarde, stil, patronen,
+    perStatus, perBron, perMonteur, perWebsite, zonderDrs, perWeek, doorlooptijd, waarde, stil, patronen,
+    filter, gefilterd, opties: filterOpties(msgById),
     definitie: { gewonnen: [...GEWONNEN], verloren: [...VERLOREN], periodes: PERIODES },
     briefing: db().settings._conversieBriefing || null,
   };

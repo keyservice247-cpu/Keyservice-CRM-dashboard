@@ -157,6 +157,48 @@ const fin = (await api('GET', `/api/finance?month=${nlVandaag().slice(0, 7)}`)).
 ok('omzet zonder bron-veld telt in "Per bron" mee als DRS (via categorie)', fin.report.bySource.DRS === 120, JSON.stringify(fin.report.bySource));
 ok('maandrapport standaard = huidige NL-maand', (await api('GET', '/api/finance')).json.report.month === nlVandaag().slice(0, 7));
 
+console.log('\n== Filters op Cijfers: monteur / bron / website (2 okt 2026) ==');
+const webB = await api('POST', '/api/ingest/form?token=' + TOKEN, { name: 'Bart Breda', phone: '0654545454', email: 'bart@example.nl', city: 'Breda', message: 'Schuifpui loopt zwaar, graag langskomen', formType: 'offerte', site: 'schuifpuireparatie-breda.nl' });
+const webBRev = (await api('POST', `/api/reviews/${webB.json.reviewId}/approve`, {})).json;
+const webBId = webBRev?.order?.id;
+ok('website-lead van een stadssite aangemaakt', !!webBId, JSON.stringify(webB.json));
+const cf0 = (await api('GET', '/api/conversie?dagen=30')).json;
+ok('opties: websites bevat de stadssite + "onbekende site"', cf0.opties.websites.includes('schuifpuireparatie-breda.nl') && cf0.opties.websites.includes('onbekende site'), JSON.stringify(cf0.opties.websites));
+ok('opties: bronnen + monteurs voor de filterbalk', ['DRS-groep', 'Website', 'Handmatig'].every((b) => cf0.opties.bronnen.includes(b)) && cf0.opties.monteurs.some((m) => m.id === montId), JSON.stringify(cf0.opties));
+ok('per website: stadssite 1 binnen', (cf0.perWebsite.find((w) => w.naam === 'schuifpuireparatie-breda.nl') || {}).binnen === 1, JSON.stringify(cf0.perWebsite));
+ok('zonder filter: "zonder DRS" = totaal min de 3 DRS-opdrachten', cf0.zonderDrs && cf0.zonderDrs.binnen === cf0.totaal.binnen - 3 && cf0.gefilterd === false, JSON.stringify({ z: cf0.zonderDrs?.binnen, t: cf0.totaal.binnen }));
+const cfD = (await api('GET', '/api/conversie?dagen=30&bron=DRS-groep')).json;
+ok('bron=DRS-groep: 3 binnen, 2 gewonnen, 1 verloren', cfD.totaal.binnen === 3 && cfD.totaal.gewonnen === 2 && cfD.totaal.verloren === 1 && cfD.gefilterd === true, JSON.stringify(cfD.totaal));
+ok('met bronfilter geen apart "zonder DRS"-cijfer', cfD.zonderDrs === null);
+const cfE = (await api('GET', '/api/conversie?dagen=30&bron=eigen')).json;
+ok('bron=eigen: geen DRS-groep meer in de lijst', !cfE.perBron.some((b) => b.naam === 'DRS-groep') && cfE.totaal.binnen === cf0.totaal.binnen - 3, JSON.stringify(cfE.perBron.map((b) => b.naam)));
+const cfM = (await api('GET', `/api/conversie?dagen=30&monteur=${montId}`)).json;
+ok('monteur-filter: alleen zijn 2 opdrachten', cfM.totaal.binnen === 2 && cfM.perMonteur.length === 1, JSON.stringify(cfM.perMonteur));
+const cfG = (await api('GET', '/api/conversie?dagen=30&monteur=geen')).json;
+ok('monteur=geen: geen enkele opdracht met monteur', !cfG.perMonteur.some((m) => m.naam !== 'Geen monteur'), JSON.stringify(cfG.perMonteur));
+const cfW = (await api('GET', '/api/conversie?dagen=30&website=schuifpuireparatie-breda.nl')).json;
+ok('website-filter: alleen die ene lead', cfW.totaal.binnen === 1 && cfW.perBron.length === 1 && cfW.perBron[0].naam === 'Website', JSON.stringify(cfW.totaal));
+// Omzet-kant: betaalde factuur op de website-lead → omzet per website + filter.
+const webOrd = (await api('GET', '/api/orders')).json.find((o) => o.id === webBId);
+const invW = (await api('POST', '/api/invoices', { customerId: webOrd.customerId, type: 'factuur', orderId: webBId })).json;
+const invWId = (invW.invoice || invW).id;
+await api('PATCH', `/api/invoices/${invWId}`, { lines: [{ description: 'Schuifpui reparatie', qty: 1, priceExcl: 300 }], btwPct: 21, note: '' });
+await api('POST', `/api/invoices/${invWId}/status`, { status: 'betaald' });
+await api('POST', '/api/finance/autosync', {});
+const maand = nlVandaag().slice(0, 7);
+const fAll = (await api('GET', `/api/finance?month=${maand}`)).json.report;
+ok('omzet per website: stadssite € 300 (excl. btw)', fAll.byWebsite['schuifpuireparatie-breda.nl'] === 300, JSON.stringify(fAll.byWebsite));
+ok('omzet per bron (herkomst): Website + DRS-groep', fAll.byHerkomst.Website >= 300 && fAll.byHerkomst['DRS-groep'] >= 120, JSON.stringify(fAll.byHerkomst));
+const fW = (await api('GET', `/api/finance?month=${maand}&website=schuifpuireparatie-breda.nl`)).json;
+ok('omzet-filter website: alleen die € 300, geen losse kosten', fW.report.income === 300 && fW.report.entries.every((e) => e.kind === 'income') && fW.report.gefilterd === true, JSON.stringify({ inc: fW.report.income, n: fW.report.entries.length }));
+ok('verloop (trend) volgt het filter', fW.trend[fW.trend.length - 1].income === 300, JSON.stringify(fW.trend.slice(-1)));
+const fD = (await api('GET', `/api/finance?month=${maand}&bron=DRS-groep`)).json.report;
+ok('omzet-filter DRS: handmatige DRS-boeking telt mee, website-omzet niet', fD.income >= 120 && !fD.entries.some((e) => /Schuifpui reparatie|Factuur.*Breda/i.test(e.note || '')) && !fD.byWebsite['schuifpuireparatie-breda.nl'], JSON.stringify(fD.byHerkomst));
+const fE = (await api('GET', `/api/finance?month=${maand}&bron=eigen`)).json.report;
+ok('omzet-filter eigen leads: geen DRS-omzet', !fE.byHerkomst['DRS-groep'] && fE.byHerkomst.Website >= 300, JSON.stringify(fE.byHerkomst));
+const fGeen = (await api('GET', `/api/finance?month=${maand}&monteur=geen`)).json.report;
+ok('omzet-filter zonder monteur: geen boeking met monteur', fGeen.entries.every((e) => !e.monteurId), String(fGeen.entries.length));
+
 console.log('\n== Rechten: monteur ziet geen conversie ==');
 await api('POST', '/api/users', { name: 'Monteur Cv', email: 'monteurcv@keyservice.nl', password: 'monteur123', role: 'monteur' });
 cookie = '';

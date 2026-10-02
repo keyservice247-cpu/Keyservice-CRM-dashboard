@@ -224,7 +224,7 @@
       <!-- Cijfers / Financiën -->
       <section id="view-finance" class="view" hidden>
         <div class="view-head"><div><h2>Cijfers</h2>
-          <div class="muted small">Omzet, kosten en winst per maand. Voer inkomsten en uitgaven handmatig in; monteur-omzet en categorieën geven meteen overzicht.</div></div>
+          <div class="muted small">Omzet, kosten en winst per maand — alle bedragen <strong>excl. btw</strong>. Filter hieronder op monteur, bron of website.</div></div>
           <div class="view-actions">
             <input id="finMonth" type="month">
             <button id="finImport" class="btn" title="Omzet uit de monteursrapporten (WhatsApp) importeren">Omzet uit rapporten</button>
@@ -234,6 +234,7 @@
             <button id="finAddExpense" class="btn btn-primary">+ Uitgave</button>
           </div>
         </div>
+        <div id="cijfersFilter" class="cf-balk"></div>
         <div id="conversiePanel"></div>
         <div id="financePanel"></div>
       </section>
