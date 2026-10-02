@@ -103,6 +103,25 @@ const naNee = await page.evaluate(async (id) => {
 }, setup.invId);
 ok('"Nee, nog niet betaald": factuur Verzonden (open), WhatsApp-tekst zonder "voldaan"', naNee.inv.status === 'verzonden' && !naNee.inv.paidAt && naNee.item && !/voldaan/i.test(naNee.item.text || ''), JSON.stringify({ s: naNee.inv.status, t: naNee.item && naNee.item.text }));
 noErr('Betaald-keuze bij versturen');
+// Niet-opgeslagen regels gaan nooit stil verloren bij een statusknop (audit 3 okt 2026).
+clear();
+const bewaarId = await page.evaluate(async () => {
+  const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const c = await post('/api/customers', { name: 'Bewaar Klant', email: 'bewaar@example.nl', phone: '0611000001' });
+  const i = await post('/api/invoices', { customerId: c.id, type: 'factuur' });
+  return (i.invoice || i).id;
+});
+await page.click('#inv-cancel').catch(() => {});
+await page.waitForTimeout(300);
+await page.evaluate((id) => window.openStandaloneInvoice(id), bewaarId);
+await page.waitForSelector('.bn-add', { timeout: 5000 }).catch(() => {});
+await page.click('.bn-add');
+await page.waitForTimeout(300);
+await page.click('#inv-unpaid');
+await page.waitForFunction(() => !document.querySelector('#inv-save'), null, { timeout: 8000 }).catch(() => {});
+const bewaard = await page.evaluate(async (id) => { const j = await fetch('/api/invoices/' + id).then((r) => r.json()); return j.invoice || j; }, bewaarId);
+ok('"Nog niet betaald" met nieuwe regels: eerst opgeslagen, dan status gewijzigd', (bewaard.lines || []).length >= 3 && bewaard.status === 'concept', JSON.stringify({ n: (bewaard.lines || []).length, s: bewaard.status }));
+noErr('Statusknop bewaart eerst');
 await page.click('#inv-cancel').catch(() => {});
 await page.waitForTimeout(400);
 

@@ -67,6 +67,15 @@ export function getInvoiceSettings() {
 }
 // Vergrendeld = niet meer inhoudelijk te wijzigen: verstuurd én betaald, of een
 // goedgekeurde offerte. Een betaalde factuur die nog niet is verstuurd is dat NIET.
+// Begin van de BETAALTERMIJN (3 okt 2026, audit): normaal de eerste verzenddatum. Gaat
+// een al verstuurde factuur van "betaald" terug naar open (betaald-keuze "nog niet
+// betaald" of de knop "Nog niet betaald"), dan begint de termijn op dát moment
+// (inv.betaalStart) — anders kreeg de klant een betaalverzoek met een vervaldatum in het
+// verleden, stond hij direct op VERLOPEN en kwam de automatische herinnering meteen.
+// De factuurdatum op de PDF blijft gewoon sentAt.
+export function betaalTermijnStart(inv) {
+  return inv.betaalStart || inv.sentAt || null;
+}
 export function isVergrendeld(inv) {
   return (inv.status === 'betaald' && !!inv.sentAt) || inv.status === 'goedgekeurd';
 }
@@ -248,6 +257,9 @@ export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
   if (!inv || inv.type !== 'offerte') return 'geen offerte';
   if (inv.status !== 'verzonden') return 'offerte is niet (meer) open';
   if (handmatig) return '';
+  // Er is al een factuur van deze offerte gemaakt ("→ Maak factuur") — de klant is dus al
+  // akkoord, ook al staat de offerte zelf nog op verzonden (audit 3 okt 2026).
+  if (inv.convertedInvoiceId && (db().invoices || []).some((i) => i.id === inv.convertedInvoiceId)) return 'er is al een factuur van deze offerte gemaakt';
   if (!inv.orderId) return ''; // losse offerte zonder opdracht: niets om tegen te checken
   const order = (db().orders || []).find((o) => o.id === inv.orderId);
   if (!order) {
@@ -440,7 +452,7 @@ export function buildInvoicePdf(inv, order, customer) {
     const blue = '#2b4b9b'; const ink = '#1b2430'; const muted = '#6b7280';
     const FOOTER_TOP = 760; // vaste y van de voetregel; content moet daarboven blijven
     const invDate = inv.sentAt || inv.updatedAt || inv.createdAt || new Date();
-    const dueDate = new Date(new Date(invDate).getTime() + (cfg.paymentDays || 7) * 86400000);
+    const dueDate = new Date(new Date((inv.type !== 'offerte' && inv.betaalStart) || invDate).getTime() + (cfg.paymentDays || 7) * 86400000);
 
     // Kop: logo links, bedrijfsgegevens rechts.
     try { if (fs.existsSync(LOGO_PATH)) doc.image(LOGO_PATH, 50, 42, { fit: [200, 92] }); } catch { /* logo optioneel */ }

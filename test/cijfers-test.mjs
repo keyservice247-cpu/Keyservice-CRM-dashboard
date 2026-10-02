@@ -109,6 +109,21 @@ ok('weigeren geaccepteerd', dis.json.dismissed === 1);
 const sug2 = await api('GET', `/api/finance/suggest-income?month=${month}`);
 ok('geweigerd bedrag wordt niet meer voorgesteld', !(sug2.json.suggestions || []).some((s) => s.ref === target.ref));
 
+console.log('\n== Bedragen zonder duizendpunt + DRS-fee voor geplakte opdracht (audit 3 okt) ==');
+await api('POST', '/api/ingest/whatsapp', {
+  group: 'Rapport Groep', name: 'Rapport Monteur',
+  body: 'Dagrapport\nAfgerond 3911 AB Rhenen €1250 pin\nAfgerond 3912 CD Veenendaal €1.800,50 pin\nOfferte 3913 EF Ede €2000',
+  externalId: 'rap2',
+}, true);
+const sug3 = ((await api('GET', `/api/finance/suggest-income?month=${month}`)).json.suggestions || []).map((s) => s.amount);
+ok('€1250 → 1250 (niet 125), €1.800,50 → 1800,5, €2000 → 2000', sug3.includes(1250) && sug3.includes(1800.5) && sug3.includes(2000) && !sug3.includes(125) && !sug3.includes(200), JSON.stringify(sug3));
+const plak = await api('POST', '/api/orders/paste', { text: 'Naam: Plak Klant\nAdres: Plakstraat 4\nWoonplaats: Rhenen\nTelefoon: 0655566677\nOpmerkingen: slot vervangen' });
+const plakId = plak.json?.id;
+ok('plak-opdracht aangemaakt', !!plakId, JSON.stringify(plak.json).slice(0, 150));
+await api('PATCH', `/api/orders/${plakId}`, { status: 'afgerond' });
+const prev3 = await api('GET', '/api/finance/autosync/preview?since=2000-01-01');
+ok('afgeronde geplakte DRS-opdracht krijgt een DRS-fee', (prev3.json.items || []).some((x) => x.sourceRef === `drsfee:${plakId}`), JSON.stringify((prev3.json.items || []).map((x) => x.sourceRef)));
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

@@ -1564,7 +1564,7 @@ async function laadWeekrapport(stil = false) {
         </div>
         <div class="wr-tabel"><table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th><th>Omzet</th><th>Afspraken</th><th>Nu actief</th></tr></thead>
         <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table></div>
-        <p class="muted small" style="margin-top:8px">Omzet = de <strong>factuur</strong> van de afgeronde opdracht (excl. btw); zonder factuur telt het <strong>prijsveld</strong>.${r.zonderBedrag ? ` <strong>${r.zonderBedrag} afgeronde opdracht(en) hebben nog geen factuur en geen prijs</strong> — die tellen als € 0. Maak de factuur of vul de prijs in.` : ''}</p>`;
+        <p class="muted small" style="margin-top:8px">Omzet = de <strong>factuur</strong> van de afgeronde opdracht (excl. btw); zonder factuur telt het <strong>prijsveld</strong> zoals het is ingevuld (dat kan incl. btw zijn).${r.zonderBedrag ? ` <strong>${r.zonderBedrag} afgeronde opdracht(en) hebben nog geen factuur en geen prijs</strong> — die tellen als € 0. Maak de factuur of vul de prijs in.` : ''}</p>`;
     box.classList.remove('wr-laden');
     if (html === window._lastWeekHtml && box.childNodes.length) return;
     window._lastWeekHtml = html;
@@ -3000,7 +3000,7 @@ function reviewHTML(r) {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open opdracht: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}
+    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open opdracht: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}${r.autoOvergeslagen ? `<span class="chip" style="background:#fef3c7;color:#92400e" title="Waarom dit bericht niet automatisch een opdracht werd">Niet automatisch: ${esc(r.autoOvergeslagen)}</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div class="muted small">${s.engine && s.engine !== 'regels' ? 'AI: ' + esc(s.engine) : ''}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions r-velden"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
       ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('inbox') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
@@ -3833,7 +3833,7 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && !isQuote && inv.status === 'concept' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button>` : ''}
         ${inv.id && !isQuote && inv.status === 'betaald' ? `<button class="btn" id="inv-unpaid" title="${inv.sentAt ? 'Terug naar Verzonden — de factuur staat dan open en kan herinnerd worden' : 'Terug naar Concept — de factuur staat dan open'}">Nog niet betaald</button>` : ''}
         ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button><button class="btn" id="inv-qremind" title="Vriendelijke herinnering: per e-mail met PDF, of via WhatsApp als de klant alleen een 06 heeft">${icon('bell', 13)} Herinnering${inv.quoteFollowupCount ? ` (${inv.quoteFollowupCount}x)` : ''}</button>` : ''}
-        ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">→ Maak factuur</button>` : ''}
+        ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">${inv.convertedInvoiceId ? '→ Open factuur' : '→ Maak factuur'}</button>` : ''}
         ${inv.id ? `<button class="btn" id="inv-copy">${icon('merge', 13)} Kopieer</button>` : ''}
         ${inv.id && !locked ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}
       </div>
@@ -3957,6 +3957,19 @@ function renderInvoiceEditor(ctx) {
   const confirmEditIfSent = () => !inv.sentAt
     || confirm(`LET OP: deze ${woord.toLowerCase()} is al verstuurd naar de klant. Wijzigen kan tot verwarring leiden — netter is een kopie (of bij een fout een creditregel). Toch wijzigen?`);
   const done = (msg) => { toast(msg); closeModal(); if (ctx.after) ctx.after(); };
+  // NIET-OPGESLAGEN REGELS NOOIT STIL KWIJT (audit 3 okt 2026): "✓ Betaald", "Nog niet
+  // betaald", Herinnering, Goedgekeurd, Kopieer en Maak factuur werkten met de OPGESLAGEN
+  // versie en sloten het venster — nieuwe regels/prijzen waren weg (of de klant kreeg de
+  // oude PDF). Nu: is er iets gewijzigd, dan eerst opslaan (met de bekende waarschuwing
+  // bij een al verstuurd document). Geeft false als de gebruiker annuleert.
+  const standNu = () => JSON.stringify({ l: readLines(), b: $('#inv-btw') && $('#inv-btw').value, n: $('#inv-note') && $('#inv-note').value, d: readDiscount(), s: readSignature() !== undefined });
+  const beginStand = standNu();
+  const bewaarEerst = async () => {
+    if (locked || !inv.id || standNu() === beginStand) return true;
+    if (!confirmEditIfSent()) return false;
+    await saveConcept();
+    return true;
+  };
   if ($('#cust-save')) $('#cust-save').onclick = async () => {
     const cp = { name: $('#cust-name').value, phone: $('#cust-phone').value, email: $('#cust-email').value, address: $('#cust-address').value };
     if (!cp.name.trim()) { toast('Naam mag niet leeg zijn', true); return; }
@@ -4012,10 +4025,10 @@ function renderInvoiceEditor(ctx) {
     try {
       const saved = await saveConcept();
       await api(`/api/invoices/${saved.id}/send-whatsapp`, 'POST', keuze === null ? {} : { betaald: keuze });
-      done(`${woord}${betaaldToast(keuze)} klaargezet voor WhatsApp naar ${tel} — in de wachtrij. Bezorgstatus zie je in Berichten; mislukt het, dan krijg je een melding${keuze === true ? '' : ' en gaat hij terug naar concept'}.`);
+      done(`${woord}${betaaldToast(keuze)} klaargezet voor WhatsApp naar ${tel} — in de wachtrij. Bezorgstatus zie je in Berichten; mislukt het, dan krijg je een melding.`);
     } catch (err) { toast(err.message, true); }
   });
-  const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = async () => { try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }; };
+  const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = (ev) => eenKeer(ev.currentTarget, async () => { try { if (!await bewaarEerst()) return; await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }); };
   statusBtn('#inv-paid', 'betaald', 'Gemarkeerd als betaald ✓');
   // "Nog niet betaald": verstuurd → Verzonden (open, herinnerbaar); nooit verstuurd → Concept.
   statusBtn('#inv-unpaid', inv.sentAt ? 'verzonden' : 'concept', 'Gemarkeerd als nog niet betaald');
@@ -4023,6 +4036,7 @@ function renderInvoiceEditor(ctx) {
   // Goedkeuren: als er automatisch een factuur-concept van wordt gemaakt, dat meteen melden.
   if ($('#inv-accept')) $('#inv-accept').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     try {
+      if (!await bewaarEerst()) return;
       const r = await api(`/api/invoices/${inv.id}/status`, 'POST', { status: 'goedgekeurd' });
       if (r && r.autoInvoice) toast(`Offerte goedgekeurd ✓ — factuur-concept ${r.autoInvoice.number} klaargezet`);
       else toast('Offerte goedgekeurd ✓');
@@ -4031,22 +4045,24 @@ function renderInvoiceEditor(ctx) {
   });
   if ($('#inv-remind')) $('#inv-remind').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     if (!confirm(`Vriendelijke betaalherinnering sturen naar ${inv.sentTo || customer.email}?`)) return;
-    try { await api(`/api/invoices/${inv.id}/remind`, 'POST', {}); done('Herinnering verstuurd'); } catch (err) { toast(err.message, true); }
+    try { if (!await bewaarEerst()) return; await api(`/api/invoices/${inv.id}/remind`, 'POST', {}); done('Herinnering verstuurd'); } catch (err) { toast(err.message, true); }
   });
   if ($('#inv-qremind')) $('#inv-qremind').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const doel = customer.email || customer.phone || 'de klant';
     if (!confirm(`Vriendelijke offerte-herinnering sturen naar ${doel}? (E-mail met PDF, of WhatsApp als er alleen een 06 is.)`)) return;
     try {
+      if (!await bewaarEerst()) return;
       const r = await api(`/api/invoices/${inv.id}/quote-followup`, 'POST', {});
       done(`Herinnering verstuurd via ${r.via === 'whatsapp' ? 'WhatsApp' : 'e-mail'}`);
     } catch (err) { toast(err.message, true); }
   });
   if ($('#inv-copy')) $('#inv-copy').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
-    try { const copy = await api(`/api/invoices/${inv.id}/copy`, 'POST', {}); toast(`Gekopieerd → ${copy.number}`); closeModal(); openStandaloneInvoice(copy.id); } catch (err) { toast(err.message, true); }
+    try { if (!await bewaarEerst()) return; const copy = await api(`/api/invoices/${inv.id}/copy`, 'POST', {}); toast(`Gekopieerd → ${copy.number}`); closeModal(); openStandaloneInvoice(copy.id); } catch (err) { toast(err.message, true); }
   });
   if ($('#inv-tofactuur')) $('#inv-tofactuur').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
-    if (!confirm('Van deze offerte een factuur maken (nieuw factuurnummer)?')) return;
-    try { const f = await api(`/api/invoices/${inv.id}/copy`, 'POST', { type: 'factuur' }); toast(`Factuur ${f.number} aangemaakt`); closeModal(); openStandaloneInvoice(f.id); } catch (err) { toast(err.message, true); }
+    // Bestaat de factuur van deze offerte al, dan opent de knop die (geen tweede nummer).
+    if (!inv.convertedInvoiceId && !confirm('Van deze offerte een factuur maken (nieuw factuurnummer)?')) return;
+    try { if (!await bewaarEerst()) return; const f = await api(`/api/invoices/${inv.id}/copy`, 'POST', { type: 'factuur' }); toast(f.bestaand ? `Factuur ${f.number} bestond al — geopend` : `Factuur ${f.number} aangemaakt`); closeModal(); openStandaloneInvoice(f.id); } catch (err) { toast(err.message, true); }
   });
   if ($('#inv-del')) $('#inv-del').onclick = async () => {
     if (!confirm(`${woord} ${inv.number} definitief verwijderen?`)) return;
@@ -4696,18 +4712,22 @@ function renderCijfersFilter() {
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${v === (cur || '') ? 'selected' : ''}>${esc(l)}</option>`;
   // Een opgeslagen keuze die (nog) niet in de lijst staat blijft zichtbaar.
   const metHuidig = (lijst, cur) => (cur && !lijst.includes(cur) ? [...lijst, cur] : lijst);
+  // Opgeslagen monteur die niet (meer) in de lijst staat: zichtbaar houden, anders filtert
+  // de pagina onzichtbaar op een verwijderde monteur (audit 3 okt).
+  const monteurOpties = [...(o.monteurs || [])];
+  if (f.monteur && f.monteur !== 'geen' && !monteurOpties.some((m) => m.id === f.monteur)) monteurOpties.push({ id: f.monteur, naam: 'Verwijderde monteur' });
   const bronnen = metHuidig(o.bronnen || [], f.bron && f.bron !== 'eigen' ? f.bron : '');
   const websites = metHuidig(o.websites || [], f.website);
   const actief = !!(f.monteur || f.bron || f.website);
   el.innerHTML = `
     <div class="cf-rij">
       <span class="cf-titel">Filter</span>
-      <label>Monteur <select id="cfMonteur">${opt('', 'Alle monteurs', f.monteur)}${(o.monteurs || []).map((m) => opt(m.id, m.naam, f.monteur)).join('')}${opt('geen', 'Zonder monteur', f.monteur)}</select></label>
+      <label>Monteur <select id="cfMonteur">${opt('', 'Alle monteurs', f.monteur)}${monteurOpties.map((m) => opt(m.id, m.naam, f.monteur)).join('')}${opt('geen', 'Zonder monteur', f.monteur)}</select></label>
       <label>Bron <select id="cfBron">${opt('', 'Alle bronnen', f.bron)}${opt('eigen', 'Eigen leads (zonder DRS)', f.bron)}${bronnen.map((b) => opt(b, b, f.bron)).join('')}</select></label>
       <label>Website <select id="cfWebsite">${opt('', websites.length ? 'Alle websites' : 'Nog geen website-leads', f.website)}${websites.map((w) => opt(w, w, f.website)).join('')}</select></label>
       ${actief ? '<button class="btn btn-sm" id="cfWis" type="button">Wis filters</button>' : ''}
     </div>
-    ${actief ? `<div class="cf-actief small">Je ziet nu alleen: <strong>${esc(cijfersFilterTekst())}</strong>. Kosten die niet bij een opdracht horen (zoals Google Ads) tellen bij een bron- of websitefilter niet mee.</div>` : ''}`;
+    ${actief ? `<div class="cf-actief small">Je ziet nu alleen: <strong>${esc(cijfersFilterTekst())}</strong>. ${f.monteur && f.monteur !== 'geen' ? 'Bij een monteurfilter tellen alleen kosten die aan die monteur hangen; algemene kosten (zoals Google Ads) vallen weg.' : 'Kosten die niet bij een opdracht horen (zoals Google Ads) tellen bij een bron- of websitefilter niet mee.'}</div>` : ''}`;
   const wissel = () => {
     const nieuw = { monteur: $('#cfMonteur').value, bron: $('#cfBron').value, website: $('#cfWebsite').value };
     // Een website kiezen = vanzelf een website-lead; een tegenstrijdige bron vervalt.

@@ -60,7 +60,7 @@ import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
-import { getInvoiceSettings, isVergrendeld, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
+import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { conversieData, maakConversieBriefing, omzetVan, factuurPerOpdracht } from './conversie.js';
@@ -1912,7 +1912,9 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
     logActivity(req.user.name, `status gewijzigd${b.aiSuggested ? ' (AI-voorstel)' : ''}`, `${order.title} → ${getStatusLabels()[order.status] || order.status}`);
     // Geannuleerd of afgerond → klaarstaande opvolg-appjes intrekken (26 sep 2026).
     if (['geannuleerd', 'afgerond'].includes(order.status)) trekOpvolgingenIn(order.id, `opdracht op ${getStatusLabels()[order.status] || order.status} gezet`);
-    if (order.status === 'afgerond' && !order.completedAt) order.completedAt = now();
+    // Afrondmoment = de LAATSTE keer dat hij op afgerond ging; heropend → weg (audit 3 okt:
+    // een per ongeluk afgeronde en later echt afgeronde opdracht telde in de verkeerde week).
+    if (order.status === 'afgerond') order.completedAt = now(); else delete order.completedAt;
     // Kwam deze status uit een AI-STATUSVOORSTEL? Leg dat vast met de vorige status,
     // zodat er een weg terug is ("Toch niet"-knop op de kaart). Zonder dit was een
     // verkeerd toegepast voorstel onomkeerbaar én onzichtbaar.
@@ -2237,7 +2239,11 @@ app.post('/api/reviews/:id/approve', requirePerm('inbox'), (req, res) => {
 // Is dit een opdracht uit de DRS/Raf Breda-groep (de opdracht-WhatsApp-groep)?
 function isDrsOrder(order) {
   if (order.originGroup) return isWhatsappOrderGroup(order.originGroup);
-  return /whatsapp|groep|app/.test((order.source || '').toLowerCase());
+  // Zonder herkomstgroep alleen nog op een expliciete DRS-/groepsbron (bv. "Plak opdracht"
+  // = "DRS WhatsApp groep"). De oude regex /whatsapp|groep|app/ zag élke 1-op-1 WhatsApp-
+  // kaart ("Keyservice WhatsApp") als DRS, waardoor "Alleen opdrachten uit de opdracht-
+  // groepen" eigen leads toch naar de monteursgroep stuurde (audit 3 okt 2026).
+  return /\bdrs\b|groep/.test((order.source || '').toLowerCase());
 }
 
 // Automatisch versturen naar de monteur als dat is ingesteld én toegestaan op de dag
@@ -3173,6 +3179,7 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
             item.status = 'failed';
             item.doneAt = now();
             item.lastResult = `sjabloon geweigerd: ${String(e2.message || '').slice(0, 120)}`;
+            factuurVerzendingMislukt(item, 'sjabloon geweigerd');
             void db().outbox; saveSoon();
           });
           saveSoon();
@@ -4128,10 +4135,23 @@ function factuurVerzendingMislukt(item, reden) {
     if (!item.invoiceId) return;
     const inv = (db().invoices || []).find((i) => i.id === item.invoiceId);
     if (!inv || !['verzonden', 'betaald'].includes(inv.status) || inv.sentTo || !inv.sentToPhone) return; // per mail óók verstuurd: laten staan
+    // HERVERZENDING van een factuur die al eerder WEL aankwam (audit 3 okt 2026): dan
+    // niets terugdraaien — de klant heeft hem al. Alleen melden; sentAt en status blijven,
+    // het nummer gaat terug naar dat van de eerdere (gelukte) verzending.
+    const eerder = item.vorigVerstuurd;
+    if (eerder && eerder.sentAt) {
+      if (eerder.sentToPhone) inv.sentToPhone = eerder.sentToPhone;
+      inv.lastSentAt = eerder.lastSentAt || eerder.sentAt;
+      const order0 = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+      if (order0) { order0.thread = order0.thread || []; order0.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem', body: `Nieuwe versie van ${inv.type === 'offerte' ? 'offerte' : 'factuur'} ${inv.number} is NIET bezorgd via WhatsApp (${reden}). De eerdere versie van ${new Date(eerder.sentAt).toLocaleDateString('nl-NL')} heeft de klant wel. Verstuur opnieuw of kies e-mail.`, at: now() }); }
+      logActivity('systeem', 'herverzending factuur mislukt', `${inv.number}: ${reden}`);
+      sendPush({ title: `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number}: herverzending niet bezorgd`, body: `WhatsApp-verzending mislukt (${reden}). De klant heeft de eerdere versie wel; verstuur opnieuw of per e-mail.`, url: '/' }).catch(() => {});
+      return;
+    }
     // Betaald blijft betaald (standaard betaald sinds 20 sep); alleen de verzend-
     // markering gaat eraf, zodat hij weer bewerkbaar/opnieuw te versturen is.
     if (inv.status === 'verzonden') inv.status = 'concept';
-    delete inv.sentAt; delete inv.lastSentAt; delete inv.sentToPhone;
+    delete inv.sentAt; delete inv.lastSentAt; delete inv.sentToPhone; delete inv.betaalStart;
     const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
     if (order) { order.thread = order.thread || []; order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem', body: `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number} is NIET bezorgd via WhatsApp (${reden})${inv.status === 'betaald' ? '' : ' — status teruggezet naar concept'}. Verstuur opnieuw of kies e-mail.`, at: now() }); }
     logActivity('systeem', 'factuur-verzending mislukt', `${inv.number}: ${reden}`);
@@ -4498,6 +4518,9 @@ app.post('/api/outbox/:id/done', checkIngestToken, (req, res) => {
     } else {
       item.status = 'failed';
       item.doneAt = now();
+      // Factuur/offerte via WhatsApp die de bridge NIET kon bezorgen (audit 3 okt): zelfde
+      // gevolg als vervallen in de wachtrij — anders bleef hij op "verzonden" staan.
+      if (!isGroupItem) factuurVerzendingMislukt(item, item.lastResult || 'de bridge kon het bericht niet versturen');
     }
   }
   // Bridge v10 meldt hoeveel bijlagen (foto's, factuur-PDF) er écht aankwamen. Sinds de
@@ -4552,7 +4575,9 @@ app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {
   const sent = [];
   order.thread = order.thread || [];
   // 1) E-mail (indien adres + SMTP)
-  const email = (customer.email || '').trim();
+  // Contact van DEZE aanvraag (intake) vóór het klantrecord (WET 3; audit 3 okt) — het
+  // bevestigvenster noemde het intake-nummer, maar het appje ging naar het oude nummer.
+  const email = String((order.intake && order.intake.email) || customer.email || '').trim();
   if (email && /@/.test(email) && smtpConfigured()) {
     const sig = getEmailSignature(afzenderVan(req));
     const body = fill(cfg.emailBody);
@@ -4563,7 +4588,7 @@ app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {
     } catch (e) { console.error('[onderweg] e-mail mislukt:', e.message); }
   }
   // 2) WhatsApp-DM via de bridge (indien telefoonnummer)
-  const phone = String(customer.phone || '').replace(/[^\d+]/g, '');
+  const phone = String((order.intake && order.intake.phone) || customer.phone || '').replace(/[^\d+]/g, '');
   if (phone) {
     const body = fill(cfg.whatsappBody);
     db().outbox = db().outbox || [];
@@ -4819,7 +4844,15 @@ app.post('/api/invoices/:id/copy', requireAuth, (req, res) => {
   const src = findInv(req.params.id);
   if (!src) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, src)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  // NOOIT TWEE FACTUREN UIT ÉÉN OFFERTE (audit 3 okt 2026): "→ Maak factuur" en het
+  // automatisch omzetten bij Goedgekeurd wisten niet van elkaar. Bestaat de factuur al,
+  // dan krijg je díe terug (bestaand:true) i.p.v. een tweede nummer.
+  if (src.type === 'offerte' && req.body?.type === 'factuur' && src.convertedInvoiceId) {
+    const bestaand = (db().invoices || []).find((i) => i.id === src.convertedInvoiceId && i.type === 'factuur');
+    if (bestaand) return res.json({ ...bestaand, bestaand: true });
+  }
   const inv = copyInvoice(src, { actorName: req.user.name, createdById: req.user.id, copyType: req.body?.type });
+  if (src.type === 'offerte' && inv.type === 'factuur') { src.convertedInvoiceId = inv.id; saveSoon(); }
   // Offerte → factuur: koppel aan de kaart als die nog geen factuur heeft.
   if (inv.type === 'factuur' && inv.orderId) {
     const order = db().orders.find((o) => o.id === inv.orderId);
@@ -4963,16 +4996,23 @@ function leesBetaaldKeuze(v) {
 }
 function pasBetaaldKeuzeToe(inv, keuze) {
   if (inv.type === 'offerte' || keuze === null) return null;
-  const vorig = { status: inv.status, paidAt: inv.paidAt };
+  const vorig = { status: inv.status, paidAt: inv.paidAt, betaalStart: inv.betaalStart, remindCount: inv.remindCount, remindedAt: inv.remindedAt };
   if (keuze && inv.status !== 'betaald') { inv.status = 'betaald'; inv.paidAt = now(); }
   // Nog niet betaald: hij gaat nu naar de klant, dus 'verzonden' (open, herinnerbaar).
-  if (!keuze && inv.status === 'betaald') { inv.status = 'verzonden'; delete inv.paidAt; }
+  if (!keuze && inv.status === 'betaald') {
+    inv.status = 'verzonden'; delete inv.paidAt;
+    // Al eerder (als voldaan) verstuurd? Dan begint de betaaltermijn NU (audit 3 okt) en
+    // telt de herinnering-teller opnieuw — de klant krijgt nu pas een betaalverzoek.
+    if (inv.sentAt) { inv.betaalStart = now(); inv.remindCount = 0; delete inv.remindedAt; }
+  }
   return vorig;
 }
 function herstelBetaaldKeuze(inv, vorig) {
   if (!vorig) return;
   inv.status = vorig.status;
-  if (vorig.paidAt) inv.paidAt = vorig.paidAt; else delete inv.paidAt;
+  for (const k of ['paidAt', 'betaalStart', 'remindCount', 'remindedAt']) {
+    if (vorig[k] !== undefined && vorig[k] !== null) inv[k] = vorig[k]; else delete inv[k];
+  }
 }
 // Na een GELUKTE verzending: was hij betaald en nu niet meer, dan ook de automatische
 // omzet-boeking uit Cijfers weg (zelfde regel als de knop "Nog niet betaald").
@@ -5017,6 +5057,8 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
       text: tekst, orderId: inv.orderId || undefined, status: 'queued', createdAt: now(),
       by: isQuote ? 'offerte-whatsapp' : 'factuur-whatsapp',
       invoiceId: inv.id, // koppeling: mislukt/vervalt dit item, dan gaat de factuur terug naar concept
+      // …tenzij hij al eerder wél aankwam (audit 3 okt): dan blijft alles staan.
+      vorigVerstuurd: inv.sentAt ? { sentAt: inv.sentAt, lastSentAt: inv.lastSentAt || null, sentToPhone: inv.sentToPhone || null } : undefined,
       media: [{ url: saved.url, name: saved.filename, mime: 'application/pdf', file: saved.file }],
       // Korte klantlink naar de bon-pagina: gaat mee in het sjabloon i.p.v. de lange
       // uploads-link, en werkt zonder login. De PDF wordt daar altijd vers opgebouwd.
@@ -5171,6 +5213,9 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
   const wasPaid = inv.status === 'betaald';
   inv.status = s;
   if (s === 'betaald') inv.paidAt = now();
+  // Verstuurde betaalde factuur → "Nog niet betaald": betaaltermijn begint nu (audit 3 okt),
+  // anders staat hij meteen op VERLOPEN en komt de automatische herinnering direct.
+  if (wasPaid && s === 'verzonden' && inv.sentAt) { inv.betaalStart = now(); inv.remindCount = 0; delete inv.remindedAt; }
   if (s === 'goedgekeurd') inv.acceptedAt = now();
   // Betaling teruggedraaid? Dan ook de automatische omzet-boeking uit Cijfers weg —
   // anders blijft er omzet staan die er niet (meer) is.
@@ -5203,7 +5248,7 @@ app.get('/api/invoices', requireAuth, (req, res) => {
     // Vervaldatum meegeven zodat het overzicht "verlopen" op de ÉCHTE betaaltermijn
     // baseert (instelbaar) i.p.v. een vaste 7 dagen in de frontend.
     const dueAt = i.type !== 'offerte' && i.sentAt
-      ? new Date(new Date(i.sentAt).getTime() + payDays * 86400000).toISOString() : null;
+      ? new Date(new Date(betaalTermijnStart(i)).getTime() + payDays * 86400000).toISOString() : null;
     // De handtekening (data-URL tot 500 KB per stuk) NIET meesturen (28 sep 2026, audit
     // server#8): de lijst gebruikt hem niet, de editor haalt GET /api/invoices/:id op —
     // en hij was 80-86% van de hele lijst. `lines` blijft wel mee (tests/scherm).

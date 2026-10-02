@@ -145,6 +145,10 @@ export function bookRecurringDue(actorName = 'systeem') {
 // VERZAMELEN (boekt zelf niets): welke automatische boekingen zouden er vanaf
 // `since` bijkomen? Gebruikt door zowel de uurlijkse run als het terugwerkende
 // voorbeeldscherm, zodat beide gegarandeerd dezelfde regels volgen.
+// DRS-opdracht? Via de herkomstgroep, of — zonder groep — via de bron. Een opdracht uit
+// "Plak opdracht" (bron "DRS WhatsApp groep", geen originGroup) kreeg anders nooit een
+// DRS-fee en zijn omzet viel onder "Overig" (audit 3 okt 2026). Zelfde regel als bronVan.
+export const isDrsOpdracht = (o) => !!o && (o.originGroup ? isWhatsappOrderGroup(o.originGroup) : /\bdrs\b/i.test(String(o.source || '')));
 export function collectAutoSyncEntries(since) {
   const s = getFinanceSettings();
   const entries = fin().entries;
@@ -165,7 +169,7 @@ export function collectAutoSyncEntries(since) {
     if (seen.has(ref)) continue;
     const order = inv.orderId ? orderById.get(inv.orderId) : null;
     const hay = `${(order && order.title) || ''} ${(inv.lines || []).map((l) => l.description).join(' ')}`;
-    const category = (order && order.originGroup && isWhatsappOrderGroup(order.originGroup)) ? 'DRS opdracht'
+    const category = isDrsOpdracht(order) ? 'DRS opdracht'
       : /schuifpui|schuifdeur|schuifwand/i.test(hay) ? 'Schuifpui reparatie'
       : 'Overig';
     out.push({
@@ -180,7 +184,7 @@ export function collectAutoSyncEntries(since) {
   if (s.drsFeePerJob > 0) {
     for (const o of orderById.values()) {
       if (o.status !== 'afgerond') continue;
-      if (!o.originGroup || !isWhatsappOrderGroup(o.originGroup)) continue;
+      if (!isDrsOpdracht(o)) continue;
       const date = nlDay(o.completedAt || o.updatedAt);
       if (since && date < since) continue;
       const ref = `drsfee:${o.id}`;
@@ -249,7 +253,12 @@ export function suggestIncomeFromReports(month, monteurs = []) {
     ...(fin().dismissedRefs || []),
   ].filter(Boolean));
   const out = [];
-  const amountRe = /€\s?(\d{1,3}(?:[.\s]?\d{3})*(?:,\d{2})?|\d+(?:,\d{2})?)/g;
+  // Bedragen: "€1.250" (duizendpunt), "€1250", "€1250,50", "€12.50". De oude regex stopte
+  // bij een bedrag ZONDER duizendpunt na 3 cijfers: "€1250 pin" werd € 125 (audit 3 okt).
+  const amountRe = /€\s?(?:(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?)(?!\d)|(\d+(?:[,.]\d{1,2})?)(?!\d))/g;
+  // Al eerder geboekt/geweigerd op dezelfde plek in hetzelfde bericht (ook met het oude,
+  // fout gelezen bedrag in de sleutel)? Dan niet opnieuw voorstellen — nooit dubbel boeken.
+  const bookedPlek = new Set([...bookedRefs].map((r) => String(r).replace(/:[^:]*$/, '')));
   for (const msg of db().messages || []) {
     if (!msg.group || monthOf(msg.receivedAt) !== m) continue;
     const mo = groupToMonteur.get(String(msg.group).toLowerCase().trim());
@@ -257,13 +266,13 @@ export function suggestIncomeFromReports(month, monteurs = []) {
     const body = String(msg.body || '');
     let mt; let idx = 0;
     while ((mt = amountRe.exec(body))) {
-      const raw = mt[1].replace(/[.\s]/g, '').replace(',', '.');
+      const raw = mt[1] ? mt[1].replace(/\./g, '').replace(',', '.') : mt[2].replace(',', '.');
       const amount = r2(parseFloat(raw));
       if (!(amount >= 20)) continue; // ruis (bv. €5) overslaan
       const around = body.slice(Math.max(0, mt.index - 45), mt.index + 40).replace(/\s+/g, ' ').trim();
       const ref = `${msg.externalId || msg.id}:${idx}:${amount}`;
       idx++;
-      if (bookedRefs.has(ref)) continue;
+      if (bookedRefs.has(ref) || bookedPlek.has(ref.replace(/:[^:]*$/, ''))) continue;
       // Slimme gok op basis van het woord DIRECT NÁ het bedrag (sterkste signaal):
       // "€90 lips kosten" -> kost; "€556 pin" -> omzet. Neutraal -> standaard omzet.
       // Alleen tot het volgende bedrag/haakje/regeleinde kijken, zodat "€556 pin" niet de
@@ -518,6 +527,8 @@ export function herkomstVanBoeking(e, ctx) {
   if (!orderId && ref.startsWith('drsfee:')) orderId = ref.slice(7);
   const order = orderId ? ctx.orders.get(orderId) : null;
   if (order) return { bron: bronVan(order, ctx.msgs), website: websiteVan(order, ctx.msgs), order: true };
+  // Betaalde LOSSE factuur (zonder opdracht) is geen handmatige boeking (audit 3 okt).
+  if (ref.startsWith('inv:')) return { bron: bronVanBoeking(e) === 'DRS' ? 'DRS-groep' : 'Losse factuur', website: null, order: false };
   return { bron: bronVanBoeking(e) === 'DRS' ? 'DRS-groep' : 'Handmatige boeking', website: null, order: false };
 }
 // Filter op boekingen: monteur kijkt naar de geboekte monteur; bron/website naar de

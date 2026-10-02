@@ -178,6 +178,47 @@ try {
   const f2b = await haal(f2.id);
   ok('assistente mag het (zelfde recht als "Nog niet betaald")', s8.status === 200 && f2b.status === 'verzonden' && !f2b.paidAt, JSON.stringify({ st: s8.status, s: f2b.status }));
   cookie = adminCookie;
+
+  console.log('\n== 8. Opnieuw versturen als nog niet betaald: termijn begint NU (audit 3 okt) ==');
+  const lijst8 = (await api('GET', '/api/invoices')).json;
+  const f2lijst = lijst8.find((i) => i.id === f2.id);
+  const f2c = await haal(f2.id);
+  ok('betaalStart gezet bij betaald → open van een al verstuurde factuur', !!f2c.betaalStart && f2c.remindCount === 0, JSON.stringify({ bs: f2c.betaalStart, rc: f2c.remindCount }));
+  ok('vervaldatum in het overzicht ligt in de toekomst (niet VERLOPEN)', f2lijst && f2lijst.dueAt && new Date(f2lijst.dueAt).getTime() > Date.now(), f2lijst && f2lijst.dueAt);
+  // Zelfde via de knop "Nog niet betaald" op een als betaald verstuurde factuur.
+  const f9 = await maakFactuur(90);
+  await api('POST', `/api/invoices/${f9.id}/send`, { betaald: true });
+  await api('POST', `/api/invoices/${f9.id}/status`, { status: 'verzonden' });
+  ok('knop "Nog niet betaald" op een verstuurde factuur zet ook betaalStart', !!(await haal(f9.id)).betaalStart);
+
+  console.log('\n== 9. WhatsApp-terugmelding van de bridge (audit 3 okt) ==');
+  const TOK = { 'content-type': 'application/json', 'x-ingest-token': TOKEN };
+  const done = (id, body) => fetch(`${BASE}/api/outbox/${id}/done`, { method: 'POST', headers: TOK, body: JSON.stringify(body) });
+  const itemVoor = async (invId) => { const ob = (await api('GET', '/api/whatsapp/outbox-status?full=1')).json || []; return (Array.isArray(ob) ? ob : ob.items || []).filter((x) => x.invoiceId === invId).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0]; };
+  // a) eerste verzending mislukt bij de bridge → terug naar concept
+  const fa = await maakFactuur(55);
+  await api('POST', `/api/invoices/${fa.id}/send-whatsapp`, { betaald: false });
+  await done((await itemVoor(fa.id)).id, { ok: false, detail: 'nummer bestaat niet op WhatsApp' });
+  const faNa = await haal(fa.id);
+  ok('bridge meldt mislukt → factuur terug naar concept, niet meer "verzonden"', faNa.status === 'concept' && !faNa.sentAt, JSON.stringify({ s: faNa.status, sent: faNa.sentAt }));
+  // b) eerst gelukt, daarna een herverzending die mislukt → niets terugdraaien
+  const fb = await maakFactuur(66);
+  await api('POST', `/api/invoices/${fb.id}/send-whatsapp`, { betaald: false });
+  await done((await itemVoor(fb.id)).id, { ok: true });
+  const fbVoor = await haal(fb.id);
+  await api('POST', `/api/invoices/${fb.id}/send-whatsapp`, { betaald: false });
+  await done((await itemVoor(fb.id)).id, { ok: false, detail: 'bridge-fout' });
+  const fbNa = await haal(fb.id);
+  ok('mislukte HERverzending laat de eerder bezorgde factuur staan (status + datum)', fbNa.status === 'verzonden' && fbNa.sentAt === fbVoor.sentAt, JSON.stringify({ s: fbNa.status, voor: fbVoor.sentAt, na: fbNa.sentAt }));
+
+  console.log('\n== 10. Automatisch goedgekeurde website-lead krijgt de ontvangstbevestiging ==');
+  await api('PATCH', '/api/settings', { aiAutoApproveThreshold: 0.5, autoReply: { enabled: true } });
+  const voorMails = mails.length;
+  const lead = await fetch(`${BASE}/api/ingest/form?token=${TOKEN}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Lisa Lead', phone: '0677788899', email: 'lisa.lead@example.nl', message: 'Mijn schuifpui loopt heel zwaar, kunnen jullie langskomen?', formType: 'offerte', site: 'schuifpuiservice.com' }) }).then((r) => r.json());
+  await slaap(1500);
+  const bevestiging = mails.slice(voorMails).map(decodeer).find((m) => /lisa\.lead@example\.nl/i.test(m));
+  ok('lead automatisch goedgekeurd', lead.status === 'auto_approved', JSON.stringify(lead));
+  ok('en de klant krijgt de ontvangstbevestiging (niet onterecht "al in behandeling")', !!bevestiging, `mails erbij: ${mails.length - voorMails}`);
 } finally {
   proc.kill('SIGTERM');
   smtp.close();

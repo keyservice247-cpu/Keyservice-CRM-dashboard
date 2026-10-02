@@ -762,7 +762,13 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   const telInTekst = (telDigits.length >= 9 && tekstCijfers.includes(telDigits.slice(-9))) || !!(myPhone && !COMPANY_PHONES.includes(myPhone));
   const adresMetNummer = /[a-zà-ÿ]{3,}\.?\s+\d{1,5}\s?[a-z]?\b/i.test(String(suggestion.customerAddress || ''))
     || /^\s*\*?(adres|straat)\*?\s*:\s*\S.*\d/im.test(String(body || ''));
-  const groepIntakeCompleet = telInTekst && (hasPostcode || adresMetNummer);
+  // Strenge postcode voor deze toets (audit 3 okt): "2025 al", "2026 om" (jaartal + kort
+  // woord) telden anders als postcode. NL-postcode: 1000-9999 + twee letters, niet SA/SD/SS
+  // en geen gewoon Nederlands woordje.
+  const POSTCODE_STOP = new Set(['al', 'om', 'en', 'is', 'op', 'in', 'te', 'of', 'er', 'de', 'je', 'we', 'ik', 'na', 'nu', 'ca', 'uw', 'zo', 'ja', 'ok', 'km', 'kg', 'cm', 'mm', 'eu', 'uu', 'sa', 'sd', 'ss', 'pm', 'am', 'st', 'nr']);
+  const echtePostcode = [...String(body || '').replace(/[*_~]/g, '').matchAll(/\b([1-9]\d{3})\s?([a-z]{2})\b/gi)]
+    .some((m) => !POSTCODE_STOP.has(m[2].toLowerCase()));
+  const groepIntakeCompleet = telInTekst && (echtePostcode || adresMetNummer);
   const isGroepsbericht = channel === 'whatsapp' && !!group;
   const groepsGesprek = isGroepsbericht && !groepIntakeCompleet;
   const otherGroupButOrder = fromOtherGroup && groepIntakeCompleet;

@@ -248,6 +248,21 @@ console.log('\n== STANDAARD BETAALD (20 sep 2026) ==');
   cookie = admCookie;
 }
 
+console.log('\n== Eén offerte = hooguit één factuur (audit 3 okt 2026) ==');
+{
+  const klQ = (await api('POST', '/api/customers', { name: 'Offerte Eenmaal', email: 'eenmaal@example.nl' })).json;
+  const offQ = (await api('POST', '/api/invoices', { customerId: klQ.id, type: 'offerte' })).json;
+  const offId = (offQ.invoice || offQ).id;
+  await api('PATCH', `/api/invoices/${offId}`, { lines: [{ description: 'Slot', qty: 1, priceExcl: 100 }], btwPct: 21, note: '' });
+  const f1 = await api('POST', `/api/invoices/${offId}/copy`, { type: 'factuur' });
+  const f2 = await api('POST', `/api/invoices/${offId}/copy`, { type: 'factuur' });
+  ok('"Maak factuur" twee keer → dezelfde factuur (geen tweede nummer)', f1.json.id && f2.json.id === f1.json.id && f2.json.bestaand === true, JSON.stringify({ a: f1.json.number, b: f2.json.number }));
+  const st = await api('POST', `/api/invoices/${offId}/status`, { status: 'goedgekeurd' });
+  ok('daarna goedkeuren maakt GEEN extra factuur-concept', !st.json.autoInvoice || st.json.autoInvoice.id === f1.json.id, JSON.stringify(st.json.autoInvoice));
+  const alle = (await api('GET', '/api/invoices')).json.filter((i) => i.copiedFrom === (offQ.invoice || offQ).number && i.type === 'factuur');
+  ok('in totaal precies één factuur uit deze offerte', alle.length === 1, String(alle.length));
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

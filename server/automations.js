@@ -27,6 +27,29 @@ import { onbeantwoordeGesprekken } from './gesprekken.js';
 import { conversieData, maakConversieBriefing } from './conversie.js';
 
 const custOf = (o) => db().customers.find((c) => c.id === o.customerId) || {};
+// Contact voor berichten over DÉZE opdracht (audit 3 okt 2026, WET 3): het nummer/adres
+// uit de aanvraag (order.intake) gaat vóór het klantrecord — anders kreeg een klant die
+// vanaf een nieuw 06 aanvroeg de afspraakbevestiging op zijn oude nummer.
+const klantContact = (o) => {
+  const c = custOf(o); const it = o.intake || {};
+  return { ...c, phone: String(it.phone || c.phone || '').trim(), email: String(it.email || c.email || '').trim() };
+};
+// Staan er nog oudere afspraakberichten voor deze opdracht in de wachtrij (bridge stil of
+// pauze), dan zijn die achterhaald zodra er een nieuwe bevestiging/annulering komt —
+// anders kreeg de klant de oude tijd alsnog, en door de nieuwste-eerst-volgorde zelfs ná
+// de nieuwe (audit 3 okt 2026).
+function trekAfspraakberichtenIn(orderId, reden) {
+  let n = 0;
+  for (const it of db().outbox || []) {
+    if (it.orderId !== orderId || it.status !== 'queued') continue;
+    if (!['afspraakbevestiging', 'afspraakherinnering', 'afspraak-annulering'].includes(it.by)) continue;
+    it.status = 'failed'; it.doneAt = now(); it.ingetrokken = true;
+    it.lastResult = `ingetrokken: ${reden}`;
+    n++;
+  }
+  if (n) logActivity('systeem', 'oud afspraakbericht ingetrokken', `${n}× — ${reden}`);
+  return n;
+}
 const fill = (tpl, vars) => String(tpl || '').replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? ''));
 
 // We werken met TIJDSBLOKKEN (standaard 3 uur, instelbaar). De eindtijd is de expliciete
@@ -100,7 +123,7 @@ export async function maybeSendAppointmentConfirm(order) {
     // Op TIJDSTIP vergelijken, niet op tekst: de kaart-modal kapt af op 16 tekens, waardoor
     // dezelfde afspraak bij elke opslag opnieuw werd bevestigd (audit 18 aug).
     if (order.apptMsg && zelfdeTijd(order.apptMsg.confirmedFor, order.appointmentAt)) return; // al bevestigd
-    const c = custOf(order);
+    const c = klantContact(order);
     const vars = apptVars(order, c);
     let sent = false;
     if (cfg.emailEnabled && c.email && smtpConfigured()) {
@@ -117,6 +140,7 @@ export async function maybeSendAppointmentConfirm(order) {
     // dit een 'else if', waardoor klanten mét e-mailadres nooit een appje kregen.
     if (cfg.whatsappEnabled && c.phone) {
       const body = fill(cfg.whatsappBody, vars);
+      trekAfspraakberichtenIn(order.id, 'vervangen door een nieuwere afspraakbevestiging');
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: body, orderId: order.id, status: 'queued', createdAt: now(), by: 'afspraakbevestiging' });
       order.thread = order.thread || [];
       order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (afspraakbevestiging)', body, at: now() });
@@ -140,7 +164,7 @@ export async function maybeSendAppointmentCancel(order, prevAppt, opts = {}) {
     const cfg = getAppointmentMsg();
     // Alleen sturen als expliciet gevraagd (knop) OF de afspraakberichten aanstaan.
     if (!opts.notify && !cfg.emailEnabled && !cfg.whatsappEnabled) return;
-    const c = custOf(order);
+    const c = klantContact(order);
     const m = String(prevAppt || '').match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
     let wanneer = '';
     if (m) {
@@ -165,6 +189,7 @@ export async function maybeSendAppointmentCancel(order, prevAppt, opts = {}) {
     // er helemaal niets uit en stond de klant voor niets thuis. Zelfde regel als de
     // bevestiging en de herinnering.
     if ((opts.notify || cfg.whatsappEnabled) && c.phone) {
+      trekAfspraakberichtenIn(order.id, 'afspraak geannuleerd');
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: body, orderId: order.id, status: 'queued', createdAt: now(), by: 'afspraak-annulering' });
       order.thread = order.thread || [];
       order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (annulering)', body, at: now() });
@@ -191,7 +216,7 @@ async function runAppointmentReminders() {
     const t = new Date(o.appointmentAt).getTime();
     if (isNaN(t) || t < nowMs || t - nowMs > windowMs) continue;
     if (o.apptMsg && zelfdeTijd(o.apptMsg.remindedFor, o.appointmentAt)) continue;
-    const c = custOf(o);
+    const c = klantContact(o);
     const vars = apptVars(o, c);
     let sent = false;
     if (cfg.emailEnabled && c.email && smtpConfigured()) {
@@ -238,7 +263,10 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   if (!cfg.link) return { error: 'Er staat nog geen review-link ingesteld (Instellingen → Automatische berichten).' };
   if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
   if (!order && !invoice) return { error: 'Geen opdracht of factuur gevonden.' };
-  if (order && order.reviewRequested && order.reviewRequested !== 'geen-email' && !force) {
+  // Alleen een échte DATUM betekent "al gevraagd" (audit 3 okt): de automatische ronde zet
+  // ook markeringen als 'te-oud'/'voor-aanzetten'/'geen-contact' zonder iets te sturen —
+  // die blokkeerden de handmatige knop met "al gevraagd op te-oud".
+  if (order && /^\d{4}-/.test(String(order.reviewRequested || '')) && !force) {
     return { error: `Er is al een review gevraagd op ${String(order.reviewRequested).slice(0, 10)}.`, already: true };
   }
   if (!order && invoice && invoice.reviewRequestedAt && !force) {
@@ -964,7 +992,8 @@ async function runInvoiceAutoReminders() {
   let n = 0;
   for (const inv of db().invoices || []) {
     if (inv.type === 'offerte' || inv.status !== 'verzonden' || !inv.sentAt) continue;
-    const sent = new Date(inv.sentAt).getTime();
+    // Termijn vanaf betaalStart als de factuur later van betaald naar open ging (audit 3 okt).
+    const sent = new Date(inv.betaalStart || inv.sentAt).getTime();
     if (!Number.isFinite(sent) || nowMs - sent > 120 * 86400000) continue;
     const due = sent + (cfg.paymentDays || 7) * 86400000;
     if (nowMs < due + (cfg.remindAfterDays || 3) * 86400000) continue;

@@ -27,8 +27,17 @@ export async function runFollowUps() {
     // A) Offerte blijft liggen: status offerte verzonden, geen reactie, X dagen open.
     // Meten vanaf het verzendmoment van de offerte (quoteSentAt; audit 16 sep) — updatedAt
     // schuift bij elke systeemactie op en liet de opvolging zelden afgaan.
+    // Niet als de klant ná de offerte reageerde (customerReplied gaat uit zodra iemand de
+    // kaart opent — lastCustomerReplyAt blijft), er al een afspraak staat, of de offerte
+    // zelf al beslist is / er al een factuur van is (audit 3 okt 2026).
+    const offerteSinds = new Date(o.quoteSentAt || o.updatedAt).getTime();
+    const klantReageerde = !!(o.lastCustomerReplyAt && new Date(o.lastCustomerReplyAt).getTime() > offerteSinds);
+    const afspraakStaat = !!(o.appointmentAt && new Date(o.appointmentAt).getTime() > Date.now());
+    const offertes = (db().invoices || []).filter((i) => i.type === 'offerte' && i.orderId === o.id);
+    const offerteBeslist = offertes.length > 0 && !offertes.some((i) => i.status === 'verzonden' && !i.convertedInvoiceId);
     const offerteCase = offerteOn && o.status === 'offerte_verzonden' && !o.customerReplied
-      && new Date(o.quoteSentAt || o.updatedAt).getTime() <= offerteCutoff;
+      && !klantReageerde && !afspraakStaat && !offerteBeslist
+      && offerteSinds <= offerteCutoff;
 
     // B) We hebben gemaild maar geen reactie gekregen (geen offerte-geval).
     const repliedSince = o.customerReplied

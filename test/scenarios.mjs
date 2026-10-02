@@ -383,6 +383,12 @@ const sCol = await api('POST', '/api/ingest/whatsapp', {
 }, true);
 const oKlantNa = (await orders()).find((o) => o.id === oKlant?.id);
 ok('collega-bericht met klantnummer -> niet in de kaart van die klant', !!oKlant && (oKlantNa?.thread || []).length === threadVoor && !/reviewId/.test('') && (await orders()).length === ordersBeforeGG, JSON.stringify(sCol.json));
+const sJaar = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Kim drs',
+  body: 'die klant is sinds 2025 al bij ons, belt morgen terug op 0612312312 voor de prijs',
+  externalId: 'gg4b',
+}, true);
+ok('jaartal + woordje ("2025 al") telt niet als postcode → gesprek, geen kaart', sJaar.json?.status === 'overige' && (await orders()).length === ordersBeforeGG, JSON.stringify(sJaar.json));
 const sEcht = await api('POST', '/api/ingest/whatsapp', {
   group: `groep ${RAF_ID}`, name: 'Kim drs',
   body: 'Naam: Gert Groep\nAdres: Stationsstraat 14\nWoonplaats: Geertruidenberg\nTelefoon: 0622223333\nOpmerkingen: langere cilinder nodig',

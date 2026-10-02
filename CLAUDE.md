@@ -926,6 +926,36 @@ de regressie meegroeit.
   afgewezen berichten mee. Advies (niet gebouwd, keuze eigenaar): alleen verstuurde
   facturen tellen, "excl. btw" op de tegel, één definitie, offerte-conversie meten,
   DRS apart in conversie, weekrapport-"conversie" hernoemen. Test: conversie-test 42.
+- **AUDIT 3 okt 2026 (7 vinders + 2 controleurs per bevinding, 95 agents; resultaat in
+  scratchpad/audit2.json):** 20 bevestigd, gefixt: (1) BETAALTERMIJN: `inv.betaalStart`
+  (betaalTermijnStart() in invoices.js) — gaat een al verstuurde factuur van betaald naar
+  open (betaald-keuze "nee" of knop "Nog niet betaald"), dan begint de termijn nu (PDF-
+  vervaldatum, dueAt in het overzicht, automatische herinnering) en remindCount = 0;
+  herstelBetaaldKeuze zet het terug. (2) factuurVerzendingMislukt draait een eerder WEL
+  bezorgde factuur/offerte niet meer terug (`item.vorigVerstuurd` op het outbox-item;
+  alleen melding) en wordt nu ook aangeroepen bij /api/outbox/:id/done {ok:false} van een
+  klant-item en bij een geweigerd Meta-sjabloon. (3) Eén offerte = één factuur: /copy
+  type=factuur geeft een bestaande convertedInvoiceId terug (`bestaand:true`), zet hem
+  anders; knop heet dan "→ Open factuur"; automatische offerte-opvolging stopt als er al
+  een factuur is. (4) Rapportbedragen: "€1250" werd 125 — nieuwe regex + `bookedPlek`
+  (oude sleutel met fout bedrag wordt nooit opnieuw voorgesteld). (5) isDrsOpdracht()
+  in finance.js: geplakte DRS-opdracht (bron, geen originGroup) krijgt fee + categorie
+  DRS. (6) completedAt = laatste keer afgerond, gewist bij heropenen. (7) followup.js:
+  geen offerte-follow-up als de klant ná de offerte reageerde (lastCustomerReplyAt), er
+  een afspraak staat of de offerte beslist/omgezet is. (8) Factuur-editor: statusknoppen,
+  Herinnering, Goedgekeurd, Kopieer en Maak factuur slaan gewijzigde regels EERST op
+  (bewaarEerst, met de bekende waarschuwing bij verstuurd). (9) Ontvangstbevestiging ook
+  bij een automatisch goedgekeurde website-lead (klantInBehandelingBehalve met
+  review.orderId). (10) Afspraakbevestiging/annulering/herinnering: oudere klaarstaande
+  afspraakberichten van dezelfde opdracht worden ingetrokken (trekAfspraakberichtenIn) en
+  gaan naar het intake-nummer/-adres (klantContact; ook onderweg-bericht). (11) Review-knop:
+  alleen een echte datum in order.reviewRequested telt als "al gevraagd". (12) isDrsOrder
+  zonder originGroup alleen nog bij bron /drs|groep/ (1-op-1 WhatsApp is geen DRS).
+  (13) Groepsintake: strenge postcode (geen "2025 al"). Kleine verbeteringen: inbox-chip
+  "Niet automatisch: …" (review.autoOvergeslagen), betaalde losse factuur heet "Losse
+  factuur" bij Per bron, verwijderde monteur blijft zichtbaar in het filter, filteruitleg
+  noemt monteurfilter, weekrapport-voetregel over het prijsveld. Tests: betaald-keuze 31,
+  factuur 65, cijfers 20, scenarios 120, browser 243.
 - **BETAALD-KEUZE BIJ VERSTUREN (3 okt 2026, wens eigenaar "facturen staan standaard op
   betaald, maar dat is niet altijd zo"):** elke verzending van een FACTUUR (editor
   "Versturen naar klant", "Via WhatsApp", "Verstuur opnieuw", Facturen-lijst "Opnieuw")

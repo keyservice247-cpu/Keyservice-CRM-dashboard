@@ -39,7 +39,10 @@ export async function maybeSendAutoReply(result) {
   // kaart (niet afgerond/geannuleerd, niet in de prullenbak of ingeklapt), dan is
   // "bedankt voor uw aanvraag, stuur foto's" misplaatst — het team kent 'm al.
   // De aanvraag zelf komt gewoon in de inbox; alleen de automatische mail blijft uit.
-  if (cust && klantInBehandeling(cust.id)) {
+  // Automatisch goedgekeurd (drempel) = de kaart van DEZE aanvraag bestaat al; die telt
+  // niet als "al in behandeling" (audit 3 okt: een auto-goedgekeurde website-lead kreeg
+  // daardoor nooit een bevestiging). Samengevoegd met een lopende kaart telt wél.
+  if (cust && (review.mergedIntoOrder || klantInBehandelingBehalve(cust.id, review.orderId || null))) {
     review.autoReplySkipped = 'klant al in behandeling (lopende kaart)';
     logActivity('systeem', 'ontvangstbevestiging overgeslagen', `${email} — klant heeft al een lopende kaart`);
     console.log(`[bevestiging] ${email} heeft al een lopende kaart — overgeslagen`);
