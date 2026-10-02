@@ -131,10 +131,22 @@ console.log('\n== Weekrapport op Start: omzet uit factuur, anders prijsveld (26 
   for (const [k, prijs] of [[k1, ''], [k2, '€ 1.250,50'], [k3, '']]) await api('PATCH', `/api/orders/${k.id}`, { status: 'afgerond', monteurId: mwId, ...(prijs ? { price: prijs } : {}) });
   let f = (await api('POST', '/api/invoices', { customerId: k1.customerId, type: 'factuur', orderId: k1.id })).json; f = f.invoice || f;
   await api('PATCH', `/api/invoices/${f.id}`, { lines: [{ description: 'Slot', qty: 1, priceExcl: 200 }], btwPct: 21, note: '' });
+  // 2 okt 2026: een LEGE factuur (geen regels, €0 — staat door standaard-betaald op
+  // betaald) op de prijsveld-opdracht mag het prijsveld niet op €0 zetten.
+  await api('POST', '/api/invoices', { customerId: k2.customerId, type: 'factuur', orderId: k2.id });
   const wr = (await api('GET', '/api/report/week?offset=0')).json;
   const rij = (wr.perMonteur || []).find((m) => m.name === 'Week Monteur');
   ok('weekrapport: 3 afgerond voor de monteur', rij && rij.afgerond === 3, JSON.stringify(rij));
-  ok('omzet = factuur 200 (excl. btw, prijsveld leeg) + prijsveld 1250,50 = 1450,50', rij && rij.omzet === 1450.5, JSON.stringify(rij));
+  ok('omzet = factuur 200 (excl. btw, prijsveld leeg) + prijsveld 1250,50 = 1450,50 (lege €0-factuur negeert het prijsveld niet)', rij && rij.omzet === 1450.5, JSON.stringify(rij));
+  // Aanvragen in het weekrapport: afgewezen berichten tellen niet mee.
+  const voorA = wr.aanvragen;
+  const ing = (await fetch(`${BASE}/api/ingest/whatsapp`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ name: 'Spam Afzender', body: 'Koop nu goedkope zonnepanelen!\nTelefoon: +31619191919', externalId: 'wr-spam-1', fromPhone: '31619191919' }) })).json;
+  const rj = (await api('GET', '/api/reviews?status=all&limit=500')).json || {};
+  const rlijst = Array.isArray(rj) ? rj : (rj.items || rj.reviews || rj.list || []);
+  const revId = ing?.review?.id || ing?.reviewId || (rlijst.find((r) => /zonnepanelen/.test(JSON.stringify(r))) || {}).id;
+  if (revId) await api('POST', `/api/reviews/${revId}/reject`, {});
+  const naA = (await api('GET', '/api/report/week?offset=0')).json.aanvragen;
+  ok('weekrapport-aanvragen: een afgewezen bericht telt niet mee', !!revId && naA === voorA, JSON.stringify({ revId, voorA, naA }));
   ok('1 afgeronde opdracht zonder factuur én prijs wordt gemeld', rij && rij.zonderBedrag === 1 && wr.zonderBedrag >= 1, JSON.stringify({ rij: rij?.zonderBedrag, tot: wr.zonderBedrag }));
 }
 

@@ -914,6 +914,18 @@ de regressie meegroeit.
   e-mailhandtekening/citaat); de e-mailknop heet nu "Per e-mail". Tests: chat-test 78
   (+7), browser 233 (+3).
   Tests: browser 230, audit 79, opslag 40, klanten 65 (+ alle overige groen).
+- **Omzetcijfers doorgelicht (2 okt 2026, vraag eigenaar):** er zijn DRIE omzet-
+  definities: (1) CIJFERS = boekingen (finance.js): elke factuur met status 'betaald'
+  en totaal > 0 → omzet EXCL. btw op de betaaldatum, monteur = order.monteurId op het
+  moment van boeken (losse factuur zonder opdracht = geen monteur) + handmatige
+  boekingen; door standaard-betaald telt een factuur dus al zodra hij is aangemaakt,
+  ook als hij nooit naar de klant ging. (2) WEEKRAPPORT op Start + (3) CONVERSIE-
+  waarde = per AFGERONDE opdracht omzetVan() (één niet-concept factuur excl. btw,
+  anders prijsveld). Twee bugs gefixt: een LEGE €0-factuur (geen regels) zette het
+  prijsveld op €0 in weekrapport/conversie; weekrapport-"aanvragen" telde geklets en
+  afgewezen berichten mee. Advies (niet gebouwd, keuze eigenaar): alleen verstuurde
+  facturen tellen, "excl. btw" op de tegel, één definitie, offerte-conversie meten,
+  DRS apart in conversie, weekrapport-"conversie" hernoemen. Test: conversie-test 42.
 - **AI-vraagbaak leeg antwoord (2 okt 2026):** Sonnet 5/Opus 5 denken eerst en dat telde
   mee voor max_tokens 6000 → bij een zware vraag alleen denkwerk, leeg vak. Nu 16000 +
   effort medium + 4 min time-out, bij leeg nog één poging met effort low, anders een

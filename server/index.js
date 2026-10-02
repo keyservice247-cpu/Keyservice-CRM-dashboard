@@ -6094,7 +6094,9 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
       monteurMap.get(o.monteurId).actief++;
     }
   }
-  const aanvragen = db().reviews.filter((r) => inWeek(r.createdAt)).length;
+  // Alleen échte aanvragen: geklets ("Overige") en afgewezen berichten tellen niet mee
+  // (2 okt 2026) — zelfde regel als het CEO-rapport (weeklyReportData).
+  const aanvragen = db().reviews.filter((r) => inWeek(r.createdAt) && !['rejected', 'overige'].includes(r.status)).length;
   const perMonteur = [...monteurMap.values(), ...(none.afgerond || none.afspraken || none.omzet ? [none] : [])]
     .map((m) => ({ ...m, omzet: Math.round(m.omzet * 100) / 100 }))
     .sort((a, b) => b.omzet - a.omzet || b.afgerond - a.afgerond);

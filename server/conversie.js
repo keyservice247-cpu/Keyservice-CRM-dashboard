@@ -71,7 +71,11 @@ export function leesPrijs(str) {
 }
 export function omzetVan(o, invByOrder) {
   const inv = invByOrder.get(o.id);
-  if (inv && Number.isFinite(Number(inv.totalExcl))) return Number(inv.totalExcl);
+  // Een LEGE factuur (geen regels, €0 — bv. "Maak factuur" geopend en niets ingevuld;
+  // door standaard-betaald telt die als echte factuur) mag het prijsveld niet op €0
+  // zetten (2 okt 2026). Een €0-factuur MÉT regels (garantie) is wél bewust €0.
+  const leeg = inv && !(Number(inv.totalExcl) > 0) && !(inv.lines || []).length;
+  if (inv && !leeg && Number.isFinite(Number(inv.totalExcl))) return Number(inv.totalExcl);
   return leesPrijs(o.price);
 }
 // Factuur per opdracht: alleen echte facturen (geen offerte), niet-concept. Heeft de
