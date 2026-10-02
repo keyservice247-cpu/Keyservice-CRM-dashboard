@@ -196,6 +196,147 @@ await login('assist-audit@keyservice.nl', 'assist123');
 const zet = await api('PATCH', `/api/taken/${taak.id}`, { categorie: 'zakelijk' });
 ok('categorie blijft privé voor de collega', zet.status === 200 && zet.json.categorie === 'prive', JSON.stringify(zet.json?.categorie));
 
+// ============================================================================
+// AUDIT 28 sep 2026 — cluster D: serversnelheid en robuustheid.
+// ============================================================================
+cookie = adminCookie;
+const http = await import('node:http');
+const zlib = await import('node:zlib');
+// Ruw verzoek (zonder automatische gzip-afhandeling van fetch): status, headers, bytes.
+const ruw = (path, headers = {}) => new Promise((resolve, reject) => {
+  const u = new URL(BASE + path);
+  const rq = http.request({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'GET', headers: { cookie, ...headers } }, (rs) => {
+    const delen = []; rs.on('data', (c) => delen.push(c)); rs.on('end', () => resolve({ status: rs.statusCode, headers: rs.headers, body: Buffer.concat(delen) }));
+  });
+  rq.on('error', reject); rq.end();
+});
+
+console.log('\n== gzip: JSON en statische bestanden (pc-browser#14 / mobiel#17 / server#5) ==');
+for (let i = 0; i < 6; i++) await api('POST', '/api/orders', { customerId: kC.id, title: `Ede — gzip-kaart ${i} ${'lange omschrijving '.repeat(20)}`, status: 'open' });
+const plat = await ruw('/api/orders');
+const gz = await ruw('/api/orders', { 'accept-encoding': 'gzip, deflate, br' });
+ok('/api/orders zonder Accept-Encoding: plat JSON (geen gzip)', plat.status === 200 && !plat.headers['content-encoding'] && Array.isArray(JSON.parse(plat.body.toString('utf8'))));
+let gzJson = null; try { gzJson = JSON.parse(zlib.gunzipSync(gz.body).toString('utf8')); } catch { /* blijft null */ }
+ok('/api/orders met gzip: gecomprimeerd én exact dezelfde inhoud/vorm', gz.headers['content-encoding'] === 'gzip' && /accept-encoding/i.test(String(gz.headers.vary || '')) && JSON.stringify(gzJson) === plat.body.toString('utf8'), `${gz.headers['content-encoding']} ${gz.body.length}/${plat.body.length}`);
+ok('gzip scheelt echt (minder dan de helft van de bytes)', gz.body.length < plat.body.length / 2, `${gz.body.length} vs ${plat.body.length}`);
+const klein = await ruw('/api/pulse', { 'accept-encoding': 'gzip' });
+ok('klein antwoord (pulse) blijft plat — gzip wint daar niets', klein.status === 200 && !klein.headers['content-encoding']);
+const js1 = await ruw('/js/app.js', { 'accept-encoding': 'gzip' });
+const jsPlat = await ruw('/js/app.js');
+ok('app.js gecomprimeerd, uitgepakt identiek aan het bestand', js1.headers['content-encoding'] === 'gzip' && zlib.gunzipSync(js1.body).equals(jsPlat.body) && /javascript/.test(js1.headers['content-type'] || ''), `${js1.headers['content-encoding']} ${js1.headers['content-type']}`);
+const js304 = await ruw('/js/app.js', { 'accept-encoding': 'gzip', 'if-none-match': js1.headers.etag });
+ok('app.js met gzip: tweede keer 304 (ETag werkt nog)', js304.status === 304 && !!js1.headers.etag, `${js304.status} ${js1.headers.etag}`);
+const range = await ruw('/js/app.js', { 'accept-encoding': 'gzip', range: 'bytes=0-9' });
+ok('range-verzoek gaat ongecomprimeerd via express.static', range.status === 206 && !range.headers['content-encoding'] && range.body.length === 10);
+const geenPad = await ruw('/../server/index.js', { 'accept-encoding': 'gzip' });
+ok('pad buiten public/ geeft geen broncode prijs', geenPad.status !== 200 || !geenPad.body.toString('utf8').includes('gracefulShutdown'));
+
+console.log('\n== Facturenlijst zonder handtekening-afbeeldingen (server#8) ==');
+const sigInv = (await api('POST', '/api/invoices', { customerId: kC.id, type: 'factuur' })).json.invoice;
+await api('PATCH', `/api/invoices/${sigInv.id}`, { lines: [{ description: 'Cilinder', qty: 1, price: 50 }], signature: 'data:image/png;base64,' + PNG });
+const invLijst = (await api('GET', '/api/invoices')).json;
+const inLijst = invLijst.find((i) => i.id === sigInv.id);
+ok('lijst bevat geen signature-veld meer, wel hasSignature', inLijst && !('signature' in inLijst) && inLijst.hasSignature === true && invLijst.every((i) => !('signature' in i)), JSON.stringify(inLijst && Object.keys(inLijst)));
+ok('lijst houdt de regels (lines) gewoon mee', inLijst && Array.isArray(inLijst.lines) && inLijst.lines.length === 1);
+const losInv = (await api('GET', `/api/invoices/${sigInv.id}`)).json;
+ok('editor (GET /api/invoices/:id) krijgt de handtekening nog wel', String((losInv.invoice || losInv).signature || '').startsWith('data:image/png'));
+
+console.log('\n== Zoekbalk: zelfde treffers, snel (server#6) ==');
+const zk = (await api('POST', '/api/customers', { name: 'Zoek Testklant', phone: '+31 6 4433 2211', address: 'Kerkstraat 12, 3911AB Rhenen' })).json;
+const zoek = async (q) => (await api('GET', `/api/search?q=${encodeURIComponent(q)}`)).json;
+ok('postcode met spatie vindt postcode zonder spatie', (await zoek('3911 ab')).customers.some((c) => c.id === zk.id));
+ok('hoofdletters maken niet uit', (await zoek('KERKSTRAAT')).customers.some((c) => c.id === zk.id));
+ok('06-nummer vindt een +31-nummer met spaties', (await zoek('0644332211')).customers.some((c) => c.id === zk.id));
+ok('deel van het nummer vindt hem ook', (await zoek('44332211')).customers.some((c) => c.id === zk.id));
+ok('regex-tekens in de zoekvraag geven geen fout', (await api('GET', '/api/search?q=' + encodeURIComponent('(.*+?['))).status === 200);
+await api('POST', '/api/ingest/email', { from: 'Bericht Zoeker <zoeker@example.nl>', subject: 'Vraag over slot', body: 'Mijn uniekewoordzoek deur klemt.' }, true);
+ok('bericht wordt gevonden (van nieuw naar oud)', (await zoek('uniekewoordzoek')).messages.length === 1);
+
+console.log('\n== Bijlage-upload: snel pad, ruwe route, zelfde ontdubbeling (server GEMIST 1) ==');
+const upK = (await api('POST', '/api/orders', { customerId: kC.id, title: 'Ede — upload-test', status: 'open' })).json;
+const PNG_BYTES = Buffer.from(PNG, 'base64');
+const upJson = await api('POST', `/api/orders/${upK.id}/attachments`, { filename: 'json.png', mime: 'image/png', dataBase64: 'data:image/png;base64,' + PNG });
+const attJ = (upJson.json?.attachments || []).find((a) => a.filename === 'json.png');
+ok('JSON-upload (data-URL) werkt via de snelle lezer', upJson.status === 200 && !!attJ && attJ.size === PNG_BYTES.length, JSON.stringify(upJson.json?.error || attJ));
+const terug = attJ ? await fetch(BASE + attJ.url, { headers: { cookie } }) : null;
+ok('opgeslagen bytes zijn exact de geüploade bytes', !!terug && Buffer.from(await terug.arrayBuffer()).equals(PNG_BYTES));
+const upRaw = await fetch(BASE + `/api/orders/${upK.id}/attachments/raw?filename=ruw.png`, { method: 'POST', headers: { cookie, 'content-type': 'image/png' }, body: PNG_BYTES });
+const upRawJ = await upRaw.json();
+ok('ruwe upload van dezelfde inhoud → herkend als dubbel (geen tweede verwijzing)', upRaw.status === 200 && upRawJ.dubbel === true && upRawJ.attachments.length === 1, JSON.stringify({ s: upRaw.status, d: upRawJ.dubbel, n: upRawJ.attachments?.length }));
+const ander = Buffer.from(PNG2, 'base64');
+const upRaw2 = await fetch(BASE + `/api/orders/${upK.id}/attachments/raw?filename=${encodeURIComponent('twee"\n.png')}`, { method: 'POST', headers: { cookie, 'content-type': 'image/png' }, body: ander });
+const upRaw2J = await upRaw2.json();
+const attR = (upRaw2J.attachments || []).find((a) => a.size === ander.length);
+ok('ruwe upload van een andere foto → nieuwe bijlage, nette bestandsnaam', upRaw2.status === 200 && !!attR && attR.kind === 'image' && !/["\n]/.test(attR.filename), JSON.stringify(attR));
+const teGroot = await fetch(BASE + `/api/orders/${upK.id}/attachments/raw?filename=groot.mp4`, { method: 'POST', headers: { cookie, 'content-type': 'video/mp4' }, body: Buffer.alloc(26 * 1024 * 1024, 1) });
+ok('ruwe upload boven 25 MB → 413 met uitleg', teGroot.status === 413 && /25 MB/.test((await teGroot.json()).error || ''));
+const escJson = await api('POST', `/api/orders/${upK.id}/attachments`, { filename: 'met "aanhalingstekens".png', mime: 'image/png', dataBase64: 'data:image\\/png;base64,' + PNG3 });
+ok('JSON met escape-tekens valt veilig terug op de gewone lezer', escJson.status === 200 && (escJson.json.attachments || []).some((a) => a.filename === 'met "aanhalingstekens".png'), JSON.stringify(escJson.json?.error));
+const kapot = await fetch(BASE + `/api/orders/${upK.id}/attachments`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{"filename":"x.png","dataBase64":"abc' });
+ok('kapotte JSON → 400 (geen crash)', kapot.status === 400);
+await login('monteur-audit@keyservice.nl', 'monteur123');
+ok('monteur kan niet ruw uploaden op andermans kaart', (await fetch(BASE + `/api/orders/${upK.id}/attachments/raw?filename=x.png`, { method: 'POST', headers: { cookie, 'content-type': 'image/png' }, body: PNG_BYTES })).status === 403);
+cookie = adminCookie;
+
+// ---------- AUDIT 28 sep 2026 — cluster A: opdracht-venster & data-integriteit ----------
+console.log('\n== 28 sep: opdracht-venster — intake, gelijktijdig bewerken, één opdracht ophalen ==');
+cookie = adminCookie;
+const kI = (await api('POST', '/api/customers', { name: 'Intake Klant', phone: '0655500777', email: 'intake@example.nl', address: 'Oudeweg 1, 3911 AA Rhenen' })).json;
+const oI = (await api('POST', '/api/orders', { customerId: kI.id, title: 'Utrecht — intake-test', status: 'open' })).json;
+// Aanvraag-gegevens zoals de pipeline/plak-route ze zet (oude client: alle vier velden).
+await api('PATCH', `/api/orders/${oI.id}`, { intake: { name: 'Intake Klant', phone: '0655500777', email: '', address: 'Nieuwelaan 99, 3511 AA Utrecht' } });
+// Nieuw venster: alleen de prijs gewijzigd → geen intake mee → aanvraag-adres blijft.
+const alleenPrijs = await api('PATCH', `/api/orders/${oI.id}`, { price: '95', basis: { price: '' } });
+ok('Opslaan met alleen een prijs laat order.intake (aanvraag-adres) staan', alleenPrijs.status === 200 && alleenPrijs.json.intake?.address === 'Nieuwelaan 99, 3511 AA Utrecht', JSON.stringify(alleenPrijs.json?.intake));
+// Eén intake-veld gewijzigd → alleen dát veld, de rest van de aanvraag blijft.
+const telIntake = await api('PATCH', `/api/orders/${oI.id}`, { intake: { phone: '0655500778' } });
+ok('gedeeltelijke intake wijzigt alleen het meegestuurde veld', telIntake.json.intake?.phone === '0655500778' && telIntake.json.intake?.address === 'Nieuwelaan 99, 3511 AA Utrecht' && telIntake.json.intake?.name === 'Intake Klant', JSON.stringify(telIntake.json?.intake));
+ok('klantrecord bleef ongemoeid (WET 3)', (await api('GET', '/api/customers')).json.find((c) => c.id === kI.id)?.address === 'Oudeweg 1, 3911 AA Rhenen');
+// Collega zet de notitie; dit venster zag nog '' en wijzigt zelf de notitie → 409.
+await api('PATCH', `/api/orders/${oI.id}`, { notes: 'Collega: klant belt terug' });
+const botsing = await api('PATCH', `/api/orders/${oI.id}`, { notes: 'Mijn notitie', basis: { notes: '' } });
+ok('gelijktijdig bewerkt veld → 409 met nette melding, niets overschreven', botsing.status === 409 && botsing.json?.conflict && /intussen/.test(botsing.json?.error || '') && (await api('GET', `/api/orders/${oI.id}`)).json.notes === 'Collega: klant belt terug', JSON.stringify(botsing.json));
+const geenBotsing = await api('PATCH', `/api/orders/${oI.id}`, { price: '120', basis: { price: '95' } });
+ok('ander veld wijzigen terwijl de collega de notitie aanpaste = gewoon opslaan', geenBotsing.status === 200 && geenBotsing.json.notes === 'Collega: klant belt terug' && geenBotsing.json.price === '120');
+ok('oude client zonder basis werkt ongewijzigd', (await api('PATCH', `/api/orders/${oI.id}`, { notes: 'Oude client' })).status === 200);
+const een = await api('GET', `/api/orders/${oI.id}`);
+ok('GET /api/orders/:id geeft één opdracht mét klant', een.status === 200 && een.json.id === oI.id && een.json.customer?.id === kI.id);
+await api('DELETE', `/api/orders/${oI.id}`);
+const wegI = await api('GET', `/api/orders/${oI.id}`);
+ok('GET /api/orders/:id in de prullenbak → 404 met uitleg', wegI.status === 404 && /prullenbak/.test(wegI.json?.error || ''));
+const vreemd = (await api('POST', '/api/orders', { customerId: kI.id, title: 'Ede — kaart van Abdel', status: 'open', monteurId: mont2.id })).json;
+await login('monteur-audit@keyservice.nl', 'monteur123');
+ok('monteur kan andermans opdracht niet los ophalen', (await api('GET', `/api/orders/${vreemd.id}`)).status === 403);
+cookie = adminCookie;
+
+console.log('\n== 28 sep: afwijzen + ongedaan maken laat geen leersignaal achter ==');
+await api('POST', '/api/ingest/whatsapp', { from: '31655500888@c.us', fromPhone: '31655500888', name: 'Undo Klant', body: 'Mijn voordeur klemt, kunt u langskomen?\nTelefoon: +31655500888', externalId: 'aud-undo-1' }, true);
+const revsU = (await api('GET', '/api/reviews')).json;
+const revU = (revsU.items || revsU || []).find((r) => /0655500888|31655500888/.test(JSON.stringify(r)));
+const fbVoor = ((await api('GET', '/api/feedback')).json || []).length;
+if (revU) {
+  await api('POST', `/api/reviews/${revU.id}/reject`, {});
+  const fbTussen = ((await api('GET', '/api/feedback')).json || []).length;
+  await api('POST', `/api/reviews/${revU.id}/restore`, {});
+  const fbNa = ((await api('GET', '/api/feedback')).json || []);
+  ok('afwijzen voegt een leervoorbeeld toe', fbTussen === fbVoor + 1, `${fbVoor} -> ${fbTussen}`);
+  ok('"Ongedaan maken" haalt dat leervoorbeeld weer weg', fbNa.length === fbVoor && !fbNa.some((f) => f.reviewId === revU.id), `${fbVoor} -> ${fbNa.length}`);
+} else ok('aanvraag voor ongedaan-maken-test staat in de inbox', false);
+
+console.log('\n== 28 sep: Nog te factureren telt alleen een échte factuur ==');
+const kT = (await api('POST', '/api/customers', { name: 'Todo Klant', phone: '0655500999' })).json;
+const oOff = (await api('POST', '/api/orders', { customerId: kT.id, title: 'Rhenen — alleen offerte', status: 'afgerond' })).json;
+await api('POST', `/api/orders/${oOff.id}/invoice`, { type: 'offerte', lines: [{ description: 'Slot', qty: 1, priceExcl: 100 }] });
+const oLeeg = (await api('POST', '/api/orders', { customerId: kT.id, title: 'Rhenen — lege factuur', status: 'afgerond' })).json;
+const leeg = (await api('POST', '/api/invoices', { customerId: kT.id, orderId: oLeeg.id, type: 'factuur' })).json;
+const oEcht = (await api('POST', '/api/orders', { customerId: kT.id, title: 'Rhenen — echte factuur', status: 'afgerond' })).json;
+await api('POST', `/api/orders/${oEcht.id}/invoice`, { type: 'factuur', lines: [{ description: 'Cilinder', qty: 1, priceExcl: 80 }] });
+const todo = (await api('GET', '/api/invoices/todo')).json || [];
+ok('afgeronde opdracht met alleen een OFFERTE staat nog in "Nog te factureren"', todo.some((t) => t.id === oOff.id));
+const leegRij = todo.find((t) => t.id === oLeeg.id);
+ok('lege €0-factuur (nooit verstuurd) telt niet als gefactureerd — en "afmaken" wijst naar die factuur', !!leegRij && leegRij.leegFactuurId === (leeg.invoice || leeg).id, JSON.stringify(leegRij));
+ok('opdracht met een echte factuur (bedrag > 0) staat er niet meer in', !todo.some((t) => t.id === oEcht.id));
+
 console.log(`\n========== AUDIT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

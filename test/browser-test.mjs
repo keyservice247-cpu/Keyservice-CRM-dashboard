@@ -22,6 +22,16 @@ await page.fill('input[type=password], input[name=password], #password', 'admin1
 await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}), page.click('button[type=submit], button')]);
 await page.waitForTimeout(2000);
 ok('ingelogd', await page.evaluate(() => !!document.querySelector('#board, .board, .column, .card') || /Opdrachten/i.test(document.body.innerText)));
+// Cluster D (28 sep 2026): app.js en grote JSON komen gzip-gecomprimeerd binnen; de
+// service worker blijft actief (installeerbaar + push) maar onderschept alleen nog
+// navigaties — een API-verzoek gaat er niet meer doorheen.
+const czD = await page.evaluate(async () => {
+  const r = await fetch('/js/app.js', { cache: 'no-store' });
+  const reg = navigator.serviceWorker ? await Promise.race([navigator.serviceWorker.ready, new Promise((res) => setTimeout(() => res(null), 4000))]) : null;
+  return { enc: r.headers.get('content-encoding'), sw: !!(reg && reg.active), push: !!(reg && reg.pushManager) };
+});
+ok('app.js komt gzip-gecomprimeerd binnen', czD.enc === 'gzip', JSON.stringify(czD));
+ok('service worker actief (push blijft werken)', czD.sw && czD.push, JSON.stringify(czD));
 
 // 2) Maak via de API een klant + pakket + losse factuur (deterministisch, geen kaart nodig)
 const setup = await page.evaluate(async () => {
@@ -112,6 +122,75 @@ await page.waitForTimeout(900);
 ok('klanthistorie geladen (knop wisselt naar "Alleen deze kaart")', /Alleen deze opdracht/i.test(await page.locator('#f-history').innerText().catch(() => '')));
 ok('zoekveld in de gesprekshistorie aanwezig', await page.locator('#f-chatsearch').count() > 0);
 noErr('Kaart + klanthistorie');
+
+// 8b) OPDRACHT-VENSTER & DATA-INTEGRITEIT (audit 28 sep 2026): dubbelklik = één
+// opdracht, Esc/klik-naast met getypte notitie vraagt eerst, Esc werkt weer na een
+// eigen invoervenster, aanvraag-adres (intake) blijft na Opslaan staan, en een
+// collega-wijziging wordt niet stil teruggezet.
+clear();
+await page.evaluate(() => closeModal());
+await page.evaluate(() => openOrderModal());
+await page.waitForTimeout(400);
+await page.fill('#f-title', 'Ede — dubbelklik browsertest');
+await page.fill('#f-cname', 'Dubbelklik Klant');
+await page.fill('#f-cphone', '0611000444');
+await page.dblclick('#f-save');
+await page.waitForTimeout(1500);
+const dblAantal = await page.evaluate(() => fetch('/api/orders').then((r) => r.json()).then((os) => os.filter((o) => o.title === 'Ede — dubbelklik browsertest').length));
+ok('dubbelklik op Opslaan maakt precies 1 opdracht', dblAantal === 1, String(dblAantal));
+// Intake-testkaart: klantrecord Rhenen, deze aanvraag Utrecht.
+const ikId = await page.evaluate(async () => {
+  const req = (m, p, b) => fetch(p, { method: m, headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const c = await req('POST', '/api/customers', { name: 'Intake Browser', phone: '0611000555', address: 'Oudeweg 1, 3911 AA Rhenen' });
+  const o = await req('POST', '/api/orders', { customerId: c.id, title: 'Utrecht — intake browsertest', status: 'open' });
+  await req('PATCH', `/api/orders/${o.id}`, { intake: { name: 'Intake Browser', phone: '0611000555', email: '', address: 'Nieuwelaan 99, 3511 AA Utrecht' } });
+  return o.id;
+});
+await page.evaluate((id) => openOrderModal(id), ikId); // niet op het bord → haalt alleen deze kaart op
+await page.waitForTimeout(900);
+ok('venster toont het adres van DEZE aanvraag (intake), niet het klantrecord', await page.inputValue('#f-ccaddress').catch(() => '') === 'Nieuwelaan 99, 3511 AA Utrecht');
+// Esc zonder wijzigingen sluit direct (geen vraag).
+let dlgTeller = 0; const telDlg = () => { dlgTeller++; }; page.on('dialog', telDlg);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+ok('Esc zonder wijzigingen sluit meteen, zonder vraag', await page.locator('#modalRoot').isHidden() && dlgTeller === 0);
+page.off('dialog', telDlg);
+await page.evaluate((id) => openOrderModal(id), ikId);
+await page.waitForTimeout(900);
+await page.click('#f-notes');
+await page.keyboard.type('Klant belt terug om 14:00');
+let escVraag = '';
+page.once('dialog', (d) => { escVraag = d.message(); d.dismiss(); });
+await page.keyboard.press('Escape');
+await page.waitForTimeout(400);
+ok('Esc met getypte notitie vraagt eerst "Niet opgeslagen wijzigingen"', /Niet opgeslagen wijzigingen/.test(escVraag) && !(await page.locator('#modalRoot').isHidden()), escVraag);
+ok('na "blijven" staat de getypte notitie er nog', /14:00/.test(await page.inputValue('#f-notes')));
+let klikVraag = '';
+page.once('dialog', (d) => { klikVraag = d.message(); d.dismiss(); });
+await page.mouse.click(8, 450); // naast het venster (achtergrond)
+await page.waitForTimeout(400);
+ok('klik naast het venster met getypte notitie vraagt ook eerst', /Niet opgeslagen/.test(klikVraag) && !(await page.locator('#modalRoot').isHidden()), klikVraag);
+// Eigen invoervenster (vraagTekst) annuleren → daarna werkt Esc nog steeds.
+await page.evaluate(() => { vraagTekst({ titel: 'Test' }); });
+await page.waitForTimeout(200);
+await page.click('#md-cancel');
+await page.waitForTimeout(200);
+page.once('dialog', (d) => d.accept());
+await page.keyboard.press('Escape');
+await page.waitForTimeout(400);
+ok('na een eigen invoervenster sluit Esc het venster nog (bevestigd)', await page.locator('#modalRoot').isHidden());
+// Intake blijft na een gewone Opslaan (alleen de prijs gewijzigd); collega-notitie blijft ook.
+await page.evaluate((id) => openOrderModal(id), ikId);
+await page.waitForTimeout(900);
+await page.evaluate((id) => fetch(`/api/orders/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ notes: 'Collega: sleutel ligt bij buren' }) }), ikId);
+await page.fill('#f-price', '95');
+await page.click('#f-save');
+await page.waitForTimeout(1000);
+const naOpslaan = await page.evaluate((id) => fetch(`/api/orders/${id}`).then((r) => r.json()), ikId);
+ok('intake-adres blijft na Opslaan staan (monteur rijdt naar het juiste adres)', naOpslaan.intake?.address === 'Nieuwelaan 99, 3511 AA Utrecht' && naOpslaan.price === '95', JSON.stringify({ intake: naOpslaan.intake, price: naOpslaan.price }));
+ok('notitie van de collega is niet stil teruggezet', naOpslaan.notes === 'Collega: sleutel ligt bij buren', naOpslaan.notes);
+ok('klantrecord bleef Rhenen (niets stil overschreven)', naOpslaan.customer?.address === 'Oudeweg 1, 3911 AA Rhenen', naOpslaan.customer?.address);
+noErr('Opdracht-venster data-integriteit');
 
 // 9) Klanten-tools: dossier, import- en campagne-scherm openen zonder JS-fouten
 clear();
@@ -301,23 +380,25 @@ await page.evaluate(async () => {
   await post('/api/orders', { customerId: c.id, title: 'Rhenen — wachtblok kaart', status: 'nieuw' });
   await post('/api/ingest/whatsapp', { from: '31611000077@c.us', fromPhone: '31611000077', name: 'Wachtblok Klant', body: 'Wanneer komt de monteur?\nTelefoon: +31611000077', externalId: 'wa-wachtblok-1' }, true);
 });
+// ROBUUST (28 sep 2026): het blok kijkt standaard naar >2 uur, dus een gelijktijdige
+// verversing van Start (pulse na de POSTs hierboven) tekende het met de échte, lege
+// lijst weer leeg — de test faalde soms. Nu staat de "alles"-variant (uren=0) aan
+// zolang deze sectie loopt, óók voor de verversing van Start zelf, en wachten we op
+// het blok i.p.v. een vaste pauze.
 await page.evaluate(async () => {
-  // Het blok kijkt standaard naar >2 uur; in de test tekenen we het met alles (uren=0).
-  const el = document.querySelector('#onbeantwoordBlok');
-  const lijst = await fetch('/api/chats/onbeantwoord?uren=0').then((r) => r.json());
-  window.__wachtLijst = lijst;
-  const orig = window.api; window.api = (p, ...rest) => p.startsWith('/api/chats/onbeantwoord') ? Promise.resolve(lijst) : orig(p, ...rest);
-  await vulOnbeantwoord(); window.api = orig;
-  return el && el.innerText;
+  window.__origApi = window.api;
+  window.api = (p, ...rest) => p.startsWith('/api/chats/onbeantwoord') ? window.__origApi('/api/chats/onbeantwoord?uren=0') : window.__origApi(p, ...rest);
+  await vulOnbeantwoord();
 });
-await page.waitForTimeout(300);
-ok('Wacht-op-antwoord-blok toont het appje mét kaart-context', await page.evaluate(() => { const t = document.querySelector('#onbeantwoordBlok')?.innerText || ''; return /Wachtblok Klant/.test(t) && /wachtblok kaart/.test(t); }));
+const wachtZichtbaar = await page.waitForFunction(() => { const t = document.querySelector('#onbeantwoordBlok')?.innerText || ''; return /Wachtblok Klant/.test(t) && /wachtblok kaart/.test(t); }, null, { timeout: 8000 }).then(() => true).catch(() => false);
+ok('Wacht-op-antwoord-blok toont het appje mét kaart-context', wachtZichtbaar);
 clear();
 const wachtVoor = await page.locator('#onbeantwoordBlok li[data-chat]').count();
 await page.evaluate(() => { const b = [...document.querySelectorAll('#onbeantwoordBlok .wacht-klaar')].find((x) => /Wachtblok/.test(x.closest('li')?.innerText || '')); b && b.click(); });
-await page.waitForTimeout(700);
+await page.waitForFunction(() => !/Wachtblok Klant/.test(document.querySelector('#onbeantwoordBlok')?.innerText || ''), null, { timeout: 5000 }).catch(() => {});
 const wachtNa = await page.evaluate(() => fetch('/api/chats/onbeantwoord?uren=0').then((r) => r.json()).then((l) => l.some((x) => /Wachtblok/.test(x.naam))));
-ok('Afgehandeld-knop haalt het gesprek uit de lijst (server)', wachtVoor >= 1 && wachtNa === false);
+await page.evaluate(() => { if (window.__origApi) window.api = window.__origApi; });
+ok('Afgehandeld-knop haalt het gesprek uit de lijst (server)', wachtVoor >= 1 && wachtNa === false, `voor=${wachtVoor} naServer=${wachtNa}`);
 noErr('Wacht op antwoord');
 await page.waitForTimeout(1200);
 ok('dagoverzicht-blok aanwezig op Start', await page.locator('#dayov').count() > 0);
@@ -464,6 +545,8 @@ ok('Berichten-scherm opent met gesprekkenlijst', await page.locator('#chatList')
   await page.fill('#chatZoek', '');
   await page.waitForTimeout(400);
   ok('zoekveld leeg → volledige lijst terug', await page.locator('.chat-item').count() === totaal);
+  // Zoek-icoon (28 sep 2026): 'search' ontbrak in ICON_PATHS → lege plek in het veld.
+  ok('Berichten-zoekveld toont een zoek-icoon', await page.locator('.chat-zoek svg').count() === 1);
 }
 const rij = page.locator('.chat-item', { hasText: 'Chat Browserklant' }).first();
 const rijGevonden = await rij.count() > 0 || await page.locator('.chat-item').count() > 0;
@@ -531,6 +614,20 @@ const cpBox = await page.evaluate(() => { const el = document.querySelector('#cp
 ok('mobiel: verstuur-balk bereikbaar', await page.locator('#cpText').isVisible());
 ok('mobiel: verstuur-balk staat ZONDER scrollen in beeld', !!cpBox && cpBox.bottom <= cpBox.vh && cpBox.top >= 0, JSON.stringify(cpBox));
 ok('mobiel: statusbalk verborgen zolang een gesprek open is', await page.evaluate(() => { const b = document.querySelector('#chatStatusBar'); return !b || b.hidden || b.offsetHeight === 0; }));
+// 28 sep 2026 (audit): de pagina was 24 px hoger dan het scherm (gesprekskop schoof onder
+// de kopbalk) en een melding viel precies over de verstuurbalk.
+{
+  await page.evaluate(() => toast('Testmelding boven de verstuurbalk'));
+  await page.waitForTimeout(300); // inschuif-animatie (10 px) laten aflopen
+  const chatMob = await page.evaluate(() => {
+    const t = document.querySelector('#toast').getBoundingClientRect();
+    const sb = document.querySelector('.cp-send').getBoundingClientRect();
+    return { docH: document.documentElement.scrollHeight, vh: window.innerHeight, overlap: t.bottom > sb.top && t.top < sb.bottom, t: [t.top, t.bottom], s: [sb.top, sb.bottom] };
+  });
+  ok('mobiel: Berichten-scherm schuift niet mee (pagina niet hoger dan het scherm)', chatMob.docH <= chatMob.vh + 1, JSON.stringify(chatMob));
+  ok('mobiel: melding valt niet over de verstuurbalk', !chatMob.overlap, JSON.stringify(chatMob));
+  await page.evaluate(() => { document.querySelector('#toast').hidden = true; });
+}
 await page.click('#cpBack');
 await page.waitForTimeout(600);
 ok('mobiel: terugknop -> lijst terug', await page.locator('#chatList').isVisible());
@@ -582,6 +679,11 @@ await page.press('#tkSnelTitel', 'Enter');
 await page.waitForTimeout(1000);
 const tkNieuw = page.locator('#view-taken .tk-kaart', { hasText: 'Browsertest taak' });
 ok('taken: snel toevoegen (Enter) plaatst de taak in Zakelijk', await tkNieuw.count() === 1 && await page.locator('#view-taken .tk-kolom-zakelijk .tk-kaart', { hasText: 'Browsertest taak' }).count() === 1);
+// Audit 28 sep 2026: het veld is daarna leeg, dus een tweede Enter maakt geen dubbele taak.
+ok('taken: invoerveld is leeg na toevoegen', await page.inputValue('#tkSnelTitel') === '');
+await page.press('#tkSnelTitel', 'Enter');
+await page.waitForTimeout(600);
+ok('taken: tweede Enter maakt geen dubbele taak', await tkNieuw.count() === 1);
 const openVoor = Number(await page.locator('#view-taken .tk-tile').first().locator('.num').textContent());
 await tkNieuw.locator('.tk-toggle').check();
 await page.waitForTimeout(1000);
@@ -738,6 +840,149 @@ await page.waitForTimeout(600);
 }
 noErr('Bord slepen');
 
+// ---------- Bord: per kaart bijwerken + rustig slepen (28 sep 2026, audit cluster C) ----------
+// Eén gewijzigde kaart liet het HELE bord opnieuw opbouwen (alle kaarten nieuwe
+// elementen, rode tellers poppen opnieuw, hover weg). Nu moeten ongewijzigde kaarten
+// exact hetzelfde element blijven. En een versleepte kaart wordt één keer getekend en
+// springt niet meer na het loslaten.
+clear();
+await page.setViewportSize({ width: 1366, height: 820 });
+await page.evaluate(() => goView('board'));
+await page.waitForFunction(() => document.querySelectorAll('#board .card').length > 1);
+await page.waitForTimeout(500);
+{
+  const r = await page.evaluate(async () => {
+    const kaarten = [...document.querySelectorAll('#board .card[data-id]')];
+    const a = kaarten[0], b = kaarten[1];
+    window._probeB = b; window._probeA = a;
+    const o = state.orders.find((x) => x.id === a.dataset.id);
+    await fetch(`/api/orders/${o.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: o.title + ' (diff)' }) });
+    await loadBoard();
+    const bNa = document.querySelector(`#board .card[data-id="${b.dataset.id}"]`);
+    const aNa = document.querySelector(`#board .card[data-id="${a.dataset.id}"]`);
+    return { bZelfde: bNa === window._probeB, aNieuw: !!aNa && aNa !== window._probeA && aNa.textContent.includes('(diff)'), kolommenBlijven: !!document.querySelector('#board .column-cards') };
+  });
+  ok('bord: wijziging van één kaart laat de ANDERE kaart-elementen staan (zelfde DOM-node)', r.bZelfde, JSON.stringify(r));
+  ok('bord: de gewijzigde kaart zelf is wél bijgewerkt', r.aNieuw, JSON.stringify(r));
+  // Klik werkt nog op een hergebruikte kaart (gedelegeerde luisteraar op #board).
+  await page.evaluate(() => window._probeB.click());
+  await page.waitForTimeout(700);
+  ok('bord: klik op een hergebruikte kaart opent hem (gedelegeerd)', await page.locator('#f-title').count() === 1);
+  await page.evaluate(() => closeModal());
+  await page.waitForTimeout(300);
+  // Pop-animatie alleen bij een echte stijging: na een verversing zonder nieuwe
+  // berichten loopt er geen pop-in op de tellers.
+  const pops = await page.evaluate(async () => { _lastBoardHtml = ''; renderBoard(); return document.querySelectorAll('#board .title-count.pop').length; });
+  ok('bord: tellers poppen niet opnieuw bij een verversing zonder nieuwe berichten', pops === 0, String(pops));
+
+  // Slepen: kaart wordt één keer getekend en blijft daarna op zijn plek staan.
+  const bron = page.locator('#board .column[data-status="nieuw"] .card').first();
+  if (await bron.count()) {
+    const id = await bron.getAttribute('data-id');
+    await page.evaluate((id) => {
+      window._sleepToevoegingen = 0;
+      window._sleepObs = new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.matches?.(`.card[data-id="${id}"]`) && n.closest('#board')) window._sleepToevoegingen++; });
+      window._sleepObs.observe(document.querySelector('#board'), { childList: true, subtree: true });
+    }, id);
+    const bb = await bron.boundingBox();
+    const doel = await page.locator('#board .column[data-status="open"]').first().boundingBox();
+    await page.mouse.move(bb.x + bb.width / 2, bb.y + 30);
+    await page.mouse.down();
+    await page.mouse.move(bb.x + bb.width / 2 + 20, bb.y + 50, { steps: 4 });
+    await page.mouse.move(doel.x + doel.width / 2, doel.y + 80, { steps: 8 });
+    // Kopie zonder overgang: staat direct onder de muis (geen ~120 ms naloop).
+    const naloop = await page.evaluate(() => getComputedStyle(document.querySelector('.board-drag-ghost')).transitionDuration);
+    ok('bord: sleep-kopie heeft geen CSS-overgang (volgt de muis direct)', /^0s(, 0s)*$/.test(naloop), naloop);
+    await page.mouse.up();
+    await page.waitForTimeout(60);
+    const plek1 = await page.evaluate((id) => { const el = document.querySelector(`#board .column[data-status="open"] .card[data-id="${id}"]`); return el ? [...el.parentNode.children].indexOf(el) : -1; }, id);
+    await page.waitForTimeout(1200);
+    const plek2 = await page.evaluate((id) => { const el = document.querySelector(`#board .column[data-status="open"] .card[data-id="${id}"]`); window._sleepObs.disconnect(); return el ? [...el.parentNode.children].indexOf(el) : -1; }, id);
+    const keer = await page.evaluate(() => window._sleepToevoegingen);
+    ok('bord: versleepte kaart staat meteen bovenaan de doelkolom en springt niet meer', plek1 === 0 && plek2 === 0, JSON.stringify({ plek1, plek2 }));
+    ok('bord: versleepte kaart wordt één keer getekend (geen tweede herbouw)', keer === 1, String(keer));
+  } else {
+    ok('sleep-tekentest overgeslagen (geen kaart in Nieuw)', true);
+  }
+}
+noErr('Bord per kaart bijwerken');
+
+// ---------- Werkbon laat geen luisteraars op het document achter (28 sep 2026, audit) ----------
+// Voorheen kwamen er bij ELK openen mousemove/mouseup/touchmove(niet-passief)/touchend
+// op document bij die nooit weggingen. Nu alleen tijdens het tekenen.
+clear();
+{
+  const cdp = await page.context().newCDPSession(page);
+  const tel = async () => { const { result } = await cdp.send('Runtime.evaluate', { expression: 'document' }); const { listeners } = await cdp.send('DOMDebugger.getEventListeners', { objectId: result.objectId }); const c = {}; for (const l of listeners) c[l.type] = (c[l.type] || 0) + 1; return c; };
+  const voor = await tel();
+  for (let i = 0; i < 3; i++) { await page.evaluate(() => openWerkbonModal(state.orders[0])); await page.waitForTimeout(300); await page.evaluate(() => closeModal()); await page.waitForTimeout(150); }
+  await page.evaluate(() => openWerkbonModal(state.orders[0]));
+  await page.waitForTimeout(400);
+  const cv = await page.locator('#wb-sign').boundingBox();
+  await page.mouse.move(cv.x + 20, cv.y + 20); await page.mouse.down();
+  const tijdens = await tel();
+  // Lijn loopt door buiten het vak (bewegen op het document) en stopt bij loslaten.
+  await page.mouse.move(cv.x + 120, cv.y + 60, { steps: 5 }); await page.mouse.move(cv.x + cv.width + 30, cv.y + 60, { steps: 3 }); await page.mouse.up();
+  const getekend = await page.evaluate(() => { const c = document.querySelector('#wb-sign'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; });
+  const na = await tel();
+  await page.evaluate(() => closeModal());
+  const k = (o, t) => o[t] || 0;
+  ok('werkbon: 4x openen laat GEEN touchmove/mousemove op het document achter', k(na, 'touchmove') === k(voor, 'touchmove') && k(na, 'mousemove') === k(voor, 'mousemove') && k(na, 'touchend') === k(voor, 'touchend'), JSON.stringify({ voor, na }));
+  ok('werkbon: tijdens het tekenen wél document-luisteraars, en tekenen werkt', k(tijdens, 'mousemove') === k(voor, 'mousemove') + 1 && getekend > 50, JSON.stringify({ tijdens: k(tijdens, 'mousemove'), getekend }));
+  await cdp.detach();
+}
+noErr('Werkbon-luisteraars');
+
+// ---------- Mobiel: plakkende balken, inbox-velden, toast (28 sep 2026, audit mobiel) ----------
+clear();
+await page.setViewportSize({ width: 390, height: 844 });
+{
+  await page.evaluate(() => goView('settings'));
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => window.scrollTo(0, 1500));
+  await page.waitForTimeout(300);
+  const sg = await page.evaluate(() => { const n = document.querySelector('.sg-nav'); return n && { top: Math.round(n.getBoundingClientRect().top), y: Math.round(scrollY) }; });
+  ok('mobiel: Instellingen-tabbladen plakken onder de kopbalk (.content is geen scroll-container meer)', !!sg && (sg.y < 100 || (sg.top >= 40 && sg.top <= 60)), JSON.stringify(sg));
+  ok('mobiel: geen horizontale paginascroll door overflow-x: clip', await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+  await page.evaluate(() => goView('inbox'));
+  await page.waitForTimeout(1500);
+  const iv = await page.evaluate(() => { const v = document.querySelector('.review .r-velden'); return v ? getComputedStyle(v).display : 'geen-items'; });
+  ok('mobiel: inbox-correctievelden staan in twee kolommen (grid)', iv === 'grid' || iv === 'geen-items', iv);
+  await page.evaluate(() => goView('board'));
+  await page.waitForTimeout(1200);
+  const toastL = await page.evaluate(async () => { toast('Testmelding'); await new Promise((r) => setTimeout(r, 30)); return Math.round(document.querySelector('.toast').getBoundingClientRect().left); });
+  ok('mobiel: melding staat vanaf het begin binnen beeld (eigen animatie)', toastL >= 0, String(toastL));
+  ok('mobiel: kolom-tabs zijn plakkend', await page.evaluate(() => getComputedStyle(document.querySelector('#boardTabs')).position === 'sticky'));
+}
+await page.setViewportSize({ width: 1366, height: 820 });
+noErr('Mobiel plakkende balken');
+
+// ---------- Venster openen verschuift de achtergrond niet (28 sep 2026, audit pc) ----------
+// Headless Chromium verbergt scrollbalken standaard; dit eigen browsertje toont ze (zoals
+// Windows), anders is de 15 px-sprong niet te meten.
+{
+  const sb = await chromium.launch({ executablePath: EXEC, args: ['--no-sandbox'], ignoreDefaultArgs: ['--hide-scrollbars'] });
+  const sp = await sb.newPage({ viewport: { width: 1440, height: 900 } });
+  await sp.goto(BASE + '/login.html', { waitUntil: 'networkidle' });
+  await sp.fill('input[type=email], input[name=email], #email', 'admin@keyservice.nl');
+  await sp.fill('input[type=password], input[name=password], #password', 'admin123');
+  await Promise.all([sp.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}), sp.click('button[type=submit], button')]);
+  await sp.waitForTimeout(1500);
+  await sp.evaluate(() => goView('board'));
+  await sp.waitForFunction(() => document.querySelectorAll('#board .card').length > 0);
+  await sp.waitForTimeout(500);
+  const meet = () => sp.evaluate(() => { const c = document.querySelectorAll('#board .column')[2] || document.querySelector('#board .column'); const r = c.getBoundingClientRect(); return { x: r.x, w: r.width, cw: document.documentElement.clientWidth }; });
+  const voor = await meet();
+  await sp.evaluate(() => openOrderModal(document.querySelector('#board .card').dataset.id));
+  await sp.waitForTimeout(500);
+  const open = await meet();
+  await sp.evaluate(() => closeModal());
+  await sp.waitForTimeout(300);
+  const na = await meet();
+  ok('venster openen op 1440 px: bord verschuift NIET horizontaal (scrollbar-gutter)', Math.abs(open.x - voor.x) < 0.5 && Math.abs(open.w - voor.w) < 0.5 && Math.abs(na.x - voor.x) < 0.5, JSON.stringify({ voor, open, na }));
+  await sb.close();
+}
+
 // Afspraak annuleren = één venster met vinkje (audit 16 sep), geen dubbele systeem-popup.
 {
   clear();
@@ -798,6 +1043,130 @@ noErr('Bord slepen');
   const reden = await page.evaluate(() => fetch('/api/reviews?status=all').then((r) => r.json()).then((d) => (d.items || d).find((x) => /br-afwijs-1|afwijs@example/.test(JSON.stringify(x)))));
   ok('reden achteraf opgeslagen op de afwijzing', reden && reden.status === 'rejected' && reden.rejectNote === 'Was een leverancier', JSON.stringify(reden && { s: reden.status, n: reden.rejectNote }));
   noErr('1-klik afwijzen');
+}
+
+// ---------- LIVE VERVERSEN (28 sep 2026, audit): Start, bord, inbox, tellers ----------
+{
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ingest = (n, tekst) => page.evaluate(([n, tekst]) => fetch('/api/ingest/whatsapp', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' },
+    body: JSON.stringify({ name: 'Live Klant ' + n, body: `${tekst}\nTelefoon: +316123${String(n).padStart(5, '0')}`, externalId: 'br-live-' + n }),
+  }).then((r) => r.status), [n, tekst]);
+  const aanvraag = (n) => `Goedemiddag, het slot van de voordeur is kapot (aanvraag ${n}). Adres Dorpsstraat ${n}, 3911AB Rhenen. Kunt u langskomen?`;
+  // a) Na het openen van de app is Start het scherm dat live meeloopt (stond op 'board').
+  clear();
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+  const begin = await page.evaluate(() => ({ view: state.view, body: document.body.dataset.view, zicht: !document.querySelector('#view-overview').hidden }));
+  ok('na openen: Start is het scherm dat de live-verversing bijhoudt', begin.view === 'overview' && begin.body === 'overview' && begin.zicht, JSON.stringify(begin));
+  // b) Zoekveld met resultaten; daarna een achtergrondwijziging (nieuwe aanvraag).
+  await page.fill('#globalSearch', 'Browser');
+  await page.waitForFunction(() => !document.querySelector('#gsResults').hidden && document.querySelector('#gsResults').textContent.length > 3, null, { timeout: 5000 }).catch(() => {});
+  await page.evaluate(() => { document.querySelector('#globalSearch').__merk = 1; const d = document.querySelector('#dayov'); if (d) d.__merk = 1; document.activeElement?.blur(); });
+  const kpiTe = () => page.evaluate(() => Number(document.querySelector('#ovKpis .kpi-card[data-go="inbox"] .kpi-num')?.textContent ?? -1));
+  const voor = await kpiTe();
+  await ingest(1, aanvraag(1));
+  const live = await page.waitForFunction((v) => Number(document.querySelector('#ovKpis .kpi-card[data-go="inbox"] .kpi-num')?.textContent ?? -1) > v, voor, { timeout: 15000 }).then(() => true).catch(() => false);
+  ok('Start ververst LIVE: "Te controleren" telt een nieuwe aanvraag mee zonder te navigeren', live, `${voor} -> ${await kpiTe()}`);
+  const na = await page.evaluate(() => ({ v: document.querySelector('#globalSearch')?.value, zelfde: document.querySelector('#globalSearch')?.__merk === 1, res: !document.querySelector('#gsResults')?.hidden, dag: document.querySelector('#dayov')?.__merk === 1, laden: /laden/i.test(document.querySelector('#dayov-body')?.textContent || '') }));
+  ok('Start: zoekveld + zoekresultaten blijven staan bij een achtergrondwijziging', na.v === 'Browser' && na.zelfde && na.res, JSON.stringify(na));
+  ok('Start: dagoverzicht wordt daarbij niet opnieuw opgebouwd (geen "laden…")', na.dag && !na.laden, JSON.stringify(na));
+  await page.fill('#globalSearch', '');
+  noErr('Start live verversen');
+
+  // c) Tellers lopen door met een open venster (stonden stil zolang er een venster open was).
+  clear();
+  await page.evaluate(() => modal('<h2>Testvenster</h2><p>open</p>'));
+  const badgeVoor = await page.evaluate(() => Number(document.querySelector('#inboxBadge')?.textContent || 0));
+  await ingest(2, aanvraag(2));
+  const badgeLive = await page.waitForFunction((v) => Number(document.querySelector('#inboxBadge')?.textContent || 0) > v, badgeVoor, { timeout: 15000 }).then(() => true).catch(() => false);
+  ok('Inbox-teller loopt door terwijl een venster open staat', badgeLive, String(badgeVoor));
+  await page.evaluate(() => closeModal());
+
+  // d) Bord ververst terwijl de filter-keuzelijst focus heeft (een <select> houdt op de pc
+  //    na het kiezen de focus — dat bevroor het bord tot je ergens anders klikte).
+  clear();
+  await page.evaluate(() => goView('board'));
+  await page.waitForTimeout(1200);
+  await page.selectOption('#boardMonteurFilter', '');
+  await page.evaluate(() => document.querySelector('#boardMonteurFilter').focus());
+  const liveTitel = 'Rhenen — live met filterfocus';
+  await page.evaluate(async (t) => {
+    const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+    const c = await post('/api/customers', { name: 'Live Bord Klant', phone: '0611004455' });
+    await post('/api/orders', { customerId: c.id, title: t, status: 'nieuw' });
+  }, liveTitel);
+  const kaartLive = await page.waitForFunction((t) => [...document.querySelectorAll('#board .card')].some((c) => c.textContent.includes(t)), liveTitel, { timeout: 15000 }).then(() => true).catch(() => false);
+  const focusNog = await page.evaluate(() => document.activeElement?.id);
+  ok('bord ververst LIVE terwijl de filter-keuzelijst focus heeft', kaartLive && focusNog === 'boardMonteurFilter', `kaart=${kaartLive} focus=${focusNog}`);
+  await page.evaluate(() => document.activeElement?.blur());
+  noErr('Bord live met filterfocus');
+
+  // e) Inbox: na "Toon meer" blijft de lijst uitgeklapt en blijft je leespositie staan.
+  clear();
+  const totaal0 = await page.evaluate(() => fetch('/api/reviews?status=pending&limit=1').then((r) => r.json()).then((d) => d.total || 0));
+  for (let i = 0, n = 10; i < Math.max(0, 72 - totaal0); i++, n++) await ingest(n, aanvraag(n));
+  await page.evaluate(() => goView('inbox'));
+  await page.waitForSelector('#inboxMore', { timeout: 8000 }).catch(() => {});
+  await page.click('#inboxMore');
+  await page.waitForTimeout(1200);
+  const rijenVoor = await page.locator('#reviewList .review').count();
+  const anker = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#reviewList .review')];
+    const el = rows[rows.length - 3]; el.scrollIntoView({ block: 'start' }); window.scrollBy(0, -100);
+    return { id: el.dataset.id, top: el.getBoundingClientRect().top, y: window.scrollY };
+  });
+  await ingest(999, aanvraag(999));
+  const nieuwIn = await page.waitForFunction(() => /Live Klant 999/.test(document.querySelector('#reviewList')?.textContent || ''), null, { timeout: 15000 }).then(() => true).catch(() => false);
+  const naInbox = await page.evaluate((id) => { const el = document.querySelector(`#reviewList .review[data-id="${id}"]`); return { rijen: document.querySelectorAll('#reviewList .review').length, top: el ? el.getBoundingClientRect().top : null, y: window.scrollY }; }, anker.id);
+  ok('Inbox: nieuw bericht komt live binnen', nieuwIn);
+  ok('Inbox: na "Toon meer" blijft de lijst uitgeklapt bij een verversing (niet terug naar 60)', rijenVoor > 60 && naInbox.rijen >= rijenVoor, `${rijenVoor} -> ${naInbox.rijen}`);
+  ok('Inbox: leespositie blijft staan (zelfde bericht op dezelfde hoogte)', naInbox.top !== null && Math.abs(naInbox.top - anker.top) < 5, JSON.stringify({ anker, naInbox }));
+  noErr('Inbox Toon meer + live');
+  // Opruimen: de testaanvragen weer uit de wachtrij (volgende secties tellen op de inbox).
+  await page.evaluate(async () => {
+    const d = await fetch('/api/reviews?status=pending&limit=500').then((r) => r.json());
+    const ids = (d.items || []).filter((r) => /^Live Klant/.test(r.message?.sender || '')).map((r) => r.id);
+    if (ids.length) await fetch('/api/reviews/bulk-reject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids }) });
+  });
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  // f) Weekrapport op de telefoon: de tabel blijft binnen de kaart (schuift zelf).
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => goView('overview'));
+  await page.waitForSelector('#wr-body .wr-tabel', { timeout: 8000 }).catch(() => {});
+  const wr = await page.evaluate(() => {
+    const vak = document.querySelector('#wr-body .wr-tabel'); const kaart = document.querySelector('#wr-body')?.closest('.info-card');
+    if (!vak || !kaart) return null;
+    return { vak: vak.getBoundingClientRect().right, kaart: kaart.getBoundingClientRect().right, docW: document.documentElement.scrollWidth, vw: window.innerWidth, schuift: getComputedStyle(vak).overflowX };
+  });
+  ok('mobiel: weekrapport-tabel valt binnen de kaart en schuift zelf', !!wr && wr.vak <= wr.kaart + 1 && wr.docW <= wr.vw + 1 && wr.schuift === 'auto', JSON.stringify(wr));
+  noErr('Weekrapport mobiel');
+
+  // g) Zelf-herlaad na een deploy: daarna hetzelfde scherm, dezelfde kolom-tab en
+  //    (ongeveer) dezelfde scrollhoogte — voorheen sprong elke telefoon terug naar Start.
+  clear();
+  await page.evaluate(() => goView('board'));
+  await page.waitForTimeout(1200);
+  const plekVoor = await page.evaluate(() => {
+    const tabs = [...document.querySelectorAll('.board-tab')];
+    const tab = tabs[1] || tabs[0]; tab && tab.click();
+    window.scrollTo(0, 0);
+    const y = Math.min(250, Math.max(0, document.documentElement.scrollHeight - window.innerHeight - 5));
+    window.scrollTo(0, y);
+    return { tab: state.boardTab, y: window.scrollY };
+  });
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}),
+    page.evaluate(() => { window._nieuweVersie = true; document.activeElement?.blur(); probeerHerladen(true); }),
+  ]);
+  await page.waitForFunction(() => typeof state !== 'undefined' && state.view === 'board' && !!document.querySelector('#board .column'), null, { timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(800);
+  const plekNa = await page.evaluate(() => ({ view: state.view, tab: state.boardTab, y: window.scrollY, zicht: !document.querySelector('#view-board').hidden }));
+  ok('na de zelf-herlaad (nieuwe versie) staat hetzelfde scherm + dezelfde kolom-tab terug', plekNa.view === 'board' && plekNa.zicht && plekNa.tab === plekVoor.tab, JSON.stringify({ plekVoor, plekNa }));
+  ok('na de zelf-herlaad staat de scrollhoogte terug', Math.abs(plekNa.y - plekVoor.y) < 30, JSON.stringify({ plekVoor, plekNa }));
+  noErr('Zelf-herlaad met plek-herstel');
+  await page.setViewportSize({ width: 1280, height: 800 });
 }
 
 // MONTEUR-NOODROUTE ÉCHT via het scherm (audit 16 sep, kritiek): een gekoppelde

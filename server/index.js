@@ -17,7 +17,9 @@ process.on('uncaughtException', (err) => {
   console.error('ONVERWACHTE FOUT — server wordt netjes herstart:', err?.stack || err?.message || err);
   try { gracefulShutdown('uncaughtException'); } catch { process.exit(1); }
 });
-import { db, id, now, save, saveSoon, saveSoonQuiet, load, logActivity, changeVersion, startBackups, backupNow, listBackups, dbFilePath, restoreBackup, snapshotJson, storageEngine, markAllDirty } from './db.js';
+import { jsonCompressie, statischeCompressie, stuurGzipBestand, wilGzip } from './compressie.js';
+import { snelleUploadJson, base64NaarBytes } from './upload-body.js';
+import { db, id, now, save, saveSoon, saveSoonQuiet, load, logActivity, changeVersion, startBackups, backupNowAsync, listBackups, dbFilePath, restoreBackup, snapshotJson, storageEngine, markAllDirty } from './db.js';
 
 // Nette afsluiting: bij een deploy/herstart stuurt Render (of Ctrl+C lokaal) een
 // signaal. Flush dan de laatste, nog niet weggeschreven wijzigingen naar schijf
@@ -63,7 +65,7 @@ import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORI
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { conversieData, maakConversieBriefing, omzetVan, factuurPerOpdracht } from './conversie.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
-import { saveBuffer, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries, registerAttachmentFiles, ontdubbelOpSchijf, weesBestanden, fileExists, mergeAttachments } from './storage.js';
+import { saveBuffer, saveBufferAsync, saveStream, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries, registerAttachmentFiles, ontdubbelOpSchijf, weesBestanden, fileExists, mergeAttachments } from './storage.js';
 import { alleBijlageVerwijzingen, beschermdeBijlageIds, verwijderBestandenAlsOngebruikt } from './bijlagen.js';
 import { cloudConfigured, sendCloudText, sendCloudTemplate, sendCloudMedia, webhookSignatureOk, parseCloudWebhook, parseCloudStatuses, fetchCloudMedia, cloudSelftest } from './connectors/whatsapp-cloud.js';
 import Busboy from 'busboy';
@@ -119,6 +121,9 @@ app.use((req, res, next) => {
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   next();
 });
+// Gzip voor JSON-antwoorden vanaf 1 KB (28 sep 2026, audit pc-browser#14): asynchroon,
+// de vorm van elk antwoord blijft gelijk. Zie server/compressie.js.
+app.use(jsonCompressie());
 // De RUWE body bewaren: de officiële WhatsApp-webhook van Meta ondertekent precies die
 // bytes, dus zonder het origineel is de handtekening niet te controleren.
 const ruweBody = (req, res, buf) => { req.rawBody = buf; };
@@ -131,7 +136,15 @@ const ruweBody = (req, res, buf) => { req.rawBody = buf; };
 const jsonKlein = express.json({ limit: '2mb', verify: ruweBody });
 const jsonGroot = express.json({ limit: '40mb', verify: ruweBody });
 const UPLOAD_PADEN = /\/(attachments|werkbon|import-preview|import)$/;
-app.use((req, res, next) => (UPLOAD_PADEN.test(req.path) ? jsonGroot : jsonKlein)(req, res, next));
+// Kaart-bijlage (foto/video vanaf de telefoon): eigen, snelle lezer die de base64 niet
+// in één ruk op de hoofdthread omzet (28 sep 2026, audit server GEMIST 1; zie
+// server/upload-body.js). Valt bij alles wat afwijkt terug op jsonGroot.
+const KAART_BIJLAGE_PAD = /^\/api\/orders\/[^/]+\/attachments$/;
+const jsonBijlage = snelleUploadJson({ limit: 40 * 1024 * 1024, terugval: jsonGroot });
+app.use((req, res, next) => {
+  if (req.method === 'POST' && KAART_BIJLAGE_PAD.test(req.path)) return jsonBijlage(req, res, next);
+  return (UPLOAD_PADEN.test(req.path) ? jsonGroot : jsonKlein)(req, res, next);
+});
 // Een te grote body geeft standaard een kale 413 waar de gebruiker niets aan heeft.
 // Nu een nette uitleg met de werkelijke grens erin.
 app.use((err, req, res, next) => {
@@ -589,12 +602,16 @@ app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) =
     if (c) bump(c.id, m.receivedAt, m.body, false);
     else bumpOnbekend(p, m.sender || '', m.receivedAt, m.body, false);
   }
+  // Eén keer indexeren i.p.v. per gesprek de hele kaartenlijst doorlopen (punt 21).
+  // 28 sep 2026 (audit server#10): de index staat nu vóór de outbox-lus — daar zocht
+  // elk wachtrij-item de klant met customers.find (1500 items x 1200 klanten).
+  const klantIndex = new Map((db().customers || []).map((c) => [c.id, c]));
   for (const ob of db().outbox || []) {
     if (ob.group && ob.group !== '__klant_dm__') continue;
-    const c = (ob.customerId && db().customers.find((x) => x.id === ob.customerId))
-      || perNummer.get(matchPhone(ob.phone || ''));
+    const obTel = matchPhone(ob.phone || '');
+    const c = (ob.customerId && klantIndex.get(ob.customerId)) || perNummer.get(obTel);
     if (c) bump(c.id, ob.createdAt, ob.text, true);
-    else if (echtNummer(matchPhone(ob.phone || ''))) bumpOnbekend(matchPhone(ob.phone), '', ob.createdAt, ob.text, true);
+    else if (echtNummer(obTel)) bumpOnbekend(obTel, '', ob.createdAt, ob.text, true);
   }
   // Losse uitgaande e-mails (via Berichten verstuurd aan een klant zonder kaart).
   for (const mu of db().mailUit || []) bump(mu.customerId, mu.at, mu.body, true);
@@ -602,8 +619,6 @@ app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) =
   // Ongelezen per gesprek op leesmarkering (15 aug) — dekt óók klanten zonder open
   // kaart en onbekende nummers; order.unreadReplies blijft alleen de bord-badge doen.
   const ongelezen = telOngelezenChats(monteurEigenMarks(req));
-  // Eén keer indexeren i.p.v. per gesprek de hele kaartenlijst doorlopen (punt 21).
-  const klantIndex = new Map((db().customers || []).map((c) => [c.id, c]));
   const openPerKlant = new Map();
   for (const o of db().orders || []) {
     if (!o.customerId || o.archivedWeek || ['afgerond', 'geannuleerd'].includes(o.status)) continue;
@@ -935,11 +950,23 @@ app.get('/api/search', requireAuth, (req, res) => {
   const zoekTel = qDigits.length >= 6 ? qDigits.replace(/^(\+?31|0031)/, '0') : '';
   // Zonder-spaties-variant erbij, zodat een postcode als "3911AB" ook "3911 AB" vindt.
   const qStrip = q.replace(/\s+/g, '');
-  const hit = (...velden) => velden.some((v) => {
-    const h = String(v || '').toLowerCase();
-    return h.includes(q) || h.replace(/\s+/g, '').includes(qStrip);
-  });
-  const telHit = (v) => !!zoekTel && String(v || '').replace(/[^\d]/g, '').replace(/^(31|0031)/, '0').includes(zoekTel);
+  // SNELLER ZOEKEN (28 sep 2026, audit server#6): voorheen werd per bericht elk veld
+  // naar kleine letters gezet, nog eens zonder spaties gekopieerd, en van de hele
+  // tekst alle cijfers aan elkaar geplakt — over ALLE 12.000 berichten, bij elke
+  // toetsaanslag (70-230 ms waarin de hele server stilstond). Nu één voorgebouwde
+  // reguliere expressie per zoekopdracht (hoofdletterongevoelig, spaties tussen de
+  // tekens toegestaan = precies "zonder spaties bevat"), zonder kopieën.
+  const esc = (c) => c.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+  const tekstRe = new RegExp([...qStrip].map(esc).join('\\s*'), 'i');
+  const hit = (...velden) => velden.some((v) => v && tekstRe.test(String(v)));
+  // Telefoon: alleen cijfers met gangbare scheidingstekens ertussen (spatie, -, ., (, ),
+  // /) — niet meer ALLE cijfers van een bericht aan elkaar (huisnummer + postcode +
+  // bedrag gaven valse treffers). Een nummer dat met 0 begint matcht ook +31/0031.
+  const SEP = '[\\s\\-.()/]*';
+  const telRe = zoekTel ? new RegExp((zoekTel.startsWith('0')
+    ? `(?:0|31|0031)${SEP}${[...zoekTel.slice(1)].join(SEP)}`
+    : [...zoekTel].join(SEP))) : null;
+  const telHit = (v) => !!telRe && !!v && telRe.test(String(v));
   const monteur = req.user.role === 'monteur';
   const mijnKaart = (o) => !monteur || (o.monteurId && o.monteurId === req.user.monteurId);
   const maps = buildMaps();
@@ -970,8 +997,19 @@ app.get('/api/search', requireAuth, (req, res) => {
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
     .slice(0, 8).map((i) => ({ id: i.id, number: i.number, type: i.type || 'factuur', status: i.status, totalIncl: i.totalIncl || 0, customer: (maps.customers.get(i.customerId) || {}).name || '' }));
 
-  const messages = monteur ? [] : (db().messages || [])
-    .filter((m) => !m.bounce && (hit(m.body, m.sender, m.subject, m.group) || telHit(m.body)))
+  // Berichten staan chronologisch (oudste eerst): van nieuw naar oud lopen en stoppen
+  // zodra er ruim genoeg treffers zijn. Bewust 30 i.p.v. 8 verzamelen en daarna op
+  // datum sorteren — een bericht dat niet precies op volgorde staat (bv. teruggezet
+  // uit het archief) valt zo niet stil weg.
+  const berichtTreffers = [];
+  if (!monteur) {
+    const msgs = db().messages || [];
+    for (let i = msgs.length - 1; i >= 0 && berichtTreffers.length < 30; i--) {
+      const m = msgs[i];
+      if (!m.bounce && (hit(m.body, m.sender, m.subject, m.group) || telHit(m.body))) berichtTreffers.push(m);
+    }
+  }
+  const messages = berichtTreffers
     .sort((a, b) => String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')))
     .slice(0, 8).map((m) => ({ id: m.id, at: m.receivedAt, sender: m.sender || '', group: m.group || '', channel: m.channel || '', snippet: String(m.body || '').replace(/\s+/g, ' ').slice(0, 110), full: String(m.body || '').slice(0, 2000) }));
 
@@ -1387,6 +1425,21 @@ app.get('/api/orders', requireAuth, (req, res) => {
   res.json(list);
 });
 
+// EÉN opdracht ophalen (28 sep 2026, server-audit): het opdracht-venster vanuit de
+// zoekbalk, Facturen, het klantdossier of Berichten haalde voorheen ALLE opdrachten
+// incl. archief op (bij een groot archief 18 MB, ~230 ms waarin de server stilstond).
+// Zelfde grens als de lijst: een monteur ziet alleen zijn eigen opdrachten.
+app.get('/api/orders/:id', requireAuth, (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) {
+    const inTrash = (db().trash || []).find((o) => o.id === req.params.id);
+    if (inTrash) return res.status(404).json({ error: 'Deze opdracht staat in de prullenbak — haal hem eerst terug.' });
+    return res.status(404).json({ error: 'Opdracht niet gevonden — misschien is hij samengevoegd of verwijderd.' });
+  }
+  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
+  res.json(withRelations(order));
+});
+
 // Lijst van week-bundels (ingeklapte agenda's), met aantallen.
 app.get('/api/archives', requireAuth, (req, res) => {
   const map = new Map();
@@ -1563,9 +1616,11 @@ app.post('/api/backups/prune', requireRole('admin'), (req, res) => {
   res.json({ ok: true, removed, kept: keep });
 });
 // Nu meteen een back-up maken.
-app.post('/api/backups/now', requireRole('admin'), (req, res) => {
+app.post('/api/backups/now', requireRole('admin'), async (req, res) => {
   save(); // eerst de actuele staat wegschrijven
-  const r = backupNow('handmatig');
+  // In de achtergrond (28 sep 2026, audit server#2): de server blijft intussen gewoon
+  // verzoeken afhandelen.
+  const r = await backupNowAsync('handmatig');
   logActivity(req.user.name, 'back-up gemaakt');
   res.json({ ok: !!r });
 });
@@ -1777,16 +1832,47 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
 
   if (b.status && !isValidStatus(b.status)) return res.status(400).json({ error: 'Ongeldige status' });
 
+  // GELIJKTIJDIG BEWERKEN (28 sep 2026, audit): het opdracht-venster stuurde bij
+  // Opslaan de HELE formulierinhoud van het moment van openen terug en zette zo
+  // status/notitie die een collega of de monteur intussen had gewijzigd stil terug.
+  // Het venster stuurt nu alleen gewijzigde velden, plus per veld de waarde die het
+  // zag (`basis`). Wijkt de huidige waarde van DAT veld daarvan af (en is het niet
+  // toevallig dezelfde nieuwe waarde), dan 409 i.p.v. overschrijven. Bewust per veld
+  // en niet op updatedAt: die wordt door achtergrondtaken (klantbericht, bevestiging,
+  // bijlage) zo vaak opgehoogd dat elke opslag een valse melding zou geven.
+  // Oude clients zonder `basis` werken ongewijzigd.
+  if (b.basis && typeof b.basis === 'object') {
+    const norm = (v) => (v == null ? '' : typeof v === 'boolean' ? (v ? '1' : '') : String(v));
+    const velden = allowed.filter((k) => k in b && k in b.basis
+      && norm(order[k]) !== norm(b.basis[k]) && norm(order[k]) !== norm(b[k]));
+    if (velden.length) {
+      const namen = { status: 'status', notes: 'notitie', title: 'titel', monteurId: 'monteur', price: 'prijs', source: 'bron', urgent: 'spoed', appointmentAt: 'afspraak', appointmentEndAt: 'afspraak-eind', description: 'omschrijving' };
+      return res.status(409).json({
+        error: `Deze opdracht is intussen door iemand anders gewijzigd (${velden.map((k) => namen[k] || k).join(', ')}). Herlaad het venster om de nieuwste versie te zien.`,
+        conflict: true, velden,
+        // Huidige waarden: kiest de gebruiker "blijven", dan neemt het venster deze als
+        // nieuwe basis en overschrijft een tweede Opslaan bewust (geen 409-lus).
+        huidig: Object.fromEntries(velden.map((k) => [k, order[k] ?? null])),
+      });
+    }
+  }
+
   // MENSELIJKE CORRECTIE = hoogste waarheid: worden de klantgegevens op de kaart
   // bewerkt, dan werkt dat óók order.intake bij (de kaart-eigen gegevens waar de
   // monteur-dispatch mee wordt opgebouwd). Anders ging een verbeterde kaart alsnog
   // met de oude AI-extractie ("Klant: U") naar de monteur.
+  // Alleen de MEEGESTUURDE velden wijzigen (28 sep 2026): het venster stuurt nu
+  // alleen wat de gebruiker echt aanpaste; de rest van de aanvraag-gegevens blijft
+  // staan (WET 3 — nooit stil overschrijven). Oude clients sturen alle vier mee.
   if (req.user.role !== 'monteur' && b.intake && typeof b.intake === 'object') {
+    const oud = order.intake || {};
+    const neem = (k, max) => String((k in b.intake ? b.intake[k] : oud[k]) || '').slice(0, max).trim();
     order.intake = {
-      name: String(b.intake.name || '').slice(0, 120).trim(),
-      phone: String(b.intake.phone || '').slice(0, 40).trim(),
-      email: String(b.intake.email || '').slice(0, 120).trim(),
-      address: String(b.intake.address || '').slice(0, 200).trim(),
+      ...oud,
+      name: neem('name', 120),
+      phone: neem('phone', 40),
+      email: neem('email', 120),
+      address: neem('address', 200),
     };
   }
 
@@ -2002,17 +2088,17 @@ app.post('/api/orders/:id/seen', requireAuth, (req, res) => {
 
 // Bijlage handmatig toevoegen aan een opdracht (foto/video/document).
 // Verwacht JSON: { filename, mime, dataBase64 }.
-app.post('/api/orders/:id/attachments', requireAuth, (req, res) => {
-  const order = db().orders.find((o) => o.id === req.params.id);
-  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
-  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
-  const { filename, mime, dataBase64 } = req.body || {};
-  if (!dataBase64) return res.status(400).json({ error: 'Geen bestand ontvangen' });
-  let buffer;
-  try { buffer = Buffer.from(String(dataBase64).split(',').pop(), 'base64'); }
-  catch { return res.status(400).json({ error: 'Ongeldig bestand' }); }
-  const saved = saveBuffer(buffer, { mime, filename });
-  if (!saved) return res.status(400).json({ error: 'Bestand te groot of leeg (max 25 MB)' });
+// 28 sep 2026 (audit server GEMIST 1): hashen en wegschrijven gaan asynchroon
+// (saveBufferAsync) — een video van 20 MB legde de hele server anders ±0,7 s stil.
+// Ná het wachten wordt de kaart OPNIEUW opgezocht via db(): zo ziet de opslag de
+// wijziging gegarandeerd (de proxy telt alleen wat ná het opvragen wordt aangeraakt),
+// en een kaart die intussen naar de prullenbak ging krijgt geen spook-bijlage.
+function bijlageAanKaartHangen(req, res, orderId, saved) {
+  const order = db().orders.find((o) => o.id === orderId);
+  if (!order) {
+    if (!saved.hergebruikt) verwijderBestandenAlsOngebruikt([saved.file]);
+    return res.status(404).json({ error: 'Niet gevonden — de opdracht is intussen verwijderd' });
+  }
   saved.uploadedBy = req.user.name;
   // Zelfde foto nogmaals op deze kaart? Dan geen tweede verwijzing (audit 16 sep).
   const voor = (order.attachments || []).length;
@@ -2021,7 +2107,48 @@ app.post('/api/orders/:id/attachments', requireAuth, (req, res) => {
   order.updatedAt = now();
   if (!dubbel) logActivity(req.user.name, 'bijlage toegevoegd', `${order.title}: ${saved.filename}`);
   saveSoon();
-  res.json({ ...withRelations(order), ...(dubbel ? { dubbel: true } : {}) });
+  return res.json({ ...withRelations(order), ...(dubbel ? { dubbel: true } : {}) });
+}
+app.post('/api/orders/:id/attachments', requireAuth, async (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
+  const { filename, mime, dataBase64 } = req.body || {};
+  if (!dataBase64) return res.status(400).json({ error: 'Geen bestand ontvangen' });
+  let buffer;
+  try {
+    buffer = req.uploadBase64
+      ? await base64NaarBytes(req.uploadBase64) // in blokken, met pauzes (upload-body.js)
+      : Buffer.from(String(dataBase64).split(',').pop(), 'base64');
+  } catch { return res.status(400).json({ error: 'Ongeldig bestand' }); }
+  req.body = null; req.rawBody = null; req.uploadBase64 = null; // niet langer vasthouden dan nodig
+  const saved = await saveBufferAsync(buffer, { mime, filename });
+  if (!saved) return res.status(400).json({ error: 'Bestand te groot of leeg (max 25 MB)' });
+  return bijlageAanKaartHangen(req, res, req.params.id, saved);
+});
+// RUWE UPLOAD (28 sep 2026, audit server GEMIST 1): het bestand zelf als body
+// (Content-Type = het bestandstype, ?filename=…), zonder base64 en zonder JSON —
+// het gaat in stukjes rechtstreeks naar schijf en wordt onderweg gehasht. Zelfde
+// rechten, grens (25 MB) en ontdubbeling als de JSON-route hierboven. Het scherm
+// (app.js) kan hier het File-object direct naartoe sturen i.p.v. readAsDataURL.
+const TE_GROOT_TEKST = 'Bestand te groot. Een foto of video mag maximaal 25 MB zijn — maak hem kleiner en probeer opnieuw.';
+app.post('/api/orders/:id/attachments/raw', requireAuth, async (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
+  const mime = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].trim().toLowerCase();
+  if (/json|x-www-form-urlencoded|multipart/.test(mime)) return res.status(400).json({ error: 'Stuur het bestand zelf als body (Content-Type = bestandstype)' });
+  const maxBytes = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
+  if (Number(req.headers['content-length'] || 0) > maxBytes) return res.status(413).json({ error: TE_GROOT_TEKST });
+  const filename = String(req.query.filename || '').replace(/[\r\n"/\\]/g, '').slice(0, 200);
+  let saved;
+  try { saved = await saveStream(req, { mime, filename }); }
+  catch (e) {
+    if (e.code === 'TE_GROOT') return res.status(413).json({ error: TE_GROOT_TEKST });
+    throw e;
+  }
+  if (!saved) return res.status(400).json({ error: 'Geen bestand ontvangen' });
+  return bijlageAanKaartHangen(req, res, req.params.id, saved);
 });
 
 // Bijlage verwijderen van een opdracht.
@@ -2308,6 +2435,14 @@ app.post('/api/reviews/:id/restore', requirePerm('inbox'), (req, res) => {
   // Terug naar waar het vandaan kwam (audit 16 sep): afgewezen "geklets" hoort bij
   // Overige, niet ineens in de lead-wachtrij.
   r.status = r.prevStatus === 'overige' ? 'overige' : 'pending'; r.reviewedAt = null; r.reviewedBy = null; delete r.prevStatus;
+  // Het LEERSIGNAAL van die afwijzing ook terugdraaien (28 sep 2026, audit): na
+  // "Ongedaan maken" bleef "Afgewezen (geen reden opgegeven)" in de feedback staan en
+  // ging het als 'dit is géén opdracht'-voorbeeld mee naar de AI. Alleen het NIEUWSTE
+  // reject-item van deze review (feedback staat nieuwste-eerst); oudere afwijzingen
+  // en correcties blijven staan.
+  const fb = db().feedback || [];
+  const fi = fb.findIndex((f) => f.type === 'reject' && f.reviewId === r.id);
+  if (fi >= 0) fb.splice(fi, 1);
   saveSoon();
   res.json({ ok: true });
 });
@@ -4611,9 +4746,18 @@ app.post('/api/bundles/add', requirePerm('settings'), (req, res) => {
 // hangt — zodat er nooit meer omzet wordt vergeten. Monteur ziet alleen eigen werk.
 // LET OP: vóór de /:id-route registreren, anders vangt die "todo" af.
 app.get('/api/invoices/todo', requireAuth, (req, res) => {
-  const invByOrder = new Set((db().invoices || []).filter((i) => i.orderId && i.type !== 'offerte').map((i) => i.orderId));
+  // Alleen een ECHTE factuur telt als "gefactureerd" (28 sep 2026, audit): een
+  // offerte (order.invoiceId wijst ook naar offertes!) of een lege €0-factuur die
+  // nooit verstuurd is (bv. "Maak factuur" geopend en meteen gesloten — door
+  // standaardBetaald staat die op betaald) liet de klus uit deze lijst verdwijnen en
+  // zo werd omzet vergeten. Een verstuurde factuur telt altijd (ook €0 = bewust).
+  // Een €0-factuur MÉT regels (garantie/gratis klus) is ook bewust gefactureerd.
+  const echteFactuur = (i) => !!i && i.type !== 'offerte' && ((Number(i.totalIncl) || 0) !== 0 || !!i.sentAt || (i.lines || []).length > 0);
+  const invById = new Map((db().invoices || []).map((i) => [i.id, i]));
+  const invByOrder = new Set((db().invoices || []).filter((i) => i.orderId && echteFactuur(i)).map((i) => i.orderId));
+  const leegPerOrder = new Map((db().invoices || []).filter((i) => i.orderId && i.type !== 'offerte' && !echteFactuur(i)).map((i) => [i.orderId, i]));
   const maps = buildMaps();
-  let list = (db().orders || []).filter((o) => o.status === 'afgerond' && !o.invoiceId && !invByOrder.has(o.id));
+  let list = (db().orders || []).filter((o) => o.status === 'afgerond' && !echteFactuur(invById.get(o.invoiceId)) && !invByOrder.has(o.id));
   if (req.user.role === 'monteur') list = list.filter((o) => o.monteurId && o.monteurId === req.user.monteurId);
   res.json(list
     .sort((a, b) => String(b.completedAt || b.updatedAt || '').localeCompare(String(a.completedAt || a.updatedAt || '')))
@@ -4622,6 +4766,9 @@ app.get('/api/invoices/todo', requireAuth, (req, res) => {
       id: o.id, title: o.title || '', price: o.price || '',
       completedAt: o.completedAt || o.updatedAt || '',
       customerId: o.customerId, customerName: (maps.customers.get(o.customerId) || {}).name || '',
+      // Staat er al een lege (nog niet verstuurde €0-)factuur klaar? Dan opent "Maak
+      // factuur" díe — anders verbruikte elke klik een nieuw factuurnummer.
+      leegFactuurId: (() => { const l = leegPerOrder.get(o.id) || (invById.get(o.invoiceId)?.type !== 'offerte' ? invById.get(o.invoiceId) : null); return l ? l.id : null; })(),
     })));
 });
 
@@ -5011,7 +5158,11 @@ app.get('/api/invoices', requireAuth, (req, res) => {
     // baseert (instelbaar) i.p.v. een vaste 7 dagen in de frontend.
     const dueAt = i.type !== 'offerte' && i.sentAt
       ? new Date(new Date(i.sentAt).getTime() + payDays * 86400000).toISOString() : null;
-    return { ...i, customerName: c.name || '', customerEmail: c.email || '', customerPhone: c.phone || '', customerAddress: c.address || '', orderTitle: o.title || '', dueAt };
+    // De handtekening (data-URL tot 500 KB per stuk) NIET meesturen (28 sep 2026, audit
+    // server#8): de lijst gebruikt hem niet, de editor haalt GET /api/invoices/:id op —
+    // en hij was 80-86% van de hele lijst. `lines` blijft wel mee (tests/scherm).
+    const { signature, ...rest } = i;
+    return { ...rest, hasSignature: !!signature, customerName: c.name || '', customerEmail: c.email || '', customerPhone: c.phone || '', customerAddress: c.address || '', orderTitle: o.title || '', dueAt };
   }));
 });
 
@@ -5340,14 +5491,14 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     // Kolommen gewijzigd (hernoemd/toegevoegd) door een collega? Dan moet elk open
     // scherm z'n kolomlijst verversen — anders gaf slepen "Ongeldige status".
     metaV: getStatusKeys().join('|'),
-    pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
+    pendingReviews: pulseTellers().pendingReviews,
     // Mailbox-vulgraad (alleen meegeven als bijna vol — anders blijft het stil).
     mailboxPct: (mq && mq.supported && mq.pct >= 85) ? mq.pct : null,
     mailboxBox: (mq && mq.supported && mq.pct >= 85 && mq.worstUser) ? String(mq.worstUser).split('@')[0] + '@' : null,
     // Nieuwe 1-op-1 klantberichten sinds je Berichten voor het laatst opende. Zo zie je
     // vanaf ELK scherm dat er een klant zit te wachten, ook als het appje (terecht) geen
     // lead werd. Alleen zinvol voor wie het scherm mag zien.
-    newChats: ['admin', 'assistent'].includes(req.user.role) ? nieuweChats() : 0,
+    newChats: ['admin', 'assistent'].includes(req.user.role) ? pulseTellers().newChats : 0,
     // Aantal GESPREKKEN met ongelezen berichten (15 aug): dit is wat de badge op het
     // menu-item toont — zelfde bron als de groene tellers in de lijst, dus nooit meer
     // een badge die knippert tussen twee verschillende betekenissen. Monteur (15 aug):
@@ -5356,6 +5507,26 @@ app.get('/api/pulse', requireAuth, (req, res) => {
       : (req.user.role === 'monteur' ? monteurChatsOngelezen(req) : 0),
   });
 });
+
+// Pulse-tellers gememoriseerd (28 sep 2026, audit server#4): de pulse komt elke 5 s
+// van elk open scherm en las daarbij ALTIJD de reviews- en berichtenlijst. Elke lees-
+// actie markeert die lijsten voor de opslag als "aangeraakt", waardoor zelfs de
+// WhatsApp-hartslag (die alleen 2 instellingen wijzigt) daarna 12.000 berichten en
+// 3.500 reviews moest vergelijken (~30-85 ms stilstand). Nu alleen opnieuw tellen als
+// er écht iets veranderde. _chatsGezienOp zit in de sleutel: POST /api/chats/seen
+// slaat stil op (zonder de wijzigingsteller te verhogen) en moet de teller toch op
+// nul zetten.
+let _pulseTellersCache = { sleutel: '', pendingReviews: 0, newChats: 0 };
+function pulseTellers() {
+  const sleutel = `${changeVersion()}|${db().settings._chatsGezienOp || ''}`;
+  if (_pulseTellersCache.sleutel !== sleutel) {
+    let pendingReviews = 0, newChats = 0;
+    try { pendingReviews = db().reviews.filter((r) => r.status === 'pending').length; } catch { /* 0 */ }
+    try { newChats = nieuweChats(); } catch { /* 0 */ }
+    _pulseTellersCache = { sleutel, pendingReviews, newChats };
+  }
+  return _pulseTellersCache;
+}
 
 // Gememoriseerd per monteur + wijzigingsversie (review-audit 15 aug): de pulse komt
 // elke 5 s van elk open scherm — zonder cache scant iedere monteur-tab continu alle
@@ -5838,7 +6009,7 @@ app.get('/api/digest', requireRole('admin', 'assistent'), (req, res) => {
     byStatus,
     customerReplied, neverOpened, awaitingReply, stale,
     todayAppointments, weekAppointments, staleQuotes,
-    pendingReviews: db().reviews.filter((r) => r.status === 'pending').length,
+    pendingReviews: pulseTellers().pendingReviews,
   });
 });
 
@@ -5981,8 +6152,13 @@ app.get('/uploads/:file', allowUploadAccess, (req, res) => {
 
 // ---------- Statische bestanden / frontend ----------
 app.get('/', (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, req.user ? 'index.html' : 'login.html'));
+  const f = path.join(PUBLIC_DIR, req.user ? 'index.html' : 'login.html');
+  if (!wilGzip(req) || req.headers.range) return res.sendFile(f);
+  stuurGzipBestand(req, res, f).then((klaar) => { if (!klaar) res.sendFile(f); }).catch(() => { if (!res.headersSent) res.sendFile(f); });
 });
+// Tekstbestanden (app.js 517 KB, styles.css 94 KB…) gecomprimeerd uit een cache
+// (28 sep 2026, audit pc-browser#14); al het andere via express.static zoals altijd.
+app.use(statischeCompressie(PUBLIC_DIR));
 app.use(express.static(PUBLIC_DIR));
 // Afsluitende foutafhandelaar: ALTIJD JSON (het scherm toonde anders "Er ging iets
 // mis" op een HTML-foutpagina), mét de echte reden in het logboek van de server.

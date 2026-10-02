@@ -874,6 +874,40 @@ de regressie meegroeit.
   Automatische dispatch stuurt bewust nog steeds GEEN bijlagen mee (alleen de link).
   Tests: test/bridge-mediafix-test.mjs (26, zonder server — o.a. gedrag vóór/na de
   reparatie met een nagebootst media-model), klanten-test (65, +20), browser (177, +10).
+- **AUDIT SCHOKKERIGHEID (28 sep – 2 okt 2026, klacht eigenaar "knoppen schuiven mee +
+  schokkerigheid eruit"):** 5 audit-agents (pc-browser, mobiel-browser, schermcode,
+  functies, server) + controleurs; bevindingen in scratchpad/audit.json. Gefixt:
+  OPDRACHT-VENSTER: knoppenblok niet meer sticky; #f-save stuurt alleen GEWIJZIGDE velden
+  + `basis` (waarde die het venster zag) → PATCH /api/orders/:id geeft per veld 409 met
+  `huidig` als een collega datzelfde veld wijzigde ("blijven" neemt huidig over, tweede
+  Opslaan overschrijft bewust); klantvelden tonen order.intake (WET 3) en alleen
+  gewijzigde intake-velden worden samengevoegd (monteur ziet/wijzigt het klantrecord);
+  `eenKeer(btn, fn)` tegen dubbelklik (opslaan, goedkeuren, facturen, versturen, taken);
+  Esc/klik-ernaast/omlaag-vegen vragen eerst bij onopgeslagen invoer
+  (sluitDoorGebruiker); Escape na vraagTekst hersteld; vervolgvenster opent bovenaan;
+  GET /api/orders/:id + openOrderVers (geen 18 MB-lijst meer om één opdracht te openen).
+  LIVE/START: app begint op Start en ververst die live; Start heeft een vast skelet en
+  vervangt alleen gewijzigde blokken (zoekveld blijft, CLS 0,1–0,49 → ~0); verversen gaat
+  door bij focus in een keuzelijst; pauze bij verborgen tabblad; inbox 'Toon meer' blijft;
+  mobiel bord springt niet meer naar boven; na een deploy hetzelfde scherm terug.
+  BORD: per kaart bijwerken (bindBoardEvents, gedelegeerd) i.p.v. volledige herbouw
+  (60–130 ms → 8–18 ms; 7 → 0 herbouwen), geen pop-in/hover-trillen, slepen zonder
+  naijlen of dubbel tekenen; html{scrollbar-gutter:stable}; scrollen boven het gesprek
+  loopt door; plakkende tabbladen werken (.content overflow-x:clip); toasts in beeld.
+  SERVER: gzip (server/compressie.js), uploads zonder event-loop-blokkade
+  (server/upload-body.js, POST /api/orders/:id/attachments/raw), schrijfronde in
+  stukjes met pauzes (db.js; tijdens fase 1 aangeraakte lijsten gaan mee in fase 2),
+  compactere back-ups, noodOpruimronde i.p.v. elke 5 min een volle back-up bij een
+  bijna volle schijf, facturenlijst zonder handtekening-afbeeldingen, zoekbalk en
+  Berichten-lijst sneller, sw.js alleen nog voor wat hij echt cachet. 'Nog te
+  factureren' telt alleen een echte factuur (geen offerte/lege €0 zonder regels).
+  NIET gedaan (keuze eigenaar): kaartvolgorde "laatst bijgewerkt", factuur-knop opent
+  offerte, Snel antwoord via WhatsApp, smallere/lagere kaarten, thumbnails.
+  Tests: browser 230, audit 79, opslag 40, klanten 65 (+ alle overige groen).
+- **AI-vraagbaak leeg antwoord (2 okt 2026):** Sonnet 5/Opus 5 denken eerst en dat telde
+  mee voor max_tokens 6000 → bij een zware vraag alleen denkwerk, leeg vak. Nu 16000 +
+  effort medium + 4 min time-out, bij leeg nog één poging met effort low, anders een
+  duidelijke fout. Test: ai-modellen-test (36).
 - **Overig:** rollen (admin/assistent/monteur), wachtwoord wijzigen, wekelijks agenda-inklappen
   (zondag na 23:59, behalve open + afspraken na die week), dubbele klanten samenvoegen.
 

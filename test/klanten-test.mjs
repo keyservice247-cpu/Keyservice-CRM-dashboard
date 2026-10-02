@@ -55,7 +55,10 @@ console.log('\n== Nog te factureren ==');
 const todo1 = (await api('GET', '/api/invoices/todo')).json || [];
 ok('afgeronde kaart zonder factuur staat in de lijst', todo1.some((t) => t.id === ord.json.id), JSON.stringify(todo1.map((t) => t.title)));
 // Factuur koppelen aan de kaart -> van de lijst af.
-await api('POST', '/api/invoices', { customerId: piet.id, type: 'factuur', orderId: ord.json.id });
+// Sinds 28 sep 2026 telt alleen een échte factuur (bedrag > 0 of verstuurd): een lege
+// €0-factuur liet de klus ten onrechte van deze lijst verdwijnen (audit). Dus mét regel.
+const todoInv = (await api('POST', '/api/invoices', { customerId: piet.id, type: 'factuur', orderId: ord.json.id })).json;
+await api('PATCH', `/api/invoices/${(todoInv.invoice || todoInv).id}`, { lines: [{ description: 'Cilinder vervangen', qty: 1, priceExcl: 85 }] });
 const todo2 = (await api('GET', '/api/invoices/todo')).json || [];
 ok('na factuur-koppeling van de lijst af', !todo2.some((t) => t.id === ord.json.id));
 

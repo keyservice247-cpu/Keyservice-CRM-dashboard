@@ -188,17 +188,28 @@ function migrateJsonToSqlite(src) {
 
 // Wat is er veranderd sinds de vorige keer? Vergelijkt per record de nieuwe json-tekst
 // met wat er op schijf staat. Alleen verschillen worden weggeschreven.
-function collectChanges(colls, alles = false, overigeSleutels = null) {
-  const ups = [], dels = [], metas = [], delMetas = [], delColls = [];
-  // Eén keer alle bekende sleutels per collectie groeperen (punt 21): de scan naar
-  // verdwenen records liep anders per collectie over ÁLLE records van álle collecties.
+// Alle bekende (weggeschreven) recordsleutels per collectie groeperen. Alleen voor de
+// gevraagde collecties (28 sep 2026, audit server#2): de schrijfronde in stukjes
+// bouwde deze index voorheen per collectie opnieuw op over ALLE 20.000+ sleutels
+// (12x per ronde ≈ 35 ms stilstand).
+function groepeerBekend(colls) {
+  const gevraagd = colls ? new Set(colls) : null;
   const bekendPerColl = new Map();
   for (const key of written.keys()) {
     const sp = key.indexOf(' '); if (sp < 0) continue;
     const c = key.slice(0, sp);
+    if (gevraagd && !gevraagd.has(c)) continue;
     let lijst = bekendPerColl.get(c); if (!lijst) { lijst = []; bekendPerColl.set(c, lijst); }
     lijst.push(key);
   }
+  return bekendPerColl;
+}
+
+function collectChanges(colls, alles = false, overigeSleutels = null, bekendVooraf = null) {
+  const ups = [], dels = [], metas = [], delMetas = [], delColls = [];
+  // Eén keer alle bekende sleutels per collectie groeperen (punt 21): de scan naar
+  // verdwenen records liep anders per collectie over ÁLLE records van álle collecties.
+  const bekendPerColl = bekendVooraf || (colls.length ? groepeerBekend(colls) : new Map());
   for (const coll of colls) {
     const arr = Array.isArray(data[coll]) ? data[coll].slice() : [];
     // Veiligheidsklep: records zonder id (of dubbele ids) kunnen niet per record
@@ -302,25 +313,108 @@ function persistSync() {
 
 // Wegschrijven in stukjes: tussen de stukjes door krijgt de server ruimte om
 // verzoeken af te handelen. Zo staat het scherm nooit stil, ook niet bij veel data.
-const CHUNK = 4000;
+//
+// 28 sep 2026 (audit server#2): voorheen gaf de ronde alleen ademruimte TUSSEN
+// collecties, en alleen bij >4000 records — 1700 kaarten (14 MB) gingen dus in één
+// blok, en de minuut-controleronde legde de server elke minuut 70-150 ms stil. Nu
+// in twee fasen:
+//   fase 1 (met pauzes): per record vergelijken; elke ~8 ms een setImmediate, zodat
+//          verzoeken tussendoor gewoon worden afgehandeld. Er wordt hier NOG NIETS
+//          weggeschreven — alleen kandidaten verzameld.
+//   fase 2 (in één keer, zonder pauze): de lijsten opnieuw bekijken zoals ze NU zijn:
+//          kandidaten opnieuw vergelijken (een tussentijds gewijzigd/verplaatst
+//          record krijgt zijn actuele inhoud, een verdwenen record valt af), nieuwe
+//          records erbij, verwijderingen en volgorde exact op de huidige stand. Alles
+//          in ÉÉN transactie, net als vroeger — een kaart die van orders naar trash
+//          verhuist staat dus nooit half/dubbel op schijf.
+// Wat ná zijn bezoek in fase 1 nog wijzigt, is via de proxy opnieuw "aangeraakt" en
+// gaat mee in de volgende ronde (en anders in de minuut-controleronde).
+// DB_BLOK_MS=0 laat de test na élk record een pauze nemen (zo is "tussendoor wijzigen"
+// te bewijzen); normaal 8 ms.
+const BLOK_MS = Number.isFinite(Number(process.env.DB_BLOK_MS)) && process.env.DB_BLOK_MS !== '' ? Number(process.env.DB_BLOK_MS) : 8;
 let passRunning = false, passAgain = false;
-async function persistChunked() {
-  if (passRunning) { passAgain = true; return; }
+function isPerRecord(arr) {
+  const ids = new Set();
+  for (const r of arr) {
+    const rid = r && typeof r === 'object' ? r.id : null;
+    if (typeof rid !== 'string' || !rid || ids.has(rid)) return null;
+    ids.add(rid);
+  }
+  return ids;
+}
+// Geeft een belofte die pas klaar is als de LOPENDE ronde (incl. herhalingen) klaar
+// is — zodat de back-up eerst alles in stukjes kan laten wegschrijven.
+let passBelofte = Promise.resolve();
+function persistChunked() {
+  if (passRunning) { passAgain = true; return passBelofte; }
   passRunning = true;
+  passBelofte = doePass();
+  return passBelofte;
+}
+// Alleen voor test/opslag-test.mjs: een schrijfronde in stukjes direct starten.
+export function persistInStukjes() { return persistChunked(); }
+async function doePass() {
   try {
     do {
       passAgain = false;
       const sel = teControleren();
-      const alleChanges = { ups: [], dels: [], metas: [], delMetas: [], delColls: [] };
+      // ---- fase 1: vergelijken met pauzes ----
+      const kandidaten = new Map(); // coll -> Set van ids die (mogelijk) gewijzigd zijn
+      const bezocht = new Map();    // coll -> Set van bezochte record-objecten
+      let t = performance.now();
       for (const coll of sel.record) {
-        const ch = collectChanges([coll], false, []);
-        for (const k of Object.keys(alleChanges)) alleChanges[k].push(...ch[k]);
-        // Bij een grote lijst even ademruimte geven, zodat de server niet blokkeert.
-        if ((data[coll] || []).length > CHUNK) await new Promise((r) => setImmediate(r));
+        const arr = Array.isArray(data[coll]) ? data[coll].slice() : [];
+        if (!isPerRecord(arr)) continue; // blok-pad: in fase 2 in één keer
+        const kand = new Set(); const gezien = new Set();
+        kandidaten.set(coll, kand); bezocht.set(coll, gezien);
+        for (const r of arr) {
+          gezien.add(r);
+          if (written.get(`${coll} ${r.id}`) !== JSON.stringify(r)) kand.add(r.id);
+          if (performance.now() - t > BLOK_MS) {
+            await new Promise((res) => setImmediate(res));
+            t = performance.now();
+          }
+        }
+      }
+      // ---- fase 2: op de huidige stand afronden, in één transactie ----
+      // Lijsten die TIJDENS fase 1 zijn aangeraakt gaan mee in deze transactie (review
+      // 28 sep 2026): verplaatst een verzoek in een pauze kaart X van orders naar trash,
+      // dan zou X anders even in geen van beide op schijf staan — bij een harde crash in
+      // dat venster kwijt. touched zelf blijft staan (volgende ronde controleert opnieuw).
+      for (const c of touched) if (RECORD_COLLS.includes(c) && !sel.record.includes(c)) sel.record.push(c);
+      const alle = { ups: [], dels: [], metas: [], delMetas: [], delColls: [] };
+      const bekend = groepeerBekend(sel.record);
+      for (const coll of sel.record) {
+        const arr = Array.isArray(data[coll]) ? data[coll] : [];
+        const ids = isPerRecord(arr);
+        const kand = kandidaten.get(coll); const gezien = bezocht.get(coll);
+        if (!ids || !kand) {
+          // Records zonder (unieke) id, of de lijst veranderde van vorm: het oude,
+          // volledige pad voor deze ene lijst.
+          const ch = collectChanges([coll], false, [], bekend);
+          for (const k of Object.keys(alle)) alle[k].push(...ch[k]);
+          continue;
+        }
+        if (written.has(`#meta #blob:${coll}`)) alle.delMetas.push(`#blob:${coll}`);
+        const volgorde = [];
+        for (const r of arr) {
+          volgorde.push(r.id);
+          if (gezien.has(r) && !kand.has(r.id)) continue; // bezocht en gelijk
+          const key = `${coll} ${r.id}`;
+          const js = JSON.stringify(r);
+          if (written.get(key) !== js) alle.ups.push([coll, r.id, js, key]);
+        }
+        const prefix = `${coll} `;
+        for (const key of bekend.get(coll) || []) {
+          const rid = key.slice(prefix.length);
+          if (!ids.has(rid)) alle.dels.push([coll, rid, key]);
+        }
+        const ordJs = JSON.stringify(volgorde);
+        if (written.get(`#meta #order:${coll}`) !== ordJs) alle.metas.push([`#order:${coll}`, ordJs]);
       }
       const rest = collectChanges([], false, sel.overig); // settings, finance, sessies…
-      for (const k of Object.keys(alleChanges)) alleChanges[k].push(...rest[k]);
-      applyChanges(alleChanges);
+      for (const k of Object.keys(alle)) alle[k].push(...rest[k]);
+      applyChanges(alle);
     } while (passAgain);
     lastSaveFailureAt = 0; lastSaveFailureMsg = '';
   } catch (e) {
@@ -335,38 +429,181 @@ async function persistChunked() {
 // elke back-up, dus je verliest bij terugvallen hooguit een paar minuten.
 // Niet-blokkerende momentopname (voor de periodieke timer): schrijft in de achtergrond,
 // verwisselt het bestand pas als het compleet is. Alleen als er iets veranderde.
+//
+// 28 sep 2026 (audit server#2/#3): de momentopname en de back-up bouwden elk één
+// reuzestring van de hele dataset (JSON.stringify(data), de momentopname zelfs mét
+// inspringing). Bij 35 MB: 0,5-0,9 s waarin de HELE server stilstond, en +255 MB
+// geheugen (twee strings tegelijk) — vlak onder de 512 MB van Render Starter. Nu:
+//   - SQLite: eerst wegschrijven, daarna de JSON samenstellen uit de tekst die AL
+//     in `written` staat (exact wat er op schijf staat; JSON.stringify(record) is
+//     precies dezelfde tekst). Geen nieuwe kopie van de data, geen grote string.
+//   - In blokken van ~1 MB naar een .tmp-bestand, pas daarna hernoemen: een half
+//     bestand (schijf vol) komt nooit in de rotatie of als db.json terecht.
+//   - Zonder inspringing (16% kleiner); parseDbFile leest beide gewoon.
+// Lukt het wegschrijven naar SQLite niet (schijf vol), dan wordt de JSON per record
+// uit het GEHEUGEN opgebouwd — juist dan moet de back-up de actuele stand bevatten.
+function delenUitGeheugen() {
+  const delen = ['{'];
+  let eerste = true;
+  for (const k of Object.keys(data)) {
+    const v = data[k];
+    if (RECORD_COLLS.includes(k) && Array.isArray(v)) {
+      delen.push(`${eerste ? '' : ','}${JSON.stringify(k)}:[`);
+      v.forEach((r, i) => { const js = JSON.stringify(r); delen.push(i ? ',' + (js === undefined ? 'null' : js) : (js === undefined ? 'null' : js)); });
+      delen.push(']');
+      eerste = false;
+      continue;
+    }
+    const js = JSON.stringify(v);
+    if (js === undefined) continue; // zelfde gedrag als JSON.stringify(data)
+    delen.push(`${eerste ? '' : ','}${JSON.stringify(k)}:`, js);
+    eerste = false;
+  }
+  delen.push('}');
+  return delen;
+}
+function delenUitWritten() {
+  // Records per collectie (ook records zonder bekende volgorde: vangnet, net als sqliteLoad).
+  const perColl = new Map();
+  for (const key of written.keys()) {
+    if (key.startsWith('#meta ')) continue;
+    const sp = key.indexOf(' '); if (sp < 0) continue;
+    const c = key.slice(0, sp);
+    let m = perColl.get(c); if (!m) { m = new Map(); perColl.set(c, m); }
+    m.set(key.slice(sp + 1), written.get(key));
+  }
+  const delen = ['{'];
+  let eerste = true;
+  const lijst = (coll, recs) => {
+    delen.push(`${eerste ? '' : ','}${JSON.stringify(coll)}:[`);
+    eerste = false;
+    let n = 0;
+    for (const js of recs) { delen.push(n++ ? ',' + js : js); }
+    delen.push(']');
+  };
+  for (const coll of RECORD_COLLS) {
+    const blob = written.get(`#meta #blob:${coll}`);
+    if (blob !== undefined) { delen.push(`${eerste ? '' : ','}${JSON.stringify(coll)}:`, blob); eerste = false; continue; }
+    const recs = perColl.get(coll) || new Map();
+    const ordJs = written.get(`#meta #order:${coll}`);
+    const volgorde = ordJs ? JSON.parse(ordJs) : [];
+    const uit = [];
+    for (const rid of volgorde) { const js = recs.get(rid); if (js !== undefined) { uit.push(js); recs.delete(rid); } }
+    for (const js of recs.values()) uit.push(js);
+    lijst(coll, uit);
+  }
+  for (const [key, js] of written) {
+    if (!key.startsWith('#meta ')) continue;
+    const k = key.slice(6);
+    if (k.startsWith('#order:') || k.startsWith('#blob:') || RECORD_COLLS.includes(k)) continue;
+    delen.push(`${eerste ? '' : ','}${JSON.stringify(k)}:`, js);
+    eerste = false;
+  }
+  delen.push('}');
+  return delen;
+}
+// De volledige dataset als JSON in stukjes. `volledig`: eerst ALLE records
+// vergelijken (back-ups), anders alleen het aangeraakte wegschrijven (momentopname).
+function jsonDelen({ volledig = false } = {}) {
+  if (engine !== 'sqlite' || !sdb) return delenUitGeheugen();
+  try {
+    if (volledig) touchAll = true;
+    persistSync();
+    return delenUitWritten();
+  } catch (e) {
+    console.error('[MOMENTOPNAME] SQLite bijwerken mislukt — JSON uit het geheugen:', e.message);
+    return delenUitGeheugen();
+  }
+}
+// Een string volledig wegschrijven (writeSync kan in theorie minder bytes schrijven).
+function schrijfAllesSync(fd, s) {
+  const b = Buffer.from(s, 'utf8');
+  let off = 0;
+  while (off < b.length) off += fs.writeSync(fd, b, off, b.length - off);
+}
+const BLOK_BYTES = 1 << 20;
+function schrijfDelenSync(file, delen, { fsync = true } = {}) {
+  const tmp = `${file}.tmp`;
+  try {
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      let buf = []; let len = 0;
+      for (const s of delen) {
+        buf.push(s); len += s.length;
+        if (len >= BLOK_BYTES) { schrijfAllesSync(fd, buf.join('')); buf = []; len = 0; }
+      }
+      if (buf.length) schrijfAllesSync(fd, buf.join(''));
+      if (fsync) fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* best-effort */ }
+    throw e;
+  }
+}
+function fsyncMap(dir) {
+  try { const dfd = fs.openSync(dir, 'r'); try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); } } catch { /* optioneel */ }
+}
+
+// Zelfde, maar in de achtergrond: tussen de blokken van ~1 MB door handelt de server
+// gewoon verzoeken af. De stukjes zijn verwijzingen naar bestaande strings, in één
+// keer vastgelegd — een consistente stand, ook al gaat het schrijven daarna door.
+async function schrijfDelenAsync(file, delen, { fsync = true, tmp = `${file}.tmp` } = {}) {
+  let fh = null;
+  const schrijf = async (s) => {
+    const b = Buffer.from(s, 'utf8');
+    let off = 0;
+    while (off < b.length) off += (await fh.write(b, off, b.length - off)).bytesWritten;
+  };
+  try {
+    fh = await fs.promises.open(tmp, 'w');
+    let buf = []; let len = 0;
+    for (const s of delen) {
+      buf.push(s); len += s.length;
+      if (len >= BLOK_BYTES) { await schrijf(buf.join('')); buf = []; len = 0; }
+    }
+    if (buf.length) await schrijf(buf.join(''));
+    if (fsync) await fh.sync();
+    await fh.close(); fh = null;
+    await fs.promises.rename(tmp, file);
+  } catch (e) {
+    try { if (fh) await fh.close(); } catch { /* best-effort */ }
+    try { await fs.promises.unlink(tmp); } catch { /* best-effort */ }
+    throw e;
+  }
+}
+
 let _laatsteSnapshotVersie = -1;
+let _snapshotBezig = false;
 export async function snapshotJsonAsync() {
   if (!data) return false;
   if (changeCounter === _laatsteSnapshotVersie) return true; // niets veranderd
+  if (_snapshotBezig) return true;
+  _snapshotBezig = true;
   ensureDir();
-  const tmp = `${DB_FILE}.tmp`;
+  const versie = changeCounter;
   try {
-    const json = JSON.stringify(data, null, 2);
-    await fs.promises.writeFile(tmp, json);
-    await fs.promises.rename(tmp, DB_FILE);
-    _laatsteSnapshotVersie = changeCounter;
+    // Eigen tmp-naam: de synchrone variant (afsluiten/back-up) kan tussendoor lopen en
+    // mag nooit in hetzelfde half geschreven bestand terechtkomen.
+    await schrijfDelenAsync(DB_FILE, jsonDelen(), { fsync: false, tmp: `${DB_FILE}.async.tmp` });
+    _laatsteSnapshotVersie = versie;
     return true;
   } catch (e) {
     console.error('[MOMENTOPNAME] db.json bijwerken mislukt:', e.message);
-    try { await fs.promises.unlink(tmp); } catch { /* best-effort */ }
     return false;
-  }
+  } finally { _snapshotBezig = false; }
 }
 export function snapshotJson() {
   if (!data) return false;
   ensureDir();
-  const tmp = `${DB_FILE}.tmp`;
   try {
-    const json = JSON.stringify(data, null, 2);
-    const fd = fs.openSync(tmp, 'w');
-    try { fs.writeSync(fd, json); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(tmp, DB_FILE);
-    try { const dfd = fs.openSync(DATA_DIR, 'r'); try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); } } catch { /* optioneel */ }
+    const versie = changeCounter;
+    schrijfDelenSync(DB_FILE, jsonDelen());
+    fsyncMap(DATA_DIR);
+    _laatsteSnapshotVersie = versie;
     return true;
   } catch (e) {
     console.error('[MOMENTOPNAME] db.json bijwerken mislukt:', e.message);
-    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* best-effort */ }
     return false;
   }
 }
@@ -547,30 +784,137 @@ const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 // wegschrijven van de database zelf konden mislukken.
 const KEEP_BACKUPS = Math.max(3, Number(process.env.BACKUP_KEEP || 10));
 
+// Gedeelde voorbereiding: controles + opruimen + bestandsnaam. Geeft null als er
+// (terecht) geen back-up moet komen.
+function backupVoorbereiden() {
+  if (!data) return null;
+  // Nooit een verdacht LEGE dataset back-uppen: anders verdringt een lege back-up
+  // (na een mislukte/lege start) langzaam alle goede back-ups uit de rotatie.
+  if (!hasRealData(data)) { console.error('[BACK-UP] overgeslagen — dataset lijkt leeg (0 klanten/opdrachten/facturen)'); return null; }
+  if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  // EERST oude back-ups opruimen, DAN pas schrijven. Andersom werkt niet op een
+  // volle schijf: het schrijven faalt en het opruimen wordt nooit meer bereikt —
+  // de schijf blijft dan voorgoed vol.
+  pruneBackups(KEEP_BACKUPS - 1);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return path.join(BACKUP_DIR, `db-${stamp}.json`);
+}
+
 export function backupNow(reason = 'auto') {
   try {
-    if (!data) return null;
-    // Nooit een verdacht LEGE dataset back-uppen: anders verdringt een lege back-up
-    // (na een mislukte/lege start) langzaam alle goede back-ups uit de rotatie.
-    if (!hasRealData(data)) { console.error('[BACK-UP] overgeslagen — dataset lijkt leeg (0 klanten/opdrachten/facturen)'); return null; }
-    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    // EERST oude back-ups opruimen, DAN pas schrijven. Andersom werkt niet op een
-    // volle schijf: het schrijven faalt en het opruimen wordt nooit meer bereikt —
-    // de schijf blijft dan voorgoed vol.
-    const files = fs.readdirSync(BACKUP_DIR).filter((f) => f.startsWith('db-') && f.endsWith('.json')).sort();
-    while (files.length >= KEEP_BACKUPS) {
-      const old = files.shift();
-      try { fs.unlinkSync(path.join(BACKUP_DIR, old)); } catch { /* negeren */ }
+    const file = backupVoorbereiden();
+    if (!file) return null;
+    // 28 sep 2026 (audit server#2/#3 + GEMIST 2): in stukjes via een .tmp-bestand
+    // (geen reuzestring, geen half bestand in de rotatie bij een volle schijf).
+    const versie = changeCounter;
+    schrijfDelenSync(file, jsonDelen({ volledig: true }));
+    if (engine === 'sqlite') {
+      // Terugvalpunt meteen bijwerken: de inhoud is identiek aan deze back-up, dus
+      // gewoon kopiëren i.p.v. alles nóg een keer als JSON op te bouwen.
+      try {
+        const tmp = `${DB_FILE}.tmp`;
+        fs.copyFileSync(file, tmp);
+        const fd = fs.openSync(tmp, 'r+'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        fs.renameSync(tmp, DB_FILE);
+        fsyncMap(DATA_DIR);
+        _laatsteSnapshotVersie = versie;
+      } catch (e) {
+        console.error('[MOMENTOPNAME] db.json bijwerken na back-up mislukt:', e.message);
+        try { fs.unlinkSync(`${DB_FILE}.tmp`); } catch { /* best-effort */ }
+      }
     }
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const file = path.join(BACKUP_DIR, `db-${stamp}.json`);
-    fs.writeFileSync(file, JSON.stringify(data));
-    if (engine === 'sqlite') snapshotJson(); // terugvalpunt meteen bijwerken
     return { file, reason };
   } catch (e) {
     console.error('Back-up maken mislukt:', e.message);
     return null;
   }
+}
+
+// De automatische back-ups (opstart + elke 6 uur) in de ACHTERGROND (28 sep 2026,
+// audit server#2): eerst een volledige vergelijkingsronde in stukjes (met pauzes),
+// daarna de JSON uit de al weggeschreven tekst samenstellen en in blokken van 1 MB
+// asynchroon wegschrijven. De opstart-back-up viel precies samen met het moment dat
+// alle open schermen zichzelf na een deploy herladen; die stonden dan 0,5-0,9 s stil.
+// De synchrone backupNow blijft voor terugzetten, de knop en de nood-opruimronde.
+// Loopt er al een (bv. de opstart-back-up als iemand op de knop drukt)? Dan wacht de
+// tweede aanvraag gewoon op die ene i.p.v. een tweede kopie te maken.
+let _backupBelofte = null;
+export function backupNowAsync(reason = 'auto') {
+  if (_backupBelofte) return _backupBelofte;
+  _backupBelofte = maakBackupAsync(reason).finally(() => { _backupBelofte = null; });
+  return _backupBelofte;
+}
+async function maakBackupAsync(reason) {
+  try {
+    if (engine === 'sqlite' && sdb) { touchAll = true; await persistChunked(); }
+    const file = backupVoorbereiden();
+    if (!file) return null;
+    const versie = changeCounter;
+    const delen = jsonDelen(); // na de ronde hierboven: (vrijwel) niets meer te doen
+    await schrijfDelenAsync(file, delen);
+    if (engine === 'sqlite') {
+      try {
+        const tmp = `${DB_FILE}.bk.tmp`;
+        await fs.promises.copyFile(file, tmp);
+        const fh = await fs.promises.open(tmp, 'r+'); try { await fh.sync(); } finally { await fh.close(); }
+        await fs.promises.rename(tmp, DB_FILE);
+        _laatsteSnapshotVersie = versie;
+      } catch (e) {
+        console.error('[MOMENTOPNAME] db.json bijwerken na back-up mislukt:', e.message);
+        try { await fs.promises.unlink(`${DB_FILE}.bk.tmp`); } catch { /* best-effort */ }
+      }
+    }
+    return { file, reason };
+  } catch (e) {
+    console.error('Back-up maken mislukt:', e.message);
+    return null;
+  }
+}
+
+// Oude back-ups weghalen tot er `keep` over zijn (nieuwste blijven). Ruimt ook
+// achtergebleven .tmp-bestanden van een afgebroken back-up op.
+export function pruneBackups(keep = KEEP_BACKUPS) {
+  let removed = 0, freedBytes = 0;
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) return { removed, freedBytes };
+    const alles = fs.readdirSync(BACKUP_DIR);
+    // Alleen tmp-bestanden ouder dan 15 min: een jongere kan van een back-up zijn die
+    // op dit moment in de achtergrond wordt geschreven.
+    for (const f of alles.filter((x) => x.startsWith('db-') && x.endsWith('.json.tmp'))) {
+      try {
+        const p = path.join(BACKUP_DIR, f); const st = fs.statSync(p);
+        if (Date.now() - st.mtimeMs < 15 * 60000) continue;
+        fs.unlinkSync(p); removed++; freedBytes += st.size;
+      } catch { /* negeren */ }
+    }
+    const files = alles.filter((f) => f.startsWith('db-') && f.endsWith('.json')).sort();
+    while (files.length > Math.max(0, keep)) {
+      const old = files.shift();
+      try { const p = path.join(BACKUP_DIR, old); const sz = fs.statSync(p).size; fs.unlinkSync(p); removed++; freedBytes += sz; } catch { /* negeren */ }
+    }
+  } catch { /* map onleesbaar: niets te doen */ }
+  return { removed, freedBytes };
+}
+
+// NOOD-OPRUIMRONDE (28 sep 2026, audit server GEMIST 2): bij een volle schijf of een
+// mislukte opslag riep de watchdog elke 5 minuten backupNow aan. Die ruimde alleen op
+// tot 9 kopieën en schreef er meteen weer een volledige bij — er kwam dus géén ruimte
+// vrij (met <10 kopieën kostte het juist ruimte), plus elke keer een stilstand en een
+// geheugenpiek. Nu: terugsnoeien tot NOOD_KEEP kopieën zonder iets nieuws te schrijven,
+// en hooguit één nood-back-up per uur (die legt de stand uit het geheugen vast — bij
+// een mislukte opslag staat die immers nergens anders).
+const NOOD_KEEP = 3;
+let _laatsteNoodBackupAt = 0;
+export function noodOpruimronde(reden = 'nood-opruimronde') {
+  const weg = pruneBackups(NOOD_KEEP);
+  let backup = null;
+  if (Date.now() - _laatsteNoodBackupAt >= 60 * 60 * 1000) {
+    _laatsteNoodBackupAt = Date.now();
+    // Bewust NIET eerst tot NOOD_KEEP-1 snoeien: mislukt deze back-up (schijf echt
+    // vol), dan blijven de drie goede kopieën staan. De volgende ronde snoeit weer.
+    backup = backupNow(reden);
+  }
+  return { removed: weg.removed, freedMB: Math.round(weg.freedBytes / 1048576), backup: !!backup };
 }
 
 // Vrije schijfruimte (MB) op de datamap — voor de schijf-bewaking. Geeft null als
@@ -623,10 +967,18 @@ export function restoreBackup(name) {
 // terugvallen op de oude motor (STORAGE=json) nooit meer dan een paar minuten kost.
 export function startBackups() {
   const hours = Math.max(1, Number(process.env.BACKUP_EVERY_HOURS || 6));
-  setTimeout(() => backupNow('startup'), 10 * 1000);
-  setInterval(() => backupNow('periodiek'), hours * 3600 * 1000);
+  // De opstart-back-up werkt ook db.json bij. De aparte momentopname 30 s later was
+  // daardoor puur dubbel werk (nog eens 0,4 s stilstand vlak na een deploy, precies
+  // als alle schermen zichzelf herladen) — 28 sep 2026, audit server#2. Alleen als
+  // er geen back-up kwam (lege dataset) schrijven we de momentopname alsnog.
+  setTimeout(() => {
+    backupNowAsync('startup').then((b) => {
+      if (!b && engine === 'sqlite') return snapshotJsonAsync();
+      return null;
+    }).catch(() => {});
+  }, 10 * 1000);
+  setInterval(() => { backupNowAsync('periodiek').catch(() => {}); }, hours * 3600 * 1000);
   if (engine === 'sqlite') {
-    setTimeout(() => snapshotJson(), 30 * 1000);
     // Elke 10 minuten NIET-blokkerend (punt 21): de synchrone variant legde de server
     // bij 20 MB een paar honderd ms stil; die blijft alleen voor afsluiten/back-up.
     setInterval(() => { snapshotJsonAsync().catch(() => {}); }, 10 * 60 * 1000);

@@ -40,18 +40,18 @@ self.addEventListener('notificationclick', (event) => {
 
 // Netwerk-eerst: altijd vers ophalen; alleen bij een offline GET-navigatie tonen we
 // een korte melding. We cachen geen API-data of code (voorkomt verouderde schermen).
+// 28 sep 2026 (audit schermcode#20): alleen NAVIGATIES lopen nog via deze handler.
+// Voorheen ging élk GET-verzoek erdoorheen (de pulse elke 5 s, API-data, foto's en
+// video's met range-verzoeken) — een onnodige omweg, en na een tijdje stilte moest de
+// service worker eerst opstarten. Alle andere verzoeken handelt de browser nu zelf af;
+// api() in de app vertaalt een netwerkfout al naar een nette melding.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-  if (req.method !== 'GET') return; // POST/PATCH/DELETE nooit onderscheppen
+  if (req.method !== 'GET' || req.mode !== 'navigate') return;
   event.respondWith(
-    fetch(req).catch(() => {
-      if (req.mode === 'navigate') {
-        return new Response(
-          '<meta charset="utf-8"><div style="font-family:sans-serif;padding:40px;text-align:center;color:#333"><h2>Geen verbinding</h2><p>Je bent offline. Probeer het zo opnieuw.</p></div>',
-          { headers: { 'content-type': 'text/html; charset=utf-8' } }
-        );
-      }
-      return new Response('', { status: 504 });
-    })
+    fetch(req).catch(() => new Response(
+      '<meta charset="utf-8"><div style="font-family:sans-serif;padding:40px;text-align:center;color:#333"><h2>Geen verbinding</h2><p>Je bent offline. Probeer het zo opnieuw.</p></div>',
+      { headers: { 'content-type': 'text/html; charset=utf-8' } }
+    ))
   );
 });

@@ -127,7 +127,68 @@ ok('weesbestand (geen verwijzing, ouder dan 1 uur) wordt geteld', w1.n === 1 && 
 st.weesBestanden([refA, refB, refC, a1], { verwijder: true });
 ok('weesbestand verwijderd; bestanden mét verwijzing blijven', !st.fileExists(wees) && st.fileExists(oud1) && st.fileExists(a1.file));
 
-try { rmSync(DIR, { recursive: true, force: true }); rmSync(DIR2, { recursive: true, force: true }); } catch { /* opruimen best-effort */ }
+console.log('\n== Schrijfronde in stukjes: tussendoor wijzigen is veilig (28 sep 2026, audit server#2/#4) ==');
+const DIR3 = mkdtempSync(join(tmpdir(), 'crm-stukjes-'));
+process.env.DATA_DIR = DIR3;
+process.env.DB_BLOK_MS = '0'; // pauze na élk record, zodat we er "tussendoor" bij kunnen
+const mS = await import(`../server/db.js?stukjes=${Math.random()}`);
+mS.load();
+const dS = mS.db();
+for (let i = 0; i < 30; i++) dS.orders.push({ id: 'o' + i, title: 'Kaart ' + i, status: 'nieuw' });
+for (let i = 0; i < 5; i++) dS.customers.push({ id: 'k' + i, name: 'Klant ' + i });
+mS.save();
+const herlaadS = async () => { const m = await import(`../server/db.js?s=${Math.random()}`); m.load(); return m.db(); };
+mS.markAllDirty();
+const ronde = mS.persistInStukjes(); // staat nu stil na het eerste record
+const weg = dS.orders.splice(5, 1)[0]; weg.deletedAt = new Date().toISOString(); dS.trash.push(weg);
+const halverwege = await herlaadS();
+ok('tijdens de ronde is er nog NIETS half weggeschreven (kaart staat precies één keer op schijf)', halverwege.orders.filter((o) => o.id === 'o5').length + halverwege.trash.filter((o) => o.id === 'o5').length === 1);
+dS.orders.find((o) => o.id === 'o20').status = 'afgerond';
+mS.save(); // een synchrone opslag van een andere route, midden in de ronde
+dS.orders.push({ id: 'o_nieuw', title: 'Nieuw tussendoor' });
+dS.orders.find((o) => o.id === 'o7').title = 'Gewijzigd na de opslag';
+await ronde;
+mS.save();
+const naRonde = await herlaadS();
+ok('verplaatste kaart staat op schijf ALLEEN in de prullenbak', !naRonde.orders.some((o) => o.id === 'o5') && naRonde.trash.filter((o) => o.id === 'o5').length === 1);
+ok('alle tussentijdse wijzigingen bewaard, volgorde exact gelijk', JSON.stringify(naRonde.orders) === JSON.stringify(dS.orders) && JSON.stringify(naRonde.trash) === JSON.stringify(dS.trash));
+
+console.log('\n== Back-up en momentopname: compact, compleet, via .tmp (28 sep 2026, audit server#2/#3) ==');
+const { readdirSync, writeFileSync: wf3, utimesSync: ut3 } = await import('node:fs');
+const bS = mS.backupNow('test');
+const bTekst = readFileSync(bS.file, 'utf8');
+const bData = JSON.parse(bTekst);
+const gelijkAanGeheugen = (x) => Object.keys(JSON.parse(JSON.stringify(dS))).every((k) => JSON.stringify(x[k]) === JSON.stringify(dS[k]));
+ok('back-up bevat exact de gegevens uit het geheugen', gelijkAanGeheugen(bData));
+ok('back-up zonder inspringing (kleiner) en zonder achtergebleven .tmp', !bTekst.includes('\n') && !readdirSync(join(DIR3, 'backups')).some((f) => f.endsWith('.tmp')));
+ok('db.json (terugvalpunt) is daarna identiek aan de back-up', readFileSync(join(DIR3, 'db.json'), 'utf8') === bTekst);
+const ref = dS.orders[0];
+mS.save();
+ref.title = 'Stil gewijzigd (zonder db()-aanraking)'; // alleen de controleronde ziet dit
+await new Promise((r) => setTimeout(r, 5)); // andere tijdstempel voor de bestandsnaam
+const bA = await mS.backupNowAsync('test-async');
+const bAData = JSON.parse(readFileSync(bA.file, 'utf8'));
+ok('achtergrond-back-up bevat ook een wijziging die de proxy niet zag', bAData.orders[0].title === 'Stil gewijzigd (zonder db()-aanraking)' && gelijkAanGeheugen(bAData));
+process.env.STORAGE = 'json';
+const mJson2 = await import(`../server/db.js?jsonterug2=${Math.random()}`);
+mJson2.load();
+ok('noodrem STORAGE=json leest de nieuwe compacte db.json', mJson2.storageEngine() === 'json' && mJson2.db().orders.length === dS.orders.length && mJson2.db().orders[0].title === ref.title);
+process.env.STORAGE = 'sqlite';
+
+console.log('\n== Nood-opruimronde maakt echt ruimte vrij (28 sep 2026, audit server GEMIST 2) ==');
+for (let i = 0; i < 6; i++) { await new Promise((r) => setTimeout(r, 3)); mS.backupNow('vul'); }
+const bDir = join(DIR3, 'backups');
+const jong = join(bDir, 'db-jong.json.tmp'); const oud = join(bDir, 'db-oud.json.tmp');
+wf3(jong, 'x'); wf3(oud, 'x'); const lang = new Date(Date.now() - 3600000); ut3(oud, lang, lang);
+const voorNood = mS.listBackups().length;
+const n1 = mS.noodOpruimronde('test');
+ok('eerste noodronde: terug naar 3 kopieën + hooguit één nood-back-up', voorNood >= 8 && mS.listBackups().length === 4 && n1.backup === true && n1.removed >= voorNood - 3, `${voorNood} -> ${mS.listBackups().length} ${JSON.stringify(n1)}`);
+ok('oud .tmp-restant opgeruimd, een lopend (jong) .tmp-bestand niet', !existsSync(oud) && existsSync(jong));
+const n2 = mS.noodOpruimronde('test');
+ok('tweede noodronde binnen het uur: géén nieuwe back-up, 3 kopieën', n2.backup === false && mS.listBackups().length === 3, JSON.stringify(n2));
+delete process.env.DB_BLOK_MS;
+
+try { rmSync(DIR, { recursive: true, force: true }); rmSync(DIR2, { recursive: true, force: true }); rmSync(DIR3, { recursive: true, force: true }); } catch { /* opruimen best-effort */ }
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

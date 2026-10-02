@@ -81,6 +81,90 @@ export function saveBuffer(buffer, { mime = 'application/octet-stream', filename
   };
 }
 
+// ASYNCHROON OPSLAAN (28 sep 2026, audit server GEMIST 1): een video van 20 MB legde
+// de HELE server ±0,7 s stil — sha256 over het hele bestand en writeFileSync liepen
+// op de hoofdthread. Hier draaien het hashen (WebCrypto, in de threadpool) en het
+// wegschrijven in de achtergrond; dezelfde ontdubbeling en dezelfde uitkomst als
+// saveBuffer.
+function bijlageMeta({ name, hash, size, mime, filename, hergebruikt }) {
+  return {
+    id: 'att_' + crypto.randomBytes(8).toString('hex'),
+    file: name,
+    url: `/uploads/${name}`,
+    mime,
+    kind: kindFor(mime),
+    filename: filename || name,
+    size,
+    hash,
+    at: new Date().toISOString(),
+    ...(hergebruikt ? { hergebruikt: true } : {}),
+  };
+}
+function extVoor(mime, filename) {
+  return EXT[mime] || (filename.includes('.') ? filename.split('.').pop().slice(0, 5).replace(/[^a-zA-Z0-9]/g, '') || 'bin' : 'bin');
+}
+export async function saveBufferAsync(buffer, { mime = 'application/octet-stream', filename = '' } = {}) {
+  if (!buffer || !buffer.length) return null;
+  if (buffer.length > MAX_BYTES) {
+    console.error(`Bijlage te groot (${buffer.length} bytes), overgeslagen.`);
+    return null;
+  }
+  ensureDir();
+  const hash = Buffer.from(await crypto.webcrypto.subtle.digest('SHA-256', buffer)).toString('hex');
+  let name = hashIndex.get(hash) || '';
+  let hergebruikt = false;
+  if (name && fs.existsSync(path.join(UPLOAD_DIR, name))) hergebruikt = true;
+  else {
+    name = `att_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${extVoor(mime, filename)}`;
+    await fs.promises.writeFile(path.join(UPLOAD_DIR, name), buffer);
+    hashIndex.set(hash, name);
+  }
+  return bijlageMeta({ name, hash, size: buffer.length, mime, filename, hergebruikt });
+}
+
+// RUWE UPLOAD als stroom (28 sep 2026, audit server GEMIST 1): het bestand gaat in
+// stukjes van de verbinding rechtstreeks naar een tijdelijk bestand, en wordt
+// onderweg gehasht — nergens een buffer van 20 MB, geen base64, geen JSON.parse.
+// Pas als het compleet is: bestaat dezelfde inhoud al, dan het tijdelijke bestand weg
+// en het bestaande hergebruiken; anders hernoemen naar de definitieve naam.
+// Te groot → fout met code 'TE_GROOT' (de route maakt er een nette 413 van).
+export async function saveStream(stream, { mime = 'application/octet-stream', filename = '' } = {}) {
+  ensureDir();
+  // Verborgen naam: wordt nooit via /uploads geserveerd en telt niet als weesbestand.
+  const tmp = path.join(UPLOAD_DIR, `.upload-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.tmp`);
+  const hasher = crypto.createHash('sha256');
+  let size = 0;
+  let fh = null;
+  try {
+    fh = await fs.promises.open(tmp, 'w');
+    for await (const chunk of stream) {
+      size += chunk.length;
+      if (size > MAX_BYTES) { const e = new Error('Bestand te groot'); e.code = 'TE_GROOT'; throw e; }
+      hasher.update(chunk);
+      let off = 0;
+      while (off < chunk.length) off += (await fh.write(chunk, off, chunk.length - off)).bytesWritten;
+    }
+    await fh.close(); fh = null;
+    if (!size) { await fs.promises.unlink(tmp).catch(() => {}); return null; }
+    const hash = hasher.digest('hex');
+    let name = hashIndex.get(hash) || '';
+    let hergebruikt = false;
+    if (name && fs.existsSync(path.join(UPLOAD_DIR, name))) {
+      hergebruikt = true;
+      await fs.promises.unlink(tmp).catch(() => {});
+    } else {
+      name = `att_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${extVoor(mime, filename)}`;
+      await fs.promises.rename(tmp, path.join(UPLOAD_DIR, name));
+      hashIndex.set(hash, name);
+    }
+    return bijlageMeta({ name, hash, size, mime, filename, hergebruikt });
+  } catch (e) {
+    try { if (fh) await fh.close(); } catch { /* best-effort */ }
+    await fs.promises.unlink(tmp).catch(() => {});
+    throw e;
+  }
+}
+
 // Sleutel om identieke bijlages te herkennen: op inhoud-hash, met een terugval op
 // grootte+bestandsnaam voor oudere bijlages (van vóór de hash).
 export function attKey(a) {

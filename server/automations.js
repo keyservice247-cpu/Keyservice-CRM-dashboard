@@ -1,7 +1,7 @@
 // Automatiseringen rond de opdracht-lus: terugkoppeling via de controle-groep,
 // afspraakbevestiging + herinnering naar de klant, review-verzoek na afronding,
 // snooze-herinneringen, uitval-alarm (bridge/e-mail/AI) en de nachtelijke statusscan.
-import { db, id, now, save, saveSoon, logActivity, diskFreeMB, backupNow, saveFailure } from './db.js';
+import { db, id, now, save, saveSoon, logActivity, diskFreeMB, noodOpruimronde, saveFailure } from './db.js';
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
@@ -432,7 +432,10 @@ async function runWatchdog() {
   try {
     const sf = saveFailure();
     if (sf) {
-      try { backupNow('nood-opruimronde (opslaan faalt)'); } catch { /* best-effort */ }
+      // Echt ruimte maken (28 sep 2026, audit server GEMIST 2): oude back-ups weg tot er
+      // 3 over zijn, hooguit één nood-back-up per uur — niet meer elke 5 min een
+      // volledige back-up erbij schrijven.
+      try { noodOpruimronde('nood-opruimronde (opslaan faalt)'); } catch { /* best-effort */ }
       if (!global._saveFailAlarmAt || Date.now() - global._saveFailAlarmAt > 15 * 60000) {
         global._saveFailAlarmAt = Date.now();
         await alertAdmins('NOOD: database kan NIET opslaan', `Het wegschrijven van de database mislukt (${sf.message}). Nieuwe leads en afspraken leven nu ALLEEN in het geheugen en gaan bij een herstart verloren. Waarschijnlijk is de schijf vol: oude back-ups zijn automatisch opgeruimd — helpt dat niet, vergroot dan direct de schijf in het Render-dashboard (Disks). Voer géén updates/deploys uit tot dit alarm stopt.`);
@@ -444,14 +447,14 @@ async function runWatchdog() {
   } catch { /* watchdog mag nooit crashen */ }
   // Schijfruimte-bewaking: een volle schijf breekt bijlages, back-ups en (erger)
   // het wegschrijven van de database zelf. Onder de 150 MB vrij: alarm (1x/dag) +
-  // meteen een back-upronde draaien, want die ruimt eerst oude kopieën op en maakt
-  // zo direct ruimte vrij. Boven de grens: alarm vanzelf opheffen.
+  // meteen een opruimronde draaien (oude back-ups weg tot er 3 over zijn) en zo
+  // direct ruimte vrijmaken. Boven de grens: alarm vanzelf opheffen.
   try {
     const freeMB = diskFreeMB();
     if (freeMB != null) {
       const today = new Date().toISOString().slice(0, 10);
       if (freeMB < 150) {
-        try { backupNow('schijf-bijna-vol (opruimronde)'); } catch { /* best-effort */ }
+        try { noodOpruimronde('schijf-bijna-vol (opruimronde)'); } catch { /* best-effort */ }
         if (s._alerts.diskDay !== today) {
           s._alerts.diskDay = today; save();
           await alertAdmins('Schijf bijna VOL op de server', `Nog maar ${freeMB} MB vrij op de datamap. Bijlages en database-opslag kunnen mislukken. Oude back-ups zijn automatisch opgeruimd; blijft dit alarm komen, vergroot dan de schijf in het Render-dashboard (Disks).`);

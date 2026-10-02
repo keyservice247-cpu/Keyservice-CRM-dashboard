@@ -5,6 +5,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 // Dunne outline-iconen (Lucide-stijl) — strak en zakelijk, geen emoji.
 const ICON_PATHS = {
+  // 'search' ontbrak (28 sep 2026, audit): het zoekveld in Berichten had een lege plek links.
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-8 8"/>',
   check: '<path d="M5 12l4 4L19 6"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
@@ -76,7 +78,10 @@ async function api(path, method = 'GET', body) {
   if (res.status === 401) { window.location.href = '/'; return new Promise(() => {}); }
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    if (data && data.error) throw new Error(data.error);
+    if (data && data.error) {
+      // Status + volledige serverantwoord mee op de fout (bv. 409 met de huidige waarden).
+      const fout = new Error(data.error); fout.status = res.status; fout.data = data; throw fout;
+    }
     // Geen JSON terug (bv. 502 tijdens een herstart van de server): eerlijk zeggen.
     throw new Error(res.status >= 500 ? 'De server is even niet bereikbaar (herstart?) — probeer het over een halve minuut opnieuw.' : 'Er ging iets mis');
   }
@@ -121,6 +126,20 @@ function toastUndo(msg, undoFn, ms = 8000) {
   if (btn) btn.onclick = async () => { clearTimeout(toast._t); close(); try { await undoFn(); } catch (e) { toast(e.message, true); } };
 }
 
+// DUBBELKLIK-REM (28 sep 2026, audit functies#3): een knop die iets AANMAAKT,
+// VERSTUURT of GOEDKEURT staat uit zolang zijn verzoek loopt. Twee snelle klikken
+// gaven twee opdrachten, twee facturen (verbruikte factuurnummers) of een rode
+// "Al verwerkt" over de echte melding heen. Werkt ook voor niet-knoppen (data-bezig).
+// Vroege return-paden ("Titel verplicht") geven de knop in finally weer vrij.
+async function eenKeer(btn, fn) {
+  if (!btn) return fn();
+  if (btn.disabled || btn.dataset.bezig === '1') return undefined;
+  btn.dataset.bezig = '1';
+  if ('disabled' in btn) btn.disabled = true;
+  try { return await fn(); }
+  finally { delete btn.dataset.bezig; if ('disabled' in btn) btn.disabled = false; }
+}
+
 // Eigen invoervenster i.p.v. de kale browser-prompt() (keuze eigenaar 16 sep): met
 // titel, uitleg, validatie en een nette annuleerknop. Ligt BOVEN een eventueel open
 // venster (factuur-editor), dus het bestaande scherm blijft staan. Geeft null bij annuleren.
@@ -136,7 +155,10 @@ function vraagTekst({ titel = 'Invoer', uitleg = '', label = '', waarde = '', pl
     </div>`;
     document.body.appendChild(wrap);
     const input = wrap.querySelector('#md-input'); const fout = wrap.querySelector('#md-fout');
-    const sluit = (v) => { wrap.remove(); document.removeEventListener('keydown', toets); resolve(v); };
+    // Weghalen MET dezelfde capture-vlag als hieronder bij het toevoegen (28 sep 2026,
+    // audit): zonder `true` bleef de luisteraar hangen en slikte hij elke volgende
+    // Escape in — daarna sloot geen enkel venster of fotoviewer meer met Esc.
+    const sluit = (v) => { wrap.remove(); document.removeEventListener('keydown', toets, true); resolve(v); };
     const ok = () => {
       const v = input.value.trim();
       const probleem = valideer ? valideer(v) : (v ? '' : 'Vul iets in');
@@ -215,7 +237,10 @@ function orderChannel(o) {
 }
 
 // ---------- State ----------
-const state = { me: null, meta: null, monteurs: [], orders: [], view: 'board', channel: 'all' };
+// view begint op 'overview' (28 sep 2026, audit): index.html toont Start als eerste
+// scherm, maar hier stond 'board' — de live-verversing hield dan het verborgen bord
+// bij en Start werd na het openen van de app nooit meer bijgewerkt.
+const state = { me: null, meta: null, monteurs: [], orders: [], view: 'overview', channel: 'all' };
 
 const statusLabel = (key) => (state.meta.statusLabels && state.meta.statusLabels[key]) || key;
 const statusColor = (key) => {
@@ -277,11 +302,16 @@ function hasPerm(key) {
 
   bindNav();
   bindButtons();
+  document.body.dataset.view = state.view; // CSS per scherm klopt ook vóór de eerste menuklik
   // Monteur start op zijn opdrachten (Overzicht is voor hem verborgen).
   if (me.user.role === 'monteur') goView('board');
   syncPush(); // dood push-abonnement stil herstellen (fire-and-forget)
-  checkPushHint(); // meldingen nog niet aan op dit toestel? Balk met één knop (alle rollen)
+  // Meldingen nog niet aan op dit toestel? Balk met één knop (alle rollen). Start wacht
+  // er kort op (max 300 ms) zodat de balk niet ná de eerste tekening alles omlaag duwt.
+  window._pushHintKlaar = checkPushHint();
   await refreshAll();
+  // Na een zelf-herlaad (nieuwe versie) terug naar hetzelfde scherm (28 sep 2026).
+  await herstelPlekNaHerlaad();
   // Deeplink vanuit een pushmelding: /?open=<opdracht-id> opent direct die opdracht.
   try {
     const openId = new URLSearchParams(location.search).get('open');
@@ -298,7 +328,7 @@ function hasPerm(key) {
     }
   } catch { /* geen probleem */ }
   refreshWaStatus();
-  setInterval(refreshWaStatus, 60000);
+  setInterval(() => { if (!document.hidden) refreshWaStatus(); }, 60000);
   startLiveUpdates();
   maybeMorningDigest();
 })();
@@ -327,53 +357,100 @@ function maybeMorningDigest() {
 // Live-updates: checkt elke 5s of er iets veranderd is op de server en ververst
 // dan automatisch de huidige weergave — geen handmatig verversen nodig.
 let _lastPulse = null;
-// Onthoud wanneer de gebruiker voor het laatst scrollde/tikte, zodat we het scherm
-// niet midden in een swipe/scroll opnieuw opbouwen (voorkomt schokkerig gevoel).
+// Onthoud wanneer de gebruiker voor het laatst scrollde/tikte/typte, zodat we het
+// scherm niet midden in een swipe/scroll opnieuw opbouwen (voorkomt schokkerig gevoel).
 window._lastInteract = 0;
-['touchstart', 'touchmove', 'pointerdown', 'wheel', 'scroll'].forEach((ev) =>
+['touchstart', 'touchmove', 'pointerdown', 'wheel', 'scroll', 'keydown'].forEach((ev) =>
   window.addEventListener(ev, () => { window._lastInteract = Date.now(); }, { passive: true, capture: true }));
+// Welk deel van elk scherm tekent de pulse opnieuw? (28 sep 2026, audit) Alleen een
+// invoerveld/keuzelijst BINNEN dat deel houdt de verversing tegen. Voorheen stopte
+// ELK veld met focus alles — een gekozen bord-filter (een <select> houdt op de pc de
+// focus) of een leeg zoekveld bevroor het bord én de tellers tot je ergens anders
+// klikte. De velden in de schermkop (#boardSearch, filters, #inboxFilter, #chatZoek,
+// #globalSearch, #wr-offset) worden nooit hertekend en blokkeren dus niet meer.
+const PULSE_HERTEKEN = { overview: '.ov-dyn', board: '#board', inbox: '#reviewList', customers: '#customerList', chats: '#chatList, #chatPane' };
+function isInvoerVeld(a) { return !!a && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable); }
+function veldInHertekenGebied(view) {
+  const a = document.activeElement;
+  if (!isInvoerVeld(a) || a.id === 'cpText') return false; // het chat-typveld wordt nooit aangeraakt
+  const sel = PULSE_HERTEKEN[view];
+  return !!(sel && a.closest && a.closest(sel));
+}
+// ZELF-VERVERSING NA EEN DEPLOY (18 aug; 28 sep 2026 rustiger): een nieuwe versie wordt
+// niet meer midden in het lezen ingeladen, maar zodra de app naar de achtergrond gaat
+// (ander tabblad/app), bij terugkomst, of na 10 minuten zonder aanraking. Daarna zet
+// de app je terug op hetzelfde scherm, dezelfde kolom en dezelfde scrollhoogte —
+// voorheen sprong elke open telefoon na een deploy terug naar Start.
+function veiligOmTeHerladen() {
+  if (window._dragging || !$('#modalRoot')?.hidden) return false;
+  if (($('#cpText')?.value || '').trim()) return false;
+  if (boardSel.size || inboxSel.size) return false;
+  // Instellingen: vaak half ingevulde (nog niet opgeslagen) velden zonder focus.
+  if (state.view === 'settings') return false;
+  // Hier bewust de BREDE check: nooit herladen terwijl er ergens een veld focus heeft.
+  if (isInvoerVeld(document.activeElement)) return false;
+  return true;
+}
+function bewaarPlek() {
+  try {
+    sessionStorage.setItem('ksHerlaadPlek', JSON.stringify({ at: Date.now(), view: state.view, channel: state.channel, boardTab: state.boardTab || '', y: window.scrollY, inboxFilter: $('#inboxFilter')?.value || '' }));
+  } catch { /* geen opslag: dan gewoon Start */ }
+}
+function probeerHerladen(nu = false) {
+  if (!window._nieuweVersie || window._appReloading) return;
+  const stil = Date.now() - (window._lastInteract || 0) > 10 * 60000;
+  if (!nu && !document.hidden && !stil) return;
+  if (!veiligOmTeHerladen()) return;
+  window._appReloading = true;
+  bewaarPlek();
+  if (document.hidden) { location.reload(); return; }
+  toast('Nieuwe versie van het CRM — het scherm ververst zich even…');
+  setTimeout(() => location.reload(), 1500);
+}
+async function herstelPlekNaHerlaad() {
+  let plek = null;
+  try { plek = JSON.parse(sessionStorage.getItem('ksHerlaadPlek') || 'null'); sessionStorage.removeItem('ksHerlaadPlek'); } catch { return; }
+  if (!plek || !plek.view || Date.now() - (plek.at || 0) > 5 * 60000) return;
+  // Alleen een scherm dat deze rol ook via het menu kan openen.
+  const menu = $(`.nav-item[data-view="${plek.view}"]`) || $(`.bn-item[data-view="${plek.view}"]`);
+  if (!menu || menu.hidden || (plek.view === 'settings' && !hasPerm('settings'))) return;
+  if (plek.boardTab) state.boardTab = plek.boardTab;
+  const inf = $('#inboxFilter');
+  if (plek.inboxFilter && inf && [...inf.options].some((o) => o.value === plek.inboxFilter)) inf.value = plek.inboxFilter;
+  const tab = (plek.channel && $(`.nav-item[data-view="${plek.view}"][data-channel="${plek.channel}"]`)) || $(`.nav-item[data-view="${plek.view}"]`);
+  try {
+    if (plek.view !== state.view || (plek.channel || 'all') !== (state.channel || 'all')) await showView(plek.view, tab);
+    else await window._viewLaad;
+  } catch { return; }
+  // Pas ná het laden scrollen, anders klemt de browser de positie op een nog lege pagina.
+  if (plek.y > 0) requestAnimationFrame(() => window.scrollTo(0, plek.y));
+}
 async function startLiveUpdates() {
   const tick = async () => {
-    // Niet verversen tijdens slepen, een open venster (modal) of typen.
+    // Tabblad/PWA op de achtergrond: niets ophalen (28 sep 2026). Bij terugkomst volgt
+    // meteen één ronde (visibilitychange hieronder).
+    if (document.hidden) return;
+    // Niet verversen tijdens slepen.
     if (window._dragging) return;
-    if (!$('#modalRoot').hidden) return;
-    // Niet verversen vlak na scrollen/tikken (vooral mobiel): voorkomt haperingen.
-    if (Date.now() - (window._lastInteract || 0) < 2500) return;
-    const active = document.activeElement;
-    // Uitzondering: het typveld van Berichten. In een chat staat je cursor ALTIJD in
-    // het veld — zonder uitzondering ververst het gesprek dus nooit en lijken nieuwe
-    // klantberichten niet aan te komen. Het gesprek werkt alleen de berichtenlijst
-    // bij; het typveld zelf wordt nooit aangeraakt.
-    if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) && active.id !== 'cpText') return;
     try {
       const p = await api('/api/pulse');
       if (!p) return;
       // Slepen begonnen terwijl de pulse onderweg was? Dan nu niets hertekenen.
       if (window._dragging) { window._boardRenderNaSleep = true; return; }
-      // ZELF-VERVERSING (18 aug): draait de server inmiddels een nieuwere versie
-      // (deploy geweest), dan herlaadt de app zichzelf — maar alleen op een veilig
-      // moment: geen open venster, geen getypte chat-tekst, geen lopende selectie.
-      // Een PWA op het beginscherm herlaadt anders NOOIT en toont dagenlang oude code.
+      // Nieuwe versie op de server (deploy geweest)? Zie probeerHerladen.
       if (p.appV) {
         if (!window._appV) window._appV = p.appV;
-        else if (window._appV !== p.appV && !window._appReloading) {
-          const modalOpen = !$('#modalRoot')?.hidden;
-          const chatTekst = ($('#cpText')?.value || '').trim();
-          if (!modalOpen && !chatTekst && !boardSel.size) {
-            window._appReloading = true;
-            toast('Nieuwe versie van het CRM — het scherm ververst zich even…');
-            setTimeout(() => location.reload(), 1500);
-            return;
-          }
-        }
+        else if (window._appV !== p.appV) { window._nieuweVersie = true; probeerHerladen(); }
       }
+      if (window._appReloading) return;
       // Kolommen gewijzigd door een collega (hernoemd/toegevoegd)? Kolomlijst verversen,
       // anders geeft slepen naar de nieuwe kolom "Ongeldige status" (audit 18 aug).
       if (p.metaV) {
         if (!window._metaV) window._metaV = p.metaV;
         else if (window._metaV !== p.metaV) { window._metaV = p.metaV; refreshMeta().then(() => { if (state.view === 'board') loadBoard(); }).catch(() => {}); }
       }
-      // Inbox-badge meteen bijwerken.
+      // Tellers ALTIJD bijwerken — ook met een open venster of een veld met focus
+      // (28 sep 2026: een factuur-venster kon de Inbox-/Berichten-teller minutenlang bevriezen).
       const badge = $('#inboxBadge');
       if (badge) { badge.textContent = p.pendingReviews; badge.hidden = p.pendingReviews === 0; }
       const bn = $('#bnInboxBadge'); if (bn) { bn.textContent = p.pendingReviews; bn.hidden = p.pendingReviews === 0; }
@@ -390,23 +467,36 @@ async function startLiveUpdates() {
         if (typeof p.mailboxPct === 'number') { mw.textContent = `Mailbox ${p.mailboxBox || ''} ${p.mailboxPct}% VOL — ruim op!`; mw.hidden = false; }
         else mw.hidden = true;
       }
+      if (_lastPulse === null) { _lastPulse = p.v; return; }
       // Alleen de inhoud verversen als er écht iets veranderd is.
-      if (_lastPulse !== null && p.v !== _lastPulse) {
-        // Bezig met een bulk-selectie? Dan het bord met rust laten tot je klaar bent —
-        // anders schuift alles onder je vingers weg terwijl je aan het aanvinken bent.
-        if (state.view === 'board' && boardSel.size) return;
-        // Inbox: selectie of half ingetypte correctie open? Dan óók met rust laten.
-        if (state.view === 'inbox' && (inboxSel.size || inboxHeeftBewerking())) return;
-        const stil = (e) => console.warn('[pulse] verversen mislukt:', e?.message);
-        if (state.view === 'overview') loadOverview().catch(stil);
-        else if (state.view === 'board') loadBoard().catch(stil);
-        else if (state.view === 'inbox') loadInbox().catch(stil);
-        else if (state.view === 'customers') loadCustomers().catch(stil);
-        else if (state.view === 'chats') loadChats(true).catch(stil);
-      }
+      if (p.v === _lastPulse) return;
+      // Geen rustig moment? Dan de inhoud nu overslaan — _lastPulse blijft staan, dus
+      // de volgende ronde probeert het opnieuw. Niet tijdens een open venster, vlak na
+      // scrollen/tikken (vooral mobiel) of met een veld met focus in het deel dat
+      // opnieuw getekend wordt.
+      if (!$('#modalRoot').hidden) return;
+      if (Date.now() - (window._lastInteract || 0) < 2500) return;
+      if (veldInHertekenGebied(state.view)) return;
+      // Bezig met een bulk-selectie? Dan het bord met rust laten tot je klaar bent —
+      // anders schuift alles onder je vingers weg terwijl je aan het aanvinken bent.
+      if (state.view === 'board' && boardSel.size) return;
+      // Inbox: selectie of half ingetypte correctie open? Dan óók met rust laten.
+      if (state.view === 'inbox' && (inboxSel.size || inboxHeeftBewerking())) return;
+      const stilFout = (e) => console.warn('[pulse] verversen mislukt:', e?.message);
+      if (state.view === 'overview') loadOverview().catch(stilFout);
+      else if (state.view === 'board') loadBoard().catch(stilFout);
+      else if (state.view === 'inbox') loadInbox().catch(stilFout);
+      else if (state.view === 'customers') loadCustomers().catch(stilFout);
+      else if (state.view === 'chats') loadChats(true).catch(stilFout);
       _lastPulse = p.v;
     } catch { /* offline: volgende keer opnieuw */ }
   };
+  window._pulseTick = tick; // voor de browser-test en de terugkomst-ronde
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { probeerHerladen(true); return; }
+    if (window._nieuweVersie) probeerHerladen(true);
+    tick(); // terug in beeld: meteen bijwerken i.p.v. tot 5 s oude gegevens
+  });
   tick();
   setInterval(tick, 5000);
 }
@@ -700,8 +790,19 @@ function renderTaken() {
     if (!titel) return;
     const categorie = $('.tk-keuze[data-k="categorie"] .tk-opt.active')?.dataset.v || 'zakelijk';
     const urgentie = $('.tk-keuze[data-k="urgentie"] .tk-opt.active')?.dataset.v || 'middel';
-    try { await api('/api/taken', 'POST', { titel, categorie, urgentie }); toast('Taak toegevoegd'); await loadTaken(); $('#tkSnelTitel')?.focus(); }
+    // Dubbele taak voorkomen (28 sep 2026, audit): het veld bleef na toevoegen gevuld
+    // (renderTaken zet half getypte tekst terug) en een tweede Enter — ook tijdens het
+    // verzoek — maakte dezelfde taak nog eens. Nu: één verzoek tegelijk, en het veld
+    // leeg VÓÓR het hertekenen (anders zet renderTaken de oude tekst terug).
+    if (window._tkSnelBezig) return;
+    window._tkSnelBezig = true;
+    try {
+      await api('/api/taken', 'POST', { titel, categorie, urgentie });
+      const veld = $('#tkSnelTitel'); if (veld && veld.value.trim() === titel) veld.value = '';
+      toast('Taak toegevoegd'); await loadTaken(); $('#tkSnelTitel')?.focus();
+    }
     catch (err) { toast(err.message, true); }
+    finally { window._tkSnelBezig = false; }
   };
   $$('.tk-toggle', wrap).forEach((c) => c.addEventListener('change', async () => {
     const t = _takenCache.find((x) => x.id === c.dataset.id); if (!t) return;
@@ -873,9 +974,12 @@ async function openTaakModal(id) {
   };
 }
 // "Vandaag"-blok op Start: urgente en verlopende taken (max 5).
-async function vulTakenVandaag() {
-  const el = $('#takenVandaagBlok'); if (!el) return;
-  let lijst; try { lijst = await api('/api/taken/vandaag'); } catch { return; }
+// `vooraf` = al opgehaalde lijst (loadOverview haalt hem tegelijk met Start op en
+// tekent dan zonder wachten — geen verspringen meer, 28 sep 2026).
+async function vulTakenVandaag(vooraf) {
+  let el = $('#takenVandaagBlok'); if (!el) return;
+  let lijst = vooraf;
+  if (lijst === undefined) { try { lijst = await api('/api/taken/vandaag'); } catch { return; } el = $('#takenVandaagBlok'); if (!el) return; }
   const badge = $('#takenBadge'); if (badge) { const n = Array.isArray(lijst) ? lijst.length : 0; badge.textContent = n; badge.hidden = !n; }
   if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; window._lastTakenBlokHtml = ''; return; }
   const takenBlokHtml = JSON.stringify(lijst.map((t) => [t.id, t.titel, t.urgentie, t.dagen]));
@@ -887,9 +991,10 @@ async function vulTakenVandaag() {
   $$('li[data-taak]', el).forEach((li) => li.onclick = () => goView('taken'));
 }
 // Onbeantwoorde klantvragen op Start (punt 10).
-async function vulOnbeantwoord() {
-  const el = $('#onbeantwoordBlok'); if (!el) return;
-  let lijst; try { lijst = await api('/api/chats/onbeantwoord?uren=2'); } catch { return; }
+async function vulOnbeantwoord(vooraf) {
+  let el = $('#onbeantwoordBlok'); if (!el) return;
+  let lijst = vooraf;
+  if (lijst === undefined) { try { lijst = await api('/api/chats/onbeantwoord?uren=2'); } catch { return; } el = $('#onbeantwoordBlok'); if (!el) return; }
   if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; window._lastWachtHtml = ''; return; }
   const wachtVinger = JSON.stringify([window._wachtAlles, lijst.map((x) => [x.chatId, x.urenWachtend, x.tekst, x.kaart?.status])]);
   if (wachtVinger === window._lastWachtHtml && el.children.length) return;
@@ -924,7 +1029,17 @@ async function openChat(cid) {
   $$('.chat-item').forEach((b) => b.classList.toggle('active', b.dataset.cid === cid));
   // Ook tel:-gesprekken hebben nu een leesmarkering (15 aug); na het lezen de lijst
   // verversen zodat de groene teller meteen verdwijnt in plaats van bij de volgende pulse.
-  api(`/api/chats/${encodeURIComponent(cid)}/read`, 'POST').then(() => loadChats(true)).catch(() => {});
+  // 28 sep 2026: alléén de lijst bijwerken (teller op 0 + menubadges), niet de hele
+  // loadChats-ronde — die haalde de volledige geschiedenis (tot 200 berichten) een
+  // tweede keer op naast renderChatPane hieronder.
+  api(`/api/chats/${encodeURIComponent(cid)}/read`, 'POST').then(() => {
+    const item = _chatList.find((c) => c.id === cid);
+    if (!item || !item.unread) return;
+    item.unread = 0;
+    tekenChatLijst(_chatList);
+    const ongelezen = _chatList.filter((c) => c.unread > 0).length;
+    for (const b of [$('#chatBadge'), $('#bnChatBadge')]) if (b) { b.textContent = ongelezen; b.hidden = ongelezen === 0; }
+  }).catch(() => {});
   syncChatStatusBar();
   renderChatPane(true);
 }
@@ -981,7 +1096,7 @@ async function renderChatPane(scrollDown) {
   const bindMsgs = () => {
     const boxEl = $('#cpMsgs');
     if (!boxEl) return;
-    $$('.cp-orderlink', boxEl).forEach((a) => a.onclick = async (e) => { e.preventDefault(); state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(a.dataset.oid); });
+    $$('.cp-orderlink', boxEl).forEach((a) => a.onclick = (e) => { e.preventDefault(); openOrderVers(a.dataset.oid); });
     // (quote-toggle: de document-brede handler onderaan dekt dit al — een tweede binding
     // klapte het citaat twee keer om en het bleef dus dicht; audit 16 sep)
   };
@@ -1046,7 +1161,7 @@ async function renderChatPane(scrollDown) {
   if (nieuw) nieuw.scrollTop = nieuw.scrollHeight;
   $('#cpBack')?.addEventListener('click', sluitChat);
   const kaartKnop = $('#cpCard');
-  if (kaartKnop) kaartKnop.onclick = async () => { state.orders = await api('/api/orders?includeArchived=1').catch(() => state.orders); openOrderModal(info.orderId); };
+  if (kaartKnop) kaartKnop.onclick = () => openOrderVers(info.orderId);
   // Kanaal-knop + passende invoerhint. De knop toont ALTIJD waar het bericht heen gaat.
   const zetKanaalUi = () => {
     const veldEl = $('#cpText');
@@ -1084,6 +1199,10 @@ function showView(view, tab) {
   const anderView = state.view !== view;
   state.view = view;
   if (view !== 'assistant') ssPollActive = false; // statusscan-pollen stoppen buiten de AI-pagina
+  // Koppelcode-timer stoppen buiten Instellingen (28 sep 2026): de view wordt alleen
+  // verborgen, dus het kaartje bestond nog en de timer pollde op elk scherm door.
+  // loadSettings start hem weer bij terugkomst.
+  if (view !== 'settings' && window._pairTimer) { clearInterval(window._pairTimer); window._pairTimer = null; }
   // De drie board-menu's (Opdrachten/E-mail/WhatsApp) delen dezelfde weergave maar filteren op kanaal.
   state.channel = (tab && tab.dataset.channel) || 'all';
   $$('.nav-item').forEach((t) => t.classList.remove('active'));
@@ -1097,11 +1216,17 @@ function showView(view, tab) {
   // van het vorige scherm vast; is het nieuwe scherm korter, dan klemt de browser die
   // positie en zie je alles verspringen (voelt als een balk die beweegt).
   if (anderView) window.scrollTo(0, 0);
+  // Inbox opnieuw geopend: weer met de eerste 60 beginnen ("Toon meer" geldt per bezoek).
+  if (anderView && view === 'inbox') state._inboxOffset = 0;
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
   const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance, chats: loadChats, taken: loadTaken };
   // Elke laadfout ZICHTBAAR maken (audit 16 sep): voorheen bleef het scherm stil leeg.
-  Promise.resolve().then(map[view] || (() => {})).catch((err) => toast(`Kon dit scherm niet laden: ${err.message}`, true));
+  // De belofte gaat terug (en staat in window._viewLaad), zodat wie op het geladen
+  // scherm wil wachten dat kan (bv. scrollpositie herstellen na een zelf-herlaad).
+  const laad = Promise.resolve().then(map[view] || (() => {})).catch((err) => toast(`Kon dit scherm niet laden: ${err.message}`, true));
+  window._viewLaad = laad;
+  return laad;
 }
 
 // Markeer een opdracht als geopend/gezien (zet de statusstip op blauw).
@@ -1147,7 +1272,7 @@ async function refreshAll() {
 // Spring naar een weergave alsof je op het menu-item klikt (incl. actief-markering).
 function goView(view) {
   const tab = $(`.nav-item[data-view="${view}"]`);
-  showView(view, tab);
+  return showView(view, tab);
 }
 
 // AI-dagcheck: laat de AI controleren of alle aanvragen van vandaag netjes verwerkt zijn.
@@ -1186,8 +1311,7 @@ function initGlobalSearch() {
       const t = b.dataset.t;
       if (t === 'cust') return openCustomerDossier(b.dataset.id);
       if (t === 'order') {
-        state.orders = await api('/api/orders?includeArchived=1');
-        markSeen(b.dataset.id); return openOrderModal(b.dataset.id);
+        return openOrderVers(b.dataset.id, { seen: true });
       }
       if (t === 'inv') return openStandaloneInvoice(b.dataset.id);
       if (t === 'msg') {
@@ -1203,156 +1327,215 @@ function initGlobalSearch() {
 }
 
 // ---------- Overzicht / Home ----------
+// RUSTIG START-SCHERM (28 sep 2026, audit): Start werd bij élke wijziging op de server
+// (nieuwe activiteitregel, collega die iets opsloeg) helemaal opnieuw opgebouwd: zoekveld
+// leeg, open zoekresultaten weg, dagoverzicht en weekrapport terug op "laden…", taken/
+// wacht-op-antwoord 400 ms weg en weer terug — de pagina sprong tot 300 px. Nu staat er
+// een vast SKELET (zoekveld, taken, wacht op antwoord, dagoverzicht, weekrapport) dat
+// één keer getekend wordt; daarna worden alleen de blokken met een andere inhoud
+// vervangen (elk met een eigen vingerafdruk). Kliks lopen via één gedelegeerde handler.
+const _ovDelen = {};              // laatst getekende HTML per dynamisch blok
+let _ovDagAt = 0, _ovWeekAt = 0;  // wanneer dagoverzicht/weekrapport voor het laatst zijn opgehaald
+function zetOvDeel(id, html) {
+  const el = document.getElementById(id);
+  if (!el || (_ovDelen[id] === html && el.childNodes.length)) return;
+  _ovDelen[id] = html;
+  el.innerHTML = html;
+}
 async function loadOverview() {
-  const d = await api('/api/overview');
+  const kantoor = state.me.role !== 'monteur';
+  // Taken en wacht-op-antwoord TEGELIJK met het overzicht ophalen en in één keer
+  // tekenen: voorheen kwamen ze 400 ms later bovenaan binnen en duwden alles omlaag.
+  // Een fout per blok laat Start nooit leeg (null = blok ongemoeid laten).
+  const [d, taken, wacht] = await Promise.all([
+    api('/api/overview'),
+    kantoor ? api('/api/taken/vandaag').catch(() => null) : null,
+    kantoor ? api('/api/chats/onbeantwoord?uren=2').catch(() => null) : null,
+  ]);
   const k = d.kpis;
   const first = (state.me.name || '').trim().split(' ')[0] || '';
   $('#overviewHi').textContent = first ? `Hoi ${first}` : 'Overzicht';
   $('#overviewDate').textContent = new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const panel = $('#overviewPanel');
+  const skelet = kantoor ? 'kantoor' : 'monteur';
+  const skeletOntbreekt = () => panel.dataset.skelet !== skelet || !$('#ovKpis', panel);
+  // De meldingen-balk boven Start eerst laten verschijnen (max 300 ms), anders
+  // schuift hij ná de eerste tekening het hele scherm 58 px omlaag.
+  if (skeletOntbreekt()) await Promise.race([window._pushHintKlaar, new Promise((r) => setTimeout(r, 300))]);
+  if (skeletOntbreekt()) { // opnieuw kijken: een gelijktijdige aanroep kan het skelet al gezet hebben
+    panel.innerHTML = `
+    <div class="info-card" style="margin-bottom:18px;position:relative">
+      <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${kantoor ? ', bericht' : ''}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
+      <div id="gsResults" hidden></div>
+    </div>
+    ${kantoor ? `<div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>
+    <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <h3 style="margin:0">${icon('sparkles', 16)} Jouw dag in één oogopslag</h3>
+        <span class="muted small" id="dayov-meta" style="margin-left:auto"></span>
+        <button class="btn btn-sm" id="dayov-refresh" title="Nieuwe AI-scan: WhatsApp tot 7 dagen + e-mail tot 14 dagen terug">${icon('refresh', 13)} Ververs</button>
+      </div>
+      <div id="dayov-body" class="muted small dayov-laden" style="margin-top:10px">Dagoverzicht laden…</div>
+    </div>` : ''}
+    <div class="kpi-grid ov-dyn" id="ovKpis"></div>
+    <div class="ov-cols ov-dyn" id="ovLijsten"></div>
+    <div class="ov-cols ov-dyn" id="ovVerdeling"></div>
+    ${kantoor ? `
+    <div class="info-card" style="margin-top:18px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <h3 style="margin:0">${icon('activity', 15)} Weekrapport</h3>
+        <select id="wr-offset" style="max-width:170px;margin-left:auto"><option value="0">Deze week</option><option value="1">Vorige week</option><option value="2">2 weken terug</option></select>
+      </div>
+      <div id="wr-body" class="muted small wr-laden" style="margin-top:10px">Laden…</div>
+    </div>` : ''}`;
+    panel.dataset.skelet = skelet;
+    for (const key of Object.keys(_ovDelen)) delete _ovDelen[key];
+    window._lastTakenBlokHtml = ''; window._lastWachtHtml = ''; window._lastDayovHtml = ''; window._lastWeekHtml = '';
+    _ovDagAt = 0; _ovWeekAt = 0;
+    // Eén gedelegeerde klik voor alle tegels/lijsten — overleeft het vervangen van een blok.
+    panel.onclick = async (e) => {
+      const go = e.target.closest('[data-go]');
+      if (go && panel.contains(go)) {
+        const col = go.dataset.col;
+        if (col) { state.boardTab = col; state._focusCol = col; } // open meteen de juiste kolom
+        goView(go.dataset.go);
+        return;
+      }
+      const op = e.target.closest('[data-open]');
+      if (op && panel.contains(op)) {
+        if (!state.orders.length) state.orders = await api('/api/orders');
+        markSeen(op.dataset.open); openOrderModal(op.dataset.open);
+      }
+    };
+    initGlobalSearch();
+    const rf = $('#dayov-refresh');
+    if (rf) rf.onclick = async () => { rf.disabled = true; rf.textContent = 'Scannen…'; await laadDagoverzicht(true); rf.disabled = false; rf.innerHTML = `${icon('refresh', 13)} Ververs`; };
+    const wo = $('#wr-offset');
+    if (wo) wo.onchange = () => laadWeekrapport(false);
+  }
   const card = (num, label, view, cls = '', col = '') => `<button class="kpi-card ${cls}" data-go="${view}"${col ? ` data-col="${esc(col)}"` : ''}><span class="kpi-num">${num}</span><span class="kpi-label">${esc(label)}</span></button>`;
   const wa = d.whatsapp || {};
   const list = (arr, empty) => arr.length
     ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
     : `<div class="muted small">${empty}</div>`;
-  const ovHtml = `
-    <div class="info-card" style="margin-bottom:18px;position:relative">
-      <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${state.me.role === 'monteur' ? '' : ', bericht'}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
-      <div id="gsResults" hidden></div>
-    </div>
-    ${state.me.role === 'monteur' ? '' : '<div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>'}
-    ${state.me.role === 'monteur' ? '' : `
-    <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <h3 style="margin:0">${icon('sparkles', 16)} Jouw dag in één oogopslag</h3>
-        <span class="muted small" id="dayov-meta" style="margin-left:auto"></span>
-        ${state.me.role !== 'monteur' ? `<button class="btn btn-sm" id="dayov-refresh" title="Nieuwe AI-scan: WhatsApp tot 7 dagen + e-mail tot 14 dagen terug">${icon('refresh', 13)} Ververs</button>` : ''}
-      </div>
-      <div id="dayov-body" class="muted small" style="margin-top:10px">Dagoverzicht laden…</div>
-    </div>`}
-    <div class="kpi-grid">
+  zetOvDeel('ovKpis', `
       ${card(k.teControleren, 'Te controleren', 'inbox', k.teControleren ? 'kpi-attn' : '')}
       ${card(k.klantReacties, 'Klant reageerde', 'board', k.klantReacties ? 'kpi-attn' : '')}
       ${card(k.afsprakenVandaag, 'Afspraken vandaag', 'agenda')}
       ${card(k.nieuwVandaag, 'Nieuw vandaag', 'board', '', 'nieuw')}
       ${card(k.openOffertes, 'Open offertes', 'board', '', 'offerte_verzonden')}
       ${card(k.afgerondDezeWeek, 'Afgerond deze week', 'board', '', 'afgerond')}
-      ${card(k.actief, 'Actieve opdrachten', 'board')}
-    </div>
-    <div class="ov-cols">
+      ${card(k.actief, 'Actieve opdrachten', 'board')}`);
+  zetOvDeel('ovLijsten', `
       <div class="info-card"><h3>Afspraken vandaag</h3>${list(d.apptToday, 'Geen afspraken vandaag.')}</div>
       <div class="info-card"><h3>Klant heeft gereageerd</h3>${list(d.repliedList, 'Niemand op dit moment.')}</div>
-      <div class="info-card"><h3>Offerte blijft liggen (3+ dagen)</h3>${list(d.staleQuotes, 'Niets blijft liggen.')}</div>
-    </div>
-    <div class="ov-cols">
+      <div class="info-card"><h3>Offerte blijft liggen (3+ dagen)</h3>${list(d.staleQuotes, 'Niets blijft liggen.')}</div>`);
+  zetOvDeel('ovVerdeling', `
       <div class="info-card"><h3>Verdeling over kolommen</h3><div class="ov-bars">${d.byStatus.map((s) => `<div class="ov-bar" data-go="board" data-col="${esc(s.key)}"><span class="column-dot" style="background:${esc(statusColor(s.key))}"></span><span class="ov-bar-label">${esc(s.label)}</span><span class="ov-bar-count">${s.count}</span></div>`).join('')}</div></div>
       <div class="info-card"><h3>WhatsApp & recente activiteit</h3>
         <div class="ov-wa ${wa.online ? 'on' : 'off'}">${wa.online ? 'WhatsApp-bridge: actief' : (wa.configured ? 'WhatsApp-bridge: GESTOPT' : 'WhatsApp: niet gekoppeld')}</div>
         <ul class="ov-activity">${(d.activity || []).map((a) => `<li><span class="muted small">${fmtDate(a.at)}</span> ${esc(a.actor)} — ${esc(a.action)}${a.detail ? `: ${esc(a.detail)}` : ''}</li>`).join('') || '<li class="muted small">Nog geen activiteit.</li>'}</ul>
-      </div>
-    </div>
-    ${state.me.role !== 'monteur' ? `
-    <div class="info-card" style="margin-top:18px">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <h3 style="margin:0">${icon('activity', 15)} Weekrapport</h3>
-        <select id="wr-offset" style="max-width:170px;margin-left:auto"><option value="0">Deze week</option><option value="1">Vorige week</option><option value="2">2 weken terug</option></select>
-      </div>
-      <div id="wr-body" class="muted small" style="margin-top:10px">Laden…</div>
-    </div>` : ''}`;
-  // Alleen opnieuw tekenen als er echt iets veranderd is. Anders werd bij élke
-  // achtergrondwijziging je zoekbalk leeggegooid, het dagoverzicht opnieuw opgehaald
-  // en sprong de pagina — precies het "geknipper" op Start.
-  // De losse blokken (Wacht op antwoord / taken) hebben hun eigen HTML-vergelijking,
-  // dus die mogen bij elke ronde kijken zonder te knipperen (audit 16 sep).
-  setTimeout(vulOnbeantwoord, 400);
-  setTimeout(vulTakenVandaag, 400);
-  if (ovHtml === _lastOvHtml && $('#overviewPanel').children.length) return;
-  _lastOvHtml = ovHtml;
-  $('#overviewPanel').innerHTML = ovHtml;
-  $$('#overviewPanel [data-go]').forEach((el) => el.onclick = () => {
-    const col = el.dataset.col;
-    if (col) { state.boardTab = col; state._focusCol = col; } // open meteen de juiste kolom
-    goView(el.dataset.go);
-  });
-  // ---------- AI-dagoverzicht (1x per dag gegenereerd, Ververs forceert) ----------
-  const renderDayOverview = (d) => {
-    const body = $('#dayov-body'); if (!body) return;
-    const meta = $('#dayov-meta');
-    if (meta && d.at) meta.textContent = `${d.engine ? `${modelNaam(d.engine)}${d.terugvalVan ? ` (i.p.v. ${modelNaam(d.terugvalVan)})` : ''} · ` : ''}gemaakt ${fmtDate(d.at)}`;
-    const viewOf = { inbox: 'inbox', opdrachten: 'board', facturen: 'invoices', agenda: 'agenda', klanten: 'customers' };
-    const prioDot = { hoog: '#ef4444', middel: '#f59e0b', laag: '#10b981' };
-    if (d.data) {
-      const a = d.data;
-      body.innerHTML = `
-        ${a.kop ? `<div style="font-size:15.5px;color:var(--ink);font-weight:600;line-height:1.45;margin-bottom:10px">${esc(a.kop)}</div>` : ''}
-        ${(a.acties || []).length ? `<div>${a.acties.map((x) => `
-          <div class="dayov-act" data-go2="${esc(viewOf[x.waar] || 'board')}" style="display:flex;gap:9px;align-items:flex-start;padding:7px 8px;margin:2px -8px;border-radius:8px;cursor:pointer">
-            <span style="width:9px;height:9px;border-radius:50%;background:${prioDot[x.prio] || prioDot.middel};margin-top:5px;flex:none"></span>
-            <span style="color:var(--ink)"><strong>${esc(x.titel)}</strong>${x.waarom ? ` <span class="muted">— ${esc(x.waarom)}</span>` : ''}</span>
-          </div>`).join('')}</div>` : '<div class="muted small">Geen acties — alles loopt.</div>'}
-        ${(a.beantwoorden || []).length ? `
-        <div style="margin-top:10px"><div class="small" style="font-weight:600;color:var(--accent);margin-bottom:4px">${icon('reply', 12)} Beantwoorden vandaag</div>
-          ${a.beantwoorden.map((b) => `<div class="muted small" style="padding:2px 0">${b.kanaal === 'whatsapp' ? icon('whatsapp', 11) : icon('mail', 11)} <strong style="color:var(--ink)">${esc(b.wie || 'Onbekend')}</strong>${b.waarover ? ` — ${esc(b.waarover)}` : ''}${b.urgent ? ' <span style="color:#ef4444;font-weight:700">· urgent</span>' : ''}</div>`).join('')}
-        </div>` : ''}
-        ${(a.kansen || []).length || (a.risicos || []).length ? `
-        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
-          ${(a.kansen || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#0d7a43;margin-bottom:4px">Kansen</div>${a.kansen.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}
-          ${(a.risicos || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#b45309;margin-bottom:4px">Let op</div>${a.risicos.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}
-        </div>` : ''}`;
-      $$('.dayov-act', body).forEach((el) => {
-        el.onmouseenter = () => { el.style.background = 'var(--panel-2, #f6f8fb)'; };
-        el.onmouseleave = () => { el.style.background = ''; };
-        el.onclick = () => goView(el.dataset.go2);
-      });
-    } else {
-      // Zonder AI: de feiten netjes tonen — nooit een leeg of kapot blok.
-      const f = d.facts || {};
-      const rows = [
-        f.appts && f.appts.length ? `${f.appts.length} afspraak/afspraken vandaag` : 'Geen afspraken vandaag',
-        f.pendingLeads ? `${f.pendingLeads} aanvraag/aanvragen te controleren in de inbox` : '',
-        f.unanswered ? `${f.unanswered} klantreactie(s) onbeantwoord` : '',
-        f.overdueCount ? `${f.overdueCount} factuur/facturen verlopen` : '',
-      ].filter(Boolean);
-      body.innerHTML = `${rows.map((r) => `<div style="padding:2px 0">• ${esc(r)}</div>`).join('')}<div class="muted small" style="margin-top:8px">${d.error === 'geen-ai'
-        ? 'Zet de AI aan (ANTHROPIC_API_KEY) voor het volledige dagoverzicht met acties, kansen en risico’s.'
-        : `AI-scan lukte niet: <strong>${esc(d.error || 'onbekende fout')}</strong> — klik op Ververs om het opnieuw te proberen.`}</div>`;
-    }
-  };
-  const loadDayOverview = async (refresh = false) => {
-    if (!$('#dayov')) return; // monteur-rol heeft dit blok niet (AVG)
-    try { renderDayOverview(await api(`/api/day-overview${refresh ? '?refresh=1' : ''}`)); }
-    catch (err) { const b = $('#dayov-body'); if (b) b.textContent = 'Dagoverzicht niet beschikbaar: ' + err.message; }
-  };
-  loadDayOverview();
-  initGlobalSearch();
-  const rf = $('#dayov-refresh');
-  if (rf) rf.onclick = async () => { rf.disabled = true; rf.textContent = 'Scannen…'; await loadDayOverview(true); rf.disabled = false; rf.innerHTML = `${icon('refresh', 13)} Ververs`; };
-  $$('#overviewPanel [data-open]').forEach((el) => el.onclick = async () => { if (!state.orders.length) state.orders = await api('/api/orders'); markSeen(el.dataset.open); openOrderModal(el.dataset.open); });
-  if ($('#wr-offset')) {
-    const euro = (n) => '€ ' + Number(n || 0).toLocaleString('nl-NL', { maximumFractionDigits: 0 });
-    const loadWeek = async () => {
-      const box = $('#wr-body'); if (!box) return;
-      box.textContent = 'Laden…';
-      try {
-        const r = await api('/api/report/week?offset=' + $('#wr-offset').value);
-        const range = `${new Date(r.weekStart).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })} t/m ${new Date(new Date(r.weekEnd).getTime() - 1).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })}`;
-        box.innerHTML = `
-          <div class="muted small" style="margin-bottom:8px">${esc(range)}</div>
-          <div class="wr-kpis">
-            <div class="wr-kpi"><span class="wr-num">${r.aanvragen}</span><span>aanvragen</span></div>
-            <div class="wr-kpi"><span class="wr-num">${r.newOrders}</span><span>nieuwe opdrachten</span></div>
-            <div class="wr-kpi"><span class="wr-num">${r.apptCount}</span><span>afspraken</span></div>
-            <div class="wr-kpi"><span class="wr-num">${r.doneCount}</span><span>afgerond</span></div>
-            <div class="wr-kpi"><span class="wr-num">${euro(r.omzet)}</span><span>omzet (excl. btw)</span></div>
-            <div class="wr-kpi"><span class="wr-num">${r.conversie === null ? '—' : r.conversie + '%'}</span><span>conversie</span></div>
-          </div>
-          <table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th><th>Omzet</th><th>Afspraken</th><th>Nu actief</th></tr></thead>
-          <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table>
-          <p class="muted small" style="margin-top:8px">Omzet = de <strong>factuur</strong> van de afgeronde opdracht (excl. btw); zonder factuur telt het <strong>prijsveld</strong>.${r.zonderBedrag ? ` <strong>${r.zonderBedrag} afgeronde opdracht(en) hebben nog geen factuur en geen prijs</strong> — die tellen als € 0. Maak de factuur of vul de prijs in.` : ''}</p>`;
-      } catch (err) { box.innerHTML = `<span class="error">${esc(err.message)}</span>`; }
-    };
-    $('#wr-offset').onchange = loadWeek;
-    loadWeek();
+      </div>`);
+  if (kantoor) {
+    // Meegeleverde lijsten → synchroon getekend, in dezelfde beeldopbouw als de KPI's.
+    if (taken) vulTakenVandaag(taken);
+    if (wacht) vulOnbeantwoord(wacht);
+    // Dagoverzicht (server-cache, 1x/dag) en weekrapport NIET bij elke wijziging
+    // opnieuw ophalen; hooguit stil (zonder "laden…") na 10 resp. 2 minuten.
+    if (!_ovDagAt || Date.now() - _ovDagAt > 10 * 60000) laadDagoverzicht(false);
+    if (!_ovWeekAt || Date.now() - _ovWeekAt > 2 * 60000) laadWeekrapport(!!_ovWeekAt);
   }
+}
+// ---------- AI-dagoverzicht (1x per dag gegenereerd, Ververs forceert) ----------
+function tekenDagoverzicht(d) {
+  const body = $('#dayov-body'); if (!body) return;
+  const meta = $('#dayov-meta');
+  if (meta && d.at) meta.textContent = `${d.engine ? `${modelNaam(d.engine)}${d.terugvalVan ? ` (i.p.v. ${modelNaam(d.terugvalVan)})` : ''} · ` : ''}gemaakt ${fmtDate(d.at)}`;
+  const viewOf = { inbox: 'inbox', opdrachten: 'board', facturen: 'invoices', agenda: 'agenda', klanten: 'customers' };
+  const prioDot = { hoog: '#ef4444', middel: '#f59e0b', laag: '#10b981' };
+  let html;
+  if (d.data) {
+    const a = d.data;
+    html = `
+      ${a.kop ? `<div style="font-size:15.5px;color:var(--ink);font-weight:600;line-height:1.45;margin-bottom:10px">${esc(a.kop)}</div>` : ''}
+      ${(a.acties || []).length ? `<div>${a.acties.map((x) => `
+        <div class="dayov-act" data-go2="${esc(viewOf[x.waar] || 'board')}" style="display:flex;gap:9px;align-items:flex-start;padding:7px 8px;margin:2px -8px;border-radius:8px;cursor:pointer">
+          <span style="width:9px;height:9px;border-radius:50%;background:${prioDot[x.prio] || prioDot.middel};margin-top:5px;flex:none"></span>
+          <span style="color:var(--ink)"><strong>${esc(x.titel)}</strong>${x.waarom ? ` <span class="muted">— ${esc(x.waarom)}</span>` : ''}</span>
+        </div>`).join('')}</div>` : '<div class="muted small">Geen acties — alles loopt.</div>'}
+      ${(a.beantwoorden || []).length ? `
+      <div style="margin-top:10px"><div class="small" style="font-weight:600;color:var(--accent);margin-bottom:4px">${icon('reply', 12)} Beantwoorden vandaag</div>
+        ${a.beantwoorden.map((b) => `<div class="muted small" style="padding:2px 0">${b.kanaal === 'whatsapp' ? icon('whatsapp', 11) : icon('mail', 11)} <strong style="color:var(--ink)">${esc(b.wie || 'Onbekend')}</strong>${b.waarover ? ` — ${esc(b.waarover)}` : ''}${b.urgent ? ' <span style="color:#ef4444;font-weight:700">· urgent</span>' : ''}</div>`).join('')}
+      </div>` : ''}
+      ${(a.kansen || []).length || (a.risicos || []).length ? `
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
+        ${(a.kansen || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#0d7a43;margin-bottom:4px">Kansen</div>${a.kansen.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}
+        ${(a.risicos || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#b45309;margin-bottom:4px">Let op</div>${a.risicos.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}
+      </div>` : ''}`;
+  } else {
+    // Zonder AI: de feiten netjes tonen — nooit een leeg of kapot blok.
+    const f = d.facts || {};
+    const rows = [
+      f.appts && f.appts.length ? `${f.appts.length} afspraak/afspraken vandaag` : 'Geen afspraken vandaag',
+      f.pendingLeads ? `${f.pendingLeads} aanvraag/aanvragen te controleren in de inbox` : '',
+      f.unanswered ? `${f.unanswered} klantreactie(s) onbeantwoord` : '',
+      f.overdueCount ? `${f.overdueCount} factuur/facturen verlopen` : '',
+    ].filter(Boolean);
+    html = `${rows.map((r) => `<div style="padding:2px 0">• ${esc(r)}</div>`).join('')}<div class="muted small" style="margin-top:8px">${d.error === 'geen-ai'
+      ? 'Zet de AI aan (ANTHROPIC_API_KEY) voor het volledige dagoverzicht met acties, kansen en risico’s.'
+      : `AI-scan lukte niet: <strong>${esc(d.error || 'onbekende fout')}</strong> — klik op Ververs om het opnieuw te proberen.`}</div>`;
+  }
+  body.classList.remove('dayov-laden');
+  if (html === window._lastDayovHtml && body.childNodes.length) return; // niets veranderd: niet hertekenen
+  window._lastDayovHtml = html;
+  body.innerHTML = html;
+  $$('.dayov-act', body).forEach((el) => {
+    el.onmouseenter = () => { el.style.background = 'var(--panel-2, #f6f8fb)'; };
+    el.onmouseleave = () => { el.style.background = ''; };
+    el.onclick = () => goView(el.dataset.go2);
+  });
+}
+async function laadDagoverzicht(refresh = false) {
+  if (!$('#dayov')) return; // monteur-rol heeft dit blok niet (AVG)
+  _ovDagAt = Date.now();
+  try { tekenDagoverzicht(await api(`/api/day-overview${refresh ? '?refresh=1' : ''}`)); }
+  catch (err) {
+    // Een stille her-ophaling die mislukt laat het laatst getoonde overzicht staan.
+    const b = $('#dayov-body');
+    if (b && (refresh || !window._lastDayovHtml)) { b.classList.remove('dayov-laden'); b.textContent = 'Dagoverzicht niet beschikbaar: ' + err.message; window._lastDayovHtml = ''; }
+  }
+}
+async function laadWeekrapport(stil = false) {
+  const box = $('#wr-body'); const sel = $('#wr-offset');
+  if (!box || !sel) return;
+  _ovWeekAt = Date.now();
+  if (!stil) { box.textContent = 'Laden…'; window._lastWeekHtml = ''; }
+  const euro = (n) => '€ ' + Number(n || 0).toLocaleString('nl-NL', { maximumFractionDigits: 0 });
+  const offset = sel.value;
+  try {
+    const r = await api('/api/report/week?offset=' + offset);
+    if (sel.value !== offset) return; // inmiddels een andere week gekozen
+    const range = `${new Date(r.weekStart).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })} t/m ${new Date(new Date(r.weekEnd).getTime() - 1).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })}`;
+    // De tabel staat in een eigen schuifvak (28 sep 2026): op de telefoon viel de
+    // kolom "Nu actief" buiten de kaart en kon je niet opzij vegen.
+    const html = `
+        <div class="muted small" style="margin-bottom:8px">${esc(range)}</div>
+        <div class="wr-kpis">
+          <div class="wr-kpi"><span class="wr-num">${r.aanvragen}</span><span>aanvragen</span></div>
+          <div class="wr-kpi"><span class="wr-num">${r.newOrders}</span><span>nieuwe opdrachten</span></div>
+          <div class="wr-kpi"><span class="wr-num">${r.apptCount}</span><span>afspraken</span></div>
+          <div class="wr-kpi"><span class="wr-num">${r.doneCount}</span><span>afgerond</span></div>
+          <div class="wr-kpi"><span class="wr-num">${euro(r.omzet)}</span><span>omzet (excl. btw)</span></div>
+          <div class="wr-kpi"><span class="wr-num">${r.conversie === null ? '—' : r.conversie + '%'}</span><span>conversie</span></div>
+        </div>
+        <div class="wr-tabel"><table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th><th>Omzet</th><th>Afspraken</th><th>Nu actief</th></tr></thead>
+        <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table></div>
+        <p class="muted small" style="margin-top:8px">Omzet = de <strong>factuur</strong> van de afgeronde opdracht (excl. btw); zonder factuur telt het <strong>prijsveld</strong>.${r.zonderBedrag ? ` <strong>${r.zonderBedrag} afgeronde opdracht(en) hebben nog geen factuur en geen prijs</strong> — die tellen als € 0. Maak de factuur of vul de prijs in.` : ''}</p>`;
+    box.classList.remove('wr-laden');
+    if (html === window._lastWeekHtml && box.childNodes.length) return;
+    window._lastWeekHtml = html;
+    box.innerHTML = html;
+  } catch (err) { if (!stil) box.innerHTML = `<span class="error">${esc(err.message)}</span>`; }
 }
 
 // ---------- Source <select> (met 'andere bron toevoegen') ----------
@@ -1398,13 +1581,28 @@ async function loadBoard() {
   // zodat een vandaag/deze-week binnengekomen aanvraag ALTIJD zichtbaar is — ook
   // als hij al is verwerkt naar Afgerond/Geannuleerd en de week is ingeklapt.
   const periode = $('#boardPeriodFilter')?.value || '';
-  state.orders = await api(periode ? '/api/orders?includeArchived=1' : '/api/orders');
-  state.archives = await api('/api/archives');
+  // De drie verzoeken TEGELIJK (28 sep 2026, audit): ze hangen niet van elkaar af,
+  // en na elkaar kostte elke verversing op Render twee extra rondreizen.
+  const statsP = state.me.role === 'monteur' ? null : api('/api/stats');
+  if (statsP) statsP.catch(() => {});   // fout komt hieronder bij de await alsnog boven
+  const [orders, archives] = await Promise.all([
+    api(periode ? '/api/orders?includeArchived=1' : '/api/orders'),
+    api('/api/archives'),
+  ]);
+  state.orders = orders;
+  state.archives = archives;
   renderBoard();
   renderArchives();
-  const stats = await api('/api/stats');
+  // Teller = de kaarten die écht op het bord staan (28 sep 2026, audit): /api/stats telde
+  // ook alle ingeklapte weken mee ("1700 opdrachten" bij 83 op het bord) en is voor de
+  // monteur bedrijfsbreed. De monteur krijgt alleen zijn eigen aantal, zonder de
+  // leads/klanten-links (dat scherm zit niet in zijn menu).
+  const opBord = (state.orders || []).filter((o) => !o.archivedWeek).length;
+  const opBordTxt = `<span title="Actieve opdracht-kaarten op het bord (niet ingeklapt)">${opBord} opdracht${opBord === 1 ? '' : 'en'}</span>`;
+  if (state.me.role === 'monteur') { $('#boardStats').innerHTML = opBordTxt; return; }
+  const stats = await statsP;
   $('#boardStats').innerHTML =
-    `<span title="Actieve opdracht-kaarten op het bord (niet ingeklapt)">${stats.totalOrders} opdrachten</span> · ` +
+    `${opBordTxt} · ` +
     `<span class="stat-link" data-go="customers" title="Contacten die nog geen klant zijn (eenmalige/aanvraag-contacten). Klik om te bekijken.">${stats.leads} leads</span> · ` +
     `<span class="stat-link" data-go="customers" title="Contacten met wie je zaken hebt gedaan. Klik om te bekijken.">${stats.customers} klanten</span>`;
   $$('#boardStats .stat-link').forEach((el) => el.onclick = () => showView(el.dataset.go));
@@ -1503,11 +1701,15 @@ function renderBoard() {
   const h = $('#view-board h2'); if (h) h.textContent = titles[state.channel] || 'Opdrachten';
   const orders = filteredOrders();
   const statuses = state.meta.statuses || [];
+  // Per kolom de kaarten + hun HTML één keer uitrekenen: nodig voor zowel de volledige
+  // opbouw als het bijwerken per kaart (28 sep 2026, zie hieronder).
+  const kolommen = statuses.map((st) => ({ st, items: orders.filter((o) => o.status === st.key).map((o) => ({ o, id: o.id, html: cardHTML(o) })) }));
+  const perKolom = new Map(kolommen.map((k) => [k.st.key, k]));
   const colHTML = (st) => {
-    const items = orders.filter((o) => o.status === st.key);
+    const items = perKolom.get(st.key).items;
     return `
       <div class="column ${st.secondary ? 'column-secondary' : ''}" data-status="${esc(st.key)}"> <div class="column-head"> <span class="column-dot" style="background:${esc(st.color)}"></span> ${esc(st.label)}
-          <span class="count">${items.length}</span> </div> <div class="column-cards" data-status="${esc(st.key)}"> ${items.map(cardHTML).join('') || '<div class="empty">Leeg</div>'}
+          <span class="count">${items.length}</span> </div> <div class="column-cards" data-status="${esc(st.key)}"> ${items.map((it) => it.html).join('') || '<div class="empty">Leeg</div>'}
         </div> </div>`;
   };
   const primary = statuses.filter((s) => !s.secondary);
@@ -1526,6 +1728,9 @@ function renderBoard() {
   const nieuweHtml = perBar + leegNote +
     `<div class="board-row board-primary">${primary.map(colHTML).join('')}</div>` +
     (secondary.length ? `<div class="board-row board-secondary"><div class="board-sec-label">Afgehandeld</div><div class="board-sec-cols">${secondary.map(colHTML).join('')}</div></div>` : '');
+  // Het "geraamte" van het bord: balken bovenaan + welke kolommen er zijn. Alleen als
+  // dát verandert, wordt het bord nog in één keer opnieuw opgebouwd.
+  const geraamte = perBar + leegNote + '|' + statuses.map((s) => [s.key, s.label, s.color, s.secondary ? 1 : 0].join('~')).join('|');
   // NIET OPNIEUW TEKENEN als er letterlijk niets veranderd is. Het bord werd tot nu toe
   // elke keer volledig herbouwd zodra de server ook maar íets opsloeg (ook een
   // achtergrondtaak). Dat gaf het "knipperen", liet de pagina verspringen onder de
@@ -1541,48 +1746,93 @@ function renderBoard() {
     return;
   }
   _lastBoardHtml = nieuweHtml;
+  bindBoardEvents();   // gedelegeerde luisteraars op #board (één keer)
   // Scrollposities onthouden (pagina + horizontaal gescrolde kolommenrij), zodat het
   // beeld niet wegspringt terwijl je aan het kijken of tikken bent.
   const paginaY = window.scrollY;
-  const rijX = [...board.querySelectorAll('.board-row')].map((r) => r.scrollLeft);
-  const kolomY = [...board.querySelectorAll('.column-cards')].map((c) => c.scrollTop);
-  board.innerHTML = nieuweHtml;
-  const rijen = [...board.querySelectorAll('.board-row')];
-  rijX.forEach((x, i) => { if (rijen[i] && x) rijen[i].scrollLeft = x; });
-  const kolommen = [...board.querySelectorAll('.column-cards')];
-  kolomY.forEach((y, i) => { if (kolommen[i] && y) kolommen[i].scrollTop = y; });
+  // Mobiel (kolom-tabs): de bovenste zichtbare kaart onthouden, zodat een nieuwe kaart
+  // bovenaan de kolom de lijst niet onder je vinger wegschuift (iOS kent geen
+  // scroll-anchoring). Op de bovenkant van de pagina bewust niet: daar mag een nieuwe
+  // kaart gewoon bovenaan verschijnen.
+  const tabbed = board.classList.contains('tabbed');
+  let anker = null;
+  if (tabbed && paginaY > 0) {
+    for (const c of board.querySelectorAll('.column.tab-active .card')) {
+      const r = c.getBoundingClientRect();
+      if (r.height && r.bottom > 60) { anker = { id: c.dataset.id, top: r.top }; break; }
+    }
+  }
+  // PER KAART BIJWERKEN i.p.v. het hele bord vervangen (28 sep 2026, audit pc/mobiel/
+  // schermcode). Eén gewijzigde kaart (bv. een collega opent een opdracht → stipkleur)
+  // liet alle 100+ kaarten opnieuw parsen en indelen: 60-130 ms haperen op de pc,
+  // 120-450 ms op een telefoon, alle rode tellers "popten" opnieuw en de kaart onder de
+  // muis verloor zijn hover. Nu blijven ongewijzigde kaarten exact dezelfde elementen;
+  // alleen nieuwe/gewijzigde kaarten worden vervangen en verplaatste kaarten verhuisd.
+  // Kolommen/rijen blijven staan, dus hun scrollpositie en de actieve tab ook.
+  if (geraamte === _lastBoardGeraamte && board.querySelector('.column-cards')) {
+    const bestaand = new Map();
+    board.querySelectorAll('.column-cards > .card[data-id]').forEach((el) => bestaand.set(el.dataset.id, el));
+    for (const { st, items } of kolommen) {
+      const lijst = board.querySelector(`.column-cards[data-status="${CSS.escape(st.key)}"]`);
+      const tel = board.querySelector(`.column[data-status="${CSS.escape(st.key)}"] .column-head .count`);
+      if (!lijst) continue;
+      if (tel && tel.textContent !== String(items.length)) tel.textContent = String(items.length);
+      let gewenst;
+      if (!items.length) {
+        gewenst = [lijst.querySelector(':scope > .empty') || maakBordElement('<div class="empty">Leeg</div>')];
+      } else {
+        gewenst = items.map(({ id, html }) => {
+          const oud = bestaand.get(id);
+          if (oud && oud._html === html) return oud;
+          const el = maakBordElement(html); el._html = html;
+          return el;
+        });
+      }
+      gewenst.forEach((el, i) => { const huidig = lijst.children[i]; if (huidig !== el) lijst.insertBefore(el, huidig || null); });
+      while (lijst.children.length > gewenst.length) lijst.lastElementChild.remove();
+    }
+  } else {
+    // Eerste keer, of de kolommen zelf zijn veranderd: in één keer opbouwen.
+    const rijX = [...board.querySelectorAll('.board-row')].map((r) => r.scrollLeft);
+    const kolomY = [...board.querySelectorAll('.column-cards')].map((c) => c.scrollTop);
+    board.innerHTML = nieuweHtml;
+    _lastBoardGeraamte = geraamte;
+    const htmlPerId = new Map();
+    for (const k of kolommen) for (const it of k.items) htmlPerId.set(it.id, it.html);
+    board.querySelectorAll('.column-cards > .card[data-id]').forEach((el) => { el._html = htmlPerId.get(el.dataset.id); });
+    // De actieve tab METEEN weer zichtbaar maken (28 sep 2026, audit): in tab-modus zijn
+    // alle kolommen verborgen behalve .tab-active. Zonder dit was de pagina na de
+    // vervanging even ~300 px hoog, klemde de browser de scrollpositie naar 0 en sprong
+    // het bord op de telefoon naar boven na vegen, Opslaan of een nieuwe aanvraag.
+    if (tabbed) $$('#board .column').forEach((col) => col.classList.toggle('tab-active', col.dataset.status === state.boardTab));
+    const rijen = [...board.querySelectorAll('.board-row')];
+    rijX.forEach((x, i) => { if (rijen[i] && x) rijen[i].scrollLeft = x; });
+    const kolomEls = [...board.querySelectorAll('.column-cards')];
+    kolomY.forEach((y, i) => { if (kolomEls[i] && y) kolomEls[i].scrollTop = y; });
+  }
   if (window.scrollY !== paginaY) window.scrollTo(0, paginaY);
-  const bpc = $('#bp-clear');
-  if (bpc) bpc.onclick = () => { $('#boardPeriodFilter').value = ''; loadBoard(); };
+  if (anker) {
+    const terug = board.querySelector(`.column.tab-active .card[data-id="${CSS.escape(anker.id)}"]`);
+    const r = terug && terug.getBoundingClientRect();
+    if (r && r.height && Math.abs(r.top - anker.top) > 1) window.scrollTo(0, window.scrollY + (r.top - anker.top));
+  }
+  // Rode teller alleen laten "poppen" als hij écht omhoog ging (28 sep 2026): de
+  // animatie stond op élke teller en liep bij iedere verversing opnieuw.
+  const vorige = _bordTellers;
+  _bordTellers = new Map();
+  for (const o of orders) {
+    const n = o.unreadReplies || 0;
+    _bordTellers.set(o.id, n);
+    if (vorige && n > (vorige.get(o.id) || 0)) board.querySelector(`.card[data-id="${CSS.escape(o.id)}"] .title-count`)?.classList.add('pop');
+  }
 
-  $$('.card').forEach((el) => {
-    el.addEventListener('click', (e) => {
-      // Klikken op selectievakje/prullenbak, of net na een swipe, opent de kaart niet.
-      if (e.target.closest('.card-select') || e.target.closest('.card-trash') || el.dataset.swiped) return;
-      markSeen(el.dataset.id); openOrderModal(el.dataset.id);
-    });
-  });
-  bindCardDrag();   // pc: slepen met de muis (eigen implementatie, zie onder)
-  bindCardSwipe();  // mobiel: vegen
-  // Mini-prullenbak per kaart (met "Ongedaan maken")
-  $$('.card-trash').forEach((b) => b.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const id = b.dataset.del;
-    try { await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo('Naar prullenbak', () => restoreOrders([id])); }
-    catch (err) { toast(err.message, true); }
-  }));
-  // Selectievakjes -> onthouden in het geheugen, zodat een verversing ze niet wist.
-  $$('.card-check').forEach((c) => c.addEventListener('change', () => {
-    if (c.checked) boardSel.add(c.dataset.id); else boardSel.delete(c.dataset.id);
-    updateBoardBulk();
-  }));
   // Kaarten die niet meer op het bord staan (verwerkt/verwijderd) uit de selectie halen.
-  const zichtbaar = new Set($$('.card-check').map((c) => c.dataset.id));
+  const zichtbaar = new Set($$('#board .card-check').map((c) => c.dataset.id));
   for (const sid of [...boardSel]) if (!zichtbaar.has(sid)) boardSel.delete(sid);
   updateBoardBulk();
 
   // Prullenbak-dropzone (alleen voor wie mag verwijderen) — het slepen zelf zit in
-  // bindCardDrag(); hier alleen tonen/verbergen.
+  // bindBoardEvents(); hier alleen tonen/verbergen.
   const tz = $('#trashZone');
   if (tz) tz.hidden = state.me.role === 'monteur';
 
@@ -1594,6 +1844,14 @@ function renderBoard() {
     state._focusCol = null;
   }
 }
+// Eén element uit een HTML-stukje (voor het bijwerken per kaart).
+function maakBordElement(html) {
+  const t = document.createElement('template');
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild;
+}
+let _lastBoardGeraamte = '';
+let _bordTellers = null;   // id -> aantal ongelezen bij de vorige tekening (pop alleen bij stijging)
 
 // Mobiel: kolom-tabs bovenaan het bord (kies één kolom i.p.v. horizontaal scrollen).
 function setupBoardTabs() {
@@ -1620,6 +1878,11 @@ function setupBoardTabs() {
     state.boardTab = b.dataset.tab;
     $$('.board-tab', tabs).forEach((x) => x.classList.toggle('active', x === b));
     apply();
+    // De tabs plakken nu onder de kopbalk (28 sep 2026). Wissel je van kolom terwijl je
+    // diep in een lange kolom zit, dan naar het BEGIN van de nieuwe kolom springen —
+    // anders landde je ergens midden/onderaan de nieuwe lijst.
+    const tr = tabs.getBoundingClientRect(), br = board.getBoundingClientRect();
+    if (br.top < tr.bottom) window.scrollTo(0, Math.max(0, window.scrollY + br.top - tr.bottom - 12));
   });
 }
 
@@ -1662,7 +1925,7 @@ function advanceStatus(id, dir = 1) {
 }
 
 // Kaart naar een andere kolom (status) — gedeeld door slepen op de pc en vegen op mobiel.
-async function verplaatsKaart(id, newStatus) {
+async function verplaatsKaart(id, newStatus, { herladen = false } = {}) {
   const order = state.orders.find((o) => o.id === id);
   if (!order) {
     // Kaart staat niet (meer) in het geheugen: verouderd bord. Niet stil niks doen.
@@ -1679,10 +1942,25 @@ async function verplaatsKaart(id, newStatus) {
     setTimeout(() => { const s = $('#f-status'); if (s) s.value = newStatus; $('#f-notes')?.focus(); }, 300);
     return;
   }
+  // De kaart METEEN op zijn definitieve plek zetten (28 sep 2026, audit "kaart wordt
+  // twee keer getekend en springt"): de server sorteert op updatedAt (nieuwste boven),
+  // dus een verzette kaart hoort bovenaan de doelkolom. Voorheen landde hij eerst op
+  // zijn oude sorteerplek (vaak onderaan, buiten beeld) en sprong hij na het volledig
+  // opnieuw ophalen van het bord naar boven.
   order.status = newStatus;
+  order.updatedAt = new Date().toISOString();
+  state.orders = [order, ...state.orders.filter((o) => o !== order)];
   renderBoard();
-  const moved = $(`.card[data-id="${id}"]`); if (moved) moved.classList.add('just-moved');
-  try { await api(`/api/orders/${id}`, 'PATCH', { status: newStatus }); toast('Status bijgewerkt'); await loadBoard(); flash(`.card[data-id="${id}"]`); }
+  const moved = $(`#board .card[data-id="${id}"]`); if (moved) moved.classList.add('just-moved');
+  try {
+    const nieuw = await api(`/api/orders/${id}`, 'PATCH', { status: newStatus });
+    // Het antwoord (zelfde vorm als de lijst) vervangt onze schatting; geen tweede
+    // volledige ophaalronde. Tellers/archief volgen bij de eerstvolgende pulse.
+    if (nieuw && nieuw.id === id) { const i = state.orders.findIndex((o) => o.id === id); if (i >= 0) state.orders[i] = nieuw; }
+    toast('Status bijgewerkt');
+    // Veranderde er tijdens het slepen iets anders op het bord? Dan nu alles ophalen.
+    if (herladen) await loadBoard(); else renderBoard();
+  }
   catch (err) { toast(err.message, true); loadBoard(); }
 }
 async function kaartNaarPrullenbak(id) {
@@ -1701,68 +1979,161 @@ async function kaartNaarPrullenbak(id) {
 // (2) renderBoard() tekent NIET tijdens het slepen maar daarna (zie renderBoard),
 // (3) loslaten werkt altijd, ook als er niets onder de muis staat (dan gebeurt er
 // gewoon niets). Vinger op mobiel blijft vegen (bindCardSwipe).
-function bindCardDrag() {
-  if (window.matchMedia('(max-width: 820px)').matches) return;
-  $$('#board .card').forEach((card) => {
-    card.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0 || e.pointerType === 'touch') return;
-      if (e.target.closest('.card-select, .card-trash, a, button, input, select, textarea')) return;
-      const id = card.dataset.id;
-      const x0 = e.clientX, y0 = e.clientY;
-      const r0 = card.getBoundingClientRect();
-      let bezig = false, ghost = null, doel = null;
-      const kolomOnder = (ev) => {
-        const el = document.elementFromPoint(ev.clientX, ev.clientY);
-        return { kolom: el && el.closest('#board .column'), prullenbak: el && el.closest('#trashZone') };
-      };
-      const markeer = (ev) => {
-        const { kolom, prullenbak } = kolomOnder(ev);
-        if (kolom !== doel) { $$('#board .column.drag-over').forEach((c) => c.classList.remove('drag-over')); if (kolom) kolom.classList.add('drag-over'); doel = kolom; }
-        const tz = $('#trashZone'); if (tz) tz.classList.toggle('drag-over', !!prullenbak && !tz.hidden);
-      };
-      const move = (ev) => {
-        if (!bezig) {
-          if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;   // gewone klik
-          bezig = true;
-          window._dragging = true;
-          window._dragSinds = Date.now();
-          document.body.classList.add('board-dragging');
-          card.classList.add('drag-src');
-          ghost = card.cloneNode(true);
-          ghost.className = 'card board-drag-ghost';
-          ghost.style.width = `${r0.width}px`;
-          document.body.appendChild(ghost);
-        }
-        ev.preventDefault();
-        ghost.style.transform = `translate(${ev.clientX - (x0 - r0.left)}px, ${ev.clientY - (y0 - r0.top)}px)`;
-        markeer(ev);
-        // Aan de rand van het scherm: meescrollen, anders kom je nooit bij Afgerond.
-        if (ev.clientY > window.innerHeight - 60) window.scrollBy(0, 14);
-        else if (ev.clientY < 70) window.scrollBy(0, -14);
-        // Ook de VOLLE doelkolom scrolt mee als je bij haar boven-/onderrand hangt.
-        const kolomLijst = doel?.querySelector('.column-cards');
-        if (kolomLijst) { const kr = kolomLijst.getBoundingClientRect(); if (ev.clientY > kr.bottom - 40) kolomLijst.scrollTop += 12; else if (ev.clientY < kr.top + 40) kolomLijst.scrollTop -= 12; }
-      };
-      const stop = async (ev) => {
-        document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', stop); document.removeEventListener('pointercancel', stop);
-        if (!bezig) return;   // niet gesleept -> de klik opent de kaart zoals altijd
-        card.dataset.swiped = '1'; setTimeout(() => { delete card.dataset.swiped; }, 400);
-        const { kolom, prullenbak } = ev.type === 'pointercancel' ? {} : kolomOnder(ev);
-        if (ghost) ghost.remove();
-        card.classList.remove('drag-src');
-        document.body.classList.remove('board-dragging');
-        $$('#board .column.drag-over').forEach((c) => c.classList.remove('drag-over'));
-        $('#trashZone')?.classList.remove('drag-over');
-        window._dragging = false;
-        if (prullenbak && state.me.role !== 'monteur') await kaartNaarPrullenbak(id);
-        else if (kolom && kolom.dataset.status) await verplaatsKaart(id, kolom.dataset.status);
-        // Verversing die tijdens het slepen is uitgesteld alsnog doen.
-        if (window._boardRenderNaSleep) { window._boardRenderNaSleep = false; loadBoard(); }
-      };
-      document.addEventListener('pointermove', move);
-      document.addEventListener('pointerup', stop);
-      document.addEventListener('pointercancel', stop);
-    });
+//
+// GEDELEGEERD (28 sep 2026, audit): klik, prullenbak, vinkje, slepen (pc) en vegen
+// (mobiel) hangen nu als één set luisteraars op #board i.p.v. 5-7 luisteraars per kaart
+// na elke tekening. Daardoor kan renderBoard() kaarten per stuk vervangen zonder dat er
+// luisteraars ontbreken of dubbel hangen. Telefoon/pc en de rol worden pas bij de
+// gebeurtenis zelf bekeken (draaien/venster smaller maken werkt dus meteen).
+function bindBoardEvents() {
+  const board = $('#board');
+  if (!board || board._gedelegeerd) return;
+  board._gedelegeerd = true;
+  const isMobiel = () => window.matchMedia('(max-width: 820px)').matches;
+  const kaartVan = (e) => { const c = e.target.closest && e.target.closest('.card[data-id]'); return c && board.contains(c) ? c : null; };
+
+  board.addEventListener('click', async (e) => {
+    if (e.target.closest('#bp-clear')) { $('#boardPeriodFilter').value = ''; loadBoard(); return; }
+    const el = kaartVan(e); if (!el) return;
+    // Mini-prullenbak per kaart (met "Ongedaan maken")
+    const trash = e.target.closest('.card-trash');
+    if (trash) {
+      e.stopPropagation();
+      const id = trash.dataset.del;
+      try { await api(`/api/orders/${id}`, 'DELETE'); loadBoard(); toastUndo('Naar prullenbak', () => restoreOrders([id])); }
+      catch (err) { toast(err.message, true); }
+      return;
+    }
+    // Klikken op selectievakje, of net na een swipe/sleep, opent de kaart niet.
+    if (e.target.closest('.card-select') || el.dataset.swiped) return;
+    markSeen(el.dataset.id); openOrderModal(el.dataset.id);
+  });
+  // Selectievakjes -> onthouden in het geheugen, zodat een verversing ze niet wist.
+  board.addEventListener('change', (e) => {
+    const c = e.target.closest('.card-check'); if (!c) return;
+    if (c.checked) boardSel.add(c.dataset.id); else boardSel.delete(c.dataset.id);
+    // De bewaarde HTML van deze kaart bijwerken (vinkje zit erin), anders zou de
+    // volgende tekening de kaart onnodig vervangen.
+    const kaart = c.closest('.card'); const o = state.orders.find((x) => x.id === c.dataset.id);
+    if (kaart && o) kaart._html = cardHTML(o);
+    updateBoardBulk();
+  });
+
+  // ---- pc: slepen met de muis ----
+  board.addEventListener('pointerdown', (e) => {
+    if (isMobiel() || e.button !== 0 || e.pointerType === 'touch') return;
+    const card = kaartVan(e); if (!card) return;
+    if (e.target.closest('.card-select, .card-trash, a, button, input, select, textarea')) return;
+    const id = card.dataset.id;
+    const x0 = e.clientX, y0 = e.clientY;
+    const r0 = card.getBoundingClientRect();
+    let bezig = false, ghost = null, doel = null, laatste = null, frame = 0;
+    const kolomOnder = (ev) => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      return { kolom: el && el.closest('#board .column'), prullenbak: el && el.closest('#trashZone') };
+    };
+    const markeer = (ev) => {
+      const { kolom, prullenbak } = kolomOnder(ev);
+      if (kolom !== doel) { $$('#board .column.drag-over').forEach((c) => c.classList.remove('drag-over')); if (kolom) kolom.classList.add('drag-over'); doel = kolom; }
+      const tz = $('#trashZone'); if (tz) tz.classList.toggle('drag-over', !!prullenbak && !tz.hidden);
+    };
+    // Eén keer per beeldje bijwerken (28 sep 2026, audit "stroperig slepen"): de muis
+    // vuurt vaker dan het scherm tekent; elementFromPoint + markeren per gebeurtenis
+    // was verspilling. De kopie zelf staat zonder CSS-overgang direct onder de muis.
+    const teken = () => {
+      frame = 0;
+      const ev = laatste; if (!ev || !ghost) return;
+      ghost.style.transform = `translate(${ev.clientX - (x0 - r0.left)}px, ${ev.clientY - (y0 - r0.top)}px)`;
+      markeer(ev);
+      // Aan de rand van het scherm: meescrollen, anders kom je nooit bij Afgerond.
+      if (ev.clientY > window.innerHeight - 60) window.scrollBy(0, 14);
+      else if (ev.clientY < 70) window.scrollBy(0, -14);
+      // Ook de VOLLE doelkolom scrolt mee als je bij haar boven-/onderrand hangt.
+      const kolomLijst = doel?.querySelector('.column-cards');
+      if (kolomLijst) { const kr = kolomLijst.getBoundingClientRect(); if (ev.clientY > kr.bottom - 40) kolomLijst.scrollTop += 12; else if (ev.clientY < kr.top + 40) kolomLijst.scrollTop -= 12; }
+    };
+    const move = (ev) => {
+      if (!bezig) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;   // gewone klik
+        bezig = true;
+        window._dragging = true;
+        window._dragSinds = Date.now();
+        document.body.classList.add('board-dragging');
+        card.classList.add('drag-src');
+        ghost = card.cloneNode(true);
+        ghost.className = 'card board-drag-ghost';
+        ghost.style.width = `${r0.width}px`;
+        document.body.appendChild(ghost);
+      }
+      ev.preventDefault();
+      laatste = { clientX: ev.clientX, clientY: ev.clientY };
+      if (!frame) frame = requestAnimationFrame(teken);
+    };
+    const stop = async (ev) => {
+      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', stop); document.removeEventListener('pointercancel', stop);
+      if (frame) { cancelAnimationFrame(frame); frame = 0; }
+      if (!bezig) return;   // niet gesleept -> de klik opent de kaart zoals altijd
+      card.dataset.swiped = '1'; setTimeout(() => { delete card.dataset.swiped; }, 400);
+      // Doel bepalen op de plek van het LOSLATEN zelf (niet het laatste getekende beeldje).
+      const { kolom, prullenbak } = ev.type === 'pointercancel' ? {} : kolomOnder(ev);
+      if (ghost) ghost.remove();
+      card.classList.remove('drag-src');
+      document.body.classList.remove('board-dragging');
+      $$('#board .column.drag-over').forEach((c) => c.classList.remove('drag-over'));
+      $('#trashZone')?.classList.remove('drag-over');
+      window._dragging = false;
+      const uitgesteld = !!window._boardRenderNaSleep;
+      window._boardRenderNaSleep = false;
+      if (prullenbak && state.me.role !== 'monteur') await kaartNaarPrullenbak(id);
+      else if (kolom && kolom.dataset.status && kolom.dataset.status !== state.orders.find((o) => o.id === id)?.status) {
+        // verplaatsKaart haalt na de wijziging het bord zelf opnieuw op als er tijdens het
+        // slepen iets anders veranderde; anders alleen het eigen antwoord tekenen.
+        await verplaatsKaart(id, kolom.dataset.status, { herladen: uitgesteld });
+      } else if (uitgesteld) loadBoard();
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', stop);
+    document.addEventListener('pointercancel', stop);
+  });
+
+  // ---- mobiel: vegen (rechts = volgende kolom, links = vorige kolom) ----
+  // (Verwijderen gaat NIET via swipe — daarvoor is het prullenbak-knopje op de kaart.)
+  let vCard = null, x0 = 0, y0 = 0, dx = 0, decided = false, horiz = false;
+  const magVegen = () => isMobiel() && state.me.role !== 'monteur';
+  const naVeeg = () => { if (window._boardRenderNaSleep) { window._boardRenderNaSleep = false; if (state.view === 'board') loadBoard(); } };
+  board.addEventListener('touchstart', (e) => {
+    if (!magVegen()) return;
+    const card = kaartVan(e); if (!card) return;
+    const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; dx = 0; decided = false; horiz = false;
+    vCard = card;
+    window._dragging = true;   // bord niet verversen midden in een veegbeweging
+    card.style.transition = '';
+  }, { passive: true });
+  board.addEventListener('touchmove', (e) => {
+    if (!vCard) return;
+    const t = e.touches[0]; dx = t.clientX - x0; const dy = t.clientY - y0;
+    if (!decided && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) { decided = true; horiz = Math.abs(dx) > Math.abs(dy); }
+    if (horiz) { e.preventDefault(); vCard.style.transform = `translateX(${dx}px)`; vCard.style.opacity = String(Math.max(0.55, 1 - Math.abs(dx) / 360)); }
+  }, { passive: false });
+  // Vinger van het scherm zonder net touchend (bv. inkomend telefoontje): rem eraf.
+  // Na een veeg/tik: een verversing die intussen is uitgesteld alsnog doen.
+  board.addEventListener('touchcancel', () => {
+    if (!vCard) return;
+    window._dragging = false; vCard.style.transform = ''; vCard.style.opacity = ''; vCard = null; naVeeg();
+  });
+  board.addEventListener('touchend', () => {
+    const card = vCard;
+    if (!card) return;
+    window._dragging = false;
+    vCard = null;
+    if (!(horiz && Math.abs(dx) >= 95)) setTimeout(naVeeg, 50);
+    card.style.transition = 'transform .16s ease, opacity .16s ease';
+    card.style.transform = ''; card.style.opacity = '';
+    const id = card.dataset.id;
+    if (horiz && Math.abs(dx) >= 95) {
+      card.dataset.swiped = '1'; setTimeout(() => { delete card.dataset.swiped; }, 400);
+      advanceStatus(id, dx > 0 ? 1 : -1); // rechts = volgende, links = vorige
+    }
   });
 }
 // Vangnet: blijft de sleepvlag om wat voor reden dan ook langer dan 20 s staan
@@ -1778,42 +2149,6 @@ setInterval(() => {
   }
 }, 5000);
 
-// Swipe-acties op kaarten (alleen mobiel): rechts = volgende kolom, links = vorige kolom.
-// (Verwijderen gaat NIET via swipe — daarvoor is het prullenbak-knopje op de kaart.)
-function bindCardSwipe() {
-  if (!window.matchMedia('(max-width: 820px)').matches || state.me.role === 'monteur') return;
-  $$('#board .card').forEach((card) => {
-    let x0 = 0, y0 = 0, dx = 0, dragging = false, decided = false, horiz = false;
-    card.addEventListener('touchstart', (e) => {
-      const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; dx = 0; dragging = true; decided = false; horiz = false;
-      window._dragging = true;   // bord niet verversen midden in een veegbeweging
-      card.style.transition = '';
-    }, { passive: true });
-    card.addEventListener('touchmove', (e) => {
-      if (!dragging) return;
-      const t = e.touches[0]; dx = t.clientX - x0; const dy = t.clientY - y0;
-      if (!decided && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) { decided = true; horiz = Math.abs(dx) > Math.abs(dy); }
-      if (horiz) { e.preventDefault(); card.style.transform = `translateX(${dx}px)`; card.style.opacity = String(Math.max(0.55, 1 - Math.abs(dx) / 360)); }
-    }, { passive: false });
-    // Vinger van het scherm zonder net touchend (bv. inkomend telefoontje): rem eraf.
-    // Na een veeg/tik: een verversing die intussen is uitgesteld alsnog doen.
-    const naVeeg = () => { if (window._boardRenderNaSleep) { window._boardRenderNaSleep = false; if (state.view === 'board') loadBoard(); } };
-    card.addEventListener('touchcancel', () => { window._dragging = false; dragging = false; card.style.transform = ''; card.style.opacity = ''; naVeeg(); });
-    card.addEventListener('touchend', () => {
-      window._dragging = false;
-      if (!dragging) { naVeeg(); return; } dragging = false;
-      if (!(horiz && Math.abs(dx) >= 95)) setTimeout(naVeeg, 50);
-      card.style.transition = 'transform .16s ease, opacity .16s ease';
-      card.style.transform = ''; card.style.opacity = '';
-      const id = card.dataset.id;
-      if (horiz && Math.abs(dx) >= 95) {
-        card.dataset.swiped = '1'; setTimeout(() => { delete card.dataset.swiped; }, 400);
-        advanceStatus(id, dx > 0 ? 1 : -1); // rechts = volgende, links = vorige
-      }
-    });
-  });
-}
-
 // SELECTIE LEEFT IN HET GEHEUGEN, niet alleen in de vinkjes op het scherm. Anders
 // was je selectie weg zodra het bord opnieuw werd opgebouwd (dat gebeurt automatisch
 // zodra er ergens iets verandert) — precies de klacht "na een halve minuut is mijn
@@ -1825,7 +2160,6 @@ const inboxSel = new Set();
 function inboxHeeftBewerking() { const a = document.activeElement; return !!(a && a.closest && a.closest('#reviewList') && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== 'checkbox'); }
 let _lastBoardHtml = '';   // laatst getekende bord, om nutteloos hertekenen te herkennen
 let _lastArchHtml = '';    // idem voor de ingeklapte week-agenda's
-let _lastOvHtml = '';      // idem voor de Start-pagina
 function selectedCardIds() { return [...boardSel]; }
 function clearBoardSel() { boardSel.clear(); $$('.card-check').forEach((c) => (c.checked = false)); updateBoardBulk(); }
 function updateBoardBulk() {
@@ -2016,7 +2350,8 @@ function openSendMonteurModal(order) {
     knopTekst();
   };
   $('#sm-cancel').onclick = () => openOrderModal(order.id);
-  $('#sm-send').onclick = async () => {
+  // Dubbelklik-rem (28 sep 2026): twee klikken zetten de opdracht twee keer in de groep.
+  $('#sm-send').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const monteurId = $('#sm-monteur').value;
     if (!monteurId) return toast('Kies een monteur', true);
     const attachmentIds = $$('.sm-img:checked').map((c) => c.value);
@@ -2024,7 +2359,7 @@ function openSendMonteurModal(order) {
       await api(`/api/orders/${order.id}/send-monteur`, 'POST', { monteurId, attachmentIds });
       closeModal(); toast(`In de wachtrij gezet${attachmentIds.length ? ` met ${attachmentIds.length} foto('s)` : ''} — wordt verstuurd`); loadBoard();
     } catch (err) { toast(err.message, true); }
-  };
+  });
 }
 
 // Kwamen de foto's écht aan? De bridge (v10) meldt het terug — sinds de WhatsApp-Web-
@@ -2036,7 +2371,10 @@ function fotoStatusHTML(s) {
   return ` · <span class="sm-foto-mislukt">foto's: ${f.verstuurd} van ${f.gevraagd} aangekomen</span>`;
 }
 
-function openMergeModal(primary) {
+async function openMergeModal(primary) {
+  // Sinds de app op Start begint en een opdracht los wordt opgehaald (28 sep 2026),
+  // kan state.orders nog leeg zijn — dan eerst de lijst laden (anders 0 kandidaten).
+  if (!state.orders.length) { try { state.orders = await api('/api/orders'); } catch { /* lege lijst tonen */ } }
   // Kandidaten: andere actieve kaarten, dezelfde klant bovenaan.
   const others = state.orders.filter((o) => o.id !== primary.id);
   const sameCustomer = others.filter((o) => o.customerId && o.customerId === primary.customerId);
@@ -2051,7 +2389,7 @@ function openMergeModal(primary) {
     ${rest.length ? `<details style="margin-top:10px"><summary class="muted small" style="cursor:pointer">Andere opdrachten tonen (${rest.length})</summary>${rest.slice(0, 40).map((o) => row(o, false)).join('')}</details>` : ''}
     <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="mg-cancel">Annuleren</button> <button class="btn btn-primary" id="mg-save">Samenvoegen</button> </div></div>`);
   $('#mg-cancel').onclick = () => openOrderModal(primary.id);
-  $('#mg-save').onclick = async () => {
+  $('#mg-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const ids = $$('.mg-pick:checked').map((c) => c.value);
     if (!ids.length) return toast('Selecteer minstens één opdracht', true);
     // Andere klant erbij? Dan expliciet bevestigen (punt 12) — anders belandt de
@@ -2064,7 +2402,24 @@ function openMergeModal(primary) {
     }
     try { await api('/api/orders/merge', 'POST', { primaryId: primary.id, mergeIds: ids, force }); closeModal(); toast(`${ids.length} opdracht(en) samengevoegd — de bronkaarten staan in de prullenbak`); loadBoard(); }
     catch (err) { toast(err.message, true); }
-  };
+  });
+}
+
+// Eén opdracht VERS ophalen en openen (28 sep 2026, server-audit): voorheen haalde
+// elke klik buiten het bord (zoekbalk, Facturen, dossier, Berichten …) ALLE
+// opdrachten incl. archief op — bij een groot archief 18 MB en ~230 ms waarin de
+// hele server stilstond. Nu één kaart via GET /api/orders/:id (zelfde rechten).
+async function openOrderVers(id, { seen = false } = {}) {
+  try {
+    const o = await api(`/api/orders/${encodeURIComponent(id)}`);
+    const i = state.orders.findIndex((x) => x.id === id);
+    if (i >= 0) { state.orders[i] = o; if (seen) markSeen(id); openOrderModal(id); } // bord-kopie meteen bijgewerkt
+    else {
+      // Niet op het bord (archief): "gezien" direct op de server zetten (markSeen kent hem niet).
+      if (seen && (!o.openedAt || o.customerReplied)) api(`/api/orders/${o.id}/seen`, 'POST').catch(() => {});
+      openOrderModal(id, [o]);
+    }
+  } catch (err) { toast(err.message || 'Opdracht niet gevonden — misschien staat hij in de prullenbak.', true); }
 }
 
 function openOrderModal(id, pool) {
@@ -2073,18 +2428,29 @@ function openOrderModal(id, pool) {
   if (id && !o && !pool) {
     // Kaart (nog) niet in het geheugen (net aangemaakt, archief, andere collega)? Eerst
     // ophalen — voorheen kreeg je stilletjes een LEEG nieuw-formulier en daarmee een
-    // dubbele kaart (audit 16 sep).
-    api('/api/orders?includeArchived=1').then((os) => {
-      state.orders = os;
-      if (os.find((x) => x.id === id)) openOrderModal(id, os);
-      else toast('Opdracht niet gevonden — misschien staat hij in de prullenbak.', true);
-    }).catch((err) => toast(err.message, true));
+    // dubbele kaart (audit 16 sep). Sinds 28 sep 2026 alleen DEZE kaart ophalen.
+    openOrderVers(id);
     return;
   }
   const canWrite = state.me.role !== 'monteur';
   const isMonteur = state.me.role === 'monteur';
   const monteurOpts = '<option value="">— geen monteur —</option>' +
     state.monteurs.map((m) => `<option value="${m.id}" ${(o ? o.monteurId === m.id : (isMonteur && state.me.monteurId === m.id)) ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  // Klantvelden tonen wat DEZE aanvraag gebruikt (order.intake, terugval klantrecord) —
+  // precies wat de monteur-dispatch (buildMonteurMessage) ook kiest. Voorheen toonde
+  // het venster het klantrecord en stuurde dat bij elke Opslaan als intake mee: het
+  // aanvraag-adres werd stil overschreven en de monteur reed naar het oude adres
+  // (28 sep 2026, audit; LEAD-INSTROOM WET 3).
+  // MONTEUR: hij wijzigt alleen het klantrecord (de intake-kopie blijft aan kantoor),
+  // dus hij ziet ook het klantrecord — anders leek zijn correctie na heropenen weg.
+  const it = (o && o.intake && canWrite) ? o.intake : {};
+  const kv = {
+    name: (it.name && !/^onbekende klant$/i.test(it.name) ? it.name : '') || o?.customer?.name || '',
+    phone: it.phone || o?.customer?.phone || '',
+    email: it.email || o?.customer?.email || '',
+    address: it.address || o?.customer?.address || '',
+  };
+  const kvWijkt = !!(o && canWrite && o.customer && ['name', 'phone', 'email', 'address'].some((k) => kv[k] !== (o.customer[k] || '')));
 
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
@@ -2103,7 +2469,7 @@ function openOrderModal(id, pool) {
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur && o ? 'disabled' : ''} placeholder="bv. Rhenen — cilinderslot vervangen"></label>
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
-      <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(o.customer?.name || '')}"></label> <label>Telefoon <input id="f-ccphone" value="${esc(o.customer?.phone || '')}" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(o.customer?.email || '')}" placeholder="e-mailadres klant (nodig voor de factuur)"></label> <label>Adres <input id="f-ccaddress" value="${esc(o.customer?.address || '')}"></label> </div>${o.customer?.phone ? `<div class="muted small" style="margin:-4px 0 10px"><a href="tel:${esc(String(o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 12)} Bel ${esc(o.customer.phone)}</a></div>` : ''}`}
+      <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(kv.name)}"></label> <label>Telefoon <input id="f-ccphone" value="${esc(kv.phone)}" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(kv.email)}" placeholder="e-mailadres klant (nodig voor de factuur)"></label> <label>Adres <input id="f-ccaddress" value="${esc(kv.address)}"></label> </div>${kvWijkt ? `<div class="muted small" style="margin:-4px 0 8px">Deze velden tonen de gegevens van <strong>déze aanvraag</strong> (die gebruikt de monteur). Wat je hier wijzigt, geldt voor deze opdracht én het klantrecord.</div>` : ''}${o.customer?.phone ? `<div class="muted small" style="margin:-4px 0 10px"><a href="tel:${esc(String(o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 12)} Bel ${esc(o.customer.phone)}</a></div>` : ''}`}
     <div class="form-sec">${icon('calendar', 13)} Planning &amp; status</div> <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''}${o && o.googleSyncError ? `<div class="muted small" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--danger);background:var(--danger-soft, rgba(220,53,69,.08))"><strong>Niet in Google Agenda.</strong> ${esc(o.googleSyncError)} — ga naar Instellingen → Koppelingen en klik "Controleer &amp; herstel nu".</div>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <div class="form-sec">${icon('message', 13)} Intern</div> <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     ${o ? `
@@ -2131,6 +2497,13 @@ function openOrderModal(id, pool) {
   // De knoppen staan op een VASTE plek onderaan de opdracht (28 sep 2026, wens eigenaar:
   // "als ik scroll gaan die knoppen allemaal mee"). Het plakkende knoppenblok van 16 sep
   // (.modal-actions-vast) schoof op de pc met 13 knoppen over de halve inhoud heen.
+  if (o) {
+    // Terug uit een vervolgvenster van DEZE opdracht? Dan op dezelfde plek verder
+    // (28 sep 2026). Een andere/nieuw geopende opdracht begint altijd bovenaan.
+    $('#modal').dataset.kaart = o.id;
+    const ks = _kaartScroll; _kaartScroll = null;
+    if (ks && ks.id === o.id) { $('#modalRoot').scrollTop = ks.root; $('#modal').scrollTop = ks.sheet; }
+  }
   bindSourceSelect($('#modal [data-source]'));
   // Suggestie-knoppen (lead-instroom wetten): de mens beslist, het systeem nooit.
   // Knoppen bestaan alleen voor kantoor (canWrite). Zonder deze guard brak de hele
@@ -2312,8 +2685,16 @@ function openOrderModal(id, pool) {
       const files = [...fileInput.files];
       if (!files.length) return;
       toast(`${files.length} bestand(en) uploaden…`);
+      // Voortgang OP DE KNOP (28 sep 2026, audit mobiel): een gewone melding is in een open
+      // venster onzichtbaar, dus een telefoonfoto van enkele MB uploadde seconden lang
+      // zonder enig teken en mensen tikten nog eens. Knop uit tot klaar (finally).
+      const knop = $('#f-addfile');
+      const knopTekst = knop ? knop.textContent : '';
+      if (knop) knop.disabled = true;
       let gelukt = 0; let mislukt = 0; let laatsteFout = '';
-      for (const file of files) {
+      try {
+      for (const [nr, file] of files.entries()) {
+        if (knop) knop.textContent = files.length > 1 ? `Uploaden ${nr + 1}/${files.length}…` : 'Uploaden…';
         try {
           const dataBase64 = await new Promise((resolve, reject) => {
             const fr = new FileReader();
@@ -2326,8 +2707,16 @@ function openOrderModal(id, pool) {
           gelukt++;
         } catch (err) { mislukt++; laatsteFout = err.message || 'uploaden mislukt'; }
       }
-      $('#f-attachgrid').innerHTML = attachmentsHTML(o.attachments);
-      flash('#f-attachgrid');
+      } finally {
+        fileInput.value = '';
+        if (knop) {
+          knop.disabled = false;
+          knop.textContent = gelukt && !mislukt ? 'Toegevoegd ✓' : knopTekst;
+          if (gelukt && !mislukt) setTimeout(() => { if (knop.isConnected && !knop.disabled) knop.textContent = knopTekst; }, 1800);
+        }
+      }
+      const grid = $('#f-attachgrid');   // kan weg zijn als het venster intussen dicht ging
+      if (grid) { grid.innerHTML = attachmentsHTML(o.attachments); flash(grid); }
       // Eerlijke melding: hier stond altijd "Toegevoegd", óók als élke upload faalde
       // (die foutmelding werd meteen overschreven).
       if (mislukt) toast(gelukt ? `${gelukt} toegevoegd, ${mislukt} mislukt: ${laatsteFout}` : `Uploaden mislukt: ${laatsteFout}`, true);
@@ -2337,7 +2726,23 @@ function openOrderModal(id, pool) {
   }
 
   $('#f-cancel').onclick = closeModal;
-  $('#f-save').onclick = async () => {
+  // Beginstand van het formulier (28 sep 2026, audit pc/functies): bij Opslaan gaan
+  // ALLEEN de velden mee die de gebruiker echt wijzigde — voorheen ging alles mee en
+  // zette een gewone Opslaan de status/notitie/klantgegevens die een collega of de
+  // monteur intussen had aangepast stil terug. `basis` (de waarde die dit venster
+  // zag) laat de server per veld een conflict herkennen (409).
+  const leesForm = () => ({
+    status: $('#f-status')?.value ?? '',
+    notes: $('#f-notes')?.value ?? '',
+    title: $('#f-title')?.value ?? '',
+    monteurId: $('#f-monteur')?.value || null,
+    price: $('#f-price')?.value ?? '',
+    source: $('#modal [data-source]')?.value || 'Handmatig',
+    urgent: $('#f-urgent')?.checked || false,
+    cc: { name: $('#f-ccname')?.value ?? '', phone: $('#f-ccphone')?.value ?? '', email: $('#f-ccemail')?.value ?? '', address: $('#f-ccaddress')?.value ?? '' },
+  });
+  const begin = leesForm();
+  $('#f-save').onclick = (e) => eenKeer(e.currentTarget, async () => {
     // Monteur: verplichte notitie voordat een opdracht naar offerte/afgerond/geannuleerd gaat.
     const noteRequired = noteRequiredKeys();
     if (isMonteur && o && $('#f-status').value !== o.status && noteRequired.includes($('#f-status').value) && !($('#f-notes').value || '').trim()) {
@@ -2345,49 +2750,75 @@ function openOrderModal(id, pool) {
       $('#f-notes')?.focus();
       return;
     }
-    const payload = {
-      status: $('#f-status').value,
-      notes: $('#f-notes').value,
+    const nu = leesForm();
+    const payload = {};
+    const basis = {};
+    // Veld meesturen: nieuwe kaart altijd, bestaande alleen bij wijziging (+ basis).
+    const zet = (k, waarde, was, wasOpServer) => {
+      if (o && waarde === was) return;
+      payload[k] = waarde;
+      if (o) basis[k] = wasOpServer ?? null;
     };
+    zet('status', nu.status, begin.status, o?.status);
+    zet('notes', nu.notes, begin.notes, o?.notes);
     // Afspraakvelden ALLEEN meesturen als ze echt gewijzigd zijn (audit 18 aug): de
     // server ziet een meegestuurde afspraak als "afspraak gezet" en draaide dan bij
     // elke gewone opslag opnieuw de bevestiging + monteur-dispatch.
     const apptNu = $('#f-appt').value || null;
     const apptWas = o?.appointmentAt ? o.appointmentAt.slice(0, 16) : null;
-    if (!o || apptNu !== apptWas) payload.appointmentAt = apptNu;
+    zet('appointmentAt', apptNu, apptWas, o?.appointmentAt);
     const apptEindNu = $('#f-appt-end') ? ($('#f-appt-end').value || null) : null;
     const apptEindWas = o?.appointmentEndAt ? o.appointmentEndAt.slice(0, 16) : null;
-    if (!o || apptEindNu !== apptEindWas) payload.appointmentEndAt = apptEindNu;
+    zet('appointmentEndAt', apptEindNu, apptEindWas, o?.appointmentEndAt);
     // Titel: bij een NIEUWE kaart altijd meesturen — ook voor de gekoppelde monteur
     // (noodroute). Die zat voorheen achter canWrite, waardoor de monteur op Opslaan
     // altijd "Titel verplicht" kreeg en nooit een kaart kon maken (audit 16 sep 2026).
-    if (!o || canWrite) payload.title = $('#f-title').value;
+    if (!o || canWrite) zet('title', nu.title, begin.title, o?.title);
     if (canWrite) {
-      payload.monteurId = $('#f-monteur').value || null;
-      payload.price = $('#f-price').value;
-      payload.source = $('#modal [data-source]')?.value || 'Handmatig';
-      payload.urgent = $('#f-urgent')?.checked || false;
+      zet('monteurId', nu.monteurId, begin.monteurId, o?.monteurId);
+      zet('price', nu.price, begin.price, o?.price);
+      zet('source', nu.source, begin.source, o?.source);
+      zet('urgent', nu.urgent, begin.urgent, !!o?.urgent);
     }
     let klantFout = '';   // mislukte klant-update onthouden: nooit "Opgeslagen" liegen
     try {
       if (o) {
-        // Klantgegevens op de kaart bewerkt? Dan gaan die naar het klantrecord ÉN
-        // naar order.intake — zodat "Stuur naar monteur" altijd de verbeterde
-        // gegevens gebruikt (nooit meer de oude AI-extractie).
+        // Klantgegevens op de kaart bewerkt? Dan gaan ALLEEN de gewijzigde velden naar
+        // order.intake (de gegevens van déze aanvraag, die de monteur krijgt) ÉN naar
+        // het klantrecord. Niets gewijzigd = geen van beide aanraken (WET 3: nooit
+        // stil overschrijven — voorheen ging het klantrecord bij elke Opslaan als
+        // intake mee en verdween het aanvraag-adres; 28 sep 2026).
         // Ook de MONTEUR mag de contactgegevens van zijn eigen klant bijwerken (server
         // staat dat sinds 17 aug toe) — hij moet een e-mailadres kunnen invullen om te
         // factureren. Alleen de intake-kopie op de kaart blijft aan kantoor.
-        if (o.customer) {
-          const cp = { name: $('#f-ccname')?.value, phone: $('#f-ccphone')?.value, email: $('#f-ccemail')?.value, address: $('#f-ccaddress')?.value };
-          if (canWrite) payload.intake = { name: cp.name, phone: cp.phone, email: cp.email, address: cp.address };
-          // Het klantrecord kan apart mislukken (bv. geen recht op Klanten, of een
-          // serverfout). Die fout werd hier stil weggegooid en het scherm zei tóch
-          // "Opgeslagen" — de gebruiker dacht dat de gegevens klopten terwijl ze weg
-          // waren. De kaart zelf slaan we wél gewoon op, maar we melden het eerlijk.
+        const cp = {};
+        if (o.customer) for (const k of ['name', 'phone', 'email', 'address']) if (nu.cc[k] !== begin.cc[k]) cp[k] = nu.cc[k];
+        const klantGewijzigd = Object.keys(cp).length > 0;
+        if (canWrite && klantGewijzigd) payload.intake = { ...cp };
+        if (!Object.keys(payload).length && !klantGewijzigd) { modalSchoon(); closeModal(); toast('Geen wijzigingen'); return; }
+        if (Object.keys(payload).length) {
+          try {
+            const bijgewerkt = await api(`/api/orders/${o.id}`, 'PATCH', { ...payload, basis });
+            const i = state.orders.findIndex((x) => x.id === o.id); if (i >= 0 && bijgewerkt && bijgewerkt.id) state.orders[i] = bijgewerkt;
+          } catch (err) {
+            if (err.status === 409 || /intussen door iemand anders gewijzigd/.test(err.message || '')) {
+              if (confirm(`${err.message}\n\nVenster nu herladen met de nieuwste versie? (Annuleren = blijven: je getypte tekst blijft staan, en nogmaals Opslaan overschrijft dan bewust de wijziging van de ander.)`)) { modalSchoon(); closeModal(); openOrderVers(o.id); }
+              // Blijven: neem de huidige serverwaarden als nieuwe basis, anders gaf elke
+              // volgende Opslaan opnieuw 409 en kon je alleen nog herladen (tekst kwijt).
+              else if (err.data && err.data.huidig) Object.assign(o, err.data.huidig);
+              return;
+            }
+            throw err;
+          }
+        }
+        // Het klantrecord kan apart mislukken (bv. geen recht op Klanten, of een
+        // serverfout). Die fout werd hier stil weggegooid en het scherm zei tóch
+        // "Opgeslagen" — de gebruiker dacht dat de gegevens klopten terwijl ze weg
+        // waren. De kaart zelf slaan we wél gewoon op, maar we melden het eerlijk.
+        if (o.customer && klantGewijzigd) {
           try { await api(`/api/customers/${o.customer.id}`, 'PATCH', cp); }
           catch (err) { klantFout = err.message || 'klantgegevens niet opgeslagen'; }
         }
-        await api(`/api/orders/${o.id}`, 'PATCH', payload);
       } else {
         payload.customerName = $('#f-cname').value;
         payload.customerPhone = $('#f-cphone').value;
@@ -2400,9 +2831,9 @@ function openOrderModal(id, pool) {
       // Ging de klant-update mis? Dan blijft het scherm open (je typwerk blijft staan)
       // en zie je de échte foutmelding van de server i.p.v. "Opgeslagen".
       if (klantFout) { toast('Opdracht opgeslagen, maar de klantgegevens NIET: ' + klantFout, true); loadBoard(); return; }
-      closeModal(); toast('Opgeslagen'); loadBoard();
+      modalSchoon(); closeModal(); toast('Opgeslagen'); loadBoard();
     } catch (err) { toast(err.message, true); }
-  };
+  });
   if (o && canWrite) $('#f-delete').onclick = async () => {
     if (!confirm('Opdracht verwijderen?')) return;
     try { await api(`/api/orders/${o.id}`, 'DELETE'); closeModal(); loadBoard(); toastUndo('Verwijderd', () => restoreOrders([o.id])); }
@@ -2425,10 +2856,18 @@ async function refreshInboxBadge() {
 const INBOX_PAGE = 60; // aantal berichten per keer renderen (voorkomt vastlopen)
 let _lastInboxHtml = '';   // laatst getekende inbox, om nutteloos hertekenen te herkennen
 async function loadInbox(append = false) {
+  append = append === true; // als change-handler krijgt hij een Event mee — dat is géén "Toon meer"
   const filter = $('#inboxFilter')?.value || 'pending';
+  // "TOON MEER" BLIJFT STAAN (28 sep 2026, audit): een verversing haalde altijd weer
+  // alleen de eerste 60 op — na "Toon meer" klapte de lijst bij elke wijziging terug
+  // en sprong je duizenden pixels omhoog. Nu: evenveel ophalen als er al stonden
+  // (zelfde filter; de server begrenst op 500). Ander filter = weer bij 60 beginnen.
+  const alGetoond = state._inboxFilterVan === filter ? (state._inboxOffset || 0) : 0;
+  state._inboxFilterVan = filter;
   if (!append) state._inboxOffset = 0;
   const offset = state._inboxOffset || 0;
-  const resp = await api(`/api/reviews?status=${filter}&limit=${INBOX_PAGE}&offset=${offset}`);
+  const limit = append ? INBOX_PAGE : Math.min(500, Math.max(INBOX_PAGE, alGetoond));
+  const resp = await api(`/api/reviews?status=${filter}&limit=${limit}&offset=${offset}`);
   const reviews = resp.items || [];
   const total = resp.total || reviews.length;
   // Eigen teller op "Geen aanvraag" (punt 13): zichtbaar in de keuzelijst, ook vanaf
@@ -2462,6 +2901,7 @@ async function loadInbox(append = false) {
   updateBulkCount();
   if (!append && !reviews.length) {
     if (bulkBar) bulkBar.hidden = true;
+    _lastInboxHtml = ''; // anders zou een latere verversing de oude lijst als 'ongewijzigd' zien
     list.innerHTML = filter === 'rejected'
       ? '<div class="empty">De inbox-prullenbak is leeg.</div>'
       : filter === 'overige'
@@ -2478,8 +2918,28 @@ async function loadInbox(append = false) {
   const inboxVinger = `${filter}\n${rowsHTML}`;
   if (!append && inboxVinger === _lastInboxHtml && list.children.length) return;
   if (!append) _lastInboxHtml = inboxVinger;
-  if (append) { $('#inboxMoreWrap')?.remove(); list.insertAdjacentHTML('beforeend', rowsHTML); _lastInboxHtml = ''; }
-  else list.innerHTML = rowsHTML;
+  if (append) {
+    // Vingerafdruk bijwerken i.p.v. wissen: anders tekende de volgende verversing
+    // altijd opnieuw (en klapte de lijst terug).
+    $('#inboxMoreWrap')?.remove(); list.insertAdjacentHTML('beforeend', rowsHTML);
+    _lastInboxHtml = _lastInboxHtml ? _lastInboxHtml + rowsHTML : '';
+  } else {
+    // Leespositie vasthouden: het bovenste zichtbare bericht blijft op dezelfde plek
+    // staan, ook als er bovenaan een nieuw bericht bij komt (Safari kent geen
+    // scroll-anchoring; alle elementen zijn na het vervangen nieuw).
+    let anker = null;
+    if (window.scrollY > 0) {
+      for (const el of list.querySelectorAll('.review')) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom > 60) { anker = { id: el.dataset.id, top: r.top }; break; }
+      }
+    }
+    list.innerHTML = rowsHTML;
+    if (anker) {
+      const terug = list.querySelector(`.review[data-id="${CSS.escape(anker.id)}"]`);
+      if (terug) { const d = terug.getBoundingClientRect().top - anker.top; if (Math.abs(d) > 1) window.scrollTo(0, window.scrollY + d); }
+    }
+  }
   reviews.forEach((r) => bindReview(r));
   if (!append) for (const sid of [...inboxSel]) if (!reviews.some((r) => r.id === sid)) inboxSel.delete(sid); // verwerkte items uit de selectie
   $$('.r-select').forEach((c) => c.addEventListener('change', () => { if (c.checked) inboxSel.add(c.dataset.id); else inboxSel.delete(c.dataset.id); updateBulkCount(); }));
@@ -2507,7 +2967,7 @@ function reviewHTML(r) {
   const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
     <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open opdracht: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}
-          <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div class="muted small">${s.engine && s.engine !== 'regels' ? 'AI: ' + esc(s.engine) : ''}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
+          <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div class="muted small">${s.engine && s.engine !== 'regels' ? 'AI: ' + esc(s.engine) : ''}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions r-velden"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
       ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('inbox') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
 }
@@ -2528,7 +2988,9 @@ function bindReview(r) {
     catch (err) { toast(err.message, true); }
   };
   if (!$('.r-approve', el)) return; // afgewezen-weergave: geen verdere knoppen
-  $('.r-approve', el).onclick = async () => {
+  // Dubbelklik-rem (28 sep 2026): de tweede klik gaf een rode "Al verwerkt" over de
+  // echte melding heen.
+  $('.r-approve', el).onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     try {
       const r2 = await api(`/api/reviews/${r.id}/approve`, 'POST', {
         status: $('.r-status', el).value,
@@ -2549,7 +3011,7 @@ function bindReview(r) {
       else toastActie('Opdracht aangemaakt', 'Opdracht openen', openKaart);
       loadInbox(); refreshInboxBadge();
     } catch (err) { toast(err.message, true); }
-  };
+  });
   // 1-KLIK AFWIJZEN (keuze eigenaar 16 sep): direct weg, met "Ongedaan maken" en
   // "Reden toevoegen" in de melding. De reden was toch al optioneel.
   $('.r-reject', el).onclick = async () => {
@@ -2571,6 +3033,7 @@ function bindReview(r) {
 }
 
 // ---------- Customers ----------
+let _lastCustHtml = '';   // laatst getekende klantentabel (geknipper-vangrail, zoals het bord)
 async function loadCustomers() {
   state._customers = await api('/api/customers');
   renderCustomers();
@@ -2601,17 +3064,23 @@ function renderCustomers() {
       <span class="muted small" style="display:block;margin-top:2px">${esc(lo.title.slice(0, 28))}${when ? ' · ' + esc(when) : ''}</span></span>`;
   };
   const eurC = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
-  $('#customerList').innerHTML = `
+  const custHtml = `
     <table><thead><tr> <th>Naam</th><th>Type</th><th>Telefoon</th><th>Laatste status</th><th>Opdrachten</th><th title="Verzonden + betaalde facturen, incl. btw (offertes tellen niet mee)">Gefactureerd</th>${canWrite ? '<th></th>' : ''}
     </tr></thead><tbody> ${list.map((c) => `<tr> <td><strong class="cust-open" data-dossier="${esc(c.id)}" style="cursor:pointer;color:var(--accent)" title="Open het klantdossier (alles van deze klant op één scherm)">${esc(c.name)}</strong>${c.address ? `<div class="muted small">${esc(c.address)}</div>` : ''}${c.email ? `<div class="muted small">${esc(c.email)}</div>` : ''}</td> <td><span class="tag ${c.type === 'lead' ? 'lead' : 'klant'}">${c.type === 'lead' ? 'nog geen klant' : esc(c.type)}</span></td> <td>${esc(c.phone || '')}</td> <td>${lastCell(c)}</td> <td>${c.orderCount}${c.activeCount ? ` <span class="muted small">(${c.activeCount} actief)</span>` : ''}</td> <td>${c.invoiceCount ? `<span class="cust-invoiced">${eurC(c.invoicedTotal)}<div class="muted small">${c.invoiceCount} factuur${c.invoiceCount > 1 ? 'en' : ''}</div></span>` : '<span class="muted small">—</span>'}</td> ${canWrite ? `<td style="white-space:nowrap"><button class="btn btn-sm btn-primary" data-neworder="${c.id}">+ Opdracht</button> <button class="btn btn-sm" data-edit="${c.id}">Bewerk</button></td>` : ''}
     </tr>`).join('') || `<tr><td colspan="7" class="empty">Geen klanten</td></tr>`}
     </tbody></table>`;
+  // Niets veranderd (ook het zoekfilter niet — dat zit in de HTML)? Dan de tabel met
+  // rust laten (28 sep 2026): voorheen werd hij bij elke achtergrondwijziging volledig
+  // vervangen en per rij opnieuw gekoppeld.
+  const custEl = $('#customerList');
+  if (custHtml === _lastCustHtml && custEl.children.length) return;
+  _lastCustHtml = custHtml;
+  custEl.innerHTML = custHtml;
   $$('[data-edit]').forEach((b) => b.onclick = () => openCustomerModal(state._customers.find((c) => c.id === b.dataset.edit)));
   $$('[data-neworder]').forEach((b) => b.onclick = () => openNewOrderForCustomer(state._customers.find((c) => c.id === b.dataset.neworder)));
   $$('.cust-open[data-dossier]').forEach((el) => { el.onclick = () => openCustomerDossier(el.dataset.dossier); const cel = el.closest('td'); if (cel) { cel.style.cursor = 'pointer'; cel.onclick = (e) => { if (!e.target.closest('button,a')) openCustomerDossier(el.dataset.dossier); }; } });
   $$('.cust-last[data-open]').forEach((el) => el.onclick = async () => {
-    if (!state.orders.length || !state.orders.find((x) => x.id === el.dataset.open)) state.orders = await api('/api/orders?includeArchived=1');
-    markSeen(el.dataset.open); openOrderModal(el.dataset.open);
+    openOrderVers(el.dataset.open, { seen: true });
   });
 }
 
@@ -2721,11 +3190,10 @@ async function openCustomerDossier(custId) {
     };
     const editBtn = $('#dos-edit'); if (editBtn) editBtn.onclick = () => openCustomerModal((state._customers || []).find((x) => x.id === custId) || c);
     const ordBtn = $('#dos-order'); if (ordBtn) ordBtn.onclick = () => openNewOrderForCustomer(c);
-    $('#dos-invoice').onclick = async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'factuur' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } };
-    $('#dos-quote').onclick = async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'offerte' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } };
+    $('#dos-invoice').onclick = (ev) => eenKeer(ev.currentTarget, async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'factuur' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } });
+    $('#dos-quote').onclick = (ev) => eenKeer(ev.currentTarget, async () => { try { const r = await api('/api/invoices', 'POST', { customerId: custId, type: 'offerte' }); openStandaloneInvoice((r.invoice || r).id); } catch (err) { toast(err.message, true); } });
     $$('.dos-row[data-order], .dos-msg[data-order]').forEach((el) => el.onclick = async () => {
-      if (!state.orders.length || !state.orders.find((x) => x.id === el.dataset.order)) state.orders = await api('/api/orders?includeArchived=1');
-      markSeen(el.dataset.order); openOrderModal(el.dataset.order);
+      openOrderVers(el.dataset.order, { seen: true });
     });
     $$('.dos-row[data-inv]').forEach((el) => el.onclick = () => openStandaloneInvoice(el.dataset.inv));
   } catch (err) { toast(err.message, true); }
@@ -2769,14 +3237,14 @@ function openNewOrderForCustomer(c) {
     <div class="modal-actions"><span></span><div class="right"><button class="btn" id="no-cancel">Annuleren</button><button class="btn btn-primary" id="no-save">Opdracht aanmaken</button></div></div>`);
   bindSourceSelect($('#modal [data-source]'));
   $('#no-cancel').onclick = closeModal;
-  $('#no-save').onclick = async () => {
+  $('#no-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const title = $('#no-title').value.trim();
     if (!title) return toast('Titel verplicht', true);
     try {
       await api('/api/orders', 'POST', { title, status: $('#no-status').value, description: $('#no-desc').value, source: $('#modal [data-source]')?.value || 'Handmatig', customerId: c.id });
-      closeModal(); toast('Opdracht aangemaakt'); goView('board');
+      modalSchoon(); closeModal(); toast('Opdracht aangemaakt'); goView('board');
     } catch (err) { toast(err.message, true); }
-  };
+  });
 }
 // ---------- KLANTIMPORT (CSV/Excel) ----------
 // Bestand kiezen -> voorbeeld + automatisch herkende kolommen -> zelf bijstellen ->
@@ -2798,7 +3266,7 @@ async function openAttachmentManager() {
     <div id="am-schijf" class="muted small" style="margin:6px 0 8px"></div>
     <div id="am-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
       <label style="margin:0"><input type="checkbox" id="am-all" style="width:auto"> Alles selecteren</label>
-      <select id="am-filter" style="max-width:240px">
+      <select id="am-filter" data-geen-wijziging style="max-width:240px">
         <option value="all">Alle bijlages</option>
         <option value="done">Alleen afgeronde/geannuleerde opdrachten</option>
         <option value="old14">Ouder dan 14 dagen</option>
@@ -3079,9 +3547,7 @@ async function openMonteurOrders(mId, mName, filter) {
         <div class="muted small">${o.customer ? esc(o.customer) : ''}${o.address ? ' · ' + esc(o.address) : ''}${o.appointmentAt ? ' · ' + esc(fmtAppt(o.appointmentAt)) : ''}</div>
       </div>`).join('');
     $$('#mo-list .mont-line[data-open]').forEach((el) => el.onclick = async () => {
-      if (!state.orders.length) state.orders = await api('/api/orders?includeArchived=1');
-      else if (!state.orders.find((x) => x.id === el.dataset.open)) state.orders = await api('/api/orders?includeArchived=1');
-      markSeen(el.dataset.open); openOrderModal(el.dataset.open);
+      openOrderVers(el.dataset.open, { seen: true });
     });
   } catch (err) { $('#mo-list').innerHTML = `<span class="error">${esc(err.message)}</span>`; }
 }
@@ -3175,13 +3641,23 @@ function openWerkbonModal(o) {
   ctx.lineWidth = Math.max(2.2, cv.width / 260); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
   let drawing = false; let drew = false;
   const pos = (e) => { const r = cv.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; return { x: (p.clientX - r.left) * (cv.width / r.width), y: (p.clientY - r.top) * (cv.height / r.height) }; };
-  const start = (e) => { drawing = true; drew = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); e.preventDefault(); };
-  const move = (e) => { if (!drawing) return; const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); e.preventDefault(); };
-  const end = () => { drawing = false; };
   // Bewegen op het DOCUMENT (net als bij bord-slepen): even buiten het vak = lijn
-  // loopt gewoon door i.p.v. afbreken.
-  cv.addEventListener('mousedown', start); document.addEventListener('mousemove', move); document.addEventListener('mouseup', end);
-  cv.addEventListener('touchstart', start, { passive: false }); document.addEventListener('touchmove', move, { passive: false }); document.addEventListener('touchend', end);
+  // loopt gewoon door i.p.v. afbreken. ALLEEN tijdens het tekenen (28 sep 2026, audit):
+  // voorheen bleven bij elk openen vier luisteraars op het document achter, waaronder een
+  // niet-passieve touchmove die daarna élke veeg in de app eerst op JavaScript liet wachten.
+  const move = (e) => { if (!drawing) return; const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); e.preventDefault(); };
+  const end = () => {
+    drawing = false;
+    document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', end);
+    document.removeEventListener('touchmove', move); document.removeEventListener('touchend', end); document.removeEventListener('touchcancel', end);
+  };
+  const start = (e) => {
+    drawing = true; drew = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); e.preventDefault();
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', end);
+    document.addEventListener('touchmove', move, { passive: false }); document.addEventListener('touchend', end); document.addEventListener('touchcancel', end);
+  };
+  cv.addEventListener('mousedown', start);
+  cv.addEventListener('touchstart', start, { passive: false });
   $('#wb-clear').onclick = () => { ctx.clearRect(0, 0, cv.width, cv.height); drew = false; };
   $('#wb-cancel').onclick = () => openOrderModal(o.id);
   $('#wb-save').onclick = async () => {
@@ -3326,7 +3802,7 @@ function renderInvoiceEditor(ctx) {
         ${inv.id ? `<button class="btn" id="inv-share">${icon('paperclip', 14)} Delen / opslaan</button>` : ''}
         ${inv.id && locked ? `<button class="btn" id="inv-resend">${icon('mail', 14)} Verstuur opnieuw</button>` : ''}
         <button class="btn" id="inv-cancel">Sluiten</button>
-        ${locked ? '' : `<button class="btn" id="inv-save">${inv.status === 'concept' ? 'Concept opslaan' : 'Opslaan'}</button>
+        ${locked ? '' : `<button class="btn" id="inv-save">${inv.id && inv.status === 'concept' ? 'Concept opslaan' : 'Opslaan'}</button>
         <button class="btn btn-primary" id="inv-send">${inv.sentAt ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
         <button class="btn" id="inv-send-wa" title="Stuur de PDF als WhatsApp-bericht naar de klant">${icon('whatsapp', 14)} Via WhatsApp</button>`}
       </div>
@@ -3417,9 +3893,11 @@ function renderInvoiceEditor(ctx) {
     const pos = (e) => { const r = sigCanvas.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return { x: (t.clientX - r.left) * (sigCanvas.width / r.width), y: (t.clientY - r.top) * (sigCanvas.height / r.height) }; };
     const start = (e) => { e.preventDefault(); drawing = true; const p = pos(e); lastX = p.x; lastY = p.y; };
     const move = (e) => { if (!drawing) return; e.preventDefault(); const p = pos(e); cctx.beginPath(); cctx.moveTo(lastX, lastY); cctx.lineTo(p.x, p.y); cctx.stroke(); lastX = p.x; lastY = p.y; sigDrawn = true; sigCleared = false; const st = $('#inv-sig-status'); if (st) st.textContent = ''; };
-    const end = () => { drawing = false; };
-    sigCanvas.addEventListener('pointerdown', start); sigCanvas.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
+    // pointerup op window alleen tijdens het tekenen (28 sep 2026, audit): voorheen bleef er
+    // bij elk openen van de editor een luisteraar op window achter.
+    const end = () => { drawing = false; window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); };
+    const startMet = (e) => { start(e); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end); };
+    sigCanvas.addEventListener('pointerdown', startMet); sigCanvas.addEventListener('pointermove', move);
     if ($('#inv-sig-clear')) $('#inv-sig-clear').onclick = () => { cctx.clearRect(0, 0, sigCanvas.width, sigCanvas.height); sigDrawn = false; sigCleared = true; const st = $('#inv-sig-status'); if (st) st.textContent = inv.signature ? 'Handtekening wordt verwijderd bij opslaan.' : ''; };
   }
   const readSignature = () => {
@@ -3453,8 +3931,14 @@ function renderInvoiceEditor(ctx) {
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
   if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); });
-  if ($('#inv-save')) $('#inv-save').onclick = async () => { if (!confirmEditIfSent()) return; try { await saveConcept(); done(inv.sentAt ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : inv.status === 'betaald' ? 'Factuur opgeslagen (betaald)' : 'Concept opgeslagen'); } catch (err) { toast(err.message, true); } };
-  if ($('#inv-send')) $('#inv-send').onclick = async () => {
+  if ($('#inv-save')) $('#inv-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => { if (!confirmEditIfSent()) return; try {
+    // Melding op het ANTWOORD van de server (28 sep 2026, audit): een nieuwe factuur
+    // krijgt bij standaardBetaald meteen 'betaald', terwijl hier "Concept opgeslagen"
+    // stond (de knop heette bij een nieuwe factuur ook "Concept opslaan").
+    const saved = await saveConcept();
+    const st = (saved && saved.status) || inv.status;
+    done(inv.sentAt ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : st === 'betaald' ? `${woord} opgeslagen (staat op betaald)` : st === 'concept' ? 'Concept opgeslagen' : `${woord} opgeslagen`); } catch (err) { toast(err.message, true); } });
+  if ($('#inv-send')) $('#inv-send').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de opdracht of bij Klanten).', true); return; }
     if (!confirm(inv.sentAt
       ? `LET OP: deze ${woord.toLowerCase()} is al eerder verstuurd. Je verstuurt nu een NIEUWE versie (eventuele wijzigingen vervangen wat de klant heeft). Doorgaan naar ${customer.email}?`
@@ -3464,9 +3948,9 @@ function renderInvoiceEditor(ctx) {
       await api(`/api/invoices/${saved.id}/send`, 'POST', {});
       done(`${woord} verstuurd naar de klant`);
     } catch (err) { toast(err.message, true); }
-  };
+  });
   // Versturen via WhatsApp: de PDF gaat als bijlage mee naar het 06 van de klant.
-  if ($('#inv-send-wa')) $('#inv-send-wa').onclick = async () => {
+  if ($('#inv-send-wa')) $('#inv-send-wa').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const tel = (ctx.order && ctx.order.intake && ctx.order.intake.phone) || customer.phone || '';
     if (!tel) { toast('Deze klant heeft nog geen telefoonnummer — vul dat eerst in.', true); return; }
     if (!confirmEditIfSent()) return;
@@ -3476,40 +3960,40 @@ function renderInvoiceEditor(ctx) {
       await api(`/api/invoices/${saved.id}/send-whatsapp`, 'POST', {});
       done(`${woord} klaargezet voor WhatsApp naar ${tel} — in de wachtrij. Bezorgstatus zie je in Berichten; mislukt het, dan gaat hij terug naar concept en krijg je een melding.`);
     } catch (err) { toast(err.message, true); }
-  };
+  });
   const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = async () => { try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }; };
   statusBtn('#inv-paid', 'betaald', 'Gemarkeerd als betaald ✓');
   // "Nog niet betaald": verstuurd → Verzonden (open, herinnerbaar); nooit verstuurd → Concept.
   statusBtn('#inv-unpaid', inv.sentAt ? 'verzonden' : 'concept', 'Gemarkeerd als nog niet betaald');
   statusBtn('#inv-reject', 'afgekeurd', 'Offerte afgekeurd');
   // Goedkeuren: als er automatisch een factuur-concept van wordt gemaakt, dat meteen melden.
-  if ($('#inv-accept')) $('#inv-accept').onclick = async () => {
+  if ($('#inv-accept')) $('#inv-accept').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     try {
       const r = await api(`/api/invoices/${inv.id}/status`, 'POST', { status: 'goedgekeurd' });
       if (r && r.autoInvoice) toast(`Offerte goedgekeurd ✓ — factuur-concept ${r.autoInvoice.number} klaargezet`);
       else toast('Offerte goedgekeurd ✓');
       closeModal(); if (ctx.after) ctx.after();
     } catch (err) { toast(err.message, true); }
-  };
-  if ($('#inv-remind')) $('#inv-remind').onclick = async () => {
+  });
+  if ($('#inv-remind')) $('#inv-remind').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     if (!confirm(`Vriendelijke betaalherinnering sturen naar ${inv.sentTo || customer.email}?`)) return;
     try { await api(`/api/invoices/${inv.id}/remind`, 'POST', {}); done('Herinnering verstuurd'); } catch (err) { toast(err.message, true); }
-  };
-  if ($('#inv-qremind')) $('#inv-qremind').onclick = async () => {
+  });
+  if ($('#inv-qremind')) $('#inv-qremind').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const doel = customer.email || customer.phone || 'de klant';
     if (!confirm(`Vriendelijke offerte-herinnering sturen naar ${doel}? (E-mail met PDF, of WhatsApp als er alleen een 06 is.)`)) return;
     try {
       const r = await api(`/api/invoices/${inv.id}/quote-followup`, 'POST', {});
       done(`Herinnering verstuurd via ${r.via === 'whatsapp' ? 'WhatsApp' : 'e-mail'}`);
     } catch (err) { toast(err.message, true); }
-  };
-  if ($('#inv-copy')) $('#inv-copy').onclick = async () => {
+  });
+  if ($('#inv-copy')) $('#inv-copy').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     try { const copy = await api(`/api/invoices/${inv.id}/copy`, 'POST', {}); toast(`Gekopieerd → ${copy.number}`); closeModal(); openStandaloneInvoice(copy.id); } catch (err) { toast(err.message, true); }
-  };
-  if ($('#inv-tofactuur')) $('#inv-tofactuur').onclick = async () => {
+  });
+  if ($('#inv-tofactuur')) $('#inv-tofactuur').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     if (!confirm('Van deze offerte een factuur maken (nieuw factuurnummer)?')) return;
     try { const f = await api(`/api/invoices/${inv.id}/copy`, 'POST', { type: 'factuur' }); toast(`Factuur ${f.number} aangemaakt`); closeModal(); openStandaloneInvoice(f.id); } catch (err) { toast(err.message, true); }
-  };
+  });
   if ($('#inv-del')) $('#inv-del').onclick = async () => {
     if (!confirm(`${woord} ${inv.number} definitief verwijderen?`)) return;
     try { await api(`/api/invoices/${inv.id}`, 'DELETE'); done(`${woord} verwijderd`); } catch (err) { toast(err.message, true); }
@@ -3522,7 +4006,7 @@ function openNewInvoiceFlow(type) {
   api('/api/customers').then((customers) => {
     modal(`
       <h2>${icon('mail', 16)} Nieuwe ${esc(woord.toLowerCase())} — kies de klant</h2>
-      <label>Zoek bestaande klant <input id="ni-search" placeholder="Typ naam, telefoon of e-mail…" autocomplete="off"></label>
+      <label>Zoek bestaande klant <input id="ni-search" data-geen-wijziging placeholder="Typ naam, telefoon of e-mail…" autocomplete="off"></label>
       <div id="ni-results" style="max-height:220px;overflow:auto;margin:6px 0 12px"></div>
       <details id="ni-newcust"><summary style="cursor:pointer;font-weight:600;padding:6px 0">+ Of maak een nieuwe klant</summary>
         <div class="row"><label>Naam <input id="ni-name"></label><label>Telefoon <input id="ni-phone"></label></div>
@@ -3530,9 +4014,15 @@ function openNewInvoiceFlow(type) {
         <button class="btn btn-primary" id="ni-create" style="margin-top:8px">${esc(woord)} maken voor nieuwe klant</button>
       </details>
       <div class="modal-actions"><span></span><div class="right"><button class="btn" id="ni-cancel">Annuleren</button></div></div>`);
+    // Eén slot voor alle klant-tegels + "nieuwe klant" (28 sep 2026): een dubbelklik
+    // (of twee tegels snel na elkaar) gaf twee facturen met verbruikte nummers.
+    let bezig = false;
     const start = async (payload) => {
-      try { const { invoice } = await api('/api/invoices', 'POST', { type, ...payload }); closeModal(); openStandaloneInvoice(invoice.id); }
+      if (bezig) return; bezig = true;
+      const knop = $('#ni-create'); if (knop) knop.disabled = true;
+      try { const { invoice } = await api('/api/invoices', 'POST', { type, ...payload }); modalSchoon(); closeModal(); openStandaloneInvoice(invoice.id); }
       catch (err) { toast(err.message, true); }
+      finally { bezig = false; if (knop && knop.isConnected) knop.disabled = false; }
     };
     const renderResults = () => {
       const q = ($('#ni-search').value || '').toLowerCase().trim();
@@ -3621,7 +4111,7 @@ async function loadAssistant() {
     if (!question) return toast('Stel eerst een vraag', true);
     const btn = $('#as-ask'); btn.disabled = true; btn.innerHTML = 'Bezig met zoeken…';
     const scope = $('#as-scope')?.value || 'all';
-    renderAsChat(`De AI doorzoekt ${scope === 'all' ? 'je dashboard én de berichten' : 'de berichten'}${_asChat.length ? ' (mét het gesprek tot nu toe)' : ''}… dit kan ~10-40 sec duren.`);
+    renderAsChat(`De AI doorzoekt ${scope === 'all' ? 'je dashboard én de berichten' : 'de berichten'}${_asChat.length ? ' (mét het gesprek tot nu toe)' : ''}… dit kan bij een grote vraag 1 à 2 minuten duren.`);
     try {
       const out = await api('/api/assistant/ask', 'POST', {
         question, group: $('#as-group').value, days: Number($('#as-days').value),
@@ -3798,10 +4288,14 @@ function renderAgenda() {
   const skipNote = skipped ? `<div class="muted small" style="margin-bottom:10px">${skipped} afspraak/afspraken met een onleesbare datum overgeslagen.</div>` : '';
   if (!items.length) { wrap.innerHTML = skipNote + '<div class="empty">Geen afspraken gepland.</div>'; return; }
   // Groeperen per dag (datum als sleutel).
-  const fmtDay = (d) => parse(d).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
-  const dayKey = (d) => parse(d).toISOString().slice(0, 10);
+  // Dag-sleutel in LOKALE (Nederlandse) tijd (28 sep 2026, audit): toISOString() gaf de
+  // UTC-datum, waardoor een afspraak om 00:30 onder de vorige dag stond en "Vandaag"
+  // tussen 00:00 en 02:00 nog naar gisteren wees. a.at is lokale tijd zonder zone.
+  const lokaleDag = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+  const fmtDay = (k) => new Date(k + 'T12:00').toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
+  const dayKey = (d) => lokaleDag(parse(d));
   const fmtTime = (d) => parse(d).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = lokaleDag(new Date());
   const groups = {};
   for (const a of items) { const k = dayKey(a.at); (groups[k] = groups[k] || []).push(a); }
   const dayBlock = (k) => `
@@ -3972,8 +4466,33 @@ async function loadHealth(run = false) {
 
 // ---------- Facturen ----------
 async function loadInvoices() {
-  state._invoices = await api('/api/invoices');
+  // "Nog te factureren" hoort bij het OPHALEN, niet bij het tekenen (28 sep 2026): het
+  // werd bij elke toets in het zoekveld opnieuw opgehaald en kwam pas na de lijst
+  // binnen, waardoor alles ~80 px omlaag sprong. Nu tegelijk ophalen en bewaren.
+  const [inv, todo] = await Promise.all([api('/api/invoices'), api('/api/invoices/todo').catch(() => null)]);
+  state._invoices = inv;
+  state._invTodo = Array.isArray(todo) ? todo : [];
   renderInvoices();
+}
+function invTodoHTML(todo) {
+  if (!todo || !todo.length) return '';
+  // INGEKLAPT tenzij je hem zelf openzet: 45 regels duwden de hele facturenlijst
+  // weg. De keuze wordt onthouden per gebruiker (localStorage).
+  let open = false; try { open = localStorage.getItem('ks_todoOpen') === '1'; } catch { /* geen opslag */ }
+  return `
+        <details class="info-card todo-blok" style="margin-bottom:14px;border-left:4px solid var(--warn,#f59e0b)"${open ? ' open' : ''}>
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600">
+            ${icon('tag', 14)} Nog te factureren <span class="chip" style="font-size:11px">${todo.length}</span>
+            <span class="muted small" style="font-weight:400;margin-left:auto">${open ? 'klik om te sluiten' : 'klik om te openen'}</span>
+          </summary>
+          <p class="muted small" style="margin:8px 0">Afgeronde opdrachten waar nog géén factuur voor is gemaakt.</p>
+          ${todo.slice(0, 15).map((t) => `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line-soft,#e5e7eb)">
+              <span>${esc(t.title)}${t.customerName ? ` <span class="muted small">— ${esc(t.customerName)}</span>` : ''}<span class="muted small" style="display:block">afgerond ${fmtDateShort(t.completedAt)}${t.price ? ' · ' + esc(t.price) : ''}</span></span>
+              <button class="btn btn-sm btn-primary todo-inv" data-cust="${esc(t.customerId)}" data-order="${esc(t.id)}"${t.leegFactuurId ? ` data-inv="${esc(t.leegFactuurId)}"` : ''}>${t.leegFactuurId ? 'Factuur afmaken' : 'Maak factuur'}</button>
+            </div>`).join('')}
+          ${todo.length > 15 ? `<div class="muted small" style="margin-top:6px">+ nog ${todo.length - 15} oudere…</div>` : ''}
+        </details>`;
 }
 function renderInvoices() {
   const wrap = $('#invoiceList'); if (!wrap) return;
@@ -4007,7 +4526,7 @@ function renderInvoices() {
   const paid = all.filter((i) => i.type !== 'offerte' && i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
   const overdueCount = all.filter(isOverdue).length;
   let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong>${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}</div>
-    <div id="invTodoWrap"></div>`;
+    <div id="invTodoWrap">${invTodoHTML(state._invTodo)}</div>`;
   if (!items.length) html += '<div class="empty">Niets in deze weergave. Maak er één met de knoppen rechtsboven, of via de knop Factuur op een opdracht.</div>';
   html += items.map((i) => {
     const quote = i.type === 'offerte';
@@ -4037,7 +4556,7 @@ function renderInvoices() {
   $$('.inv-edit').forEach((b) => b.onclick = () => openStandaloneInvoice(b.dataset.id));
   $$('.inv-share').forEach((b) => b.onclick = (e) => shareInvoicePdf(b.dataset.id, b.dataset.label, e.currentTarget));
   $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices()));
-  $$('.inv-open').forEach((b) => b.onclick = async () => { const orders = await api('/api/orders?includeArchived=1'); state.orders = orders; openOrderModal(b.dataset.oid); });
+  $$('.inv-open').forEach((b) => b.onclick = () => openOrderVers(b.dataset.oid));
   // Zelf een review vragen bij een verzonden factuur — het moment waarop de klus af is.
   $$('.inv-review').forEach((b) => b.onclick = async () => {
     const alGedaan = b.textContent.includes('✓');
@@ -4056,41 +4575,21 @@ function renderInvoices() {
   quickStatus('.inv-mark', 'betaald', 'Betaald ✓');
   quickStatus('.inv-unmark', 'verzonden', 'Gemarkeerd als nog niet betaald');
   // NOG TE FACTUREREN: afgeronde kaarten zonder factuur — nooit meer omzet vergeten.
-  (async () => {
+  // (Getekend in de HTML hierboven uit state._invTodo; hier alleen de knoppen.)
+  const box = $('#invTodoWrap');
+  const det = box && $('.todo-blok', box);
+  if (det) det.addEventListener('toggle', () => {
+    try { localStorage.setItem('ks_todoOpen', det.open ? '1' : '0'); } catch { /* geen opslag */ }
+    const hint = $('summary .muted', det); if (hint) hint.textContent = det.open ? 'klik om te sluiten' : 'klik om te openen';
+  });
+  if (box) $$('.todo-inv', box).forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    // Lege factuur van een eerdere klik? Die afmaken i.p.v. een nieuw nummer (28 sep 2026).
+    if (b.dataset.inv) return openStandaloneInvoice(b.dataset.inv);
     try {
-      const todo = await api('/api/invoices/todo');
-      const box = $('#invTodoWrap');
-      if (!box || !todo.length) return;
-      // INGEKLAPT tenzij je hem zelf openzet: 45 regels duwden de hele facturenlijst
-      // weg. De keuze wordt onthouden per gebruiker (localStorage).
-      const open = localStorage.getItem('ks_todoOpen') === '1';
-      box.innerHTML = `
-        <details class="info-card todo-blok" style="margin-bottom:14px;border-left:4px solid var(--warn,#f59e0b)"${open ? ' open' : ''}>
-          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600">
-            ${icon('tag', 14)} Nog te factureren <span class="chip" style="font-size:11px">${todo.length}</span>
-            <span class="muted small" style="font-weight:400;margin-left:auto">klik om te openen</span>
-          </summary>
-          <p class="muted small" style="margin:8px 0">Afgeronde opdrachten waar nog géén factuur voor is gemaakt.</p>
-          ${todo.slice(0, 15).map((t) => `
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line-soft,#e5e7eb)">
-              <span>${esc(t.title)}${t.customerName ? ` <span class="muted small">— ${esc(t.customerName)}</span>` : ''}<span class="muted small" style="display:block">afgerond ${fmtDateShort(t.completedAt)}${t.price ? ' · ' + esc(t.price) : ''}</span></span>
-              <button class="btn btn-sm btn-primary todo-inv" data-cust="${esc(t.customerId)}" data-order="${esc(t.id)}">Maak factuur</button>
-            </div>`).join('')}
-          ${todo.length > 15 ? `<div class="muted small" style="margin-top:6px">+ nog ${todo.length - 15} oudere…</div>` : ''}
-        </details>`;
-      const det = $('.todo-blok', box);
-      if (det) det.addEventListener('toggle', () => {
-        localStorage.setItem('ks_todoOpen', det.open ? '1' : '0');
-        const hint = $('summary .muted', det); if (hint) hint.textContent = det.open ? 'klik om te sluiten' : 'klik om te openen';
-      });
-      $$('.todo-inv', box).forEach((b) => b.onclick = async () => {
-        try {
-          const r = await api('/api/invoices', 'POST', { customerId: b.dataset.cust, orderId: b.dataset.order, type: 'factuur' });
-          openStandaloneInvoice((r.invoice || r).id);
-        } catch (err) { toast(err.message, true); }
-      });
-    } catch { /* blok is optioneel */ }
-  })();
+      const r = await api('/api/invoices', 'POST', { customerId: b.dataset.cust, orderId: b.dataset.order, type: 'factuur' });
+      openStandaloneInvoice((r.invoice || r).id);
+    } catch (err) { toast(err.message, true); }
+  }));
   quickStatus('.inv-ok', 'goedgekeurd', 'Offerte goedgekeurd ✓');
 }
 
@@ -5013,7 +5512,9 @@ async function loadSettingsHtml(s) {
   // een code is maar een paar minuten geldig, dus verversen moet vanzelf gaan.
   pairLaad();
   if (window._pairTimer) clearInterval(window._pairTimer);
-  window._pairTimer = setInterval(() => { if ($('#wa-pair-card')) pairLaad(); else clearInterval(window._pairTimer); }, 15000);
+  // Alleen zolang Instellingen écht in beeld is (28 sep 2026): showView stopt de timer
+  // bij het verlaten; deze check is het vangnet.
+  window._pairTimer = setInterval(() => { if ($('#wa-pair-card') && state.view === 'settings' && !document.hidden) pairLaad(); else if (state.view !== 'settings') { clearInterval(window._pairTimer); window._pairTimer = null; } }, 15000);
   $('#wt-refresh').onclick = wtLoad;
   $('#wt-send').onclick = async () => {
     const phone = $('#wt-phone').value.trim();
@@ -5526,7 +6027,10 @@ async function loadSettingsHtml(s) {
     row.className = 'editor-row';
     row.dataset.key = st.key || '';
     row.innerHTML = `<input type="color" value="${esc(st.color || '#64748b')}"><input type="text" value="${esc(st.label || '')}" placeholder="Kolomnaam"><button class="btn btn-sm btn-danger" title="Kolom verwijderen" aria-label="Kolom verwijderen">${icon('trash', 13)}</button>`;
-    row.querySelector('button').onclick = () => {
+    row.querySelector('button').onclick = async () => {
+      // Bord nog niet geladen (app begint op Start)? Eerst de opdrachten ophalen, anders
+      // zei de waarschuwing altijd "0 opdrachten" (28 sep 2026, review).
+      if (!(state.orders || []).length) { try { state.orders = await api('/api/orders'); } catch { /* zonder telling */ } }
       const n = (state.orders || []).filter((o) => o.status === row.dataset.key).length;
       if (!confirm(`Kolom "${row.querySelector('input[type=text]').value || 'zonder naam'}" verwijderen?${n ? ` Er staan ${n} opdracht(en) in — die krijgen daarna "onbekende kolom".` : ''} Pas na "Kolommen opslaan" is het definitief.`)) return;
       row.remove();
@@ -6111,7 +6615,7 @@ function bindButtons() {
   $('#trashSearch')?.addEventListener('input', renderTrash);
   $('#agendaScope')?.addEventListener('change', renderAgenda);
   $('#invFilter')?.addEventListener('change', renderInvoices);
-  $('#invSearch')?.addEventListener('input', renderInvoices);
+  $('#invSearch')?.addEventListener('input', () => { clearTimeout(window._invZoekT); window._invZoekT = setTimeout(renderInvoices, 150); }); // debounce (28 sep 2026)
   $('#attachMgrBtn')?.addEventListener('click', openAttachmentManager); // punt 18: ook buiten Instellingen
   $('#newInvoiceBtn')?.addEventListener('click', () => openNewInvoiceFlow('factuur'));
   $('#newQuoteBtn')?.addEventListener('click', () => openNewInvoiceFlow('offerte'));
@@ -6121,7 +6625,7 @@ function bindButtons() {
   $('#finImport')?.addEventListener('click', openImportIncome);
   $('#finBackfill')?.addEventListener('click', openBackfillModal);
   $('#finSettings')?.addEventListener('click', openFinanceSettings);
-  $('#inboxFilter')?.addEventListener('change', loadInbox);
+  $('#inboxFilter')?.addEventListener('change', () => loadInbox());
   $('#selectAll')?.addEventListener('change', (e) => {
     $$('.r-select').forEach((c) => (c.checked = e.target.checked));
     updateBulkCount();
@@ -6213,9 +6717,21 @@ function bindButtons() {
 }
 
 function modal(html) {
+  // Opent er vanuit een OPDRACHT een vervolgvenster (werkbon, monteur, samenvoegen,
+  // afspraak annuleren …)? Dan de scrollstand van die opdracht onthouden, zodat
+  // "Terug/Annuleren" weer op dezelfde plek uitkomt (28 sep 2026, audit schermcode).
+  const mEl = $('#modal');
+  if (!$('#modalRoot').hidden && mEl.dataset.kaart) _kaartScroll = { id: mEl.dataset.kaart, root: $('#modalRoot').scrollTop, sheet: mEl.scrollTop };
+  delete mEl.dataset.kaart;
   $('#modal').innerHTML = html;
   $('#modalRoot').hidden = false;
   $('#modalRoot').scrollTop = 0;
+  // Op mobiel is #modal ZELF de scroller (bottom-sheet). Die hield zijn oude stand
+  // als er vanuit een gescrold venster een vervolgvenster opende (Snel antwoord,
+  // factuur, werkbon …) → nieuw venster halverwege/onderaan (28 sep 2026, audit).
+  $('#modal').scrollTop = 0;
+  // Nieuw venster = schone lei voor de "niet opgeslagen"-controle (sluitDoorGebruiker).
+  modalSchoon();
   // ECHTE scroll-lock (iOS): body vastpinnen op de huidige scrollpositie.
   // Zonder dit schilderde Safari de vaste onderbalk soms op de oude positie
   // ("zwevende balk") en sprong de pagina na sluiten naar boven. Alleen de
@@ -6226,7 +6742,7 @@ function modal(html) {
     document.body.style.top = `-${y}px`;
   }
   document.body.classList.add('modal-open'); // achtergrond vastzetten
-  $('.modal-backdrop').onclick = closeModal;
+  $('.modal-backdrop').onclick = () => sluitDoorGebruiker();
   // Toegankelijkheid (audit 16 sep): dialoog-semantiek + focus naar het eerste veld;
   // bij sluiten terug naar de knop die het venster opende.
   const m = $('#modal'); m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true');
@@ -6238,7 +6754,8 @@ function closeModal() {
   // Geen venster open (bv. Escape op een gewone pagina)? Dan óók niet scrollen —
   // anders sprong de pagina naar boven.
   if ($('#modalRoot').hidden) return;
-  const m = $('#modal'); m.style.transform = ''; m.style.transition = '';
+  _kaartScroll = null; // venster dicht = volgende opdracht begint gewoon bovenaan
+  const m = $('#modal'); m.style.transform = ''; m.style.transition = ''; delete m.dataset.kaart;
   $('#modalRoot').hidden = true; m.innerHTML = '';
   document.body.classList.remove('modal-open');
   // Scrollpositie exact herstellen (zie modal()).
@@ -6249,6 +6766,53 @@ function closeModal() {
   document.body.classList.remove('modal-focus-bewaard');
   const op = modal._opener; modal._opener = null;
   if (op && op.isConnected && typeof op.focus === 'function') { try { op.focus({ preventScroll: true }); } catch { /* stil */ } }
+}
+
+// NIET-OPGESLAGEN-CONTROLE (28 sep 2026, audit pc/mobiel/functies): Esc, een klik
+// naast het venster of omlaag vegen gooide getypte notities/factuurregels zonder
+// vraag weg. We houden bij welke velden de GEBRUIKER aanraakte (echte input/change-
+// events; waarden die de code zelf invult tellen niet) en vergelijken die bij het
+// sluiten met hun beginwaarde (defaultValue/defaultSelected uit de HTML).
+// Bewust NIET in closeModal(): die wordt ook na een geslaagde Opslaan/Verwijderen
+// e.d. aangeroepen en moet dan zonder vraag sluiten. Alleen de "per ongeluk"-paden
+// (Esc, achtergrond, veeg) lopen via sluitDoorGebruiker(); de knoppen Opslaan/
+// Sluiten werken direct. Vinkjes (foto-keuze, "alles selecteren") en zoek-/filter-
+// velden (type=search of [data-geen-wijziging]) tellen niet mee.
+var _modalAangeraakt = new Set(); // var: modal() kan in theorie vóór deze regel draaien
+var _kaartScroll = null;          // scrollstand van de opdracht onder een vervolgvenster (zie modal())
+function modalSchoon() { if (_modalAangeraakt) _modalAangeraakt.clear(); }
+function veldGewijzigd(el) {
+  if (!el || !el.isConnected || el.disabled) return false;
+  if (el.closest('[data-geen-wijziging]')) return false;
+  if (el.tagName === 'SELECT') {
+    const opts = [...el.options];
+    if (!opts.length) return false;
+    const heeftDefault = opts.some((x) => x.defaultSelected);
+    return opts.some((x, i) => x.selected !== (heeftDefault ? x.defaultSelected : i === 0));
+  }
+  if (el.tagName === 'TEXTAREA') return el.value !== el.defaultValue;
+  if (el.tagName === 'INPUT') {
+    if (['search', 'file', 'hidden', 'checkbox', 'radio', 'range', 'button', 'submit'].includes(el.type)) return false;
+    return el.value !== el.defaultValue;
+  }
+  return false;
+}
+function modalHeeftWijzigingen() {
+  if ($('#modalRoot').hidden) return false;
+  return [...(_modalAangeraakt || [])].some(veldGewijzigd);
+}
+{
+  const m = document.getElementById('modal');
+  const noteer = (e) => { if (e.isTrusted && e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) _modalAangeraakt.add(e.target); };
+  if (m) { m.addEventListener('input', noteer, true); m.addEventListener('change', noteer, true); }
+}
+// Sluiten op initiatief van de gebruiker (Esc / achtergrond / veeg). Geeft true als
+// het venster dicht is, false als de gebruiker koos om te blijven.
+function sluitDoorGebruiker() {
+  if ($('#modalRoot').hidden) return true;
+  if (modalHeeftWijzigingen() && !confirm('Niet opgeslagen wijzigingen — toch sluiten?')) return false;
+  closeModal();
+  return true;
 }
 
 // Bottom-sheet: op mobiel sluit je een venster door het balkje/de titel bovenaan
@@ -6263,6 +6827,10 @@ function closeModal() {
     const t = e.touches[0];
     const rect = sheet.getBoundingClientRect();
     if (t.clientY - rect.top > 64) return; // alleen de bovenste strook (balkje/titel)
+    // Alleen als de sheet BOVENAAN staat (28 sep 2026, audit mobiel): de titel plakt,
+    // dus "bovenste strook" was altijd raak — wie omlaag veegde om terug omhoog te
+    // scrollen, sloot het venster (en verloor zijn getypte notitie).
+    if (sheet.scrollTop > 0) return;
     startY = t.clientY; dragging = true; dy = 0;
     sheet.style.transition = 'none';
   }, { passive: true });
@@ -6275,7 +6843,10 @@ function closeModal() {
   const endDrag = () => {
     if (!dragging) return; dragging = false;
     sheet.style.transition = 'transform .18s ease';
-    if (dy > 110) {
+    // Niet-opgeslagen invoer? Eerst vragen (ná het loslaten, nooit midden in het
+    // gebaar); kiest de gebruiker "blijven", dan veert de sheet terug.
+    if (dy > 110 && (!modalHeeftWijzigingen() || confirm('Niet opgeslagen wijzigingen — toch sluiten?'))) {
+      modalSchoon();
       sheet.style.transform = 'translateY(105%)';
       setTimeout(closeModal, 170); // closeModal ruimt transform/transition op
     } else {
@@ -6309,7 +6880,11 @@ function openNavMenu() {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if ($('.lightbox')) return; // open foto-viewer handelt zijn eigen Esc af
-  closeModal();
+  // Esc in een zoekveld binnen het venster wist alleen dat veld (browser-gedrag),
+  // niet het hele venster (28 sep 2026).
+  const a = document.activeElement;
+  if (a && a.tagName === 'INPUT' && a.type === 'search' && a.closest('#modal') && a.value) return;
+  sluitDoorGebruiker();
 });
 // Sneltoets: druk "/" om direct in de zoekbalk van de huidige weergave te springen.
 document.addEventListener('keydown', (e) => {
