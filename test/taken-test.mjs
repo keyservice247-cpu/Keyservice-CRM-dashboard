@@ -20,7 +20,9 @@ async function api(method, path, body) {
   return { status: r.status, json };
 }
 const login = async (email, password) => { cookie = ''; return api('POST', '/api/login', { email, password }); };
-const isoOver = (dagen) => { const d = new Date(); d.setDate(d.getDate() + dagen); return d.toISOString().slice(0, 10); };
+// In NEDERLANDSE kalenderdagen, net als de server (taken.js dagenTot). Met de UTC-datum
+// faalde deze test elke nacht tussen 00:00 en 02:00 NL-tijd (3 okt 2026).
+const isoOver = (dagen) => { const [y, m, d] = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }).split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + dagen)).toISOString().slice(0, 10); };
 
 console.log('\n== Starttaken ==');
 ok('admin inloggen', (await login('admin@keyservice.nl', 'admin123')).status === 200);

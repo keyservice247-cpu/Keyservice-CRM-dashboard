@@ -174,6 +174,40 @@ function vraagTekst({ titel = 'Invoer', uitleg = '', label = '', waarde = '', pl
   });
 }
 
+// BETAALD-KEUZE BIJ VERSTUREN (3 okt 2026, wens eigenaar): facturen staan standaard op
+// betaald, maar dat klopt niet altijd. Daarom vraagt élke verzending van een FACTUUR
+// (e-mail, WhatsApp, opnieuw versturen) eerst: "Kan deze factuur als betaald worden
+// verstuurd?". Geeft true (betaald), false (nog niet betaald) of null (geannuleerd).
+// De server past de keuze toe vóór PDF en tekst worden gemaakt.
+function vraagBetaaldBijVersturen({ nummer = '', bedrag = null, doel = '', kanaal = 'e-mail', huidig = '', alVerstuurd = false } = {}) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'mini-dialog-root';
+    const bedragTxt = bedrag !== null && bedrag !== undefined && bedrag !== '' ? ` · € ${Number(bedrag).toFixed(2).replace('.', ',')}` : '';
+    const nu = huidig === 'betaald' ? 'staat nu op <strong>Betaald</strong>' : huidig ? 'staat nu op <strong>Nog niet betaald</strong>' : '';
+    wrap.innerHTML = `<div class="mini-dialog bk-dialog" role="dialog" aria-modal="true" aria-labelledby="bk-titel">
+      <h3 id="bk-titel">Kan deze factuur als betaald worden verstuurd?</h3>
+      <p class="muted small">Factuur ${esc(nummer || '(nieuw)')}${esc(bedragTxt)} · via ${esc(kanaal)}${doel ? ` naar ${esc(doel)}` : ''}${nu ? ` · ${nu}` : ''}</p>
+      ${alVerstuurd ? '<p class="bk-let-op small">Let op: deze factuur is al eerder verstuurd. De klant krijgt nu een nieuwe versie.</p>' : ''}
+      <div class="bk-keuzes">
+        <button type="button" class="bk-keuze bk-ja${huidig === 'betaald' ? ' bk-huidig' : ''}" id="bk-ja"><strong>✓ Ja, is betaald</strong><span>De klant krijgt hem als voldaan ("Betaald op …", geen betaalverzoek). Telt mee als omzet.</span></button>
+        <button type="button" class="bk-keuze bk-nee${huidig && huidig !== 'betaald' ? ' bk-huidig' : ''}" id="bk-nee"><strong>Nee, nog niet betaald</strong><span>De klant krijgt een betaalverzoek met vervaldatum. Staat open bij Facturen; je kunt later een herinnering sturen of op ✓ Betaald klikken.</span></button>
+      </div>
+      <div class="modal-actions"><span></span><div class="right"><button type="button" class="btn" id="bk-cancel">Annuleren</button></div></div>
+    </div>`;
+    document.body.appendChild(wrap);
+    const sluit = (v) => { wrap.remove(); document.removeEventListener('keydown', toets, true); resolve(v); };
+    const toets = (e) => { if (e.key === 'Escape') { e.stopPropagation(); sluit(null); } };
+    document.addEventListener('keydown', toets, true);
+    wrap.querySelector('#bk-ja').onclick = () => sluit(true);
+    wrap.querySelector('#bk-nee').onclick = () => sluit(false);
+    wrap.querySelector('#bk-cancel').onclick = () => sluit(null);
+    wrap.onclick = (e) => { if (e.target === wrap) sluit(null); };
+    setTimeout(() => { const b = wrap.querySelector('.bk-huidig') || wrap.querySelector('#bk-ja'); if (b) b.focus(); }, 30);
+  });
+}
+const betaaldToast = (keuze) => (keuze === true ? ' als betaald' : keuze === false ? ' met betaalverzoek (staat open)' : '');
+
 // Bouwt een "Zet in Google Agenda"-link (opent Google met een vooraf ingevuld event).
 // De afspraaktijd is lokale NL-tijd; we geven 'm zo door + ctz=Europe/Amsterdam zodat
 // Google de juiste tijd toont (geen UTC-verschuiving).
@@ -3729,13 +3763,19 @@ async function shareInvoicePdf(invId, label, btn) {
 // Factuur/offerte (opnieuw) versturen naar de klant. Vraagt naar het e-mailadres
 // (voorgevuld met het huidige/laatst gebruikte) zodat een verkeerd adres direct te
 // corrigeren is. Mag zo vaak als nodig; een betaalde factuur blijft betaald.
-async function resendInvoice(invId, label, prefillEmail, after) {
-  const to = await vraagTekst({ titel: `${label} versturen`, uitleg: 'Controleer het e-mailadres van de klant voordat je verstuurt.', label: 'E-mailadres', waarde: prefillEmail || '', type: 'email', knop: 'Versturen', valideer: (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? '' : 'Dit is geen geldig e-mailadres' });
+// Bij een FACTUUR (opts.factuur) volgt daarna de betaald-keuze (3 okt 2026).
+async function resendInvoice(invId, label, prefillEmail, after, opts = {}) {
+  const to = await vraagTekst({ titel: `${label} versturen`, uitleg: 'Controleer het e-mailadres van de klant voordat je verstuurt.', label: 'E-mailadres', waarde: prefillEmail || '', type: 'email', knop: opts.factuur ? 'Volgende' : 'Versturen', valideer: (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? '' : 'Dit is geen geldig e-mailadres' });
   if (to === null) return; // geannuleerd
   const addr = to.trim();
+  let keuze = null;
+  if (opts.factuur) {
+    keuze = await vraagBetaaldBijVersturen({ nummer: opts.nummer, bedrag: opts.bedrag, doel: addr, kanaal: 'e-mail', huidig: opts.status, alVerstuurd: true });
+    if (keuze === null) return;
+  }
   try {
-    const r = await api(`/api/invoices/${invId}/send`, 'POST', { to: addr });
-    toast(`Verstuurd naar ${r.invoice?.sentTo || addr}`);
+    const r = await api(`/api/invoices/${invId}/send`, 'POST', keuze === null ? { to: addr } : { to: addr, betaald: keuze });
+    toast(`Verstuurd naar ${r.invoice?.sentTo || addr}${betaaldToast(keuze)}`);
     if (after) after();
   } catch (err) { toast(err.message, true); }
 }
@@ -3930,7 +3970,7 @@ function renderInvoiceEditor(ctx) {
   };
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
-  if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); });
+  if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); }, { factuur: !isQuote, nummer: inv.number, bedrag: inv.totalIncl, status: inv.status });
   if ($('#inv-save')) $('#inv-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => { if (!confirmEditIfSent()) return; try {
     // Melding op het ANTWOORD van de server (28 sep 2026, audit): een nieuwe factuur
     // krijgt bij standaardBetaald meteen 'betaald', terwijl hier "Concept opgeslagen"
@@ -3938,27 +3978,41 @@ function renderInvoiceEditor(ctx) {
     const saved = await saveConcept();
     const st = (saved && saved.status) || inv.status;
     done(inv.sentAt ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : st === 'betaald' ? `${woord} opgeslagen (staat op betaald)` : st === 'concept' ? 'Concept opgeslagen' : `${woord} opgeslagen`); } catch (err) { toast(err.message, true); } });
+  // Totaal incl. btw zoals het NU in het scherm staat (voor de betaald-vraag).
+  const totaalNu = () => { const t = $('#inv-totals strong:last-child'); const m = t && t.textContent.match(/([\d.,]+)/); return m ? Number(m[1].replace(/\./g, '').replace(',', '.')) : (inv.totalIncl ?? null); };
   if ($('#inv-send')) $('#inv-send').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de opdracht of bij Klanten).', true); return; }
-    if (!confirm(inv.sentAt
-      ? `LET OP: deze ${woord.toLowerCase()} is al eerder verstuurd. Je verstuurt nu een NIEUWE versie (eventuele wijzigingen vervangen wat de klant heeft). Doorgaan naar ${customer.email}?`
-      : `${woord} nu versturen naar ${customer.email}?`)) return;
+    let keuze = null;
+    if (isQuote) {
+      if (!confirm(inv.sentAt
+        ? `LET OP: deze ${woord.toLowerCase()} is al eerder verstuurd. Je verstuurt nu een NIEUWE versie (eventuele wijzigingen vervangen wat de klant heeft). Doorgaan naar ${customer.email}?`
+        : `${woord} nu versturen naar ${customer.email}?`)) return;
+    } else {
+      keuze = await vraagBetaaldBijVersturen({ nummer: inv.number, bedrag: totaalNu(), doel: customer.email, kanaal: 'e-mail', huidig: inv.id ? inv.status : '', alVerstuurd: !!inv.sentAt });
+      if (keuze === null) return;
+    }
     try {
       const saved = await saveConcept();
-      await api(`/api/invoices/${saved.id}/send`, 'POST', {});
-      done(`${woord} verstuurd naar de klant`);
+      await api(`/api/invoices/${saved.id}/send`, 'POST', keuze === null ? {} : { betaald: keuze });
+      done(`${woord} verstuurd naar de klant${betaaldToast(keuze)}`);
     } catch (err) { toast(err.message, true); }
   });
   // Versturen via WhatsApp: de PDF gaat als bijlage mee naar het 06 van de klant.
   if ($('#inv-send-wa')) $('#inv-send-wa').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const tel = (ctx.order && ctx.order.intake && ctx.order.intake.phone) || customer.phone || '';
     if (!tel) { toast('Deze klant heeft nog geen telefoonnummer — vul dat eerst in.', true); return; }
-    if (!confirmEditIfSent()) return;
-    if (!confirm(`${woord} als PDF via WhatsApp sturen naar ${tel}?`)) return;
+    let keuze = null;
+    if (isQuote) {
+      if (!confirmEditIfSent()) return;
+      if (!confirm(`${woord} als PDF via WhatsApp sturen naar ${tel}?`)) return;
+    } else {
+      keuze = await vraagBetaaldBijVersturen({ nummer: inv.number, bedrag: totaalNu(), doel: tel, kanaal: 'WhatsApp', huidig: inv.id ? inv.status : '', alVerstuurd: !!inv.sentAt });
+      if (keuze === null) return;
+    }
     try {
       const saved = await saveConcept();
-      await api(`/api/invoices/${saved.id}/send-whatsapp`, 'POST', {});
-      done(`${woord} klaargezet voor WhatsApp naar ${tel} — in de wachtrij. Bezorgstatus zie je in Berichten; mislukt het, dan gaat hij terug naar concept en krijg je een melding.`);
+      await api(`/api/invoices/${saved.id}/send-whatsapp`, 'POST', keuze === null ? {} : { betaald: keuze });
+      done(`${woord}${betaaldToast(keuze)} klaargezet voor WhatsApp naar ${tel} — in de wachtrij. Bezorgstatus zie je in Berichten; mislukt het, dan krijg je een melding${keuze === true ? '' : ' en gaat hij terug naar concept'}.`);
     } catch (err) { toast(err.message, true); }
   });
   const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = async () => { try { await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }; };
@@ -4543,7 +4597,7 @@ function renderInvoices() {
         <button class="btn btn-sm btn-primary inv-edit" data-id="${esc(i.id)}">Openen</button>
         <a class="btn btn-sm" target="_blank" rel="noopener" href="/api/invoices/${esc(i.id)}/pdf">PDF</a>
         <button class="btn btn-sm inv-share" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + '-' + i.number + (i.customerName ? ' ' + i.customerName : ''))}">${icon('paperclip', 13)} Deel</button>
-        ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
+        ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" data-factuur="${quote ? '' : '1'}" data-nummer="${esc(i.number || '')}" data-bedrag="${esc(String(i.totalIncl ?? ''))}" data-status="${esc(i.status)}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Opdracht</button>` : ''}
         ${!quote && (i.sentAt || i.status === 'betaald') ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review (mail + WhatsApp)'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
         ${!quote && (i.status === 'verzonden' || i.status === 'concept') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
@@ -4555,7 +4609,7 @@ function renderInvoices() {
   wrap.innerHTML = html;
   $$('.inv-edit').forEach((b) => b.onclick = () => openStandaloneInvoice(b.dataset.id));
   $$('.inv-share').forEach((b) => b.onclick = (e) => shareInvoicePdf(b.dataset.id, b.dataset.label, e.currentTarget));
-  $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices()));
+  $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices(), { factuur: !!b.dataset.factuur, nummer: b.dataset.nummer, bedrag: b.dataset.bedrag === '' ? null : Number(b.dataset.bedrag), status: b.dataset.status }));
   $$('.inv-open').forEach((b) => b.onclick = () => openOrderVers(b.dataset.oid));
   // Zelf een review vragen bij een verzonden factuur — het moment waarop de klus af is.
   $$('.inv-review').forEach((b) => b.onclick = async () => {
@@ -5230,7 +5284,7 @@ async function loadSettingsHtml(s) {
       <div class="row"> <label>Betaaltermijn (dagen) <input id="is-days" type="number" min="1" max="90" value="${esc(String(s.invoiceSettings?.paymentDays ?? 7))}" style="max-width:110px"></label> <label>Standaard btw-tarief <select id="is-btw"><option value="21" ${Number(s.invoiceSettings?.btwPct ?? 21) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(s.invoiceSettings?.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(s.invoiceSettings?.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label> </div>
       <div style="border-top:1px solid var(--line-soft,#e5e7eb);margin:12px 0 10px;padding-top:10px"><strong>Nieuwe facturen</strong>
         <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:6px"><input type="checkbox" id="is-standaardbetaald" style="width:auto" ${s.invoiceSettings?.standaardBetaald !== false ? 'checked' : ''}>Nieuwe factuur staat <strong>standaard op Betaald</strong></label>
-        <p class="muted small" style="margin:4px 0 8px">Vrijwel elke klus wordt direct afgerekend; zo scheelt het per factuur een klik. De knop heet dan "Nog niet betaald" voor de uitzondering. Een betaalde factuur die nog niet is verstuurd blijft gewoon bewerkbaar; de omzet gaat automatisch naar Cijfers. Facturen uit een offerte beginnen altijd als concept.</p>
+        <p class="muted small" style="margin:4px 0 8px">Vrijwel elke klus wordt direct afgerekend; zo scheelt het per factuur een klik. De knop heet dan "Nog niet betaald" voor de uitzondering. Bij élke verzending naar de klant vraagt het CRM bovendien: "Kan deze factuur als betaald worden verstuurd?" — kies je "Nee", dan gaat hij met betaalverzoek en staat hij open. Een betaalde factuur die nog niet is verstuurd blijft gewoon bewerkbaar; de omzet gaat automatisch naar Cijfers. Facturen uit een offerte beginnen altijd als concept.</p>
       </div>
       <div style="border-top:1px solid var(--line-soft,#e5e7eb);margin:12px 0 10px;padding-top:10px"><strong>Automatische betaalherinnering</strong>
         <p class="muted small" style="margin:4px 0 8px">Verzonden facturen die na de vervaldatum nog openstaan krijgen vanzelf een vriendelijke herinnering (zelfde mail als de knop, met PDF). Zet eerst alle al betaalde facturen op "Betaald" — anders krijgt een klant onterecht een herinnering.</p>

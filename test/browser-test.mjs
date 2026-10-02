@@ -74,6 +74,35 @@ await page.waitForTimeout(600);
 ok('pakket opgeslagen via het venster', await page.evaluate(() => fetch('/api/settings').then((r) => r.json()).then((s) => (s.priceBundles || []).some((b) => b.name === 'Browsertest pakket'))));
 ok('venster is weer weg, editor staat nog', await page.locator('#md-input').count() === 0 && await page.locator('#inv-save').count() === 1);
 noErr('Pakketnaam-venster');
+// BETAALD-KEUZE BIJ VERSTUREN (3 okt 2026): elke factuur-verzending vraagt eerst
+// "Kan deze factuur als betaald worden verstuurd?" — Annuleren verstuurt niets.
+clear();
+await page.click('#inv-send-wa');
+await page.waitForSelector('#bk-ja', { timeout: 4000 }).catch(() => {});
+const bk = await page.evaluate(() => ({
+  titel: (document.querySelector('#bk-titel') || {}).textContent || '',
+  ja: !!document.querySelector('#bk-ja'), nee: !!document.querySelector('#bk-nee'),
+  bedrag: /€\s?\d/.test((document.querySelector('.bk-dialog .muted') || {}).textContent || ''),
+  editorStaat: !!document.querySelector('#inv-save'),
+}));
+ok('betaald-vraag verschijnt bij "Via WhatsApp" (Ja/Nee + bedrag, editor blijft staan)', /als betaald worden verstuurd/.test(bk.titel) && bk.ja && bk.nee && bk.bedrag && bk.editorStaat, JSON.stringify(bk));
+await page.click('#bk-cancel');
+await page.waitForTimeout(400);
+const naAnnuleren = await page.evaluate(async (id) => ({ weg: !document.querySelector('#bk-ja'), editor: !!document.querySelector('#inv-save'), inv: await fetch('/api/invoices/' + id).then((r) => r.json()) }), setup.invId);
+const invNaA = naAnnuleren.inv.invoice || naAnnuleren.inv;
+ok('Annuleren: niets verstuurd, factuur ongewijzigd', naAnnuleren.weg && naAnnuleren.editor && !invNaA.sentAt, JSON.stringify({ weg: naAnnuleren.weg, sent: invNaA.sentAt }));
+await page.click('#inv-send-wa');
+await page.waitForSelector('#bk-nee', { timeout: 4000 }).catch(() => {});
+await page.click('#bk-nee');
+await page.waitForFunction(() => !document.querySelector('#inv-save'), null, { timeout: 8000 }).catch(() => {});
+const naNee = await page.evaluate(async (id) => {
+  const inv = await fetch('/api/invoices/' + id).then((r) => r.json());
+  const ob = await fetch('/api/whatsapp/outbox-status?full=1').then((r) => r.json());
+  const lijst = Array.isArray(ob) ? ob : (ob.items || []);
+  return { inv: inv.invoice || inv, item: lijst.find((x) => x.invoiceId === id) || null };
+}, setup.invId);
+ok('"Nee, nog niet betaald": factuur Verzonden (open), WhatsApp-tekst zonder "voldaan"', naNee.inv.status === 'verzonden' && !naNee.inv.paidAt && naNee.item && !/voldaan/i.test(naNee.item.text || ''), JSON.stringify({ s: naNee.inv.status, t: naNee.item && naNee.item.text }));
+noErr('Betaald-keuze bij versturen');
 await page.click('#inv-cancel').catch(() => {});
 await page.waitForTimeout(400);
 

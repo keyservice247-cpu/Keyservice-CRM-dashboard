@@ -4949,6 +4949,43 @@ ${rest.map((a) => `<a class="bestand" href="${src(a)}">${htmlTekst(a.filename ||
   res.type('html').send(pagina(`Foto's — ${order.title || 'opdracht'}`, inhoud));
 });
 
+// BETAALD-KEUZE BIJ VERSTUREN (3 okt 2026, wens eigenaar: "facturen staan standaard op
+// betaald, maar dat is niet altijd zo"). Het verstuur-venster vraagt bij ELKE factuur
+// "Kan deze factuur als betaald worden verstuurd?" en stuurt `betaald: true|false` mee.
+// De keuze wordt VÓÓR het opbouwen van PDF en tekst toegepast, zodat de klant precies
+// krijgt wat er gekozen is ("voldaan" óf betaalverzoek met vervaldatum). Lukt het
+// versturen niet, dan zet herstelBetaaldKeuze alles terug. Zonder `betaald` (oude
+// schermen, offertes) verandert er niets aan het oude gedrag.
+function leesBetaaldKeuze(v) {
+  if (v === true || v === 'true' || v === 'ja' || v === 1) return true;
+  if (v === false || v === 'false' || v === 'nee' || v === 0) return false;
+  return null;
+}
+function pasBetaaldKeuzeToe(inv, keuze) {
+  if (inv.type === 'offerte' || keuze === null) return null;
+  const vorig = { status: inv.status, paidAt: inv.paidAt };
+  if (keuze && inv.status !== 'betaald') { inv.status = 'betaald'; inv.paidAt = now(); }
+  // Nog niet betaald: hij gaat nu naar de klant, dus 'verzonden' (open, herinnerbaar).
+  if (!keuze && inv.status === 'betaald') { inv.status = 'verzonden'; delete inv.paidAt; }
+  return vorig;
+}
+function herstelBetaaldKeuze(inv, vorig) {
+  if (!vorig) return;
+  inv.status = vorig.status;
+  if (vorig.paidAt) inv.paidAt = vorig.paidAt; else delete inv.paidAt;
+}
+// Na een GELUKTE verzending: was hij betaald en nu niet meer, dan ook de automatische
+// omzet-boeking uit Cijfers weg (zelfde regel als de knop "Nog niet betaald").
+function rondBetaaldKeuzeAf(inv, vorig, keuze, door) {
+  if (!vorig) return;
+  inv.betaaldKeuze = { betaald: keuze, at: now(), door };
+  if (vorig.status === 'betaald' && inv.status !== 'betaald') {
+    const n = removeAutoIncomeForInvoice(inv.id);
+    if (n) logActivity(door, 'automatische omzet-boeking teruggedraaid', `${inv.number} (verstuurd als nog niet betaald)`);
+  }
+  logActivity(door, keuze ? 'factuur verstuurd als betaald' : 'factuur verstuurd als nog niet betaald', inv.number);
+}
+
 app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
@@ -4960,6 +4997,8 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
   const tel = String(req.body?.phone || (order && order.intake && order.intake.phone) || customer.phone || '').trim();
   if (tel.replace(/[^\d]/g, '').length < 6) return res.status(400).json({ error: 'Geen geldig telefoonnummer van de klant. Vul het telefoonveld in.' });
   const isQuote = inv.type === 'offerte';
+  const keuze = leesBetaaldKeuze(req.body?.betaald);
+  const vorigBetaald = pasBetaaldKeuzeToe(inv, keuze);
   try {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
     // Vorige WhatsApp-PDF van deze factuur opruimen, zodat er per factuur maar één
@@ -4967,7 +5006,7 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
     const vorigePdf = inv.waPdfFile; inv.waPdfFile = null;
     if (vorigePdf) verwijderBestandenAlsOngebruikt([vorigePdf]);
     const saved = saveBuffer(pdf, { mime: 'application/pdf', filename: `${isQuote ? 'Offerte' : 'Factuur'}-${inv.number}.pdf` });
-    if (!saved) return res.status(500).json({ error: 'PDF klaarzetten mislukt.' });
+    if (!saved) { herstelBetaaldKeuze(inv, vorigBetaald); return res.status(500).json({ error: 'PDF klaarzetten mislukt.' }); }
     inv.waPdfFile = saved.file;
     const cfg = getInvoiceSettings();
     const tekst = String(req.body?.text || '').trim()
@@ -5005,9 +5044,10 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
       order.updatedAt = now();
     }
     logActivity(req.user.name, `${isQuote ? 'offerte' : 'factuur'} via WhatsApp verstuurd`, `${inv.number} -> ${tel}`);
+    rondBetaaldKeuzeAf(inv, vorigBetaald, keuze, req.user.name);
     saveSoon();
     res.json({ ok: true, phone: tel, status: inv.status });
-  } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
+  } catch (e) { herstelBetaaldKeuze(inv, vorigBetaald); res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
 
 // Versturen per e-mail (factuur óf offerte) met PDF-bijlage.
@@ -5035,6 +5075,8 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
   if (!inv.lines || !inv.lines.length) return res.status(400).json({ error: 'Er staan nog geen regels op.' });
   const cfg = getInvoiceSettings();
   const isQuote = inv.type === 'offerte';
+  const keuze = leesBetaaldKeuze(req.body?.betaald);
+  const vorigBetaald = pasBetaaldKeuzeToe(inv, keuze);
   try {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
     const sig = getEmailSignature(afzenderVan(req));
@@ -5074,10 +5116,11 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
       order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (${inv.type})`, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number}`, body, at: now() });
       order.updatedAt = now();
     }
+    rondBetaaldKeuzeAf(inv, vorigBetaald, keuze, req.user.name);
     saveSoon();
     logActivity(req.user.name, `${inv.type} verstuurd`, `${inv.number} → ${to}`);
     res.json({ ok: true, invoice: inv });
-  } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
+  } catch (e) { herstelBetaaldKeuze(inv, vorigBetaald); res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
 
 // Vriendelijke betaalherinnering (alleen verzonden facturen), met PDF opnieuw als

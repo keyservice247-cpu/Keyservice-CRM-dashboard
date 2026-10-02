@@ -1,0 +1,187 @@
+// Test: BETAALD-KEUZE BIJ VERSTUREN (3 okt 2026, wens eigenaar: "facturen staan standaard
+// op betaald, maar dat is niet altijd zo"). Het verstuur-venster vraagt bij elke factuur
+// "Kan deze factuur als betaald worden verstuurd?" en stuurt betaald: true|false mee.
+// Deze test start ZELF een nep-mailserver (SMTP) + de CRM-server (poort 3143), zodat
+// ook de e-mailroute echt doorlopen wordt: mailtekst, status, paidAt, de automatische
+// omzet-boeking in Cijfers en het terugzetten als versturen mislukt.
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const PORT = 3143;
+const SMTP_PORT = 2643;
+const BASE = `http://localhost:${PORT}`;
+const TOKEN = 'test123';
+const DIR = mkdtempSync(join(tmpdir(), 'crm-betaald-'));
+
+let passed = 0, failed = 0; const bad = [];
+function ok(name, cond, extra = '') { if (cond) { passed++; console.log(`  ✓ ${name}`); } else { failed++; bad.push(name); console.log(`  ✗ FAIL: ${name}${extra ? ' — ' + extra : ''}`); } }
+const slaap = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------- Nep-SMTP: accepteert alles, bewaart de berichten; kan ook weigeren ----------
+const mails = [];
+let weigerOntvanger = false;
+const smtp = createServer((sock) => {
+  let data = false; let buf = ''; let huidig = '';
+  sock.write('220 nep-smtp klaar\r\n');
+  sock.on('data', (chunk) => {
+    buf += chunk.toString('utf8');
+    let i;
+    while ((i = buf.indexOf('\r\n')) >= 0) {
+      const regel = buf.slice(0, i); buf = buf.slice(i + 2);
+      if (data) {
+        if (regel === '.') { data = false; mails.push(huidig); huidig = ''; sock.write('250 OK opgeslagen\r\n'); }
+        else huidig += regel.replace(/^\.\./, '.') + '\n';
+        continue;
+      }
+      const cmd = regel.slice(0, 4).toUpperCase();
+      if (cmd === 'EHLO') sock.write('250-nep-smtp\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n');
+      else if (cmd === 'HELO') sock.write('250 nep-smtp\r\n');
+      else if (cmd === 'AUTH') {
+        if (/PLAIN\s+\S+/i.test(regel)) sock.write('235 OK\r\n');
+        else if (/PLAIN/i.test(regel)) sock.write('334 \r\n');
+        else if (/LOGIN/i.test(regel)) { sock.write('334 VXNlcm5hbWU6\r\n'); sock._login = 1; }
+      } else if (sock._login === 1) { sock._login = 2; sock.write('334 UGFzc3dvcmQ6\r\n'); }
+      else if (sock._login === 2) { sock._login = 0; sock.write('235 OK\r\n'); }
+      else if (cmd === 'MAIL') sock.write('250 OK\r\n');
+      else if (cmd === 'RCPT') sock.write(weigerOntvanger ? '550 5.1.1 recipient rejected\r\n' : '250 OK\r\n');
+      else if (cmd === 'DATA') { data = true; sock.write('354 ga je gang\r\n'); }
+      else if (cmd === 'QUIT') { sock.write('221 doei\r\n'); sock.end(); }
+      else if (cmd === 'RSET' || cmd === 'NOOP') sock.write('250 OK\r\n');
+      else if (regel.length && !sock._login) sock.write('235 OK\r\n'); // base64-antwoord na "334 " (AUTH PLAIN)
+    }
+  });
+  sock.on('error', () => {});
+});
+await new Promise((r) => smtp.listen(SMTP_PORT, r));
+
+let cookie = '';
+async function api(method, path, body) {
+  const headers = { 'content-type': 'application/json' };
+  if (cookie) headers.cookie = cookie;
+  const r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const setC = r.headers.get('set-cookie'); if (setC) cookie = setC.split(';')[0];
+  let json = null; try { json = await r.json(); } catch { /* leeg */ }
+  return { status: r.status, json };
+}
+
+const proc = spawn(process.execPath, ['server/index.js'], {
+  env: { ...process.env, DATA_DIR: DIR, INGEST_TOKEN: TOKEN, SESSION_SECRET: 'test', PORT: String(PORT), SMTP_HOST: '127.0.0.1', SMTP_PORT: String(SMTP_PORT), SMTP_USER: 'test@keyservice247.nl', SMTP_PASSWORD: 'x', SMTP_FROM: 'test@keyservice247.nl' },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+let gestart = false;
+for (let i = 0; i < 60 && !gestart; i++) { try { await fetch(BASE + '/login.html'); gestart = true; } catch { await slaap(500); } }
+if (!gestart) { console.log('server start mislukt:\n' + log); process.exit(1); }
+
+const decodeer = (raw) => {
+  // quoted-printable grof terugzetten zodat we op tekst kunnen zoeken
+  return raw.replace(/=\r?\n/g, '').replace(/=([0-9A-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+};
+
+try {
+  ok('inloggen', (await api('POST', '/api/login', { email: 'admin@keyservice.nl', password: 'admin123' })).status === 200);
+  const klant = (await api('POST', '/api/customers', { name: 'Betaal Klant', email: 'betaal@example.nl', phone: '0612340000', address: 'Laan 1, Rhenen' })).json;
+  const order = (await api('POST', '/api/orders', { customerId: klant.id, title: 'Rhenen — slot vervangen', status: 'afgerond' })).json;
+  const maakFactuur = async (prijs) => {
+    const r = (await api('POST', '/api/invoices', { customerId: klant.id, orderId: order.id, type: 'factuur' })).json;
+    const inv = r.invoice || r;
+    await api('PATCH', `/api/invoices/${inv.id}`, { lines: [{ description: 'Cilinder vervangen', qty: 1, priceExcl: prijs }], btwPct: 21, note: '' });
+    return (await api('GET', `/api/invoices/${inv.id}`)).json.invoice || (await api('GET', `/api/invoices/${inv.id}`)).json;
+  };
+  const haal = async (id) => { const j = (await api('GET', `/api/invoices/${id}`)).json; return j.invoice || j; };
+  const maand = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }).slice(0, 7);
+  const omzetVoor = async (id) => ((await api('GET', `/api/finance?month=${maand}`)).json.report.entries || []).filter((e) => e.sourceRef === `inv:${id}`);
+
+  console.log('\n== 1. Standaard betaald, verstuurd als NOG NIET BETAALD (e-mail) ==');
+  const f1 = await maakFactuur(100);
+  ok('nieuwe factuur staat standaard op betaald', f1.status === 'betaald' && !!f1.paidAt, JSON.stringify({ s: f1.status }));
+  await api('POST', '/api/finance/autosync', {});
+  ok('omzet automatisch geboekt (standaard betaald)', (await omzetVoor(f1.id)).length === 1);
+  const s1 = await api('POST', `/api/invoices/${f1.id}/send`, { betaald: false });
+  ok('versturen lukt', s1.status === 200, JSON.stringify(s1.json).slice(0, 200));
+  const f1na = await haal(f1.id);
+  ok('status nu Verzonden (open), betaaldatum weg', f1na.status === 'verzonden' && !f1na.paidAt && !!f1na.sentAt, JSON.stringify({ s: f1na.status, p: f1na.paidAt }));
+  ok('keuze vastgelegd op de factuur', f1na.betaaldKeuze && f1na.betaaldKeuze.betaald === false);
+  ok('automatische omzet-boeking teruggedraaid', (await omzetVoor(f1.id)).length === 0);
+  const m1 = decodeer(mails[mails.length - 1] || '');
+  ok('mail vraagt om betaling (geen "voldaan")', /graag betalen binnen/i.test(m1) && !/al voldaan/i.test(m1), m1.slice(0, 300));
+  await api('POST', '/api/finance/autosync', {});
+  ok('volgende autosync boekt hem NIET opnieuw (niet betaald)', (await omzetVoor(f1.id)).length === 0);
+  // Later toch betaald → knop ✓ Betaald → telt weer mee.
+  await api('POST', `/api/invoices/${f1.id}/status`, { status: 'betaald' });
+  await api('POST', '/api/finance/autosync', {});
+  ok('na ✓ Betaald telt de omzet weer mee', (await omzetVoor(f1.id)).length === 1);
+
+  console.log('\n== 2. Verstuurd als BETAALD (e-mail) ==');
+  const f2 = await maakFactuur(200);
+  const s2 = await api('POST', `/api/invoices/${f2.id}/send`, { betaald: true });
+  const f2na = await haal(f2.id);
+  ok('blijft betaald + verstuurd (vergrendeld)', s2.status === 200 && f2na.status === 'betaald' && !!f2na.paidAt && !!f2na.sentAt);
+  const m2 = decodeer(mails[mails.length - 1] || '');
+  ok('mail zegt "al voldaan"', /al voldaan/i.test(m2) && !/graag betalen binnen/i.test(m2), m2.slice(0, 300));
+
+  console.log('\n== 3. Concept (niet standaard betaald) verstuurd als BETAALD ==');
+  await api('PATCH', '/api/settings', { invoiceSettings: { standaardBetaald: false } });
+  const f3 = await maakFactuur(50);
+  ok('met de instelling uit: nieuwe factuur = concept', f3.status === 'concept', f3.status);
+  await api('POST', `/api/invoices/${f3.id}/send`, { betaald: true });
+  const f3na = await haal(f3.id);
+  ok('concept → betaald + betaaldatum bij versturen als betaald', f3na.status === 'betaald' && !!f3na.paidAt && !!f3na.sentAt, JSON.stringify({ s: f3na.status }));
+  await api('POST', '/api/finance/autosync', {});
+  ok('en telt dan mee als omzet', (await omzetVoor(f3.id)).length === 1);
+  const f3b = await maakFactuur(60);
+  await api('POST', `/api/invoices/${f3b.id}/send`, { betaald: false });
+  ok('concept verstuurd als nog niet betaald → Verzonden', (await haal(f3b.id)).status === 'verzonden');
+  await api('PATCH', '/api/settings', { invoiceSettings: { standaardBetaald: true } });
+
+  console.log('\n== 4. Versturen MISLUKT → keuze teruggezet ==');
+  const f4 = await maakFactuur(80);
+  weigerOntvanger = true;
+  const s4 = await api('POST', `/api/invoices/${f4.id}/send`, { betaald: false });
+  weigerOntvanger = false;
+  const f4na = await haal(f4.id);
+  ok('mislukte verzending geeft een fout', s4.status >= 400, JSON.stringify(s4));
+  ok('status + betaaldatum onveranderd (nog steeds betaald, niet verstuurd)', f4na.status === 'betaald' && !!f4na.paidAt && !f4na.sentAt, JSON.stringify({ s: f4na.status, p: f4na.paidAt, sent: f4na.sentAt }));
+
+  console.log('\n== 5. WhatsApp: keuze gaat mee in tekst en status ==');
+  const f5 = await maakFactuur(120);
+  const w5 = await api('POST', `/api/invoices/${f5.id}/send-whatsapp`, { betaald: false });
+  const f5na = await haal(f5.id);
+  ok('WhatsApp als nog niet betaald → Verzonden, geen betaaldatum', w5.status === 200 && w5.json.status === 'verzonden' && f5na.status === 'verzonden' && !f5na.paidAt, JSON.stringify(w5.json));
+  const ob = (await api('GET', '/api/whatsapp/outbox-status?full=1')).json || [];
+  const item5 = (Array.isArray(ob) ? ob : ob.items || []).find((x) => x.invoiceId === f5.id);
+  ok('WhatsApp-tekst zegt NIET dat hij voldaan is', item5 && !/voldaan/i.test(item5.text || ''), item5 && item5.text);
+  const f6 = await maakFactuur(130);
+  await api('POST', `/api/invoices/${f6.id}/send-whatsapp`, { betaald: true });
+  const ob2 = (await api('GET', '/api/whatsapp/outbox-status?full=1')).json || [];
+  const item6 = (Array.isArray(ob2) ? ob2 : ob2.items || []).find((x) => x.invoiceId === f6.id);
+  ok('WhatsApp als betaald → tekst "al voldaan", status betaald', item6 && /voldaan/i.test(item6.text || '') && (await haal(f6.id)).status === 'betaald', item6 && item6.text);
+
+  console.log('\n== 6. Zonder keuze (oud scherm) en offerte: gedrag ongewijzigd ==');
+  const f7 = await maakFactuur(70);
+  await api('POST', `/api/invoices/${f7.id}/send`, {});
+  ok('zonder betaald-veld blijft een betaalde factuur betaald', (await haal(f7.id)).status === 'betaald');
+  const off = ((await api('POST', '/api/invoices', { customerId: klant.id, orderId: order.id, type: 'offerte' })).json);
+  const offId = (off.invoice || off).id;
+  await api('PATCH', `/api/invoices/${offId}`, { lines: [{ description: 'Offerte slot', qty: 1, priceExcl: 99 }], btwPct: 21, note: '' });
+  await api('POST', `/api/invoices/${offId}/send`, { betaald: true });
+  ok('offerte negeert het betaald-veld (wordt gewoon Verzonden)', (await haal(offId)).status === 'verzonden');
+
+  console.log('\n== 7. Verstuurde betaalde factuur opnieuw sturen als nog niet betaald (assistente) ==');
+  await api('POST', '/api/users', { name: 'Assistente Betaal', email: 'assist-betaal@keyservice.nl', password: 'assist123', role: 'assistent' });
+  const adminCookie = cookie; cookie = '';
+  await api('POST', '/api/login', { email: 'assist-betaal@keyservice.nl', password: 'assist123' });
+  const s8 = await api('POST', `/api/invoices/${f2.id}/send`, { to: 'betaal@example.nl', betaald: false });
+  const f2b = await haal(f2.id);
+  ok('assistente mag het (zelfde recht als "Nog niet betaald")', s8.status === 200 && f2b.status === 'verzonden' && !f2b.paidAt, JSON.stringify({ st: s8.status, s: f2b.status }));
+  cookie = adminCookie;
+} finally {
+  proc.kill('SIGTERM');
+  smtp.close();
+}
+console.log(`\n========== BETAALD-KEUZE: ${passed} geslaagd, ${failed} gefaald ==========`);
+if (failed) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
+process.exit(0);

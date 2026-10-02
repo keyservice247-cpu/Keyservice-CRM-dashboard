@@ -926,6 +926,22 @@ de regressie meegroeit.
   afgewezen berichten mee. Advies (niet gebouwd, keuze eigenaar): alleen verstuurde
   facturen tellen, "excl. btw" op de tegel, één definitie, offerte-conversie meten,
   DRS apart in conversie, weekrapport-"conversie" hernoemen. Test: conversie-test 42.
+- **BETAALD-KEUZE BIJ VERSTUREN (3 okt 2026, wens eigenaar "facturen staan standaard op
+  betaald, maar dat is niet altijd zo"):** elke verzending van een FACTUUR (editor
+  "Versturen naar klant", "Via WhatsApp", "Verstuur opnieuw", Facturen-lijst "Opnieuw")
+  opent eerst vraagBetaaldBijVersturen(): "Kan deze factuur als betaald worden
+  verstuurd?" met "✓ Ja, is betaald" / "Nee, nog niet betaald" / Annuleren (huidige stand
+  gemarkeerd, bedrag + kanaal + ontvanger, waarschuwing bij al eerder verstuurd).
+  Vervangt bij facturen de oude confirm()-vragen; offertes ongewijzigd. Server: POST
+  /api/invoices/:id/send en /send-whatsapp accepteren `betaald: true|false`
+  (leesBetaaldKeuze/pasBetaaldKeuzeToe/herstelBetaaldKeuze/rondBetaaldKeuzeAf in
+  index.js): keuze wordt VÓÓR PDF en tekst toegepast (true: status betaald + paidAt;
+  false: betaald → verzonden, paidAt weg), bij een mislukte verzending teruggezet, na
+  succes `inv.betaaldKeuze` + logboek en — van betaald naar open — de automatische
+  omzet-boeking weg (removeAutoIncomeForInvoice). Zonder `betaald` (oude schermen) en bij
+  offertes: oud gedrag. Assistente mag het (zelfde recht als "Nog niet betaald").
+  Test: test/betaald-keuze-test.mjs (24; start zelf een nep-SMTP + server op PORT=3143)
+  + browser 241 (+4). Taken-test rekent nu in NL-kalenderdagen (faalde 00–02 u NL).
 - **Groepsgesprekken worden geen opdracht meer (2 okt 2026, klacht eigenaar: "vage
   gesprekken als kaart / als aanvulling aan oude opdracht"):** casussen "klant in
   Geertruidenberg … kostenoverzichtje?" (DRS-collega die iets vraagt) en ons eigen

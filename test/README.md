@@ -27,6 +27,9 @@ node test/whatsapp-cloud-test.mjs
 node test/chat-test.mjs
 # Taken-module: aanmaken, afvinken, filteren, deadline-teller, privé/zakelijk (PORT=3133)
 node test/taken-test.mjs
+# Betaald-keuze bij versturen: e-mail (nep-SMTP) + WhatsApp, status/paidAt/omzet, terugzetten
+# bij mislukken (start zelf een nep-SMTP + server op PORT=3143)
+node test/betaald-keuze-test.mjs
 # Herstart van het CRM: dubbel wachtrij-item komt NIET terug (start zelf een server op PORT=3135)
 node test/herstart-test.mjs
 # Audit-fixes 16 sep: suggesties, samenvoegen, gedeelde bestanden, rechten, reden-achteraf (PORT=3137)
