@@ -383,6 +383,17 @@ const sCol = await api('POST', '/api/ingest/whatsapp', {
 }, true);
 const oKlantNa = (await orders()).find((o) => o.id === oKlant?.id);
 ok('collega-bericht met klantnummer -> niet in de kaart van die klant', !!oKlant && (oKlantNa?.thread || []).length === threadVoor && !/reviewId/.test('') && (await orders()).length === ordersBeforeGG, JSON.stringify(sCol.json));
+// Onvolledige DRS-opdracht (4 okt 2026): geen kaart, wél vlag + teller in de inbox.
+const sHalf = await api('POST', '/api/ingest/whatsapp', {
+  group: `groep ${RAF_ID}`, name: 'Kim drs',
+  body: 'Naam: Piet Half\nAdres: Kerkstraat 5\nWoonplaats: Breda\nOpmerkingen: slot voordeur klemt',
+  externalId: 'gg-half',
+}, true);
+const revs0 = (await api('GET', '/api/reviews?status=overige&limit=200')).json;
+const revHalf = (revs0.items || []).find((r) => r.id === sHalf.json?.reviewId);
+ok('onvolledige DRS-opdracht (geen telefoon) → geen kaart, wél gemarkeerd + teller', sHalf.json?.status === 'overige' && revHalf?.onvolledigeOpdracht === true && revs0.onvolledig >= 1 && (await orders()).length === ordersBeforeGG, JSON.stringify({ st: sHalf.json?.status, vlag: revHalf?.onvolledigeOpdracht, n: revs0.onvolledig }));
+const revKim = (revs0.items || []).find((r) => r.id === sGG.json?.reviewId);
+ok('vaag gesprek zonder klantgegevens ("kostenoverzichtje") wordt NIET gemarkeerd', revKim && !revKim.onvolledigeOpdracht);
 const sJaar = await api('POST', '/api/ingest/whatsapp', {
   group: `groep ${RAF_ID}`, name: 'Kim drs',
   body: 'die klant is sinds 2025 al bij ons, belt morgen terug op 0612312312 voor de prijs',

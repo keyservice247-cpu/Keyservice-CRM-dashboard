@@ -965,6 +965,18 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
     reviewedAt: null,
     createdAt: now(),
   };
+  // ONVOLLEDIGE OPDRACHT UIT DE OPDRACHT-GROEP (4 okt 2026, keuze eigenaar): een DRS-
+  // bericht met wél een deel van de klantgegevens (telefoon, postcode, straat+nummer of
+  // "Naam:/Adres:"-regels) maar niet compleet, verdween stil in "Geen aanvraag". Het blijft
+  // daar (geen kaart — opdrachten komen compleet binnen), maar krijgt een vlag, een melding
+  // en een teller in de inbox, zodat de assistente het kan controleren.
+  if (review.status === 'overige' && isOrderGroupMsg && groepsGesprek && !isEigenRapport && !looksReport
+      && (!!myPhone || telInTekst || echtePostcode || adresMetNummer
+        || /^\s*\*?(naam|adres|woonplaats|telefoon|tel\.?)\*?\s*:/im.test(String(body || '')))) {
+    review.onvolledigeOpdracht = true;
+    suggestion.relevanceReason = `Mogelijk een ONVOLLEDIGE opdracht uit "${group}" (klantgegevens deels aanwezig: ${[myPhone || telInTekst ? 'telefoon' : '', echtePostcode ? 'postcode' : '', adresMetNummer ? 'adres' : ''].filter(Boolean).join(', ') || 'naam/adres-regels'}) — geen kaart gemaakt. Controleer en keur zo nodig goed.`;
+    notifyPush('Onvolledig DRS-bericht', `${sender || group}: ${String(body || '').replace(/\s+/g, ' ').slice(0, 90)} — staat bij "Geen aanvraag", controleer even.`);
+  }
   db().reviews.push(review);
 
   // AFMELDEN VOOR DE CAMPAGNE (punt 16): de voettekst vraagt om "afmelden" te antwoorden

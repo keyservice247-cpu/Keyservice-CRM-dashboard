@@ -2222,7 +2222,9 @@ app.get('/api/reviews', requireAuth, (req, res) => {
     const m = msgById.get(r.messageId) || null;
     return { ...r, message: m, knownCustomer: r.status === 'pending' || r.status === 'overige' ? knownCustomerFor(r, m) : null };
   });
-  res.json({ items, total: all.length, offset, limit });
+  // Teller: onvolledige opdracht-groepsberichten die nog bij "Geen aanvraag" staan (4 okt).
+  const onvolledig = db().reviews.filter((r) => r.status === 'overige' && r.onvolledigeOpdracht).length;
+  res.json({ items, total: all.length, offset, limit, onvolledig });
 });
 
 app.post('/api/reviews/:id/approve', requirePerm('inbox'), (req, res) => {

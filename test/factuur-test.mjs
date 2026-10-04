@@ -219,7 +219,8 @@ console.log('\n== STANDAARD BETAALD (20 sep 2026) ==');
   ok('concept → betaald kan direct (zonder versturen)', ok200(weer) && weer.json.status === 'betaald');
   // Verwijderen mag zolang hij niet verstuurd is (gedraagt zich als concept).
   const kopie = (await api('POST', `/api/invoices/${nbInv.id}/copy`, {})).json;
-  ok('kopie van een factuur volgt de instelling (betaald)', kopie.status === 'betaald', kopie.status);
+  // 4 okt 2026 (keuze eigenaar): een kopie begint ALTIJD als concept (anders dubbele omzet).
+  ok('kopie van een factuur begint als concept (niet dubbel als omzet)', kopie.status === 'concept' && !kopie.paidAt, kopie.status);
   const del = await api('DELETE', `/api/invoices/${kopie.id}`);
   ok('niet-verstuurde betaalde factuur mag weg', ok200(del), JSON.stringify(del.json));
   // Offerte → factuur blijft concept (nog niet betaald).

@@ -926,6 +926,20 @@ de regressie meegroeit.
   afgewezen berichten mee. Advies (niet gebouwd, keuze eigenaar): alleen verstuurde
   facturen tellen, "excl. btw" op de tegel, één definitie, offerte-conversie meten,
   DRS apart in conversie, weekrapport-"conversie" hernoemen. Test: conversie-test 42.
+- **Adviezen 1-3 gebouwd (4 okt 2026, keuze eigenaar):** (1) een KOPIE van een factuur
+  begint altijd als CONCEPT (copyInvoice → startStatus alsConcept:true) — als betaald telde
+  een correctie-kopie dubbel als omzet; bij versturen kies je via de betaald-vraag.
+  (2) ÉÉN OFFERTE-OPVOLGSYSTEEM: followup.js slaat een opdracht MET CRM-offerte over als
+  invoiceSettings.autoQuoteFollowup aan staat (`offerteOpvolgingDoetHet`; die stuurt de
+  PDF mee), en offerteOpvolgingBlokkade stopt als order.followUpAt ná de offerte ligt.
+  Uitleg bij beide vinkjes in Instellingen. (3) ONVOLLEDIGE DRS-OPDRACHT: groepsbericht uit
+  een opdracht-groep dat niet compleet is maar wél telefoon/postcode/straat+nummer of
+  "Naam:/Adres:"-regels heeft → blijft Overige (geen kaart), krijgt
+  `review.onvolledigeOpdracht`, push "Onvolledig DRS-bericht", chip "Onvolledige opdracht?
+  Controleer", teller in de inbox-keuzelijst en een balk bovenaan Te controleren
+  (#inboxOnvolledig, knop Bekijken → filter Overige); GET /api/reviews geeft `onvolledig`.
+  Vaag gesprek zonder klantgegevens wordt niet gemarkeerd. Tests: scenarios 122, mail 78,
+  factuur 65. Facturen gaan nooit tegelijk per e-mail én WhatsApp (gebruiker kiest één knop).
 - **AUDIT 3 okt 2026 (7 vinders + 2 controleurs per bevinding, 95 agents; resultaat in
   scratchpad/audit2.json):** 20 bevestigd, gefixt: (1) BETAALTERMIJN: `inv.betaalStart`
   (betaalTermijnStart() in invoices.js) — gaat een al verstuurde factuur van betaald naar

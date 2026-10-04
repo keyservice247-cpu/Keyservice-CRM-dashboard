@@ -260,6 +260,12 @@ export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
   // Er is al een factuur van deze offerte gemaakt ("→ Maak factuur") — de klant is dus al
   // akkoord, ook al staat de offerte zelf nog op verzonden (audit 3 okt 2026).
   if (inv.convertedInvoiceId && (db().invoices || []).some((i) => i.id === inv.convertedInvoiceId)) return 'er is al een factuur van deze offerte gemaakt';
+  // ÉÉN OPVOLGSYSTEEM PER OFFERTE (4 okt 2026, keuze eigenaar): heeft de kanban-follow-up
+  // (followup.js) deze klant na de offerte al benaderd, dan niet nóg een herinnering.
+  {
+    const ord0 = inv.orderId ? (db().orders || []).find((o) => o.id === inv.orderId) : null;
+    if (ord0 && ord0.followUpAt && new Date(ord0.followUpAt).getTime() > new Date(inv.sentAt || 0).getTime()) return 'de klant kreeg al een follow-up op deze opdracht';
+  }
   if (!inv.orderId) return ''; // losse offerte zonder opdracht: niets om tegen te checken
   const order = (db().orders || []).find((o) => o.id === inv.orderId);
   if (!order) {
@@ -388,7 +394,10 @@ export function copyInvoice(src, { actorName = '', createdById = '', copyType } 
   // Offerte → factuur = nog te betalen: altijd concept. Kopie van een factuur volgt de instelling.
   const inv = {
     id: id('inv'), number: nextInvoiceNumber(t), type: t, orderId: src.orderId || null, customerId: src.customerId,
-    ...startStatus(t, { alsConcept: src.type === 'offerte' }), lines: (src.lines || []).map((l) => ({ ...l })), btwPct: src.btwPct,
+    // Een KOPIE begint altijd als concept (4 okt 2026, keuze eigenaar): een kopie is meestal
+    // een correctie of herhaling — als betaald telde hij meteen dubbel als omzet. Bij het
+    // versturen kies je via de betaald-vraag alsnog "is betaald".
+    ...startStatus(t, { alsConcept: true }), lines: (src.lines || []).map((l) => ({ ...l })), btwPct: src.btwPct,
     discount: src.discount ? { ...src.discount } : undefined,
     note: src.note || '', ...computeTotals(src.lines || [], src.btwPct, src.discount),
     createdAt: now(), createdBy: actorName, createdById, copiedFrom: src.number,

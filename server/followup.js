@@ -3,6 +3,7 @@
 // WhatsApp (WhatsApp loopt via de outbox -> bridge stuurt naar het klant-nummer).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { getFollowUp, getEmailSignature } from './settings.js';
+import { getInvoiceSettings } from './invoices.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 
 export function startFollowUps() {
@@ -35,8 +36,13 @@ export async function runFollowUps() {
     const afspraakStaat = !!(o.appointmentAt && new Date(o.appointmentAt).getTime() > Date.now());
     const offertes = (db().invoices || []).filter((i) => i.type === 'offerte' && i.orderId === o.id);
     const offerteBeslist = offertes.length > 0 && !offertes.some((i) => i.status === 'verzonden' && !i.convertedInvoiceId);
+    // ÉÉN OPVOLGSYSTEEM (4 okt 2026, keuze eigenaar): heeft de opdracht een offerte uit het
+    // CRM én staat "offerte automatisch opvolgen" (met de PDF) aan, dan doet DIE het —
+    // deze algemene follow-up slaat de opdracht over. Zo krijgt een klant nooit twee
+    // herinneringen. Zonder CRM-offerte (bv. prijs telefonisch) blijft deze het doen.
+    const offerteOpvolgingDoetHet = offertes.length > 0 && getInvoiceSettings().autoQuoteFollowup;
     const offerteCase = offerteOn && o.status === 'offerte_verzonden' && !o.customerReplied
-      && !klantReageerde && !afspraakStaat && !offerteBeslist
+      && !klantReageerde && !afspraakStaat && !offerteBeslist && !offerteOpvolgingDoetHet
       && offerteSinds <= offerteCutoff;
 
     // B) We hebben gemaild maar geen reactie gekregen (geen offerte-geval).

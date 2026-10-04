@@ -246,6 +246,22 @@ console.log('\n== Offerte-opvolging stopt bij geannuleerde opdracht (26 sep 2026
   const naar = (d.outbox || []).filter((x) => x.by === 'offerte-opvolging').map((x) => x.orderId).sort();
   ok('automatische ronde: ALLEEN de lopende offerte krijgt een opvolging', naar.join() === 'ord-q1', naar.join());
   ok('geannuleerde klant: géén opvolging, teller onaangeroerd', !b.inv.quoteFollowupAt && !b.inv.quoteFollowupCount);
+  // ÉÉN OPVOLGSYSTEEM PER OFFERTE (4 okt 2026): kanban-follow-up en offerte-opvolging
+  // benaderen dezelfde klant nooit allebei.
+  {
+    const h = maak(7, 'offerte_verzonden', { followUpAt: dagenGeleden(1) });
+    ok('offerte-opvolging stopt als de kanban-follow-up al is gestuurd', /follow-up/.test(offerteOpvolgingBlokkade(h.inv)), offerteOpvolgingBlokkade(h.inv));
+    const { runFollowUps } = await import('../server/followup.js');
+    d.settings.followUp = { ...(d.settings.followUp || {}), whatsappEnabled: true, emailEnabled: false, days: 3, whatsappBody: 'Heeft u onze offerte al bekeken?' };
+    d.customers.push(klant(8));
+    d.orders.push({ id: 'ord-q8', title: 'Rhenen — prijs telefonisch', status: 'offerte_verzonden', customerId: 'cust-q8', createdAt: dagenGeleden(10), updatedAt: dagenGeleden(10), quoteSentAt: dagenGeleden(6), thread: [] });
+    const voor = (d.outbox || []).length;
+    await runFollowUps();
+    const fu = (d.outbox || []).slice(0, (d.outbox || []).length - voor).filter((x) => x.by === 'follow-up').map((x) => x.orderId);
+    ok('kanban-follow-up slaat opdrachten MET CRM-offerte over (offerte-opvolging staat aan)', !fu.includes('ord-q1'), fu.join());
+    ok('…maar volgt een opdracht ZONDER CRM-offerte wel op', fu.includes('ord-q8'), fu.join());
+    d.settings.followUp = { ...d.settings.followUp, whatsappEnabled: false };
+  }
   // Handmatige knop: de mens beslist — mag óók bij een geannuleerde opdracht.
   const hB = await sendQuoteFollowup(b.inv, { by: 'test', handmatig: true });
   ok('handmatige knop bij geannuleerde opdracht → mag wél (mens beslist)', hB.ok === true, JSON.stringify(hB));

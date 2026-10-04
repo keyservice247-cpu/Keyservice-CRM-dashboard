@@ -565,6 +565,8 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 .mini-dialog label { display: block; margin-top: 10px; }
 .mini-dialog .md-fout { color: var(--danger); margin-top: 6px; }
 .bk-dialog { width: 480px; }
+.inbox-onvolledig { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; background: rgba(192,138,62,.14); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
+.chip-onvolledig { background: #fef3c7; color: #92400e; border-color: #f59e0b; }
 .bk-keuzes { display: grid; gap: 10px; margin: 12px 0 4px; }
 .bk-keuze { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 12px 14px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; min-height: 44px; }
 .bk-keuze strong { font-size: 15px; }
