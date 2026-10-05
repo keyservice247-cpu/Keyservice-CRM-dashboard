@@ -372,6 +372,33 @@ export function getAppointmentMsg() {
   };
 }
 
+// TRUSTPILOT (5 okt 2026, wens eigenaar): Trustpilot nodigt een klant uit voor een review
+// zodra hun unieke "invite"-adres in BCC staat van een mail die wij aan die klant sturen.
+// Het CRM zet dat adres ALLEEN in BCC als de gebruiker dat per klant kiest (vinkje bij de
+// factuurmail, of de knop Trustpilot op een afgeronde opdracht). Nooit automatisch.
+export const DEFAULT_TRUSTPILOT = {
+  bcc: '',
+  standaardAan: false,
+  subject: 'Bedankt voor uw vertrouwen — Key Service 24/7',
+  body: `Beste {naam},
+
+Bedankt dat u voor ons heeft gekozen. We hopen dat alles naar wens is opgelost.
+
+U ontvangt binnenkort een e-mail van Trustpilot met de vraag om uw ervaring te delen. Daar helpt u ons enorm mee — alvast hartelijk dank!`,
+};
+export const TRUSTPILOT_BCC_RE = /^[^@\s]+@invite\.trustpilot\.com$/i;
+export function getTrustpilot() {
+  const t = db().settings.trustpilot || {};
+  const bcc = TRUSTPILOT_BCC_RE.test(String(t.bcc || '').trim()) ? String(t.bcc).trim() : '';
+  return {
+    bcc,
+    aan: !!bcc,
+    standaardAan: !!t.standaardAan,
+    subject: t.subject || DEFAULT_TRUSTPILOT.subject,
+    body: t.body || DEFAULT_TRUSTPILOT.body,
+  };
+}
+
 // Review-verzoek: X uur na "Afgerond" automatisch een mailtje met de review-link.
 export const DEFAULT_REVIEW_REQUEST = {
   enabled: false,

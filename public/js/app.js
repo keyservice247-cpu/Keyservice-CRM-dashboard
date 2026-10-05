@@ -179,7 +179,12 @@ function vraagTekst({ titel = 'Invoer', uitleg = '', label = '', waarde = '', pl
 // (e-mail, WhatsApp, opnieuw versturen) eerst: "Kan deze factuur als betaald worden
 // verstuurd?". Geeft true (betaald), false (nog niet betaald) of null (geannuleerd).
 // De server past de keuze toe vóór PDF en tekst worden gemaakt.
-function vraagBetaaldBijVersturen({ nummer = '', bedrag = null, doel = '', kanaal = 'e-mail', huidig = '', alVerstuurd = false } = {}) {
+// Trustpilot (5 okt 2026): bij een factuur PER E-MAIL staat er een vinkje "Trustpilot-
+// uitnodiging meesturen" (alleen als het adres is ingesteld). De keuze komt in `uit.trustpilot`.
+function vraagBetaaldBijVersturen({ nummer = '', bedrag = null, doel = '', kanaal = 'e-mail', huidig = '', alVerstuurd = false, trustpilotAl = '', uit = {} } = {}) {
+  const tp = (state.meta && state.meta.trustpilot) || {};
+  const tpTonen = kanaal === 'e-mail' && tp.aan;
+  const tpAan = tpTonen && tp.standaardAan && !trustpilotAl;
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'mini-dialog-root';
@@ -193,10 +198,11 @@ function vraagBetaaldBijVersturen({ nummer = '', bedrag = null, doel = '', kanaa
         <button type="button" class="bk-keuze bk-ja${huidig === 'betaald' ? ' bk-huidig' : ''}" id="bk-ja"><strong>✓ Ja, is betaald</strong><span>De klant krijgt hem als voldaan ("Betaald op …", geen betaalverzoek). Telt mee als omzet.</span></button>
         <button type="button" class="bk-keuze bk-nee${huidig && huidig !== 'betaald' ? ' bk-huidig' : ''}" id="bk-nee"><strong>Nee, nog niet betaald</strong><span>De klant krijgt een betaalverzoek met vervaldatum. Staat open bij Facturen; je kunt later een herinnering sturen of op ✓ Betaald klikken.</span></button>
       </div>
+      ${tpTonen ? `<label class="bk-tp"><input type="checkbox" id="bk-tp" ${tpAan ? 'checked' : ''}> <span><strong>Trustpilot-uitnodiging meesturen</strong> — de klant krijgt daarna van Trustpilot een verzoek om een review.${trustpilotAl ? ` <em>Al uitgenodigd op ${esc(fmtDateShort(trustpilotAl))}.</em>` : ''}</span></label>` : ''}
       <div class="modal-actions"><span></span><div class="right"><button type="button" class="btn" id="bk-cancel">Annuleren</button></div></div>
     </div>`;
     document.body.appendChild(wrap);
-    const sluit = (v) => { wrap.remove(); document.removeEventListener('keydown', toets, true); resolve(v); };
+    const sluit = (v) => { uit.trustpilot = v !== null && !!(wrap.querySelector('#bk-tp') || {}).checked; wrap.remove(); document.removeEventListener('keydown', toets, true); resolve(v); };
     const toets = (e) => { if (e.key === 'Escape') { e.stopPropagation(); sluit(null); } };
     document.addEventListener('keydown', toets, true);
     wrap.querySelector('#bk-ja').onclick = () => sluit(true);
@@ -2569,7 +2575,7 @@ function openOrderModal(id, pool) {
         </div>
       </div>` : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && (o.intake?.address || o.customer?.address) ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}" title="Navigeer naar het adres van déze aanvraag">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o ? `<button class="btn" id="f-onweg" title="Stuur de klant een mail + appje dat de monteur nu onderweg is">${icon('pin', 14)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
+      <div class="right"> ${o && (o.intake?.address || o.customer?.address) ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}" title="Navigeer naar het adres van déze aanvraag">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o ? `<button class="btn" id="f-onweg" title="Stuur de klant een mail + appje dat de monteur nu onderweg is">${icon('pin', 14)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite && o.status === 'afgerond' && state.meta?.trustpilot?.aan ? `<button class="btn" id="f-trustpilot" title="Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC) — jij beslist per klant">${icon('sparkles', 14)} Trustpilot${o.trustpilotAt || o.customer?.trustpilotUitgenodigdAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
         <button class="btn" id="f-cancel">Sluiten</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   // De knoppen staan op een VASTE plek onderaan de opdracht (28 sep 2026, wens eigenaar:
   // "als ik scroll gaan die knoppen allemaal mee"). Het plakkende knoppenblok van 16 sep
@@ -2720,6 +2726,20 @@ function openOrderModal(id, pool) {
   // Notitie-hint bij de statuskeuze zelf (punt 8) — niet pas bij Opslaan.
   if (o && isMonteur && $('#f-status')) $('#f-status').addEventListener('change', () => {
     if (noteRequiredKeys().includes($('#f-status').value) && !($('#f-notes').value || '').trim()) { toast('Voor deze kolom is een notitie nodig — vul hierboven kort in wat er is gedaan/afgesproken'); $('#f-notes')?.focus(); }
+  });
+  // TRUSTPILOT (5 okt 2026): per afgeronde klant zelf kiezen — bedankmailtje met de
+  // Trustpilot-uitnodiging in BCC. Al eerder gedaan → eerst vragen.
+  if (o && $('#f-trustpilot')) $('#f-trustpilot').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    const mail = o.intake?.email || o.customer?.email || '';
+    if (!mail) { toast('Deze klant heeft geen e-mailadres — Trustpilot werkt alleen via e-mail. Vul het e-mailadres in en sla eerst op.', true); return; }
+    const al = o.trustpilotAt || o.customer?.trustpilotUitgenodigdAt;
+    if (!confirm(al ? `Deze klant is al uitgenodigd voor Trustpilot (${fmtDateShort(al)}). Toch nog een keer sturen naar ${mail}?` : `Trustpilot-uitnodiging sturen naar ${mail}?\n\nDe klant krijgt een kort bedankmailtje; Trustpilot stuurt daarna zelf het reviewverzoek.`)) return;
+    try {
+      const r = await api(`/api/orders/${o.id}/trustpilot`, 'POST', { force: !!al });
+      toast(`Trustpilot-uitnodiging verstuurd naar ${r.to}`);
+      o.trustpilotAt = new Date().toISOString();
+      ev.currentTarget.innerHTML = `${icon('sparkles', 14)} Trustpilot ✓`;
+    } catch (err) { toast(err.message, true); }
   });
   if (o && $('#f-onweg')) $('#f-onweg').onclick = async () => {
     // Vooraf laten zien via welk kanaal het gaat (punt 7) — en stoppen als er niets is.
@@ -3820,12 +3840,12 @@ async function resendInvoice(invId, label, prefillEmail, after, opts = {}) {
   const addr = to.trim();
   let keuze = null;
   if (opts.factuur) {
-    keuze = await vraagBetaaldBijVersturen({ nummer: opts.nummer, bedrag: opts.bedrag, doel: addr, kanaal: 'e-mail', huidig: opts.status, alVerstuurd: true });
+    keuze = await vraagBetaaldBijVersturen({ nummer: opts.nummer, bedrag: opts.bedrag, doel: addr, kanaal: 'e-mail', huidig: opts.status, alVerstuurd: true, trustpilotAl: opts.trustpilotAl || '', uit: opts.uit = {} });
     if (keuze === null) return;
   }
   try {
-    const r = await api(`/api/invoices/${invId}/send`, 'POST', keuze === null ? { to: addr } : { to: addr, betaald: keuze });
-    toast(`Verstuurd naar ${r.invoice?.sentTo || addr}${betaaldToast(keuze)}`);
+    const r = await api(`/api/invoices/${invId}/send`, 'POST', keuze === null ? { to: addr } : { to: addr, betaald: keuze, trustpilot: !!(opts.uit && opts.uit.trustpilot) });
+    toast(`Verstuurd naar ${r.invoice?.sentTo || addr}${betaaldToast(keuze)}${r.trustpilot ? ' + Trustpilot-uitnodiging' : ''}`);
     if (after) after();
   } catch (err) { toast(err.message, true); }
 }
@@ -4033,7 +4053,7 @@ function renderInvoiceEditor(ctx) {
   };
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
-  if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); }, { factuur: !isQuote, nummer: inv.number, bedrag: inv.totalIncl, status: inv.status });
+  if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); }, { factuur: !isQuote, nummer: inv.number, bedrag: inv.totalIncl, status: inv.status, trustpilotAl: inv.trustpilotAt || customer.trustpilotUitgenodigdAt || '' });
   if ($('#inv-save')) $('#inv-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => { if (!confirmEditIfSent()) return; try {
     // Melding op het ANTWOORD van de server (28 sep 2026, audit): een nieuwe factuur
     // krijgt bij standaardBetaald meteen 'betaald', terwijl hier "Concept opgeslagen"
@@ -4043,6 +4063,7 @@ function renderInvoiceEditor(ctx) {
     done(inv.sentAt ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : st === 'betaald' ? `${woord} opgeslagen (staat op betaald)` : st === 'concept' ? 'Concept opgeslagen' : `${woord} opgeslagen`); } catch (err) { toast(err.message, true); } });
   // Totaal incl. btw zoals het NU in het scherm staat (voor de betaald-vraag).
   const totaalNu = () => { const t = $('#inv-totals strong:last-child'); const m = t && t.textContent.match(/([\d.,]+)/); return m ? Number(m[1].replace(/\./g, '').replace(',', '.')) : (inv.totalIncl ?? null); };
+  const tpKeuze = {};
   if ($('#inv-send')) $('#inv-send').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de opdracht of bij Klanten).', true); return; }
     let keuze = null;
@@ -4051,13 +4072,13 @@ function renderInvoiceEditor(ctx) {
         ? `LET OP: deze ${woord.toLowerCase()} is al eerder verstuurd. Je verstuurt nu een NIEUWE versie (eventuele wijzigingen vervangen wat de klant heeft). Doorgaan naar ${customer.email}?`
         : `${woord} nu versturen naar ${customer.email}?`)) return;
     } else {
-      keuze = await vraagBetaaldBijVersturen({ nummer: inv.number, bedrag: totaalNu(), doel: customer.email, kanaal: 'e-mail', huidig: inv.id ? inv.status : '', alVerstuurd: !!inv.sentAt });
+      keuze = await vraagBetaaldBijVersturen({ nummer: inv.number, bedrag: totaalNu(), doel: customer.email, kanaal: 'e-mail', huidig: inv.id ? inv.status : '', alVerstuurd: !!inv.sentAt, trustpilotAl: inv.trustpilotAt || customer.trustpilotUitgenodigdAt || (ctx.order && ctx.order.trustpilotAt) || '', uit: tpKeuze });
       if (keuze === null) return;
     }
     try {
       const saved = await saveConcept();
-      await api(`/api/invoices/${saved.id}/send`, 'POST', keuze === null ? {} : { betaald: keuze });
-      done(`${woord} verstuurd naar de klant${betaaldToast(keuze)}`);
+      const r = await api(`/api/invoices/${saved.id}/send`, 'POST', keuze === null ? {} : { betaald: keuze, trustpilot: !!tpKeuze.trustpilot });
+      done(`${woord} verstuurd naar de klant${betaaldToast(keuze)}${r && r.trustpilot ? ' + Trustpilot-uitnodiging' : ''}`);
     } catch (err) { toast(err.message, true); }
   });
   // Versturen via WhatsApp: de PDF gaat als bijlage mee naar het 06 van de klant.
@@ -4663,7 +4684,7 @@ function renderInvoices() {
         <button class="btn btn-sm btn-primary inv-edit" data-id="${esc(i.id)}">Openen</button>
         <a class="btn btn-sm" target="_blank" rel="noopener" href="/api/invoices/${esc(i.id)}/pdf">PDF</a>
         <button class="btn btn-sm inv-share" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + '-' + i.number + (i.customerName ? ' ' + i.customerName : ''))}">${icon('paperclip', 13)} Deel</button>
-        ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" data-factuur="${quote ? '' : '1'}" data-nummer="${esc(i.number || '')}" data-bedrag="${esc(String(i.totalIncl ?? ''))}" data-status="${esc(i.status)}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
+        ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" data-factuur="${quote ? '' : '1'}" data-nummer="${esc(i.number || '')}" data-bedrag="${esc(String(i.totalIncl ?? ''))}" data-status="${esc(i.status)}" data-tp="${esc(i.trustpilotAt || '')}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Opdracht</button>` : ''}
         ${!quote && (i.sentAt || i.status === 'betaald') ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review (mail + WhatsApp)'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
         ${!quote && (i.status === 'verzonden' || i.status === 'concept') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
@@ -4675,7 +4696,7 @@ function renderInvoices() {
   wrap.innerHTML = html;
   $$('.inv-edit').forEach((b) => b.onclick = () => openStandaloneInvoice(b.dataset.id));
   $$('.inv-share').forEach((b) => b.onclick = (e) => shareInvoicePdf(b.dataset.id, b.dataset.label, e.currentTarget));
-  $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices(), { factuur: !!b.dataset.factuur, nummer: b.dataset.nummer, bedrag: b.dataset.bedrag === '' ? null : Number(b.dataset.bedrag), status: b.dataset.status }));
+  $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices(), { factuur: !!b.dataset.factuur, nummer: b.dataset.nummer, bedrag: b.dataset.bedrag === '' ? null : Number(b.dataset.bedrag), status: b.dataset.status, trustpilotAl: b.dataset.tp || '' }));
   $$('.inv-open').forEach((b) => b.onclick = () => openOrderVers(b.dataset.oid));
   // Zelf een review vragen bij een verzonden factuur — het moment waarop de klus af is.
   $$('.inv-review').forEach((b) => b.onclick = async () => {
@@ -5481,6 +5502,15 @@ async function loadSettingsHtml(s) {
       <label>Bericht <textarea id="rr-body" rows="6">${esc(s.reviewRequest?.body || '')}</textarea></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveReview">Opslaan</button></div>
     </div>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Trustpilot-uitnodiging (jij kiest per klant)</h3>
+      <p class="muted small">Plak hier jullie unieke Trustpilot-adres (Trustpilot → Uitnodigen → <em>Automatic / BCC</em>, eindigt op <code>@invite.trustpilot.com</code>). Het CRM zet dat adres <strong>alleen</strong> in BCC als jij dat kiest: met het vinkje "Trustpilot-uitnodiging meesturen" bij het mailen van een factuur, of met de knop <strong>Trustpilot</strong> op een afgeronde opdracht. Trustpilot stuurt de klant daarna zelf het reviewverzoek. Werkt alleen voor klanten met een e-mailadres.</p>
+      <label>Trustpilot BCC-adres <input id="tp-bcc" value="${esc(s.trustpilot?.bcc || '')}" placeholder="naam+code@invite.trustpilot.com" autocomplete="off"></label>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="tp-standaard" style="width:auto" ${s.trustpilot?.standaardAan ? 'checked' : ''}> Vinkje bij de factuurmail standaard aan (klanten die al zijn uitgenodigd nooit)</label>
+      <label>Onderwerp bedankmailtje (knop op de opdracht) <input id="tp-subject" value="${esc(s.trustpilot?.subject || '')}"></label>
+      <label>Tekst bedankmailtje <textarea id="tp-body" rows="5">${esc(s.trustpilot?.body || '')}</textarea></label>
+      <div class="muted small">Gebruik <code>{naam}</code> voor de naam van de klant. Je handtekening komt er automatisch onder.</div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveTrustpilot">Opslaan</button></div>
+    </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>Bedrijfsprofiel — wat de AI over jullie moet weten</h3> <p class="muted small">Beschrijf hoe Keyservice werkt: diensten, prijzen, aanpak, toon. De AI krijgt dit bij ELKE aanvraag en elk concept-antwoord mee, zodat het past bij jullie werkwijze.</p> <textarea id="companyProfile" rows="8" style="margin-top:6px">${esc(s.companyProfile || '')}</textarea> <div style="margin-top:12px"><button class="btn btn-primary" id="saveProfile">Bedrijfsprofiel opslaan</button></div> </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>Verkeer analyseren</h3> <p class="muted small">Laat de AI het binnengekomen WhatsApp/e-mail-verkeer bestuderen: veelgevraagde diensten, terugkerende patronen en verbeterpunten. (Kost een paar cent per analyse.)</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="analyzeDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runAnalyze" style="align-self:flex-end">Analyse starten</button> </div> <div id="analyzeResult" style="margin-top:14px"></div> </div>
     <div data-sg="ai" class="info-card" style="margin-bottom:18px"> <h3>AI laten leren filteren</h3> <p class="muted small">Laat de AI uit het echte verkeer afleiden wat wél en niet een opdracht is, en voeg die filterregels toe aan het bedrijfsprofiel. Daarna filtert de inbox scherper.</p> <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"> <label style="margin:0">Periode <select id="learnDays" style="margin-top:3px"><option value="7">laatste 7 dagen</option><option value="30" selected>laatste 30 dagen</option><option value="90">laatste 90 dagen</option></select></label> <button class="btn btn-primary" id="runLearn" style="align-self:flex-end">Filterregels leren &amp; toevoegen</button> </div> <div id="learnResult" style="margin-top:14px"></div> </div>
@@ -5717,6 +5747,11 @@ async function loadSettingsHtml(s) {
     const onderwegMsg = { emailSubject: $('#ow-subject').value, emailBody: $('#ow-body').value, whatsappBody: $('#ow-wabody').value };
     try { await api('/api/settings', 'PATCH', { onderwegMsg }); toast('Onderweg-bericht opgeslagen'); }
     catch (err) { toast(err.message, true); }
+  };
+  if ($('#saveTrustpilot')) $('#saveTrustpilot').onclick = async () => {
+    const trustpilot = { bcc: $('#tp-bcc').value.trim(), standaardAan: $('#tp-standaard').checked, subject: $('#tp-subject').value, body: $('#tp-body').value };
+    if (trustpilot.bcc && !/^[^@\s]+@invite\.trustpilot\.com$/i.test(trustpilot.bcc)) return toast('Dit is geen Trustpilot-adres — het moet eindigen op @invite.trustpilot.com', true);
+    try { await api('/api/settings', 'PATCH', { trustpilot }); toast(trustpilot.bcc ? 'Trustpilot opgeslagen' : 'Trustpilot uitgezet (geen adres)'); if (typeof refreshMeta === 'function') refreshMeta(); } catch (err) { toast(err.message, true); }
   };
   $('#saveReview').onclick = async () => {
     const reviewRequest = { enabled: $('#rr-enabled').checked, link: $('#rr-link').value.trim(), delayHours: Number($('#rr-hours').value) || 24, subject: $('#rr-subject').value, body: $('#rr-body').value };

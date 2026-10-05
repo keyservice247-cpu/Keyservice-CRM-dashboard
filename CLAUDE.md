@@ -926,6 +926,22 @@ de regressie meegroeit.
   afgewezen berichten mee. Advies (niet gebouwd, keuze eigenaar): alleen verstuurde
   facturen tellen, "excl. btw" op de tegel, één definitie, offerte-conversie meten,
   DRS apart in conversie, weekrapport-"conversie" hernoemen. Test: conversie-test 42.
+- **Trustpilot-uitnodiging, per klant zelf kiezen (5 okt 2026, wens eigenaar):** Trustpilot
+  nodigt een klant uit als hun unieke adres (…@invite.trustpilot.com) in BCC staat van een
+  mail aan die klant. settings.trustpilot {bcc, standaardAan, subject, body} (getTrustpilot/
+  TRUSTPILOT_BCC_RE in settings.js; PATCH weigert een adres dat niet op
+  @invite.trustpilot.com eindigt; Instellingen → Automatische berichten → kaart
+  "Trustpilot-uitnodiging"). /api/me meta.trustpilot = {aan, standaardAan} (NOOIT het adres).
+  NOOIT automatisch, alleen op keuze: (1) vinkje "Trustpilot-uitnodiging meesturen" in het
+  betaald-venster bij een factuur PER E-MAIL (vraagBetaaldBijVersturen → uit.trustpilot →
+  POST /api/invoices/:id/send {trustpilot:true}; offertes en WhatsApp nooit; standaard uit,
+  "al uitgenodigd op …" zichtbaar); (2) knop "Trustpilot" op een AFGERONDE opdracht
+  (kantoor) → POST /api/orders/:id/trustpilot = kort bedankmailtje ({naam}) aan intake-/
+  klant-e-mail met BCC; al uitgenodigd → 409 tenzij force (scherm vraagt eerst); geen
+  e-mail → 400 met uitleg. sendMail kreeg een `bcc`-parameter (alleen als meegegeven).
+  markeerTrustpilot: customer.trustpilotUitgenodigdAt, order/inv.trustpilotAt, kaart-
+  historie "Trustpilot-uitnodiging meegestuurd (BCC)" + logboek. Tests: betaald-keuze-test
+  42 (nep-SMTP controleert de BCC in de envelop) + browser 251.
 - **Zoeken in de ingeklapte agenda's (5 okt 2026, wens eigenaar):** de zoekbalk en het
   bron/monteur-filter op het bord keken alleen naar open kaarten. GET /api/archives/zoek
   ?q=(min 2)&mont=(src:drs|src:eigen|id)&kanaal= doorzoekt alle ingeklapte weken (zelfde

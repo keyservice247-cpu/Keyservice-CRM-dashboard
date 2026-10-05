@@ -151,7 +151,7 @@ export function emailAdresProbleem(to) {
   return '';
 }
 
-export async function sendMail({ to, subject, text, attachments, inReplyTo, references, afzender = null, automatisch = false }) {
+export async function sendMail({ to, subject, text, attachments, inReplyTo, references, afzender = null, automatisch = false, bcc = '' }) {
   const tx = await getTransporter();
   if (!tx) throw new Error('SMTP niet geconfigureerd op de server');
   if (!to) throw new Error('Geen ontvanger (e-mailadres) opgegeven');
@@ -168,6 +168,8 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
     || { name: process.env.SMTP_FROM_NAME || 'Key Service 24/7 contact', address: process.env.SMTP_USER };
   try {
     const mail = { from, to, subject: subject || 'Keyservice', text: text || '' };
+    // BCC alleen als expliciet meegegeven (Trustpilot-uitnodiging, 5 okt 2026).
+    if (bcc) mail.bcc = bcc;
     if (attachments && attachments.length) mail.attachments = attachments;
     // Nette HTML-versie met de huisstijl-handtekening (tekst blijft als fallback).
     const html = wrapHtmlMail(text || '', afzender);

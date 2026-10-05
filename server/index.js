@@ -81,7 +81,7 @@ import {
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, afzenderProfiel, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
-  getTerugkoppeling, getAppointmentMsg, getReviewRequest, getCrmAlerts, getPriceList,
+  getTerugkoppeling, getAppointmentMsg, getReviewRequest, getTrustpilot, TRUSTPILOT_BCC_RE, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
   getHtmlSignature, getWeeklyAiCheck, syncBundlesToPriceList, getGoogleSync,
@@ -222,6 +222,8 @@ app.get('/api/me', (req, res) => {
       autoApproveThreshold: autoApproveThreshold(),
       // Persoonlijk: de assistente ziet in "Beantwoorden" haar eigen handtekening.
       emailSignature: getEmailSignature(afzenderVan(req)),
+      // Trustpilot (5 okt): alleen of het aan staat + standaard-vinkje, nooit het adres zelf.
+      trustpilot: { aan: getTrustpilot().aan, standaardAan: getTrustpilot().standaardAan },
     },
   });
 });
@@ -3341,6 +3343,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     appointmentMsg: getAppointmentMsg(),
     onderwegMsg: getOnderweg(),
     reviewRequest: getReviewRequest(),
+    trustpilot: getTrustpilot(),
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     crmAlerts: getCrmAlerts(),
     morningBriefing: getMorningBriefing(),
@@ -3615,6 +3618,17 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     db().settings.weeklyAiCheck = {
       enabled: !!w.enabled,
       hour: Math.max(0, Math.min(23, Number(w.hour) >= 0 ? Number(w.hour) : 8)),
+    };
+  }
+  if ('trustpilot' in b) {
+    const t = b.trustpilot || {};
+    const bcc = String(t.bcc || '').trim();
+    if (bcc && !TRUSTPILOT_BCC_RE.test(bcc)) return res.status(400).json({ error: 'Dit is geen Trustpilot-uitnodigingsadres. Het moet eindigen op @invite.trustpilot.com (kopieer het uit Trustpilot → Uitnodigen → Automatisch / BCC).' });
+    db().settings.trustpilot = {
+      bcc,
+      standaardAan: !!t.standaardAan,
+      subject: String(t.subject || '').slice(0, 200),
+      body: String(t.body || '').slice(0, 2000),
     };
   }
   if ('reviewRequest' in b) {
@@ -4608,6 +4622,35 @@ function canTouchOrder(req, order) {
   return !!(order.monteurId && order.monteurId === req.user.monteurId);
 }
 
+// TRUSTPILOT-UITNODIGING VANAF EEN OPDRACHT (5 okt 2026, wens eigenaar "zelf bepalen
+// zodra ik een klant heb afgerond"): een kort bedankmailtje aan de klant met het Trustpilot-
+// adres in BCC — Trustpilot stuurt de klant daarna zelf de uitnodiging. Alleen kantoor,
+// alleen als het adres is ingesteld, nooit automatisch; al uitgenodigd → 409 tenzij force.
+app.post('/api/orders/:id/trustpilot', requireRole('admin', 'assistent'), async (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  const tp = getTrustpilot();
+  if (!tp.aan) return res.status(400).json({ error: 'Er staat nog geen Trustpilot-adres ingesteld (Instellingen → Automatische berichten → Trustpilot).' });
+  if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
+  const customer = db().customers.find((c) => c.id === order.customerId) || {};
+  const to = String(req.body?.to || (order.intake && order.intake.email) || customer.email || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Deze klant heeft geen e-mailadres. Trustpilot werkt alleen via e-mail — vul het e-mailadres in op de opdracht.' });
+  const eerder = order.trustpilotAt || customer.trustpilotUitgenodigdAt;
+  if (eerder && !req.body?.force) return res.status(409).json({ error: `Deze klant is al uitgenodigd voor Trustpilot op ${new Date(eerder).toLocaleDateString('nl-NL')}.`, al: eerder });
+  const naam = (order.intake && order.intake.name) || customer.name || '';
+  const body = String(tp.body || '').replace(/\{naam\}/g, naam && !/onbekende klant/i.test(naam) ? naam : 'klant');
+  const sig = getEmailSignature(afzenderVan(req));
+  try {
+    await sendMail({ afzender: afzenderVan(req), to, subject: tp.subject, text: sig ? `${body}\n\n${sig}` : body, bcc: tp.bcc });
+  } catch (e) { return res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
+  order.thread = order.thread || [];
+  order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (Trustpilot)`, subject: tp.subject, body, at: now() });
+  markeerTrustpilot({ customer, order, door: req.user.name, to });
+  order.updatedAt = now();
+  saveSoon();
+  res.json({ ok: true, to });
+});
+
 // "Monteur onderweg": één knop op de kaart -> klant krijgt een mail én een appje
 // dat de monteur er nu aankomt. Mag ook door de monteur zelf (eigen opdrachten).
 app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {
@@ -5038,6 +5081,19 @@ ${rest.map((a) => `<a class="bestand" href="${src(a)}">${htmlTekst(a.filename ||
 // krijgt wat er gekozen is ("voldaan" óf betaalverzoek met vervaldatum). Lukt het
 // versturen niet, dan zet herstelBetaaldKeuze alles terug. Zonder `betaald` (oude
 // schermen, offertes) verandert er niets aan het oude gedrag.
+// TRUSTPILOT-UITNODIGING (5 okt 2026): vastleggen dát een klant via de BCC is uitgenodigd
+// (klantrecord + kaart-historie + logboek), zodat niemand hem per ongeluk twee keer vraagt.
+function markeerTrustpilot({ customer, order, inv, door, to }) {
+  const t = now();
+  if (customer && customer.id) customer.trustpilotUitgenodigdAt = t;
+  if (inv) inv.trustpilotAt = t;
+  if (order) {
+    order.trustpilotAt = t;
+    order.thread = order.thread || [];
+    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: true, sender: 'Systeem (Trustpilot)', body: `Trustpilot-uitnodiging meegestuurd (BCC) met de mail aan ${to}. Trustpilot stuurt de klant zelf het reviewverzoek.`, at: t });
+  }
+  logActivity(door, 'Trustpilot-uitnodiging meegestuurd', `${(customer && customer.name) || ''} → ${to}`.trim());
+}
 function leesBetaaldKeuze(v) {
   if (v === true || v === 'true' || v === 'ja' || v === 1) return true;
   if (v === false || v === 'false' || v === 'nee' || v === 0) return false;
@@ -5167,6 +5223,10 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
   const cfg = getInvoiceSettings();
   const isQuote = inv.type === 'offerte';
   const keuze = leesBetaaldKeuze(req.body?.betaald);
+  // Trustpilot alleen bij een FACTUUR, alleen op uitdrukkelijk verzoek, alleen als het
+  // uitnodigingsadres is ingesteld.
+  const tp = getTrustpilot();
+  const metTrustpilot = !isQuote && req.body?.trustpilot === true && tp.aan;
   const vorigBetaald = pasBetaaldKeuzeToe(inv, keuze);
   try {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
@@ -5182,7 +5242,9 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
       to, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number} — ${cfg.companyName}`,
       text: sig ? `${body}\n\n${sig}` : body,
       attachments: [{ filename: `${isQuote ? 'offerte' : 'factuur'}-${inv.number}.pdf`, content: pdf }],
+      bcc: metTrustpilot ? tp.bcc : '',
     });
+    if (metTrustpilot) markeerTrustpilot({ customer, order, inv, door: req.user.name, to });
     // Opnieuw versturen mag altijd (bv. verkeerd adres, klant wil kopie), maar
     // verlaag de status NOOIT: een betaalde factuur of goedgekeurde offerte blijft
     // dat. Alleen een concept promoveert naar 'verzonden'.
@@ -5210,7 +5272,7 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
     rondBetaaldKeuzeAf(inv, vorigBetaald, keuze, req.user.name);
     saveSoon();
     logActivity(req.user.name, `${inv.type} verstuurd`, `${inv.number} → ${to}`);
-    res.json({ ok: true, invoice: inv });
+    res.json({ ok: true, invoice: inv, trustpilot: metTrustpilot });
   } catch (e) { herstelBetaaldKeuze(inv, vorigBetaald); res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
 

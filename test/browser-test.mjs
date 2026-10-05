@@ -1324,6 +1324,39 @@ ok('zoekveld leeg → gewone ingeklapte weken weer terug', await page.evaluate((
 noErr('Zoeken in ingeklapte agenda\'s');
 await page.evaluate(async (key) => { await fetch('/api/archives/uncollapse', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }) }); }, archKey);
 
+// TRUSTPILOT (5 okt 2026): instelling, vinkje in het verstuur-venster, knop op een
+// afgeronde opdracht — alleen als het adres is ingesteld.
+clear();
+const tpSetup = await page.evaluate(async () => {
+  const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  await fetch('/api/settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ trustpilot: { bcc: 'test+abc@invite.trustpilot.com', standaardAan: false } }) });
+  await refreshMeta();
+  const c = await post('/api/customers', { name: 'Trust Klant', email: 'trust@example.nl', phone: '0611777888' });
+  const o = await post('/api/orders', { customerId: c.id, title: 'Rhenen — trustpilot browser', status: 'afgerond' });
+  const i = await post('/api/invoices', { customerId: c.id, orderId: o.id, type: 'factuur' });
+  const inv = i.invoice || i;
+  await fetch('/api/invoices/' + inv.id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ lines: [{ description: 'Slot', qty: 1, priceExcl: 100 }], btwPct: 21 }) });
+  return { orderId: o.id, invId: inv.id, aan: !!(state.meta.trustpilot && state.meta.trustpilot.aan) };
+});
+ok('Trustpilot-instelling bekend in het scherm (meta)', tpSetup.aan, JSON.stringify(tpSetup));
+await page.evaluate((id) => openOrderVers(id), tpSetup.orderId);
+await page.waitForSelector('#f-trustpilot', { timeout: 6000 }).catch(() => {});
+ok('afgeronde opdracht heeft een knop "Trustpilot"', await page.locator('#f-trustpilot').count() === 1);
+await page.evaluate(() => closeModal());
+await page.evaluate((id) => window.openStandaloneInvoice(id), tpSetup.invId);
+await page.waitForSelector('#inv-send', { timeout: 6000 }).catch(() => {});
+await page.click('#inv-send');
+await page.waitForSelector('#bk-ja', { timeout: 4000 }).catch(() => {});
+const tpVinkje = await page.evaluate(() => ({ er: !!document.querySelector('#bk-tp'), uit: document.querySelector('#bk-tp') && !document.querySelector('#bk-tp').checked }));
+ok('factuur per e-mail: vinkje "Trustpilot-uitnodiging meesturen" staat er (standaard uit)', tpVinkje.er && tpVinkje.uit, JSON.stringify(tpVinkje));
+await page.click('#bk-cancel');
+await page.click('#inv-send-wa');
+await page.waitForSelector('#bk-ja', { timeout: 4000 }).catch(() => {});
+ok('via WhatsApp: géén Trustpilot-vinkje (werkt alleen per e-mail)', await page.evaluate(() => !document.querySelector('#bk-tp')));
+await page.click('#bk-cancel');
+await page.evaluate(() => closeModal());
+noErr('Trustpilot');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

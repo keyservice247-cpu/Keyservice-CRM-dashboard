@@ -21,10 +21,10 @@ function ok(name, cond, extra = '') { if (cond) { passed++; console.log(`  ✓ $
 const slaap = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- Nep-SMTP: accepteert alles, bewaart de berichten; kan ook weigeren ----------
-const mails = [];
+const mails = []; const enveloppen = [];
 let weigerOntvanger = false;
 const smtp = createServer((sock) => {
-  let data = false; let buf = ''; let huidig = '';
+  let data = false; let buf = ''; let huidig = ''; let rcpt = [];
   sock.write('220 nep-smtp klaar\r\n');
   sock.on('data', (chunk) => {
     buf += chunk.toString('utf8');
@@ -32,7 +32,7 @@ const smtp = createServer((sock) => {
     while ((i = buf.indexOf('\r\n')) >= 0) {
       const regel = buf.slice(0, i); buf = buf.slice(i + 2);
       if (data) {
-        if (regel === '.') { data = false; mails.push(huidig); huidig = ''; sock.write('250 OK opgeslagen\r\n'); }
+        if (regel === '.') { data = false; mails.push(huidig); enveloppen.push(rcpt); rcpt = []; huidig = ''; sock.write('250 OK opgeslagen\r\n'); }
         else huidig += regel.replace(/^\.\./, '.') + '\n';
         continue;
       }
@@ -46,7 +46,7 @@ const smtp = createServer((sock) => {
       } else if (sock._login === 1) { sock._login = 2; sock.write('334 UGFzc3dvcmQ6\r\n'); }
       else if (sock._login === 2) { sock._login = 0; sock.write('235 OK\r\n'); }
       else if (cmd === 'MAIL') sock.write('250 OK\r\n');
-      else if (cmd === 'RCPT') sock.write(weigerOntvanger ? '550 5.1.1 recipient rejected\r\n' : '250 OK\r\n');
+      else if (cmd === 'RCPT') { rcpt.push(regel.replace(/^RCPT TO:\s*<?([^>]*)>?.*$/i, '$1').toLowerCase()); sock.write(weigerOntvanger ? '550 5.1.1 recipient rejected\r\n' : '250 OK\r\n'); }
       else if (cmd === 'DATA') { data = true; sock.write('354 ga je gang\r\n'); }
       else if (cmd === 'QUIT') { sock.write('221 doei\r\n'); sock.end(); }
       else if (cmd === 'RSET' || cmd === 'NOOP') sock.write('250 OK\r\n');
@@ -219,6 +219,46 @@ try {
   const bevestiging = mails.slice(voorMails).map(decodeer).find((m) => /lisa\.lead@example\.nl/i.test(m));
   ok('lead automatisch goedgekeurd', lead.status === 'auto_approved', JSON.stringify(lead));
   ok('en de klant krijgt de ontvangstbevestiging (niet onterecht "al in behandeling")', !!bevestiging, `mails erbij: ${mails.length - voorMails}`);
+
+  console.log('\n== 11. Trustpilot-uitnodiging: alleen als jij het kiest (5 okt 2026) ==');
+  const TP = 'schuifpuiservice.com+test123@invite.trustpilot.com';
+  const fout = await api('PATCH', '/api/settings', { trustpilot: { bcc: 'iemand@gmail.com' } });
+  ok('geen Trustpilot-adres → geweigerd met uitleg', fout.status === 400 && /invite\.trustpilot\.com/.test(fout.json?.error || ''), JSON.stringify(fout.json));
+  await api('PATCH', '/api/settings', { trustpilot: { bcc: TP, standaardAan: false } });
+  const meTp = (await api('GET', '/api/me')).json.meta.trustpilot;
+  ok('scherm weet dat Trustpilot aan staat (zonder het adres te tonen)', meTp && meTp.aan === true && !JSON.stringify(meTp).includes('invite'), JSON.stringify(meTp));
+  const fT1 = await maakFactuur(150);
+  let n = enveloppen.length;
+  await api('POST', `/api/invoices/${fT1.id}/send`, { betaald: true });
+  ok('factuurmail ZONDER vinkje → geen Trustpilot in BCC', enveloppen.length === n + 1 && !enveloppen[n].includes(TP.toLowerCase()), JSON.stringify(enveloppen[n]));
+  const fT2 = await maakFactuur(160);
+  n = enveloppen.length;
+  const sT2 = await api('POST', `/api/invoices/${fT2.id}/send`, { betaald: true, trustpilot: true });
+  ok('factuurmail MET vinkje → Trustpilot in BCC (en klant als ontvanger)', sT2.json?.trustpilot === true && enveloppen[n].includes(TP.toLowerCase()) && enveloppen[n].includes('betaal@example.nl'), JSON.stringify(enveloppen[n]));
+  ok('BCC staat niet zichtbaar in de mail zelf', !/invite\.trustpilot/i.test(mails[mails.length - 1] || ''));
+  ok('uitnodiging vastgelegd op klant en opdracht', !!(await haal(fT2.id)).trustpilotAt);
+  const offTp = ((await api('POST', '/api/invoices', { customerId: klant.id, orderId: order.id, type: 'offerte' })).json);
+  const offTpId = (offTp.invoice || offTp).id;
+  await api('PATCH', `/api/invoices/${offTpId}`, { lines: [{ description: 'Offerte', qty: 1, priceExcl: 99 }], btwPct: 21, note: '' });
+  n = enveloppen.length;
+  await api('POST', `/api/invoices/${offTpId}/send`, { trustpilot: true });
+  ok('offerte nooit met Trustpilot', !enveloppen[n].includes(TP.toLowerCase()));
+  // Knop op de opdracht: bedankmailtje + BCC; tweede keer → 409 tenzij force.
+  const o2 = (await api('POST', '/api/orders', { customerId: klant.id, title: 'Rhenen — trustpilot test', status: 'afgerond' })).json;
+  const kl2 = (await api('POST', '/api/customers', { name: 'Tina Trust', email: 'tina@example.nl' })).json;
+  const o3 = (await api('POST', '/api/orders', { customerId: kl2.id, title: 'Ede — trustpilot knop', status: 'afgerond' })).json;
+  n = enveloppen.length;
+  const k1 = await api('POST', `/api/orders/${o3.id}/trustpilot`, {});
+  ok('knop Trustpilot op afgeronde opdracht: bedankmail aan de klant met Trustpilot in BCC', k1.status === 200 && enveloppen[n] && enveloppen[n].includes('tina@example.nl') && enveloppen[n].includes(TP.toLowerCase()) && /Trustpilot/.test(decodeer(mails[mails.length - 1])) && /Tina Trust/.test(decodeer(mails[mails.length - 1])), JSON.stringify({ st: k1.status, env: enveloppen[n] }));
+  const k2 = await api('POST', `/api/orders/${o3.id}/trustpilot`, {});
+  ok('tweede keer: eerst waarschuwen (409 "al uitgenodigd")', k2.status === 409 && /al uitgenodigd/.test(k2.json?.error || ''), JSON.stringify(k2.json));
+  const kl3 = (await api('POST', '/api/customers', { name: 'Zonder Mail', phone: '0611112222' })).json;
+  const o4 = (await api('POST', '/api/orders', { customerId: kl3.id, title: 'Tiel — geen mail', status: 'afgerond' })).json;
+  const k3 = await api('POST', `/api/orders/${o4.id}/trustpilot`, {});
+  ok('klant zonder e-mail: nette uitleg', k3.status === 400 && /e-mailadres/.test(k3.json?.error || ''), JSON.stringify(k3.json));
+  const oThread = ((await api('GET', `/api/orders/${o3.id}`)).json.thread || []);
+  ok('kaart-historie toont dat de uitnodiging is meegestuurd', oThread.some((t) => /Trustpilot-uitnodiging meegestuurd/.test(t.body || '')));
+  void o2;
 } finally {
   proc.kill('SIGTERM');
   smtp.close();
