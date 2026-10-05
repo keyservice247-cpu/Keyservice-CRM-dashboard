@@ -926,6 +926,15 @@ de regressie meegroeit.
   afgewezen berichten mee. Advies (niet gebouwd, keuze eigenaar): alleen verstuurde
   facturen tellen, "excl. btw" op de tegel, één definitie, offerte-conversie meten,
   DRS apart in conversie, weekrapport-"conversie" hernoemen. Test: conversie-test 42.
+- **Zoeken in de ingeklapte agenda's (5 okt 2026, wens eigenaar):** de zoekbalk en het
+  bron/monteur-filter op het bord keken alleen naar open kaarten. GET /api/archives/zoek
+  ?q=(min 2)&mont=(src:drs|src:eigen|id)&kanaal= doorzoekt alle ingeklapte weken (zelfde
+  velden als het bord + intake + gesprek, telefoon via matchPhone ook met +31), lichte
+  regels per week, max 300 (`afgekapt`), monteur alleen eigen. Scherm: zoekInArchief() in
+  renderArchives — weken met treffers open (`.archive-treffer`, "X van Y"), kop "N
+  opdrachten gevonden voor …", klik → openOrderVers; leeg zoekveld = gewone weken terug
+  (sleutel _archZoekGetoond voorkomt herladen bij elke pulse). Tests: audit-test 83,
+  browser 246.
 - **Adviezen 1-3 gebouwd (4 okt 2026, keuze eigenaar):** (1) een KOPIE van een factuur
   begint altijd als CONCEPT (copyInvoice → startStatus alsConcept:true) — als betaald telde
   een correctie-kopie dubbel als omzet; bij versturen kies je via de betaald-vraag.

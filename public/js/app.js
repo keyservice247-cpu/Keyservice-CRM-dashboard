@@ -1653,6 +1653,8 @@ function renderArchives() {
   }
   const archives = state.archives || [];
   if (!archives.length) { wrap.innerHTML = ''; _lastArchHtml = ''; return; }
+  // Zoeken/filteren actief? Dan toont dit blok de treffers uit ALLE ingeklapte weken.
+  if (archiefZoekSleutel()) { zoekInArchief(); return; }
   // Ook hier: alleen hertekenen als er echt iets veranderd is — anders klapte elke
   // opengeklapte week-agenda bij iedere achtergrondwijziging weer dicht.
   const archVinger = JSON.stringify(archives.map((a) => [a.key, a.label, a.count]));
@@ -1686,6 +1688,47 @@ function renderArchives() {
       $$('.archive-item', body).forEach((it) => it.onclick = () => openOrderModal(it.dataset.id, orders));
     });
   });
+}
+
+// ZOEKEN IN DE INGEKLAPTE AGENDA'S (5 okt 2026, wens eigenaar): de zoekbalk en het
+// monteur/bron-filter op het bord keken alleen naar de open kaarten. Nu doorzoekt de
+// server ook alle ingeklapte weken (GET /api/archives/zoek); weken met treffers klappen
+// open en tonen alleen de gevonden opdrachten. Leeg zoekveld + geen filter = gewoon de
+// weken zoals altijd.
+let _archZoekGetoond = '';
+function archiefZoekSleutel() {
+  const q = ($('#boardSearch')?.value || '').trim();
+  const mont = $('#boardMonteurFilter')?.value || '';
+  if (q.length < 2 && !mont) return '';
+  return JSON.stringify([q.toLowerCase(), mont, state.channel || 'all', (state.archives || []).map((a) => a.key + a.count).join(',')]);
+}
+async function zoekInArchief() {
+  const wrap = $('#archiveWrap'); if (!wrap) return;
+  const sleutel = archiefZoekSleutel();
+  if (!sleutel) { if (_archZoekGetoond) { _archZoekGetoond = ''; _lastArchHtml = ''; renderArchives(); } return; }
+  if (sleutel === _archZoekGetoond && wrap.children.length) return; // al getoond (pulse)
+  _archZoekGetoond = sleutel;
+  const q = ($('#boardSearch')?.value || '').trim();
+  const mont = $('#boardMonteurFilter')?.value || '';
+  const kanaal = state.channel === 'email' || state.channel === 'whatsapp' ? state.channel : '';
+  let r;
+  try { r = await api(`/api/archives/zoek?q=${encodeURIComponent(q)}&mont=${encodeURIComponent(mont)}&kanaal=${kanaal}`); }
+  catch (err) { _archZoekGetoond = ''; wrap.innerHTML = `<h3 class="archive-title">${icon('box', 14)} Ingeklapte agenda's</h3><div class="muted small">Zoeken in de ingeklapte agenda's lukte niet: ${esc(err.message)}</div>`; return; }
+  if (archiefZoekSleutel() !== sleutel) return; // inmiddels verder getypt
+  _lastArchHtml = ''; // na het wissen van de zoekopdracht de gewone weken weer tekenen
+  const wat = q.length >= 2 ? `"${esc(q)}"` : 'dit filter';
+  const statuses = state.meta.statuses || [];
+  const kop = `<h3 class="archive-title">${icon('box', 14)} Ingeklapte agenda's — ${r.totaal ? `<strong>${r.totaal}</strong> opdracht${r.totaal === 1 ? '' : 'en'} gevonden voor ${wat}` : `niets gevonden voor ${wat}`}${r.afgekapt ? ' (eerste 300 getoond — zoek specifieker)' : ''}</h3>`;
+  wrap.innerHTML = kop + (r.weken || []).map((w) => {
+    const groepen = statuses.map((st) => ({ st, items: w.items.filter((o) => o.status === st.key) })).filter((g) => g.items.length);
+    const overig = w.items.filter((o) => !statuses.some((st) => st.key === o.status));
+    if (overig.length) groepen.push({ st: { key: '', label: 'Overig', color: 'var(--line)' }, items: overig });
+    return `<details class="archive archive-treffer" open><summary>${esc(w.label)} <span class="count">${w.gevonden} van ${w.count}</span></summary><div class="archive-body">
+      ${groepen.map((g) => `<div class="arch-group"><div class="arch-group-head"><span class="column-dot" style="background:${esc(g.st.color)}"></span> ${esc(g.st.label)} <span class="count">${g.items.length}</span></div>
+        ${g.items.map((o) => `<div class="archive-item" data-id="${esc(o.id)}"><span class="dot" style="background:${esc(statusColor(o.status))}"></span><strong>${esc(o.title)}</strong><span class="muted small">${esc(o.klant || '')}${o.telefoon ? ' · ' + esc(o.telefoon) : ''}</span><span class="muted small arch-when">${esc(fmtDateShort(o.createdAt))}</span></div>`).join('')}</div>`).join('')}
+    </div></details>`;
+  }).join('');
+  $$('.archive-treffer .archive-item', wrap).forEach((it) => it.onclick = () => openOrderVers(it.dataset.id));
 }
 
 // Periode-grenzen (lokale tijd) voor het "binnengekomen in…"-filter op het bord.
@@ -6772,10 +6815,10 @@ function bindButtons() {
   $('#newUserBtn')?.addEventListener('click', () => openUserModal());
   $('#simulateBtn')?.addEventListener('click', () => openSimulateModal());
   $('#pasteOrderBtn')?.addEventListener('click', openPasteOrderModal);
-  $('#boardSearch')?.addEventListener('input', () => { clearTimeout(window._boardZoekT); window._boardZoekT = setTimeout(renderBoard, 180); }); // debounce (audit 16 sep)
+  $('#boardSearch')?.addEventListener('input', () => { clearTimeout(window._boardZoekT); window._boardZoekT = setTimeout(() => { renderBoard(); zoekInArchief(); }, 180); }); // debounce (audit 16 sep); ook in de ingeklapte agenda's (5 okt)
   // Periode wisselen = opnieuw laden (mét of zonder ingeklapte kaarten), niet alleen filteren.
   $('#boardPeriodFilter')?.addEventListener('change', loadBoard);
-  $('#boardMonteurFilter')?.addEventListener('change', renderBoard);
+  $('#boardMonteurFilter')?.addEventListener('change', () => { renderBoard(); zoekInArchief(); });
   $('#customerSearch')?.addEventListener('input', renderCustomers);
   $('#trashSearch')?.addEventListener('input', renderTrash);
   $('#agendaScope')?.addEventListener('change', renderAgenda);

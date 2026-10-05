@@ -1303,6 +1303,27 @@ noErr('Mobiel plakkende balken');
   await mp.close();
 }
 
+// ZOEKEN IN DE INGEKLAPTE AGENDA'S (5 okt 2026): zoekbalk op het bord vindt ook
+// opdrachten in ingeklapte weken; die week klapt open met alleen de treffers.
+clear();
+const archKey = await page.evaluate(async () => {
+  const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const c = await post('/api/customers', { name: 'Zoekniko Archiefklant', phone: '0612399888' });
+  await post('/api/orders', { customerId: c.id, title: 'Breda — zoektest archief', status: 'afgerond' });
+  return (await post('/api/archives/collapse', { channel: 'all' })).key;
+});
+await page.evaluate(() => goView('board'));
+await page.waitForTimeout(1200);
+await page.fill('#boardSearch', 'zoekniko');
+await page.waitForSelector('.archive-treffer .archive-item', { timeout: 8000 }).catch(() => {});
+const archZoek = await page.evaluate(() => ({ treffers: document.querySelectorAll('.archive-treffer .archive-item').length, open: !!document.querySelector('.archive-treffer[open]'), kop: (document.querySelector('#archiveWrap .archive-title') || {}).textContent || '' }));
+ok('zoeken op het bord vindt ook opdrachten in de ingeklapte agenda\'s (week open, alleen treffers)', archZoek.treffers === 1 && archZoek.open && /1 opdracht gevonden/.test(archZoek.kop), JSON.stringify(archZoek));
+await page.fill('#boardSearch', '');
+await page.waitForFunction(() => !document.querySelector('.archive-treffer'), null, { timeout: 8000 }).catch(() => {});
+ok('zoekveld leeg → gewone ingeklapte weken weer terug', await page.evaluate(() => !document.querySelector('.archive-treffer') && document.querySelectorAll('#archiveWrap details.archive').length >= 1));
+noErr('Zoeken in ingeklapte agenda\'s');
+await page.evaluate(async (key) => { await fetch('/api/archives/uncollapse', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }) }); }, archKey);
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

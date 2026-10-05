@@ -1452,6 +1452,53 @@ app.get('/api/archives', requireAuth, (req, res) => {
   res.json([...map.values()].sort((a, b) => b.key.localeCompare(a.key)));
 });
 
+// ZOEKEN IN DE INGEKLAPTE AGENDA'S (5 okt 2026, wens eigenaar): de zoekbalk/filter op het
+// bord keek alleen naar de open kaarten. Dit doorzoekt ALLE ingeklapte weken op dezelfde
+// velden als het bord (titel, omschrijving, klant + intake, notities, bron, gesprek) en
+// telefoon genormaliseerd (06 12… = +31 6 12…). Lichte regels, gegroepeerd per week.
+// ?q= (min 2 tekens) &mont= (src:drs|src:eigen|<monteurId>) &kanaal= (email|whatsapp).
+app.get('/api/archives/zoek', requireAuth, (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase().slice(0, 100);
+  const mont = String(req.query.mont || '');
+  const kanaal = String(req.query.kanaal || '');
+  if (q.length < 2 && !mont) return res.json({ weken: [], totaal: 0, afgekapt: false });
+  const qTel = q.replace(/[\s()+.-]/g, '');
+  const zoekTel = /^\d{4,}$/.test(qTel) ? matchPhone(qTel) : '';
+  const kanaalVan = (o) => { const l = String(o.source || '').toLowerCase(); return l.includes('mail') ? 'email' : (l.includes('whatsapp') || l.includes('app') || l.includes('groep')) ? 'whatsapp' : 'other'; };
+  const klanten = new Map((db().customers || []).map((c) => [c.id, c]));
+  const MAX = 300;
+  const perWeek = new Map(); let totaal = 0;
+  for (const o of db().orders) {
+    if (!o.archivedWeek) continue;
+    if (req.user.role === 'monteur' && !(o.monteurId && o.monteurId === req.user.monteurId)) continue;
+    const isDrs = !!(o.originGroup && isWhatsappOrderGroup(o.originGroup));
+    if (mont === 'src:drs' && !isDrs) continue;
+    if (mont === 'src:eigen' && isDrs) continue;
+    if (mont && !mont.startsWith('src:') && o.monteurId !== mont) continue;
+    if ((kanaal === 'email' || kanaal === 'whatsapp') && kanaalVan(o) !== kanaal) continue;
+    const c = klanten.get(o.customerId) || {}; const it = o.intake || {};
+    if (q.length >= 2) {
+      const hay = [o.title, o.description, c.name, c.phone, c.email, c.address, it.name, it.phone, it.email, it.address, o.notes, o.source, ...(o.thread || []).map((t) => t.body || '')].join(' ').toLowerCase();
+      const telRaak = zoekTel && [c.phone, it.phone].some((p) => p && matchPhone(p).includes(zoekTel));
+      if (!hay.includes(q) && !telRaak) continue;
+    }
+    totaal++;
+    const k = o.archivedWeek.key;
+    if (!perWeek.has(k)) perWeek.set(k, { key: k, label: o.archivedWeek.label, items: [] });
+    perWeek.get(k).items.push({ id: o.id, title: o.title, status: o.status, createdAt: o.createdAt, klant: it.name || c.name || '', telefoon: it.phone || c.phone || '' });
+  }
+  const tel = new Map(); for (const o of db().orders) if (o.archivedWeek) tel.set(o.archivedWeek.key, (tel.get(o.archivedWeek.key) || 0) + 1);
+  let getoond = 0;
+  const weken = [...perWeek.values()].sort((a, b) => b.key.localeCompare(a.key)).map((w) => {
+    w.items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const ruimte = Math.max(0, MAX - getoond);
+    const gevonden = w.items.length;
+    w.items = w.items.slice(0, ruimte); getoond += w.items.length;
+    return { ...w, gevonden, count: tel.get(w.key) || gevonden };
+  }).filter((w) => w.items.length);
+  res.json({ weken, totaal, afgekapt: totaal > getoond });
+});
+
 // Handmatig de wekelijkse archivering nu uitvoeren (admin).
 app.post('/api/archives/run', requireRole('admin'), (req, res) => {
   const result = runWeeklyArchive();

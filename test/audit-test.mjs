@@ -337,6 +337,25 @@ const leegRij = todo.find((t) => t.id === oLeeg.id);
 ok('lege €0-factuur (nooit verstuurd) telt niet als gefactureerd — en "afmaken" wijst naar die factuur', !!leegRij && leegRij.leegFactuurId === (leeg.invoice || leeg).id, JSON.stringify(leegRij));
 ok('opdracht met een echte factuur (bedrag > 0) staat er niet meer in', !todo.some((t) => t.id === oEcht.id));
 
+console.log('\n== Zoeken in de ingeklapte agenda\'s (5 okt 2026) ==');
+{
+  cookie = adminCookie;
+  const kz = (await api('POST', '/api/customers', { name: 'Niko Archief', phone: '0612345111' })).json;
+  const oz = (await api('POST', '/api/orders', { customerId: kz.id, title: 'Breda — slot archief', status: 'afgerond', monteurId: mont.id })).json;
+  const kz2 = (await api('POST', '/api/customers', { name: 'Ander Archief', phone: '0612345222' })).json;
+  await api('POST', '/api/orders', { customerId: kz2.id, title: 'Tilburg — deur archief', status: 'geannuleerd' });
+  const ingeklapt = (await api('POST', '/api/archives/collapse', { channel: 'all' })).json;
+  const z1 = (await api('GET', '/api/archives/zoek?q=niko')).json;
+  ok('zoeken op naam vindt de opdracht in een ingeklapte week', z1.totaal === 1 && z1.weken[0].items[0].id === oz.id && z1.weken[0].key === ingeklapt.key, JSON.stringify(z1).slice(0, 200));
+  const z2 = (await api('GET', `/api/archives/zoek?q=${encodeURIComponent('+31 6 1234 5111')}`)).json;
+  ok('zoeken op telefoon werkt ook met +31-notatie', z2.totaal === 1, JSON.stringify(z2.totaal));
+  const z3 = (await api('GET', `/api/archives/zoek?mont=${mont.id}`)).json;
+  ok('filter op monteur werkt in de ingeklapte agenda\'s', z3.totaal >= 1 && z3.weken.every((w) => w.items.every((i) => i.id !== undefined)) && !JSON.stringify(z3).includes('Tilburg — deur archief'), String(z3.totaal));
+  const z4 = (await api('GET', '/api/archives/zoek?q=x')).json;
+  ok('te korte zoekterm geeft niets (geen volledige lijst)', z4.totaal === 0);
+  await api('POST', '/api/archives/uncollapse', { key: ingeklapt.key });
+}
+
 console.log(`\n========== AUDIT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);
