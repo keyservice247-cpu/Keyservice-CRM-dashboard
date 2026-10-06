@@ -1357,6 +1357,14 @@ await page.click('#bk-cancel');
 await page.evaluate(() => closeModal());
 noErr('Trustpilot');
 
+// WEBSITE-FORMULIEREN (6 okt 2026): controlekaart in Instellingen → Koppelingen.
+clear();
+await page.evaluate(() => goView('settings'));
+await page.waitForFunction(() => /komen de aanvragen binnen/.test((document.querySelector('#formulierenKaart') || {}).textContent || ''), null, { timeout: 8000 }).catch(() => {});
+const fk = await page.evaluate(() => { const k = document.querySelector('#formulierenKaart'); return { er: !!k, tabel: !!(k && k.querySelector('table')), mailbox: /contact@keyservice247\.nl/.test((k || {}).textContent || '') }; });
+ok('Instellingen: kaart "Website-formulieren" met tabel en FormSubmit-mailbox', fk.er && fk.tabel && fk.mailbox, JSON.stringify(fk));
+noErr('Website-formulieren');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

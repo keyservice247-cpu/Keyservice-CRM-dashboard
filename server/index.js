@@ -60,6 +60,7 @@ import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
+import { formulierStatus, markeerActivatieAfgehandeld } from './formulieren.js';
 import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -4621,6 +4622,18 @@ function canTouchOrder(req, order) {
   if (req.user.role !== 'monteur') return true;
   return !!(order.monteurId && order.monteurId === req.user.monteurId);
 }
+
+// WEBSITE-FORMULIEREN BEWAKEN (6 okt 2026): per website de laatste directe lead en
+// FormSubmit-kopie, welke mailboxen het CRM leest en openstaande FormSubmit-activaties.
+app.get('/api/formulieren/status', requireRole('admin', 'assistent'), (req, res) => {
+  res.json(formulierStatus());
+});
+app.post('/api/formulieren/activatie/afgehandeld', requireRole('admin', 'assistent'), (req, res) => {
+  const ok = markeerActivatieAfgehandeld(String(req.body?.sleutel || ''), req.user.name);
+  if (!ok) return res.status(404).json({ error: 'Niet gevonden' });
+  logActivity(req.user.name, 'FormSubmit-activatie afgehandeld', String(req.body?.sleutel || '').slice(0, 120));
+  res.json({ ok: true });
+});
 
 // TRUSTPILOT-UITNODIGING VANAF EEN OPDRACHT (5 okt 2026, wens eigenaar "zelf bepalen
 // zodra ik een klant heb afgerond"): een kort bedankmailtje aan de klant met het Trustpilot-

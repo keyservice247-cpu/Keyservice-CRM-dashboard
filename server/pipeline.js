@@ -560,6 +560,10 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
       return t >= winKort;
     });
     if (twin) {
+      // Bewaking website-formulieren (6 okt 2026): vastleggen dat de FormSubmit-kopie van
+      // deze directe lead WEL is aangekomen (zichtbaar in Instellingen → Koppelingen).
+      if (channel === 'email' && !forceRelevant) twin.formSubmitKopieAt = now();
+      if (forceRelevant) twin.directOokAt = now();
       if (attachments && attachments.length) {
         // Identieke foto's (zelfde inhoud) niet nóg een keer toevoegen.
         twin.attachments = mergeAttachments(twin.attachments || [], attachments);

@@ -27,6 +27,8 @@ node test/whatsapp-cloud-test.mjs
 node test/chat-test.mjs
 # Taken-module: aanmaken, afvinken, filteren, deadline-teller, privé/zakelijk (PORT=3133)
 node test/taken-test.mjs
+# Website-formulieren: FormSubmit-activatie, status per site, mailbox-check (GEEN server nodig)
+node test/formulieren-test.mjs
 # Betaald-keuze bij versturen: e-mail (nep-SMTP) + WhatsApp, status/paidAt/omzet, terugzetten
 # bij mislukken (start zelf een nep-SMTP + server op PORT=3143)
 node test/betaald-keuze-test.mjs

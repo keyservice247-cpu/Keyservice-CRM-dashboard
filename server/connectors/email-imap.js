@@ -12,6 +12,7 @@ import { ingestMessage, findCustomer, queueCrmWhatsappAlert } from '../pipeline.
 import { saveBuffer, dedupeAttachments } from '../storage.js';
 import { maybeSendAutoReply } from '../autoreply.js';
 import { sendPush } from '../push.js';
+import { isFormSubmitActivatie, registreerFormSubmitActivatie } from '../formulieren.js';
 
 // ---------- Bounce-detectie ("mail kon niet worden afgeleverd") ----------
 // Een bounce van MAILER-DAEMON/postmaster is nooit een lead: we koppelen 'm terug
@@ -373,6 +374,12 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
           || /offerte-?aanvraag/i.test(parsed.subject || '')
           || /submitted your form on/i.test(rawText)
           || /nieuwe aanvraag via de website/i.test(rawText);
+        // ACTIVATIEMAIL VAN FORMSUBMIT (6 okt 2026): per nieuwe website moet je één keer op
+        // "Activate" klikken, anders stuurt FormSubmit niets door. Die mail viel ongezien in
+        // "Geen aanvraag" — nu wordt de link bewaard en krijgt kantoor een melding.
+        if (isFormSubmitActivatie({ from: fromText, subject: parsed.subject || '', text: rawText })) {
+          try { registreerFormSubmitActivatie({ subject: parsed.subject || '', text: rawText, html: String(parsed.html || '') }); } catch (e) { console.error('[formsubmit-activatie]', e.message); }
+        }
         const body = isFormSubmit
           ? parseFormSubmit(rawText, parsed.subject || '')
           : rawText.slice(0, 8000);

@@ -1387,10 +1387,11 @@ async function loadOverview() {
   // Taken en wacht-op-antwoord TEGELIJK met het overzicht ophalen en in één keer
   // tekenen: voorheen kwamen ze 400 ms later bovenaan binnen en duwden alles omlaag.
   // Een fout per blok laat Start nooit leeg (null = blok ongemoeid laten).
-  const [d, taken, wacht] = await Promise.all([
+  const [d, taken, wacht, formulieren] = await Promise.all([
     api('/api/overview'),
     kantoor ? api('/api/taken/vandaag').catch(() => null) : null,
     kantoor ? api('/api/chats/onbeantwoord?uren=2').catch(() => null) : null,
+    kantoor ? api('/api/formulieren/status').catch(() => null) : null,
   ]);
   const k = d.kpis;
   const first = (state.me.name || '').trim().split(' ')[0] || '';
@@ -1408,7 +1409,7 @@ async function loadOverview() {
       <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${kantoor ? ', bericht' : ''}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
       <div id="gsResults" hidden></div>
     </div>
-    ${kantoor ? `<div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>
+    ${kantoor ? `<div id="formulierAlarmBlok"></div><div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>
     <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <h3 style="margin:0">${icon('sparkles', 16)} Jouw dag in één oogopslag</h3>
@@ -1478,6 +1479,7 @@ async function loadOverview() {
       </div>`);
   if (kantoor) {
     // Meegeleverde lijsten → synchroon getekend, in dezelfde beeldopbouw als de KPI's.
+    if (formulieren) vulFormulierAlarm(formulieren);
     if (taken) vulTakenVandaag(taken);
     if (wacht) vulOnbeantwoord(wacht);
     // Dagoverzicht (server-cache, 1x/dag) en weekrapport NIET bij elke wijziging
@@ -5283,6 +5285,7 @@ async function loadSettingsHtml(s) {
         <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
       </div>
     </div>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px" id="formulierenKaart"><h3>Website-formulieren</h3><div class="muted small">Laden…</div></div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px;border-left:4px solid var(--danger)"> <h3>${icon('whatsapp', 15)} Wegwerpnummer pauzeren (noodrem)</h3>
       <p class="muted small">Is het <strong>wegwerpnummer</strong> (tijdelijk) geblokkeerd? Zet dit vinkje AAN: de bridge krijgt dan een lege wachtrij, zodat er via dat nummer niets meer uitgaat (groeps- en monteursberichten). Wat klaarstond blijft bewaard en gaat vanzelf alsnog uit zodra je de pauze uitzet. <strong>De officiële WhatsApp-route (klantberichten, facturen, bevestigingen) loopt gewoon door</strong> — die staat los van dit nummer. Ontvangen blijft ook gewoon werken.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-pause" style="width:auto" ${s.whatsappPaused ? 'checked' : ''}> Uitgaande berichten via het wegwerpnummer pauzeren</label>
@@ -5789,6 +5792,7 @@ async function loadSettingsHtml(s) {
   };
   $('#openAttMgr').onclick = openAttachmentManager;
   laadSigPerUser();
+  laadFormulierStatus();
   $('#saveSignature').onclick = async () => {
     const htmlSignature = {
       enabled: $('#hs-enabled').checked,
@@ -6345,6 +6349,44 @@ async function syncPush() {
 
 // HANDTEKENING PER MEDEWERKER (23 sep 2026): per account functie/telefoon/e-mail,
 // voorbeeld van de platte tekst en een testmail in naam van die persoon.
+// ---------- WEBSITE-FORMULIEREN (6 okt 2026): komen aanvragen van de sites binnen? ----------
+// Op Start alleen een balk als er iets aan de hand is (FormSubmit wil een activatie, of
+// de FormSubmit-mailbox wordt niet gelezen); het volledige overzicht staat in
+// Instellingen → Koppelingen.
+function vulFormulierAlarm(st) {
+  const el = $('#formulierAlarmBlok'); if (!el) return;
+  const open = st.activatiesOpen || [];
+  const regels = [];
+  if (open.length) regels.push(`FormSubmit wacht op <strong>${open.length} bevestiging${open.length === 1 ? '' : 'en'}</strong> (${esc(open.map((a) => a.site).join(', '))}). Tot je die klikt komen van die website(s) géén FormSubmit-mails binnen.`);
+  if (st.mailboxen && st.mailboxen.length && !st.leestDoelBox) regels.push(`Het CRM leest de mailbox <strong>${esc(st.doel)}</strong> niet — daar stuurt FormSubmit de aanvragen naartoe.`);
+  const html = regels.length ? `<div class="info-card form-alarm" style="margin-bottom:18px"><h3 style="margin:0 0 6px">${icon('mail', 15)} Website-formulieren: actie nodig</h3>${regels.map((r) => `<p class="small" style="margin:4px 0">${r}</p>`).join('')}<button class="btn btn-sm btn-primary" id="formAlarmOpen" type="button">Bekijken en oplossen</button></div>` : '';
+  if (el.dataset.html === html) return;
+  el.dataset.html = html; el.innerHTML = html;
+  if ($('#formAlarmOpen')) $('#formAlarmOpen').onclick = () => { try { localStorage.setItem('ksInstellingenGroep', 'koppel'); } catch { /* geen opslag */ } showView('settings'); };
+}
+async function laadFormulierStatus() {
+  const el = $('#formulierenKaart'); if (!el) return;
+  let st;
+  try { st = await api('/api/formulieren/status'); } catch (err) { el.innerHTML = `<h3>Website-formulieren</h3><div class="muted small">Status laden lukte niet: ${esc(err.message)}</div>`; return; }
+  const wanneer = (t) => (t ? fmtDateShort(t) : '<span class="muted">nooit</span>');
+  const open = st.activatiesOpen || [];
+  el.innerHTML = `<h3>${icon('mail', 15)} Website-formulieren — komen de aanvragen binnen?</h3>
+    <p class="muted small">Elke website stuurt een aanvraag op twee manieren: <strong>rechtstreeks naar het CRM</strong> én via <strong>FormSubmit</strong> als e-mail naar <strong>${esc(st.doel)}</strong> (reserve). Beide komen als één aanvraag in de Inbox.</p>
+    ${open.length ? `<div class="form-alarm" style="padding:10px 12px;border-radius:10px;margin:8px 0"><strong>FormSubmit wacht op bevestiging</strong> — klik per website één keer op <em>Activeren</em> (opent FormSubmit) en daarna op <em>Gedaan</em>:
+      ${open.map((a) => `<div class="form-act-rij"><span><strong>${esc(a.site)}</strong> <span class="muted small">${esc(fmtDateShort(a.at))}</span></span>${a.link ? `<a class="btn btn-sm btn-primary" href="${esc(a.link)}" target="_blank" rel="noopener">Activeren</a>` : '<span class="muted small">geen link gevonden — zoek de mail "Activate FormSubmit" in ' + esc(st.doel) + '</span>'}<button class="btn btn-sm form-act-klaar" data-sleutel="${esc(a.sleutel)}" type="button">Gedaan</button></div>`).join('')}</div>` : ''}
+    <div class="cf-rij" style="margin:6px 0 10px;font-size:13px">
+      <span>Mailbox voor FormSubmit: <strong>${esc(st.doel)}</strong> — ${st.leestDoelBox ? '<span style="color:var(--ok)">wordt gelezen ✓</span>' : `<span style="color:var(--danger)">wordt NIET gelezen</span>`}</span>
+      <span class="muted small">Gelezen mailboxen: ${st.mailboxen.length ? esc(st.mailboxen.join(', ')) : 'geen (IMAP niet ingesteld)'} · laatste mailcontrole: ${st.imapLaatstOk ? esc(fmtDateShort(st.imapLaatstOk)) : 'onbekend'}</span>
+    </div>
+    ${!st.leestDoelBox ? `<p class="small" style="color:var(--danger);margin:0 0 10px">Zet ${esc(st.doel)} erbij in Render → Environment → <code>IMAP_INGEST_ACCOUNTS</code> (formaat <code>adres:wachtwoord</code>), anders ziet het CRM de FormSubmit-mails nooit.</p>` : ''}
+    <div class="cv-tabel-wrap"><table class="cv-tabel"><thead><tr><th>Website</th><th title="Rechtstreeks van de website naar het CRM">Laatste direct</th><th>30 d</th><th title="De e-mailkopie via FormSubmit">Laatste FormSubmit</th><th>30 d</th><th title="Directe aanvragen (ouder dan 6 uur) waarvan de FormSubmit-kopie nooit binnenkwam">Zonder kopie</th></tr></thead><tbody>
+      ${(st.sites || []).map((s) => `<tr><td><strong>${esc(s.site)}</strong></td><td>${wanneer(s.direct.laatste)}</td><td>${s.direct.aantal30}</td><td>${wanneer(s.formsubmit.laatste)}</td><td>${s.formsubmit.aantal30}</td><td>${s.zonderKopie30 ? `<span style="color:var(--warn)">${s.zonderKopie30}</span>` : '0'}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nog geen website-aanvragen gezien.</td></tr>'}
+    </tbody></table></div>
+    <p class="muted small" style="margin-top:8px">Komt de directe route binnen maar FormSubmit niet ("zonder kopie")? Dan wacht FormSubmit meestal op bevestiging, of de mailbox wordt niet gelezen. De aanvraag zelf is dan niet kwijt — die kwam rechtstreeks binnen.</p>`;
+  $$('.form-act-klaar', el).forEach((b) => b.onclick = async () => {
+    try { await api('/api/formulieren/activatie/afgehandeld', 'POST', { sleutel: b.dataset.sleutel }); toast('Gemarkeerd als gedaan'); laadFormulierStatus(); } catch (err) { toast(err.message, true); }
+  });
+}
 async function laadSigPerUser() {
   const box = $('#sigPerUser'); if (!box) return;
   let users = [];

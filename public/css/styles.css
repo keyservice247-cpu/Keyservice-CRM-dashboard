@@ -565,6 +565,9 @@ body.modal-open { overflow: hidden; position: fixed; left: 0; right: 0; width: 1
 .mini-dialog label { display: block; margin-top: 10px; }
 .mini-dialog .md-fout { color: var(--danger); margin-top: 6px; }
 .bk-dialog { width: 480px; }
+.form-alarm { background: rgba(192,138,62,.14); border-left: 4px solid var(--warn); }
+.form-act-rij { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.cv-tabel-wrap { overflow-x: auto; }
 .bk-tp { display: flex !important; align-items: flex-start; gap: 8px; margin: 10px 0 0 !important; font-size: 13px; line-height: 1.4; cursor: pointer; }
 .bk-tp input { width: auto; margin-top: 2px; }
 .inbox-onvolledig { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; background: rgba(192,138,62,.14); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }

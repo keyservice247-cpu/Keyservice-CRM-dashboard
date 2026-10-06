@@ -926,6 +926,26 @@ de regressie meegroeit.
   afgewezen berichten mee. Advies (niet gebouwd, keuze eigenaar): alleen verstuurde
   facturen tellen, "excl. btw" op de tegel, één definitie, offerte-conversie meten,
   DRS apart in conversie, weekrapport-"conversie" hernoemen. Test: conversie-test 42.
+- **Website-formulieren bewaakt (6 okt 2026, eigenaar "het lijkt alsof FormSubmit niet
+  werkt — dat moet werken!"):** elke site (keyservice247.nl, schuifpuiservice.com, alle
+  stadssites via /assets/offerte.js) stuurt DUBBEL: rechtstreeks naar POST /api/ingest/form
+  (mailbox 'website-direct') én via FormSubmit naar contact@keyservice247.nl (IMAP →
+  ontdubbeld). Gecontroleerd 6 okt: sites bevatten beide endpoints, CORS/origin-check van
+  /api/ingest/form werkt, formsubmit.co bereikbaar. Nieuw server/formulieren.js:
+  FormSubmit-ACTIVATIEMAILS ("Activate FormSubmit on <site>", per nieuwe website nodig)
+  worden in de IMAP-poller herkend (isFormSubmitActivatie) → link + site bewaard in
+  settings._formSubmitActivaties (één keer per link) + push; vielen voorheen ongezien in
+  "Geen aanvraag" (vermoedelijke oorzaak). pipeline website-dedup zet
+  twin.formSubmitKopieAt / directOokAt. formulierStatus(): per website laatste directe lead
+  + FormSubmit-kopie (30 d), "zonder kopie" (directe lead >6 u zonder FormSubmit-mail),
+  gelezen mailboxen (IMAP_USER + IMAP_INGEST_ACCOUNTS, nooit wachtwoorden) en of
+  contact@keyservice247.nl erbij zit. GET /api/formulieren/status + POST
+  /api/formulieren/activatie/afgehandeld (admin+assistent). Scherm: kaart bovenaan
+  Instellingen → Koppelingen (#formulierenKaart, knoppen Activeren/Gedaan) + balk op Start
+  (#formulierAlarmBlok) bij open activatie of ongelezen FormSubmit-mailbox. Test:
+  test/formulieren-test.mjs (14, zonder server) + browser 253.
+  OPEN — HERINNERING EIGENAAR: na de FormSubmit-check terugkomen op Trustpilot
+  ("we komen hier nog op terug, help me herinneren").
 - **Trustpilot-uitnodiging, per klant zelf kiezen (5 okt 2026, wens eigenaar):** Trustpilot
   nodigt een klant uit als hun unieke adres (…@invite.trustpilot.com) in BCC staat van een
   mail aan die klant. settings.trustpilot {bcc, standaardAan, subject, body} (getTrustpilot/
