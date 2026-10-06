@@ -93,6 +93,13 @@ const oud = await ingestMessage({
 oud.message.receivedAt = new Date(Date.now() - 8 * 3600000).toISOString();
 const ams = F.formulierStatus({ env: {} }).sites.find((s) => s.site === 'schuifpuireparatie-amsterdam.nl');
 ok('directe lead zonder FormSubmit-kopie na 6 uur → gemeld als "zonder kopie"', ams && ams.zonderKopie30 === 1 && ams.formsubmit.aantal30 === 0, JSON.stringify(ams));
+// Oude kopie zonder vlag (van vóór 6 okt, los opgeslagen) telt wél als kopie: koppeling op nummer.
+db().messages.push({ id: 'fs-los-olga', channel: 'email', sender: 'FormSubmit <submissions@formsubmit.co>', mailbox: 'crm@keyservice247.nl',
+  subject: 'Offerte-aanvraag schuifpui (schuifpuireparatie-amsterdam.nl)', receivedAt: new Date(Date.now() - 7 * 3600000).toISOString(),
+  body: 'Nieuwe aanvraag via de website schuifpuireparatie-amsterdam.nl (FormSubmit-mail).\nNaam: Olga Oud\nTelefoon: +31 6 11122233\nAndere tekst' });
+const ams2 = F.formulierStatus({ env: {} }).sites.find((s) => s.site === 'schuifpuireparatie-amsterdam.nl');
+ok('losse oude FormSubmit-mail met zelfde nummer (+31-notatie) → niet meer "zonder kopie"', ams2 && ams2.zonderKopie30 === 0 && ams2.formsubmit.aantal30 === 1, JSON.stringify(ams2));
+db().messages = db().messages.filter((m) => m.id !== 'fs-los-olga');
 
 console.log('\n== FormSubmit-mailbox: alleen formulier-mails ==');
 ok('contact@: gewone mail wordt overgeslagen', F.mailOverslaanInFormSubmitBox({ mailbox: 'contact@keyservice247.nl', from: 'Leverancier <info@leverancier.nl>', subject: 'Uw bestelling' }) === true);

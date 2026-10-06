@@ -965,6 +965,11 @@ de regressie meegroeit.
   mobielvriendelijk (lijst per website), exacte Render-stappen, "via doorsturen ✓" als er
   recent FormSubmit-mails binnenkomen. Test: formulieren-test 31 (o.a. nep-SMTP: nooit
   dubbele bevestiging; nagebootste contact@-mailbox via _processInboxVoorTest).
+  6 okt 13:00: eigenaar koppelde contact@ in Render (IMAP_INGEST_ACCOUNTS) → "gekoppeld ✓",
+  6 teruggevonden. Direct-route voor amersfoort/denhaag/almere.pages.dev live gecontroleerd
+  (lege POST met hun Origin → 400 "Lege aanvraag" = toegestaan). "Zonder kopie" koppelt nu
+  óók op klantnummer/e-mail (contactSleutels, ±1/+3 d) — de vlag bestond pas sinds 6 okt,
+  oude paren telden ten onrechte. formulieren-test 32.
   OPEN — HERINNERING EIGENAAR: na de FormSubmit-check terugkomen op Trustpilot
   ("we komen hier nog op terug, help me herinneren").
 - **Trustpilot-uitnodiging, per klant zelf kiezen (5 okt 2026, wens eigenaar):** Trustpilot

@@ -92,6 +92,21 @@ const isFormSubmitMail = (m) => m && m.channel === 'email' && m.mailbox !== 'web
   && /formsubmit/i.test(String(m.sender || ''))
   && !isFormSubmitActivatie({ from: m.sender, subject: m.subject, text: m.body });
 
+// Telefoon (genormaliseerd, 06…/0xx…) en e-mail van de klant uit de berichttekst.
+function contactSleutels(body) {
+  const b = String(body || '');
+  const uit = [];
+  for (const mm of b.matchAll(/(?:\+31|0031|\b0)\s?\(?0?\)?\s?[1-9](?:[\s-]?\d){8}\b/g)) {
+    const d = mm[0].replace(/\D/g, '').replace(/^0031/, '0').replace(/^31/, '0').replace(/^00/, '0');
+    if (d.length === 10) uit.push('t:' + d);
+  }
+  for (const mm of b.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)) {
+    const e = mm[0].toLowerCase();
+    if (!/keyservice247\.nl|keyservice-crm|formsubmit/.test(e)) uit.push('m:' + e);
+  }
+  return [...new Set(uit)];
+}
+
 // Welke mailboxen leest het CRM? (alleen namen, nooit wachtwoorden)
 export function gelezenMailboxen(env = process.env) {
   const lijst = [];
@@ -110,6 +125,16 @@ export function formulierStatus({ env = process.env, nu = Date.now() } = {}) {
     return sites.get(site);
   };
   const later = (a, b) => (!a || (b && b > a) ? b : a);
+  // Koppeling direct ↔ FormSubmit-mail op klantnummer/e-mail (±3 dagen). De vlag
+  // formSubmitKopieAt bestaat pas sinds 6 okt; oudere paren (of een kopie die als los
+  // bericht binnenkwam) telden anders ten onrechte als "zonder kopie".
+  const fsContact = new Map();
+  for (const m of db().messages || []) {
+    if (!m || !m.receivedAt || !isFormSubmitMail(m)) continue;
+    const t = new Date(m.receivedAt).getTime();
+    for (const k of contactSleutels(m.body)) { if (!fsContact.has(k)) fsContact.set(k, []); fsContact.get(k).push(t); }
+  }
+  const heeftFsKopie = (m, t) => contactSleutels(m.body).some((k) => (fsContact.get(k) || []).some((ft) => ft >= t - DAG && ft <= t + 3 * DAG));
   for (const m of db().messages || []) {
     if (!m || !m.receivedAt) continue;
     const t = new Date(m.receivedAt).getTime();
@@ -122,7 +147,7 @@ export function formulierStatus({ env = process.env, nu = Date.now() } = {}) {
       if (m.formSubmitKopieAt) {
         r.formsubmit.laatste = later(r.formsubmit.laatste, m.formSubmitKopieAt);
         if (nu - new Date(m.formSubmitKopieAt).getTime() < 30 * DAG) r.formsubmit.aantal30++;
-      } else if (binnen30 && nu - t > 6 * 3600000) r.zonderKopie30++;
+      } else if (binnen30 && nu - t > 6 * 3600000 && !heeftFsKopie(m, t)) r.zonderKopie30++;
     } else if (isFormSubmitMail(m)) {
       const r = per(siteVanBericht(m));
       r.formsubmit.laatste = later(r.formsubmit.laatste, m.receivedAt);
