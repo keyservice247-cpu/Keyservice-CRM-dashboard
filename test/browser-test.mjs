@@ -1361,8 +1361,8 @@ noErr('Trustpilot');
 clear();
 await page.evaluate(() => goView('settings'));
 await page.waitForFunction(() => /komen de aanvragen binnen/.test((document.querySelector('#formulierenKaart') || {}).textContent || ''), null, { timeout: 8000 }).catch(() => {});
-const fk = await page.evaluate(() => { const k = document.querySelector('#formulierenKaart'); return { er: !!k, tabel: !!(k && k.querySelector('table')), mailbox: /contact@keyservice247\.nl/.test((k || {}).textContent || '') }; });
-ok('Instellingen: kaart "Website-formulieren" met tabel en FormSubmit-mailbox', fk.er && fk.tabel && fk.mailbox, JSON.stringify(fk));
+const fk = await page.evaluate(() => { const k = document.querySelector('#formulierenKaart'); return { er: !!k, lijst: !!(k && k.querySelector('.form-sites')), mailbox: /contact@keyservice247\.nl/.test((k || {}).textContent || ''), schakelaar: !!(k && k.querySelector('#fsAlleenFormulieren')), breedteOk: !k || k.scrollWidth <= k.clientWidth + 2 }; });
+ok('Instellingen: kaart "Website-formulieren" met lijst per website, reserve-mailbox en schakelaar', fk.er && fk.lijst && fk.mailbox && fk.schakelaar && fk.breedteOk, JSON.stringify(fk));
 noErr('Website-formulieren');
 
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);

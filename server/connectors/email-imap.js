@@ -12,7 +12,7 @@ import { ingestMessage, findCustomer, queueCrmWhatsappAlert } from '../pipeline.
 import { saveBuffer, dedupeAttachments } from '../storage.js';
 import { maybeSendAutoReply } from '../autoreply.js';
 import { sendPush } from '../push.js';
-import { isFormSubmitActivatie, registreerFormSubmitActivatie } from '../formulieren.js';
+import { isFormSubmitActivatie, registreerFormSubmitActivatie, FORMSUBMIT_DOEL, mailOverslaanInFormSubmitBox } from '../formulieren.js';
 
 // ---------- Bounce-detectie ("mail kon niet worden afgeleverd") ----------
 // Een bounce van MAILER-DAEMON/postmaster is nooit een lead: we koppelen 'm terug
@@ -172,7 +172,17 @@ async function poll({ host, port, user, pass }) {
       client.on('error', (e) => console.error(`  IMAP client-fout (${acc.user}):`, e?.message || e));
       try {
         await client.connect();
-        await processInbox(client, simpleParser, since, acc.user); // bron-markering op het bericht
+        // FormSubmit-mailbox (contact@): bij de EERSTE koppeling eenmalig 30 dagen terug-
+        // kijken, zodat aanvragen die de directe route misten (bv. tijdens een update van
+        // het CRM) alsnog boven water komen. Al bekende aanvragen worden ontdubbeld.
+        const isFsBox = String(acc.user).trim().toLowerCase() === FORMSUBMIT_DOEL;
+        const eersteScan = isFsBox && !db().settings._fsBoxEersteScan;
+        const sinceBox = eersteScan ? new Date(Date.now() - 30 * 24 * 3600 * 1000) : since;
+        await processInbox(client, simpleParser, sinceBox, acc.user); // bron-markering op het bericht
+        if (isFsBox) {
+          db()._fsBoxLaatstOk = now();
+          if (eersteScan) { db().settings._fsBoxEersteScan = now(); logActivity('systeem', 'FormSubmit-mailbox gekoppeld', `${acc.user} — eenmalig 30 dagen teruggekeken`); saveSoon(); }
+        }
       } catch (e) {
         console.error(`  IMAP: extra postbus ${acc.user} overgeslagen door fout:`, e.message);
       } finally {
@@ -303,7 +313,14 @@ export function parseFormSubmit(text, subject) {
   // Sitenaam uit het onderwerp als die tussen haakjes staat, bv.
   //   "Offerte-aanvraag schuifpui (schuifpuiservice.com)" -> "schuifpuiservice.com".
   const siteM = String(subject || '').match(/\(([^)]+)\)/);
-  const site = siteM ? siteM[1].trim() : '';
+  let site = siteM ? siteM[1].trim() : '';
+  // Geen site in het onderwerp? FormSubmit zet zelf "Someone just submitted your form on
+  // https://<site>/…" in de mail (6 okt 2026: anders "website onbekend" in de bewaking).
+  if (!site || !/\.[a-z]{2,}/i.test(site)) {
+    const u = t.match(/submitted your form on\s+(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:nl|com|be|eu|dev))/i)
+      || String(subject || '').match(/\bvia\s+(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:nl|com|be|eu|dev))\b/i);
+    if (u) site = u[1].toLowerCase();
+  }
 
   const lines = [`Nieuwe aanvraag via de website${site ? ' ' + site : ''} (FormSubmit-mail).`];
   if (naam) lines.push(`Naam: ${naam}`);
@@ -328,6 +345,19 @@ export function parseFormSubmit(text, subject) {
 // hoofdaccount (bestaand gedrag/weergave), de user-naam voor extra postbussen.
 async function processInbox(client, simpleParser, since, mailbox = '') {
   const lock = await client.getMailboxLock('INBOX');
+  // GEZIEN-LIJST (6 okt 2026): mails die NIET als eigen bericht worden opgeslagen (een
+  // ontdubbelde FormSubmit-kopie, of iets dat we in de FormSubmit-mailbox bewust laten
+  // liggen) werden elke ronde (60 s) opnieuw opgehaald en verwerkt — dat kostte werk én
+  // kon de klant herhaald een ontvangstbevestiging sturen. Nu één keer, daarna onthouden.
+  const st = db().settings;
+  st._imapGezien = st._imapGezien && typeof st._imapGezien === 'object' ? st._imapGezien : {};
+  const gezien = st._imapGezien;
+  {
+    const grens = Date.now() - 40 * 86400000;
+    for (const [k, v] of Object.entries(gezien)) if (new Date(v).getTime() < grens) delete gezien[k];
+  }
+  const onthoud = (mid) => { gezien[mid] = now(); saveSoonQuiet(); };
+  let teruggevonden = 0;
   try {
     const uids = await client.search({ since }, { uid: true });
     for (const uid of uids || []) {
@@ -336,7 +366,14 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
       try { head = await client.fetchOne(uid, { envelope: true }, { uid: true }); } catch { continue; }
       const mid = head?.envelope?.messageId || `imap-${uid}`;
       // Al verwerkt? Dan overslaan (geen dubbel werk, geen dubbele kaarten).
-      if (db().messages.find((m) => m.externalId && m.externalId === mid)) continue;
+      if (gezien[mid] || db().messages.find((m) => m.externalId && m.externalId === mid)) continue;
+      // FormSubmit-mailbox (contact@): standaard ALLEEN de formulier-mails (en FormSubmit-
+      // activaties) verwerken — de rest van die mailbox laten we met rust.
+      {
+        const env = head?.envelope || {};
+        const vanEnv = (env.from || []).map((f) => `${f.name || ''} <${f.address || ''}>`).join(' ');
+        if (mailOverslaanInFormSubmitBox({ mailbox, from: vanEnv, subject: env.subject || '', instelling: st.formSubmitBox })) { onthoud(mid); continue; }
+      }
 
       // BELANGRIJK: één kapotte/rare e-mail mag NIET de hele ronde afbreken — anders
       // worden alle NIEUWERE mails (hogere UID) nooit meer verwerkt. Dus per bericht
@@ -384,6 +421,11 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
           ? parseFormSubmit(rawText, parsed.subject || '')
           : rawText.slice(0, 8000);
 
+        // Datum IN de mail: een al uren oude mail (net gekoppelde mailbox, of het CRM lag
+        // er even uit) is "achterstand" — geen bevestiging meer naar de klant, en de
+        // ontdubbeling vergelijkt met de aanvragen van díe dag.
+        const mailDatum = parsed.date instanceof Date && !Number.isNaN(parsed.date.getTime()) ? parsed.date : null;
+        const backlog = !!(mailDatum && Date.now() - mailDatum.getTime() > 6 * 3600000);
         const result = await ingestMessage({
           channel: 'email',
           sender: parsed.from?.text || '',
@@ -395,9 +437,15 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
           // Thread-header: is dit een ANTWOORD in een bestaande mailwisseling? Dan
           // hoort het in de gesprekshistorie van de kaart, nooit als nieuwe aanvraag.
           inReplyTo: parsed.inReplyTo || '',
+          verzondenOp: mailDatum ? mailDatum.toISOString() : '',
+          backlog,
         });
-        // Automatische ontvangstbevestiging naar de klant (indien aangezet).
-        await maybeSendAutoReply(result).catch(() => {});
+        // Niet als eigen bericht opgeslagen (ontdubbeld)? Dan onthouden, anders volgende ronde weer.
+        if (result && result.duplicate && (!result.message || result.message.externalId !== mid)) onthoud(mid);
+        if (result && result.message && result.message.teruggevonden) teruggevonden++;
+        // Automatische ontvangstbevestiging naar de klant (indien aangezet) — nooit voor
+        // een dubbele binnenkomst of een al uren oude mail.
+        if (!backlog && !(result && result.duplicate)) await maybeSendAutoReply(result).catch(() => {});
       } catch (e) {
         console.error(`  IMAP: e-mail (uid ${uid}) overgeslagen door fout:`, e.message);
         // Markeer als 'gezien' zodat deze rotte mail de volgende rondes niet blijft
@@ -411,8 +459,15 @@ async function processInbox(client, simpleParser, since, mailbox = '') {
     }
   } finally {
     lock.release();
+    if (teruggevonden) {
+      logActivity('systeem', 'gemiste website-aanvragen teruggevonden', `${teruggevonden} uit ${mailbox || 'de hoofdmailbox'}`);
+      try { sendPush({ title: 'Gemiste website-aanvragen teruggevonden', body: `${teruggevonden} aanvraag/aanvragen kwam(en) alleen via FormSubmit binnen. Ze staan in de Inbox bij Te controleren (label TERUGGEVONDEN).`, url: '/' }).catch(() => {}); } catch { /* nooit blokkeren */ }
+    }
   }
 }
+
+// Alleen voor de tests (nagebootste mailbox, geen echte IMAP-server).
+export { processInbox as _processInboxVoorTest };
 
 // Zoekt de "Verzonden"-map (naam verschilt per provider) en hangt verstuurde
 // antwoorden aan de bijbehorende klant-opdracht. Faalt veilig als er geen

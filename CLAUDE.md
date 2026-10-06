@@ -944,6 +944,27 @@ de regressie meegroeit.
   Instellingen → Koppelingen (#formulierenKaart, knoppen Activeren/Gedaan) + balk op Start
   (#formulierAlarmBlok) bij open activatie of ongelezen FormSubmit-mailbox. Test:
   test/formulieren-test.mjs (14, zonder server) + browser 253.
+  RONDE 2 (6 okt, screenshot eigenaar: CRM leest alleen crm@keyservice247.nl, FormSubmit
+  mailt naar contact@ → reserve-route komt nooit binnen; directe route werkt): CRM klaar
+  gemaakt om contact@ VEILIG te lezen zodra de eigenaar in Render IMAP_INGEST_ACCOUNTS
+  aanvult (contact@keyservice247.nl:wachtwoord — kan alleen hij; geen Render-toegang):
+  (a) FormSubmit-box standaard ALLEEN FormSubmit-mails (mailOverslaanInFormSubmitBox op de
+  envelope; instelling settings.formSubmitBox.alleenFormulieren, schakelaar in de kaart);
+  (b) GEZIEN-LIJST settings._imapGezien (40 d): ontdubbelde/overgeslagen mails worden niet
+  elke ronde opnieuw opgehaald; (c) BUG GEFIXT in maybeSendAutoReply: een dubbele
+  binnenkomst (result.duplicate) of een bericht met autoReplied krijgt nooit nog een
+  bevestiging — voorheen gold alleen "max 1 per klant per uur", waardoor een herverwerkte
+  FormSubmit-kopie de klant elk uur een bevestiging kon sturen; (d) mail-datum
+  (verzondenOp) als referentie voor de website-dedup + `backlog` (mail >6 u oud): zelfde
+  contact binnen 3 dagen = dubbel, anders TERUGGEVONDEN (message.teruggevonden, uitleg op
+  het inbox-item, géén bevestiging/push per stuk, één samenvattende push per ronde);
+  (e) eerste koppeling van contact@ kijkt eenmalig 30 dagen terug (settings.
+  _fsBoxEersteScan) om aanvragen te vinden die de directe route misten (Render met
+  persistente schijf = kort offline bij elke deploy); (f) FormSubmit-mail herkend op
+  AFZENDER (niet tekstvorm), site ook uit "submitted your form on <url>"; (g) kaart
+  mobielvriendelijk (lijst per website), exacte Render-stappen, "via doorsturen ✓" als er
+  recent FormSubmit-mails binnenkomen. Test: formulieren-test 31 (o.a. nep-SMTP: nooit
+  dubbele bevestiging; nagebootste contact@-mailbox via _processInboxVoorTest).
   OPEN — HERINNERING EIGENAAR: na de FormSubmit-check terugkomen op Trustpilot
   ("we komen hier nog op terug, help me herinneren").
 - **Trustpilot-uitnodiging, per klant zelf kiezen (5 okt 2026, wens eigenaar):** Trustpilot

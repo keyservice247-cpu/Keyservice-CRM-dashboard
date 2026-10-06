@@ -6358,7 +6358,7 @@ function vulFormulierAlarm(st) {
   const open = st.activatiesOpen || [];
   const regels = [];
   if (open.length) regels.push(`FormSubmit wacht op <strong>${open.length} bevestiging${open.length === 1 ? '' : 'en'}</strong> (${esc(open.map((a) => a.site).join(', '))}). Tot je die klikt komen van die website(s) géén FormSubmit-mails binnen.`);
-  if (st.mailboxen && st.mailboxen.length && !st.leestDoelBox) regels.push(`Het CRM leest de mailbox <strong>${esc(st.doel)}</strong> niet — daar stuurt FormSubmit de aanvragen naartoe.`);
+  if (st.mailboxen && st.mailboxen.length && !st.leestDoelBox) regels.push(`De reserve-route werkt nog niet: FormSubmit mailt naar <strong>${esc(st.doel)}</strong>, maar die mailbox is niet aan het CRM gekoppeld. Aanvragen komen wel binnen via de directe route.`);
   const html = regels.length ? `<div class="info-card form-alarm" style="margin-bottom:18px"><h3 style="margin:0 0 6px">${icon('mail', 15)} Website-formulieren: actie nodig</h3>${regels.map((r) => `<p class="small" style="margin:4px 0">${r}</p>`).join('')}<button class="btn btn-sm btn-primary" id="formAlarmOpen" type="button">Bekijken en oplossen</button></div>` : '';
   if (el.dataset.html === html) return;
   el.dataset.html = html; el.innerHTML = html;
@@ -6368,24 +6368,39 @@ async function laadFormulierStatus() {
   const el = $('#formulierenKaart'); if (!el) return;
   let st;
   try { st = await api('/api/formulieren/status'); } catch (err) { el.innerHTML = `<h3>Website-formulieren</h3><div class="muted small">Status laden lukte niet: ${esc(err.message)}</div>`; return; }
-  const wanneer = (t) => (t ? fmtDateShort(t) : '<span class="muted">nooit</span>');
+  const wanneer = (t) => (t ? esc(fmtDateShort(t)) : 'nooit');
   const open = st.activatiesOpen || [];
+  const gekoppeld = (st.mailboxen || []).includes(st.doel);
+  const status = gekoppeld
+    ? '<span style="color:var(--ok)">gekoppeld ✓</span>'
+    : st.viaDoorsturen ? '<span style="color:var(--ok)">komt binnen via doorsturen ✓</span>' : '<span style="color:var(--danger)">NIET gekoppeld</span>';
   el.innerHTML = `<h3>${icon('mail', 15)} Website-formulieren — komen de aanvragen binnen?</h3>
-    <p class="muted small">Elke website stuurt een aanvraag op twee manieren: <strong>rechtstreeks naar het CRM</strong> én via <strong>FormSubmit</strong> als e-mail naar <strong>${esc(st.doel)}</strong> (reserve). Beide komen als één aanvraag in de Inbox.</p>
+    <p class="muted small">Elke website stuurt een aanvraag op twee manieren: <strong>rechtstreeks naar het CRM</strong> (de hoofdroute) én via <strong>FormSubmit</strong> als e-mail naar <strong>${esc(st.doel)}</strong> (reserve). Beide worden samen één aanvraag in de Inbox.</p>
     ${open.length ? `<div class="form-alarm" style="padding:10px 12px;border-radius:10px;margin:8px 0"><strong>FormSubmit wacht op bevestiging</strong> — klik per website één keer op <em>Activeren</em> (opent FormSubmit) en daarna op <em>Gedaan</em>:
       ${open.map((a) => `<div class="form-act-rij"><span><strong>${esc(a.site)}</strong> <span class="muted small">${esc(fmtDateShort(a.at))}</span></span>${a.link ? `<a class="btn btn-sm btn-primary" href="${esc(a.link)}" target="_blank" rel="noopener">Activeren</a>` : '<span class="muted small">geen link gevonden — zoek de mail "Activate FormSubmit" in ' + esc(st.doel) + '</span>'}<button class="btn btn-sm form-act-klaar" data-sleutel="${esc(a.sleutel)}" type="button">Gedaan</button></div>`).join('')}</div>` : ''}
-    <div class="cf-rij" style="margin:6px 0 10px;font-size:13px">
-      <span>Mailbox voor FormSubmit: <strong>${esc(st.doel)}</strong> — ${st.leestDoelBox ? '<span style="color:var(--ok)">wordt gelezen ✓</span>' : `<span style="color:var(--danger)">wordt NIET gelezen</span>`}</span>
-      <span class="muted small">Gelezen mailboxen: ${st.mailboxen.length ? esc(st.mailboxen.join(', ')) : 'geen (IMAP niet ingesteld)'} · laatste mailcontrole: ${st.imapLaatstOk ? esc(fmtDateShort(st.imapLaatstOk)) : 'onbekend'}</span>
-    </div>
-    ${!st.leestDoelBox ? `<p class="small" style="color:var(--danger);margin:0 0 10px">Zet ${esc(st.doel)} erbij in Render → Environment → <code>IMAP_INGEST_ACCOUNTS</code> (formaat <code>adres:wachtwoord</code>), anders ziet het CRM de FormSubmit-mails nooit.</p>` : ''}
-    <div class="cv-tabel-wrap"><table class="cv-tabel"><thead><tr><th>Website</th><th title="Rechtstreeks van de website naar het CRM">Laatste direct</th><th>30 d</th><th title="De e-mailkopie via FormSubmit">Laatste FormSubmit</th><th>30 d</th><th title="Directe aanvragen (ouder dan 6 uur) waarvan de FormSubmit-kopie nooit binnenkwam">Zonder kopie</th></tr></thead><tbody>
-      ${(st.sites || []).map((s) => `<tr><td><strong>${esc(s.site)}</strong></td><td>${wanneer(s.direct.laatste)}</td><td>${s.direct.aantal30}</td><td>${wanneer(s.formsubmit.laatste)}</td><td>${s.formsubmit.aantal30}</td><td>${s.zonderKopie30 ? `<span style="color:var(--warn)">${s.zonderKopie30}</span>` : '0'}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nog geen website-aanvragen gezien.</td></tr>'}
-    </tbody></table></div>
-    <p class="muted small" style="margin-top:8px">Komt de directe route binnen maar FormSubmit niet ("zonder kopie")? Dan wacht FormSubmit meestal op bevestiging, of de mailbox wordt niet gelezen. De aanvraag zelf is dan niet kwijt — die kwam rechtstreeks binnen.</p>`;
+    <div class="form-box-status"><div><strong>Reserve-mailbox ${esc(st.doel)}:</strong> ${status}</div>
+      <div class="muted small">Het CRM leest: ${st.mailboxen.length ? esc(st.mailboxen.join(', ')) : 'geen mailbox (IMAP niet ingesteld)'} · laatste mailcontrole ${st.imapLaatstOk ? esc(fmtDateShort(st.imapLaatstOk)) : 'onbekend'}</div></div>
+    ${!st.leestDoelBox ? `<div class="form-stappen"><strong>Zo koppel je hem (2 minuten, eenmalig):</strong>
+      <ol>
+        <li>Ga naar <strong>dashboard.render.com</strong> → open de dienst <strong>keyservice-crm</strong> → links <strong>Environment</strong>.</li>
+        <li>Staat er al een regel <code>IMAP_INGEST_ACCOUNTS</code>? Klik op <strong>Edit</strong> en zet achter de bestaande waarde: <code>,${esc(st.doel)}:WACHTWOORD</code><br>Staat hij er niet? Klik <strong>Add Environment Variable</strong> → Key <code>IMAP_INGEST_ACCOUNTS</code> → Value <code>${esc(st.doel)}:WACHTWOORD</code>.</li>
+        <li>WACHTWOORD = het wachtwoord van de mailbox ${esc(st.doel)} (hetzelfde als in je mail-app). Klik <strong>Save Changes</strong> (vraagt Render hoe: kies de optie met <em>deploy</em>). Het CRM herstart vanzelf (± 2 minuten).</li>
+        <li>Kom hier terug: er staat dan "gekoppeld ✓". Het CRM kijkt één keer 30 dagen terug en haalt aanvragen op die de directe route ooit misten (label TERUGGEVONDEN).</li>
+      </ol></div>` : ''}
+    <label class="form-toggle"><input type="checkbox" id="fsAlleenFormulieren" ${st.alleenFormulieren ? 'checked' : ''}> Uit ${esc(st.doel)} <strong>alleen FormSubmit-mails</strong> verwerken (aanbevolen — de rest van die mailbox blijft buiten het CRM)</label>
+    ${st.teruggevonden30 ? `<p class="small" style="margin:6px 0">${st.teruggevonden30} gemiste aanvraag/aanvragen teruggevonden (30 d) — staan in de Inbox met label TERUGGEVONDEN.</p>` : ''}
+    <div class="form-sites">${(st.sites || []).map((s) => `<div class="form-site"><div class="form-site-naam">${esc(s.site)}</div>
+      <div class="form-site-regels"><span>Direct: <strong>${wanneer(s.direct.laatste)}</strong> <span class="muted">· ${s.direct.aantal30}× in 30 d</span></span>
+      <span>FormSubmit: <strong>${wanneer(s.formsubmit.laatste)}</strong> <span class="muted">· ${s.formsubmit.aantal30}× in 30 d</span></span>
+      ${s.zonderKopie30 && st.leestDoelBox ? `<span style="color:var(--warn)">${s.zonderKopie30}× zonder FormSubmit-kopie</span>` : ''}</div></div>`).join('') || '<div class="muted small">Nog geen website-aanvragen gezien.</div>'}</div>
+    <p class="muted small" style="margin-top:8px">"Direct" = de aanvraag kwam rechtstreeks van de website (de hoofdroute; werkt dit, dan mis je niets). "FormSubmit" = de reserve-kopie per e-mail; die vangt aanvragen op die de directe route missen, bv. als het CRM net een update krijgt.</p>`;
   $$('.form-act-klaar', el).forEach((b) => b.onclick = async () => {
     try { await api('/api/formulieren/activatie/afgehandeld', 'POST', { sleutel: b.dataset.sleutel }); toast('Gemarkeerd als gedaan'); laadFormulierStatus(); } catch (err) { toast(err.message, true); }
   });
+  const tg = $('#fsAlleenFormulieren', el);
+  if (tg) tg.onchange = async () => {
+    try { await api('/api/settings', 'PATCH', { formSubmitBox: { alleenFormulieren: tg.checked } }); toast(tg.checked ? 'Alleen FormSubmit-mails uit die mailbox' : 'Alle mail uit die mailbox komt in het CRM'); } catch (err) { toast(err.message, true); tg.checked = !tg.checked; }
+  };
 }
 async function laadSigPerUser() {
   const box = $('#sigPerUser'); if (!box) return;

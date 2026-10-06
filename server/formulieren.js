@@ -65,16 +65,32 @@ export function markeerActivatieAfgehandeld(sleutel, door = '') {
   return true;
 }
 
+// FormSubmit-mailbox (contact@): wat laten we liggen? Standaard ALLES behalve de
+// formulier-mails en FormSubmit-activaties (instelling formSubmitBox.alleenFormulieren,
+// standaard aan). Andere mailboxen: nooit iets overslaan.
+export function mailOverslaanInFormSubmitBox({ mailbox = '', from = '', subject = '', instelling = null } = {}) {
+  if (String(mailbox || '').trim().toLowerCase() !== FORMSUBMIT_DOEL) return false;
+  if (instelling && instelling.alleenFormulieren === false) return false;
+  if (/formsubmit/i.test(from)) return false;
+  if (/offerte-?aanvraag|contactaanvraag|aanvraag via|submitted your form/i.test(subject)) return false;
+  return true;
+}
+
 // Website van een (direct of FormSubmit-)bericht.
 export function siteVanBericht(m) {
   const b = String((m && m.body) || '');
   const r = b.match(/^Nieuwe aanvraag via de website\s+([a-z0-9.-]+\.[a-z]{2,})/i)
+    || b.match(/submitted your form on\s+(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:nl|com|be|eu|dev))/i)
     || String((m && m.subject) || '').match(/\(((?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:nl|com|be|eu|dev))\)/i)
     || String((m && m.subject) || '').match(/\bvia\s+((?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:nl|com|be|eu|dev))\b/i);
-  return r ? r[1].toLowerCase().replace(/^www\./, '') : 'onbekende website';
+  return r ? r[1].toLowerCase().replace(/^www\./, '') : 'website onbekend';
 }
 const isDirect = (m) => m && m.mailbox === 'website-direct';
-const isFormSubmitMail = (m) => m && m.channel === 'email' && m.mailbox !== 'website-direct' && /^Nieuwe aanvraag via de website[^\n]*\(FormSubmit-mail\)/i.test(String(m.body || ''));
+// Echte FormSubmit-aanvraagmail: AFZENDER is FormSubmit (niet alleen de tekstvorm — een
+// klant die "Offerte-aanvraag" als onderwerp typt telde anders mee) en geen activatie.
+const isFormSubmitMail = (m) => m && m.channel === 'email' && m.mailbox !== 'website-direct'
+  && /formsubmit/i.test(String(m.sender || ''))
+  && !isFormSubmitActivatie({ from: m.sender, subject: m.subject, text: m.body });
 
 // Welke mailboxen leest het CRM? (alleen namen, nooit wachtwoorden)
 export function gelezenMailboxen(env = process.env) {
@@ -115,10 +131,19 @@ export function formulierStatus({ env = process.env, nu = Date.now() } = {}) {
   }
   const mailboxen = gelezenMailboxen(env);
   const activaties = (db().settings._formSubmitActivaties || []).map((a) => ({ ...a, sleutel: a.link || `${a.site}|${a.subject}` }));
+  // Komen er de laatste 14 dagen FormSubmit-mails binnen, dan bereiken ze het CRM (bv.
+  // via doorsturen naar de hoofdmailbox) — ook als contact@ zelf niet gekoppeld is.
+  const laatsteFs = [...sites.values()].map((s) => s.formsubmit.laatste).filter(Boolean).sort().pop() || null;
+  const viaDoorsturen = !mailboxen.includes(FORMSUBMIT_DOEL) && !!(laatsteFs && nu - new Date(laatsteFs).getTime() < 14 * DAG);
+  const teruggevonden30 = (db().messages || []).filter((m) => m && m.teruggevonden && m.receivedAt && nu - new Date(m.receivedAt).getTime() < 30 * DAG).length;
   return {
     doel: FORMSUBMIT_DOEL,
     mailboxen,
-    leestDoelBox: mailboxen.includes(FORMSUBMIT_DOEL),
+    leestDoelBox: mailboxen.includes(FORMSUBMIT_DOEL) || viaDoorsturen,
+    viaDoorsturen,
+    alleenFormulieren: !(db().settings.formSubmitBox && db().settings.formSubmitBox.alleenFormulieren === false),
+    eersteScan: db().settings._fsBoxEersteScan || null,
+    teruggevonden30,
     imapLaatstOk: db()._imapLaatstOk || null,
     sites: [...sites.values()].sort((a, b) => String(b.direct.laatste || b.formsubmit.laatste || '').localeCompare(String(a.direct.laatste || a.formsubmit.laatste || ''))),
     activatiesOpen: activaties.filter((a) => !a.afgehandeld),

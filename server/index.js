@@ -3621,6 +3621,9 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       hour: Math.max(0, Math.min(23, Number(w.hour) >= 0 ? Number(w.hour) : 8)),
     };
   }
+  if ('formSubmitBox' in b) {
+    db().settings.formSubmitBox = { alleenFormulieren: !(b.formSubmitBox && b.formSubmitBox.alleenFormulieren === false) };
+  }
   if ('trustpilot' in b) {
     const t = b.trustpilot || {};
     const bcc = String(t.bcc || '').trim();

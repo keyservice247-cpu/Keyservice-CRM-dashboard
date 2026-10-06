@@ -21,6 +21,16 @@ export async function maybeSendAutoReply(result) {
   // bericht aan een bestaande, lopende kaart hangt (klant is dan al in behandeling/
   // offerte) — dan is "bedankt voor uw aanvraag, stuur foto's" niet meer passend.
   if (!review) { console.log('[bevestiging] bericht hing aan bestaande kaart (terugkerende klant) — overgeslagen'); return; }
+  // NOOIT TWEE KEER VOOR DEZELFDE AANVRAAG (6 okt 2026): een dubbele binnenkomst (de
+  // FormSubmit-kopie van een directe aanvraag, een dubbele klik) krijgt geen eigen
+  // bevestiging, en een aanvraag die er al één kreeg ook niet. Voorheen gold alleen
+  // "max 1 per klant per uur" — een kopie die later opnieuw werd verwerkt kon de klant
+  // zo elk uur opnieuw een bevestiging sturen.
+  if (result.duplicate) { console.log('[bevestiging] dubbele binnenkomst — overgeslagen'); return; }
+  {
+    const eerder = db().messages.find((m) => m.id === review.messageId);
+    if (eerder && eerder.autoReplied) { console.log('[bevestiging] deze aanvraag kreeg al een bevestiging — overgeslagen'); return; }
+  }
   // Ook automatisch goedgekeurde website-leads (drempel) krijgen gewoon een
   // ontvangstbevestiging — de klant merkt anders niets van z'n aanvraag.
   if (!['pending', 'auto_approved'].includes(review.status)) { console.log(`[bevestiging] review-status '${review.status}' (geen nieuwe aanvraag) — overgeslagen`); return; }

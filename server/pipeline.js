@@ -457,7 +457,11 @@ export async function ingestMessage(args) {
   try { return await ingestMessageKern(args); }
   finally { if (key) _inVerwerking.delete(key); }
 }
-async function ingestMessageKern({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '', inReplyTo = '', fromPhone = '' }) {
+// verzondenOp = de datum IN de mail (Date-header); backlog = de mail is al uren oud
+// (bv. een FormSubmit-mail die pas wordt gelezen nadat de mailbox is gekoppeld). Beide
+// alleen vanuit de IMAP-poller (6 okt 2026).
+async function ingestMessageKern({ channel, sender, subject, body, group, groupId, externalId, attachments = [], forceRelevant = false, mailbox = '', inReplyTo = '', fromPhone = '', verzondenOp = '', backlog = false }) {
+  const refT = verzondenOp ? new Date(verzondenOp).getTime() : NaN;
   // Stuurt de bridge naam ÉN groeps-id mee? Dan die koppeling meteen leren (self-healing:
   // valt de naam later weg door een WhatsApp-storing, dan kent het CRM de groep al).
   if (groupId && group) learnGroupAlias(groupId, group);
@@ -525,7 +529,10 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
     // van een ÉCHTE nieuwe aanvraag dagen later: buiten de eerste 3 uur is zelfde
     // telefoon/e-mail niet genoeg — dan moet ook de BERICHTTEKST overeenkomen
     // (de FormSubmit-kopie bevat letterlijk dezelfde klanttekst).
-    const now2 = Date.now();
+    // Referentie = het moment van de MAIL zelf (niet "nu"): een FormSubmit-mail die pas
+    // dagen later wordt gelezen (mailbox net gekoppeld) moet tegen de directe aanvraag
+    // van díe dag worden vergeleken (6 okt 2026).
+    const now2 = Number.isFinite(refT) ? Math.min(Date.now(), refT) : Date.now();
     const winKort = now2 - 180 * 60000;        // 3 uur: zelfde contact volstaat
     const winLang = now2 - 72 * 3600000;       // 72 uur: contact + zelfde tekst
     const mailOf = (t) => ((String(t || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])
@@ -547,11 +554,16 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
       if (!m.receivedAt) return false;
       const t = new Date(m.receivedAt).getTime();
       if (t < winLang) return false;
+      if (t > now2 + 24 * 3600000) return false; // niet tegen een veel látere aanvraag
       if (!WEBSITE_LEAD_RE.test(`${m.subject || ''}\n${m.body || ''}`)) return false;
       const tp = phoneOf(m.body);
       const tm = mailOf(m.body);
       const zelfdeContact = (myPhone && tp && tp === myPhone) || (myMail && tm && tm === myMail);
       if (!zelfdeContact) return false;
+      // ACHTERSTAND (mail is al uren oud, bv. net gekoppelde mailbox): zelfde klant binnen
+      // 3 dagen = vrijwel zeker dezelfde aanvraag die al rechtstreeks binnenkwam. Liever
+      // geen dubbele oude aanvraag in de inbox.
+      if (backlog && Math.abs(t - now2) <= 3 * 86400000) return true;
       // ALTIJD de klanttekst vergelijken — ook binnen 3 uur. Anders werd een tweede,
       // ECHTE aanvraag van dezelfde klant (andere klus, of vergeten informatie) als
       // duplicaat weggegooid en nergens bewaard. Heeft het bericht geen bruikbare
@@ -562,8 +574,8 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
     if (twin) {
       // Bewaking website-formulieren (6 okt 2026): vastleggen dat de FormSubmit-kopie van
       // deze directe lead WEL is aangekomen (zichtbaar in Instellingen → Koppelingen).
-      if (channel === 'email' && !forceRelevant) twin.formSubmitKopieAt = now();
-      if (forceRelevant) twin.directOokAt = now();
+      if (channel === 'email' && !forceRelevant && !twin.formSubmitKopieAt) twin.formSubmitKopieAt = Number.isFinite(refT) ? new Date(now2).toISOString() : now();
+      if (forceRelevant && !twin.directOokAt) twin.directOokAt = now();
       if (attachments && attachments.length) {
         // Identieke foto's (zelfde inhoud) niet nóg een keer toevoegen.
         twin.attachments = mergeAttachments(twin.attachments || [], attachments);
@@ -1044,7 +1056,15 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   // VANGNET: komt een website-lead via de FormSubmit-MAIL binnen zonder dat de
   // directe website->CRM-koppeling dezelfde lead (telefoon/e-mail) in de afgelopen
   // 20 min aanleverde, dan is de directe koppeling mogelijk stuk -> direct alarm.
-  if (isWebsiteForm && !forceRelevant && !isFormActivation) {
+  // TERUGGEVONDEN (6 okt 2026): een al uren oude website-mail zonder directe aanvraag =
+  // een aanvraag die de directe route miste (bv. tijdens een update van het CRM). Geen
+  // alarm per stuk, wel een duidelijke uitleg op het inbox-item; de IMAP-poller stuurt
+  // één samenvattende melding.
+  if (backlog && isWebsiteForm && !forceRelevant && !isFormActivation && review.status === 'pending') {
+    message.teruggevonden = true;
+    suggestion.relevanceReason = `TERUGGEVONDEN — deze website-aanvraag${Number.isFinite(refT) ? ` van ${new Date(refT).toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''} kwam alleen via FormSubmit (e-mail) binnen; de directe route miste hem (bv. tijdens een update van het CRM). Controleer of hij al is opgepakt.`;
+    logActivity('systeem', 'gemiste website-aanvraag teruggevonden', suggestion.customerName || sender || '');
+  } else if (isWebsiteForm && !forceRelevant && !isFormActivation) {
     const cutoff = Date.now() - 20 * 60000;
     const phone = (suggestion.customerPhone || '').replace(/[^\d]/g, '');
     const mail = (suggestion.customerEmail || '').toLowerCase();
@@ -1061,7 +1081,7 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   logActivity('systeem', 'bericht ontvangen', `${channel} van ${sender || 'onbekend'}`);
   // Melding bij een echte nieuwe aanvraag (niet bij geklets/overige) — óók wanneer
   // hij automatisch is goedgekeurd: een lead mag NOOIT stil binnenkomen.
-  if (['pending', 'auto_approved'].includes(review.status)) {
+  if (['pending', 'auto_approved'].includes(review.status) && !backlog) {
     const who = suggestion.customerName || sender || 'Onbekend';
     const what = (subject || body || '').replace(/\s+/g, ' ').slice(0, 80);
     const isAuto = review.status === 'auto_approved';
