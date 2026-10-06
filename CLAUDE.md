@@ -970,6 +970,9 @@ de regressie meegroeit.
   (lege POST met hun Origin → 400 "Lege aanvraag" = toegestaan). "Zonder kopie" koppelt nu
   óók op klantnummer/e-mail (contactSleutels, ±1/+3 d) — de vlag bestond pas sinds 6 okt,
   oude paren telden ten onrechte. formulieren-test 32.
+  BEVEILIGINGSUPDATES (6 okt): npm audit fix + nodemailer 6 → 10.0.15 (Node ≥20; Render draait
+  22). Alleen xlsx (klantimport, alleen ingelogd) heeft nog geen fix. Alle tests groen.
+  LET OP: npm install ruimt playwright-core op → `npm install --no-save playwright-core`.
   OPEN — HERINNERING EIGENAAR: na de FormSubmit-check terugkomen op Trustpilot
   ("we komen hier nog op terug, help me herinneren").
 - **Trustpilot-uitnodiging, per klant zelf kiezen (5 okt 2026, wens eigenaar):** Trustpilot
