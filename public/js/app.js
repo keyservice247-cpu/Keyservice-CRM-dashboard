@@ -2731,7 +2731,9 @@ function openOrderModal(id, pool) {
   });
   // TRUSTPILOT (5 okt 2026): per afgeronde klant zelf kiezen — bedankmailtje met de
   // Trustpilot-uitnodiging in BCC. Al eerder gedaan → eerst vragen.
-  if (o && $('#f-trustpilot')) $('#f-trustpilot').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+  // Knop vooraf vastpakken: ev.currentTarget is na een await leeg (gaf "Cannot set
+  // properties of null" NA een geslaagde verzending — 6 okt 2026).
+  if (o && $('#f-trustpilot')) $('#f-trustpilot').onclick = (ev) => { const tpKnop = ev.currentTarget; return eenKeer(tpKnop, async () => {
     const mail = o.intake?.email || o.customer?.email || '';
     if (!mail) { toast('Deze klant heeft geen e-mailadres — Trustpilot werkt alleen via e-mail. Vul het e-mailadres in en sla eerst op.', true); return; }
     const al = o.trustpilotAt || o.customer?.trustpilotUitgenodigdAt;
@@ -2740,9 +2742,9 @@ function openOrderModal(id, pool) {
       const r = await api(`/api/orders/${o.id}/trustpilot`, 'POST', { force: !!al });
       toast(`Trustpilot-uitnodiging verstuurd naar ${r.to}`);
       o.trustpilotAt = new Date().toISOString();
-      ev.currentTarget.innerHTML = `${icon('sparkles', 14)} Trustpilot ✓`;
+      if (tpKnop) tpKnop.innerHTML = `${icon('sparkles', 14)} Trustpilot ✓`;
     } catch (err) { toast(err.message, true); }
-  });
+  }); };
   if (o && $('#f-onweg')) $('#f-onweg').onclick = async () => {
     // Vooraf laten zien via welk kanaal het gaat (punt 7) — en stoppen als er niets is.
     const tel = (o.intake?.phone || o.customer?.phone || '').replace(/\D/g, '');
@@ -3798,6 +3800,29 @@ function openInvoiceModal(o, type = 'factuur') {
   }).catch((err) => toast(err.message, true));
 }
 
+// TRUSTPILOT VANAF EEN FACTUUR (6 okt 2026): knop naast Review in de lijst én in de editor.
+// Alleen kantoor en alleen als het BCC-adres is ingesteld. Al uitgenodigd → eerst vragen.
+function trustpilotKnopMag() {
+  return state.me && state.me.role !== 'monteur' && !!state.meta?.trustpilot?.aan;
+}
+async function stuurTrustpilotFactuur(invId, alDatum, btn, klaar) {
+  if (!confirm(alDatum ? `Deze klant is al uitgenodigd voor Trustpilot (${fmtDateShort(alDatum)}). Toch nog een keer sturen?` : 'Trustpilot-uitnodiging sturen?\n\nDe klant krijgt een kort bedankmailtje; Trustpilot stuurt daarna zelf het reviewverzoek.')) return;
+  const oud = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Versturen…'; }
+  const stuur = (force) => api(`/api/invoices/${invId}/trustpilot`, 'POST', { force });
+  try {
+    let r;
+    try { r = await stuur(!!alDatum); }
+    catch (err) {
+      // Klant al via een andere factuur/opdracht uitgenodigd → server meldt dat; eerst vragen.
+      if (!/al uitgenodigd/i.test(err.message) || !confirm(`${err.message}\n\nToch nog een keer sturen?`)) throw err;
+      r = await stuur(true);
+    }
+    toast(`Trustpilot-uitnodiging verstuurd naar ${r.to}`);
+    if (btn) { btn.disabled = false; btn.innerHTML = `${icon('sparkles', 13)} Trustpilot ✓`; btn.dataset.al = r.trustpilotAt || ''; }
+    if (klaar) klaar(r);
+  } catch (err) { toast(err.message, true); if (btn) { btn.disabled = false; btn.innerHTML = oud; } }
+}
 function openStandaloneInvoice(invId) {
   api(`/api/invoices/${invId}`).then(({ invoice, customer, order, priceList = [], bundles = [] }) => {
     renderInvoiceEditor({
@@ -3904,6 +3929,7 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && !isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button><button class="btn" id="inv-remind">${icon('bell', 13)} Herinnering</button>` : ''}
         ${inv.id && !isQuote && inv.status === 'concept' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button>` : ''}
         ${inv.id && !isQuote && inv.status === 'betaald' ? `<button class="btn" id="inv-unpaid" title="${inv.sentAt ? 'Terug naar Verzonden — de factuur staat dan open en kan herinnerd worden' : 'Terug naar Concept — de factuur staat dan open'}">Nog niet betaald</button>` : ''}
+        ${inv.id && !isQuote && (inv.sentAt || inv.status === 'betaald') && trustpilotKnopMag() ? `<button class="btn" id="inv-tp" title="${inv.trustpilotAt ? 'Al uitgenodigd op ' + esc(fmtDateShort(inv.trustpilotAt)) : 'Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC)'}">${icon('sparkles', 13)} Trustpilot${inv.trustpilotAt ? ' ✓' : ''}</button>` : ''}
         ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button><button class="btn" id="inv-qremind" title="Vriendelijke herinnering: per e-mail met PDF, of via WhatsApp als de klant alleen een 06 heeft">${icon('bell', 13)} Herinnering${inv.quoteFollowupCount ? ` (${inv.quoteFollowupCount}x)` : ''}</button>` : ''}
         ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">${inv.convertedInvoiceId ? '→ Open factuur' : '→ Maak factuur'}</button>` : ''}
         ${inv.id ? `<button class="btn" id="inv-copy">${icon('merge', 13)} Kopieer</button>` : ''}
@@ -4104,6 +4130,7 @@ function renderInvoiceEditor(ctx) {
   const statusBtn = (sel, status, msg) => { if ($(sel)) $(sel).onclick = (ev) => eenKeer(ev.currentTarget, async () => { try { if (!await bewaarEerst()) return; await api(`/api/invoices/${inv.id}/status`, 'POST', { status }); done(msg); } catch (err) { toast(err.message, true); } }); };
   statusBtn('#inv-paid', 'betaald', 'Gemarkeerd als betaald ✓');
   // "Nog niet betaald": verstuurd → Verzonden (open, herinnerbaar); nooit verstuurd → Concept.
+  if ($('#inv-tp')) $('#inv-tp').onclick = (e) => stuurTrustpilotFactuur(inv.id, e.currentTarget.dataset.al || inv.trustpilotAt || '', e.currentTarget, (r) => { inv.trustpilotAt = r.trustpilotAt || inv.trustpilotAt; });
   statusBtn('#inv-unpaid', inv.sentAt ? 'verzonden' : 'concept', 'Gemarkeerd als nog niet betaald');
   statusBtn('#inv-reject', 'afgekeurd', 'Offerte afgekeurd');
   // Goedkeuren: als er automatisch een factuur-concept van wordt gemaakt, dat meteen melden.
@@ -4689,6 +4716,7 @@ function renderInvoices() {
         ${i.sentAt ? `<button class="btn btn-sm inv-resend" data-id="${esc(i.id)}" data-label="${esc((quote ? 'Offerte' : 'Factuur') + ' ' + i.number)}" data-email="${esc(i.customerEmail || i.sentTo || '')}" data-factuur="${quote ? '' : '1'}" data-nummer="${esc(i.number || '')}" data-bedrag="${esc(String(i.totalIncl ?? ''))}" data-status="${esc(i.status)}" data-tp="${esc(i.trustpilotAt || '')}" title="Opnieuw naar de klant mailen (bv. verkeerd adres)">${icon('mail', 13)} Opnieuw</button>` : ''}
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Opdracht</button>` : ''}
         ${!quote && (i.sentAt || i.status === 'betaald') ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review (mail + WhatsApp)'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
+        ${!quote && (i.sentAt || i.status === 'betaald') && trustpilotKnopMag() ? `<button class="btn btn-sm inv-tp" data-id="${esc(i.id)}" data-al="${esc(i.trustpilotAt || '')}" title="${i.trustpilotAt ? 'Al uitgenodigd op ' + esc(fmtDateShort(i.trustpilotAt)) : 'Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC)'}">${icon('sparkles', 13)} Trustpilot${i.trustpilotAt ? ' ✓' : ''}</button>` : ''}
         ${!quote && (i.status === 'verzonden' || i.status === 'concept') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
         ${!quote && i.status === 'betaald' ? `<button class="btn btn-sm inv-unmark" data-id="${esc(i.id)}" data-status="${i.sentAt ? 'verzonden' : 'concept'}" title="De factuur staat dan weer open">Nog niet betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
@@ -4711,6 +4739,7 @@ function renderInvoices() {
       loadInvoices();
     } catch (err) { toast(err.message, true); b.disabled = false; b.innerHTML = oud; }
   });
+  $$('.inv-tp').forEach((b) => b.onclick = () => stuurTrustpilotFactuur(b.dataset.id, b.dataset.al, b, () => loadInvoices()));
   const quickStatus = (sel, status, msg) => $$(sel).forEach((b) => b.onclick = async () => {
     try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status: b.dataset.status || status }); toast(msg); loadInvoices(); }
     catch (err) { toast(err.message, true); }

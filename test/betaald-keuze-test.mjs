@@ -258,6 +258,22 @@ try {
   ok('klant zonder e-mail: nette uitleg', k3.status === 400 && /e-mailadres/.test(k3.json?.error || ''), JSON.stringify(k3.json));
   const oThread = ((await api('GET', `/api/orders/${o3.id}`)).json.thread || []);
   ok('kaart-historie toont dat de uitnodiging is meegestuurd', oThread.some((t) => /Trustpilot-uitnodiging meegestuurd/.test(t.body || '')));
+  // Knop Trustpilot vanaf een FACTUUR (6 okt 2026): ook bij een losse factuur, BCC in de envelop.
+  const kl5 = (await api('POST', '/api/customers', { name: 'Frida Factuur', email: 'frida@example.nl' })).json;
+  const fF = (await api('POST', '/api/invoices', { customerId: kl5.id, type: 'factuur' })).json;
+  const fFid = (fF.invoice || fF).id;
+  await api('PATCH', `/api/invoices/${fFid}`, { lines: [{ description: 'Cilinder', qty: 1, priceExcl: 80 }], btwPct: 21, note: '' });
+  n = enveloppen.length;
+  const kf1 = await api('POST', `/api/invoices/${fFid}/trustpilot`, {});
+  ok('knop Trustpilot op een (losse) factuur: bedankmail aan de klant met Trustpilot in BCC', kf1.status === 200 && kf1.json?.to === 'frida@example.nl' && enveloppen[n] && enveloppen[n].includes('frida@example.nl') && enveloppen[n].includes(TP.toLowerCase()) && /Frida Factuur/.test(decodeer(mails[mails.length - 1])), JSON.stringify({ st: kf1.status, j: kf1.json, env: enveloppen[n] }));
+  ok('… vastgelegd op de factuur (✓ op de knop)', !!(await haal(fFid)).trustpilotAt && !!kf1.json?.trustpilotAt);
+  const kf2 = await api('POST', `/api/invoices/${fFid}/trustpilot`, {});
+  ok('factuur: tweede keer eerst waarschuwen (409)', kf2.status === 409 && /al uitgenodigd/.test(kf2.json?.error || ''), JSON.stringify(kf2.json));
+  n = enveloppen.length;
+  const kf3 = await api('POST', `/api/invoices/${fFid}/trustpilot`, { force: true });
+  ok('factuur: bewust nog een keer (force) → verstuurd', kf3.status === 200 && enveloppen.length === n + 1);
+  const kf4 = await api('POST', `/api/invoices/${offTpId}/trustpilot`, {});
+  ok('offerte: geen Trustpilot-knop (400)', kf4.status === 400, JSON.stringify(kf4.json));
   void o2;
 } finally {
   proc.kill('SIGTERM');

@@ -1342,7 +1342,45 @@ ok('Trustpilot-instelling bekend in het scherm (meta)', tpSetup.aan, JSON.string
 await page.evaluate((id) => openOrderVers(id), tpSetup.orderId);
 await page.waitForSelector('#f-trustpilot', { timeout: 6000 }).catch(() => {});
 ok('afgeronde opdracht heeft een knop "Trustpilot"', await page.locator('#f-trustpilot').count() === 1);
+// ECHT KLIKKEN (6 okt 2026, casus eigenaar: "Cannot set properties of null (setting
+// 'innerHTML')" NA een geslaagde verzending). De testserver heeft geen mailserver, dus het
+// antwoord wordt nagebootst; de fout zat in het scherm, ná het antwoord.
+const tpNep = (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, to: 'trust@example.nl', trustpilotAt: new Date().toISOString() }) });
+await page.route('**/api/orders/*/trustpilot', tpNep);
+await page.evaluate(() => { const t = document.querySelector('#toast'); if (t) { t.hidden = true; t.textContent = ''; t.className = 'toast'; } });
+page.once('dialog', (d) => d.accept());
+await page.click('#f-trustpilot');
+await page.waitForFunction(() => /✓/.test((document.querySelector('#f-trustpilot') || {}).textContent || '') || (document.querySelector('#toast.err') && !document.querySelector('#toast').hidden), null, { timeout: 6000 }).catch(() => {});
+const tpKlik = await page.evaluate(() => { const t = document.querySelector('#toast'); return { knop: (document.querySelector('#f-trustpilot') || {}).textContent || '', toast: t ? t.textContent : '', fout: !!(t && !t.hidden && t.classList.contains('err')) }; });
+ok('knop Trustpilot op de opdracht: na versturen ✓ op de knop en GEEN foutmelding', /✓/.test(tpKlik.knop) && !tpKlik.fout && /verstuurd naar trust@example\.nl/.test(tpKlik.toast), JSON.stringify(tpKlik));
+await page.unroute('**/api/orders/*/trustpilot', tpNep);
 await page.evaluate(() => closeModal());
+// Knop "Trustpilot" ook bij Facturen (lijst + geopende factuur), naast Review.
+const tpStatusVooraf = await page.evaluate(async (id) => { const r = await fetch('/api/invoices/' + id).then((x) => x.json()); const st = (r.invoice || r).status; await fetch('/api/invoices/' + id + '/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'betaald' }) }); return st; }, tpSetup.invId);
+await page.evaluate(() => goView('invoices'));
+await page.waitForSelector(`.inv-tp[data-id="${tpSetup.invId}"]`, { timeout: 8000 }).catch(() => {});
+ok('Facturen-lijst: knop "Trustpilot" bij een betaalde factuur', await page.locator(`.inv-tp[data-id="${tpSetup.invId}"]`).count() === 1);
+const tpNepF = (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, to: 'trust@example.nl', trustpilotAt: new Date().toISOString() }) });
+await page.route('**/api/invoices/*/trustpilot', tpNepF);
+await page.evaluate(() => { const t = document.querySelector('#toast'); if (t) { t.hidden = true; t.textContent = ''; t.className = 'toast'; } });
+page.once('dialog', (d) => d.accept());
+await page.click(`.inv-tp[data-id="${tpSetup.invId}"]`);
+await page.waitForFunction(() => /verstuurd naar/.test((document.querySelector('#toast') || {}).textContent || '') || (document.querySelector('#toast.err') && !document.querySelector('#toast').hidden), null, { timeout: 6000 }).catch(() => {});
+const tpLijst = await page.evaluate(() => { const t = document.querySelector('#toast'); return { toast: t ? t.textContent : '', fout: !!(t && !t.hidden && t.classList.contains('err')) }; });
+ok('Facturen-lijst: Trustpilot-knop verstuurt zonder foutmelding', !tpLijst.fout && /verstuurd naar trust@example\.nl/.test(tpLijst.toast), JSON.stringify(tpLijst));
+await page.evaluate((id) => window.openStandaloneInvoice(id), tpSetup.invId);
+await page.waitForSelector('#inv-tp', { timeout: 6000 }).catch(() => {});
+ok('geopende factuur: knop "Trustpilot" staat er', await page.locator('#inv-tp').count() === 1);
+await page.evaluate(() => { const t = document.querySelector('#toast'); if (t) { t.hidden = true; t.textContent = ''; t.className = 'toast'; } });
+page.once('dialog', (d) => d.accept());
+await page.click('#inv-tp');
+await page.waitForFunction(() => /✓/.test((document.querySelector('#inv-tp') || {}).textContent || '') || (document.querySelector('#toast.err') && !document.querySelector('#toast').hidden), null, { timeout: 6000 }).catch(() => {});
+const tpEditor = await page.evaluate(() => { const t = document.querySelector('#toast'); return { knop: (document.querySelector('#inv-tp') || {}).textContent || '', fout: !!(t && !t.hidden && t.classList.contains('err')), toast: t ? t.textContent : '' }; });
+ok('geopende factuur: Trustpilot-knop → ✓ zonder foutmelding', /✓/.test(tpEditor.knop) && !tpEditor.fout, JSON.stringify(tpEditor));
+await page.unroute('**/api/invoices/*/trustpilot', tpNepF);
+await page.evaluate(() => closeModal());
+// Zet de factuur terug zoals hij was voor de verstuur-vinkje-checks hieronder.
+if (tpStatusVooraf && tpStatusVooraf !== 'betaald') await page.evaluate(async ([id, st]) => { await fetch('/api/invoices/' + id + '/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: st }) }); }, [tpSetup.invId, tpStatusVooraf]);
 await page.evaluate((id) => window.openStandaloneInvoice(id), tpSetup.invId);
 await page.waitForSelector('#inv-send', { timeout: 6000 }).catch(() => {});
 await page.click('#inv-send');

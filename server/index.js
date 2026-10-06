@@ -4667,6 +4667,39 @@ app.post('/api/orders/:id/trustpilot', requireRole('admin', 'assistent'), async 
   res.json({ ok: true, to });
 });
 
+// TRUSTPILOT VANAF EEN FACTUUR (6 okt 2026, eigenaar: "de knop hoort bij Facturen, naast
+// Review"). Zelfde bedankmailtje + BCC als op de opdracht; werkt ook voor een losse factuur
+// (zonder opdracht). Ontvanger: e-mail van de opdracht (intake) → klantrecord → sentTo.
+app.post('/api/invoices/:id/trustpilot', requireRole('admin', 'assistent'), async (req, res) => {
+  const inv = (db().invoices || []).find((i) => i.id === req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Factuur niet gevonden' });
+  if (inv.type === 'offerte') return res.status(400).json({ error: 'Een Trustpilot-uitnodiging stuur je na een factuur, niet na een offerte.' });
+  const tp = getTrustpilot();
+  if (!tp.aan) return res.status(400).json({ error: 'Er staat nog geen Trustpilot-adres ingesteld (Instellingen → Automatische berichten → Trustpilot → Opslaan).' });
+  if (!smtpConfigured()) return res.status(400).json({ error: 'E-mail versturen (SMTP) is niet ingesteld.' });
+  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+  const customer = db().customers.find((c) => c.id === inv.customerId) || {};
+  const geldig = (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(v || '').trim());
+  const to = [req.body?.to, order && order.intake && order.intake.email, customer.email, inv.sentTo].map((v) => String(v || '').trim()).find(geldig) || '';
+  if (!to) return res.status(400).json({ error: 'Deze klant heeft geen e-mailadres. Trustpilot werkt alleen via e-mail — vul het e-mailadres van de klant in.' });
+  const eerder = inv.trustpilotAt || (order && order.trustpilotAt) || customer.trustpilotUitgenodigdAt;
+  if (eerder && !req.body?.force) return res.status(409).json({ error: `Deze klant is al uitgenodigd voor Trustpilot op ${new Date(eerder).toLocaleDateString('nl-NL')}.`, al: eerder });
+  const naam = (order && order.intake && order.intake.name) || customer.name || '';
+  const body = String(tp.body || '').replace(/\{naam\}/g, naam && !/onbekende klant/i.test(naam) ? naam : 'klant');
+  const sig = getEmailSignature(afzenderVan(req));
+  try {
+    await sendMail({ afzender: afzenderVan(req), to, subject: tp.subject, text: sig ? `${body}\n\n${sig}` : body, bcc: tp.bcc });
+  } catch (e) { return res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
+  if (order) {
+    order.thread = order.thread || [];
+    order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (Trustpilot)`, subject: tp.subject, body, at: now() });
+    order.updatedAt = now();
+  }
+  markeerTrustpilot({ customer, order, inv, door: req.user.name, to });
+  saveSoon();
+  res.json({ ok: true, to, trustpilotAt: inv.trustpilotAt });
+});
+
 // "Monteur onderweg": één knop op de kaart -> klant krijgt een mail én een appje
 // dat de monteur er nu aankomt. Mag ook door de monteur zelf (eigen opdrachten).
 app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {

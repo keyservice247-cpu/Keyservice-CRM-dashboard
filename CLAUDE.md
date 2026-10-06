@@ -991,6 +991,16 @@ de regressie meegroeit.
   markeerTrustpilot: customer.trustpilotUitgenodigdAt, order/inv.trustpilotAt, kaart-
   historie "Trustpilot-uitnodiging meegestuurd (BCC)" + logboek. Tests: betaald-keuze-test
   42 (nep-SMTP controleert de BCC in de envelop) + browser 251.
+  KNOP OOK BIJ FACTUREN (6 okt 2026, eigenaar "ik zie alleen de oude Review-knop"): knop
+  "Trustpilot" naast Review in de Facturen-lijst (.inv-tp) én in de geopende factuur (#inv-tp),
+  bij een verstuurde of betaalde factuur, alleen kantoor en alleen met ingesteld adres
+  (trustpilotKnopMag) → POST /api/invoices/:id/trustpilot (zelfde bedankmailtje + BCC, ook
+  losse factuur; ontvanger intake → klant → sentTo; 409 al uitgenodigd tenzij force; offerte
+  400); gedeelde schermfunctie stuurTrustpilotFactuur. BUG GEFIXT: de knop op de opdracht
+  gaf "Cannot set properties of null (setting 'innerHTML')" NA een geslaagde verzending
+  (ev.currentTarget is leeg na een await) — de mail ging wél weg. REGEL: knop vóór de await
+  in een variabele vastpakken. Browser-test klikt nu echt (nagebootst serverantwoord).
+  Tests: betaald-keuze 47, browser 258.
 - **Zoeken in de ingeklapte agenda's (5 okt 2026, wens eigenaar):** de zoekbalk en het
   bron/monteur-filter op het bord keken alleen naar open kaarten. GET /api/archives/zoek
   ?q=(min 2)&mont=(src:drs|src:eigen|id)&kanaal= doorzoekt alle ingeklapte weken (zelfde
