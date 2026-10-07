@@ -1001,6 +1001,16 @@ de regressie meegroeit.
   (ev.currentTarget is leeg na een await) — de mail ging wél weg. REGEL: knop vóór de await
   in een variabele vastpakken. Browser-test klikt nu echt (nagebootst serverantwoord).
   Tests: betaald-keuze 47, browser 258.
+  BOUNCE-MELDING NAAR DE JUISTE MENSEN (7 okt 2026, casus losse offerte Daniel "E-mail
+  niet aangekomen"): handleBounce zoekt nu óók de factuur/offerte die ≤7 d geleden naar het
+  geweigerde adres ging (inv.sentTo) → inv.bounce {at,to,reden} → rood label "mail NIET
+  aangekomen — adres controleren" in de Facturen-lijst (.inv-bounce; weg bij opnieuw
+  versturen); melding noemt het document. Kantoor (beheerder + assistente) kreeg hem al
+  (sendPush standaard = kantoor; de assistente moet wel Meldingen aan hebben op haar
+  toestel). NIEUW: ook de MONTEUR van de klant (bounceMonteurDoel: monteur van de opdracht,
+  anders de monteur die de losse factuur/offerte maakte). Monteur krijgt de betaald-vraag
+  bij versturen gewoon (geen rolbeperking; browser-test logt als monteur in en verstuurt).
+  Tests: mail-test 83, browser 259.
 - **Zoeken in de ingeklapte agenda's (5 okt 2026, wens eigenaar):** de zoekbalk en het
   bron/monteur-filter op het bord keken alleen naar open kaarten. GET /api/archives/zoek
   ?q=(min 2)&mont=(src:drs|src:eigen|id)&kanaal= doorzoekt alle ingeklapte weken (zelfde

@@ -5313,6 +5313,7 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
       logActivity(req.user.name, 'kaart naar Offerte verzonden', `${order.title} (offerte ${inv.number})`);
     }
     inv.sentTo = to;
+    delete inv.bounce; // opnieuw verstuurd (bv. adres verbeterd) → oude "niet aangekomen" weg
     if (order) {
       order.thread = order.thread || [];
       order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (${inv.type})`, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number}`, body, at: now() });

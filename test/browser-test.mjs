@@ -1299,6 +1299,20 @@ noErr('Mobiel plakkende balken');
   const gebonden = await mp.evaluate(() => ({ save: !!document.querySelector('#f-save')?.onclick, onweg: !!document.querySelector('#f-onweg')?.onclick, werkbon: !!document.querySelector('#f-werkbon')?.onclick }));
   ok('monteur: kaart met samenvoeg-suggestie is volledig bruikbaar (Opslaan/Onderweg/Werkbon gebonden)', gebonden.save && gebonden.onweg && gebonden.werkbon, JSON.stringify(gebonden));
   ok('monteur: geen JS-fout bij het openen van die kaart', !mErr.filter((e) => !/favicon|manifest|ServiceWorker/i.test(e)).length, mErr.join(' | '));
+  // Betaald-vraag óók voor de monteur (vraag eigenaar 7 okt): factuur op zijn eigen opdracht.
+  const mInvId = await mp.evaluate(async ([orderId, customerId]) => {
+    const r = await fetch('/api/invoices', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ orderId, customerId, type: 'factuur' }) }).then((x) => x.json());
+    const inv = r.invoice || r;
+    await fetch('/api/invoices/' + inv.id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ lines: [{ description: 'Cilinder', qty: 1, priceExcl: 80 }], btwPct: 21 }) });
+    return inv.id || JSON.stringify(r).slice(0, 120);
+  }, [gemaakt && gemaakt.id, gemaakt && gemaakt.customerId]);
+  await mp.evaluate((id) => { if (typeof closeModal === 'function') closeModal(); window.openStandaloneInvoice(id); }, mInvId);
+  await mp.waitForSelector('#inv-send-wa', { timeout: 6000 }).catch(() => {});
+  await mp.click('#inv-send-wa').catch(() => {});
+  await mp.waitForSelector('#bk-ja', { timeout: 5000 }).catch(() => {});
+  const mBk = await mp.evaluate(() => ({ ja: !!document.querySelector('#bk-ja'), nee: !!document.querySelector('#bk-nee'), tekst: (document.querySelector('.bk-dialog') || {}).textContent || '' }));
+  ok('monteur: bij versturen van een factuur óók de vraag "Kan deze factuur als betaald worden verstuurd?"', mBk.ja && mBk.nee && /betaald/i.test(mBk.tekst), JSON.stringify({ ...mBk, tekst: mBk.tekst.slice(0, 80), inv: mInvId }));
+  await mp.click('#bk-cancel').catch(() => {});
   ok('monteur-scherm zonder JS-fouten', !mErr.filter((e) => !/favicon|manifest|ServiceWorker/i.test(e)).length, mErr.join(' | '));
   await mp.close();
 }

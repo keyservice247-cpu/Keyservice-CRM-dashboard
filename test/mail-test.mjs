@@ -49,6 +49,21 @@ ok('waarschuwing in de gesprekshistorie van de kaart', (ordBt.thread || []).some
 ok('reden = volledige Diagnostic-Code (niet het korte fragment)', /User unknown/.test((ordBt.thread.find((t) => /NIET AANGEKOMEN/.test(t.body || '')) || {}).body || ''));
 ok('bounce geregistreerd als verwerkt bericht (nooit een lead)', d.messages.some((m) => m.externalId === '<bounce-1@transip>' && m.bounce === true));
 
+console.log('\n== Bounce op een (losse) offerte: welk document + wie krijgt de melding (6 okt 2026) ==');
+const { bounceMonteurDoel } = await import('../server/connectors/email-imap.js');
+d.invoices = d.invoices || []; d.users = d.users || [];
+d.users.push({ id: 'usr_mont', role: 'monteur', monteurId: 'mon_y', name: 'Youssef' }, { id: 'usr_ass', role: 'assistent', name: 'Assistente' });
+d.invoices.push({ id: 'inv_bt', type: 'offerte', number: 'OFF-2026-0077', customerId: 'cust_bt2', orderId: null, sentTo: 'daniel@example.nl', lastSentAt: new Date().toISOString(), createdById: 'usr_mont' });
+const DSN2 = DSN_BODY.replace(/klant@example\.nl/g, 'daniel@example.nl').replace(/<ks-uit-123@keyservice247\.nl>/g, '<ks-onbekend@keyservice247.nl>');
+const rb = handleBounce({ from: { text: 'MAILER-DAEMON@transip.email' }, subject: 'Undelivered Mail Returned to Sender' }, DSN2, '<bounce-2@transip>');
+ok('losse offerte gevonden en gemarkeerd als "niet aangekomen"', rb.inv && rb.inv.id === 'inv_bt' && d.invoices.find((i) => i.id === 'inv_bt').bounce && /daniel@example\.nl/.test(d.invoices.find((i) => i.id === 'inv_bt').bounce.to), JSON.stringify(rb.inv && rb.inv.bounce));
+ok('… en de monteur die hem maakte krijgt de melding ook', JSON.stringify(rb.monteurDoel) === JSON.stringify({ userIds: ['usr_mont'] }), JSON.stringify(rb.monteurDoel));
+ok('opdracht met monteur → melding naar die monteur', JSON.stringify(bounceMonteurDoel({ order: { monteurId: 'mon_y' } })) === JSON.stringify({ monteurId: 'mon_y' }));
+ok('door kantoor gemaakt, zonder monteur → alleen kantoor (geen extra doel)', bounceMonteurDoel({ order: null, inv: { createdById: 'usr_ass' }, users: d.users }) === null);
+const { kiesToestellen } = await import('../server/push.js');
+const toestellen = kiesToestellen(undefined, [{ endpoint: 'a', userId: 'usr_ass' }, { endpoint: 'm', userId: 'usr_mont' }], d.users);
+ok('standaardmelding (kantoor) gaat naar de assistente, niet naar de monteur', toestellen.map((t) => t.endpoint).join() === 'a', JSON.stringify(toestellen));
+
 console.log('\n== AI-antwoord dat halverwege afbreekt wordt gered (dagoverzicht) ==');
 // Het dagoverzicht faalde omdat de AI-JSON werd afgekapt (te lage antwoordlimiet)
 // en er geen werkende reparatie was. Deze test bewaakt beide kanten.

@@ -66,7 +66,15 @@ export function handleBounce(parsed, rawText, mid) {
         || String((db().customers.find((c) => c.id === o.customerId) || {}).email || '').toLowerCase() === rcpt)));
     order = candidates.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0] || null;
   }
+  // Factuur/offerte die naar dit adres ging (6 okt 2026, casus losse offerte Daniel: de mail
+  // hing aan geen opdracht, dus niemand zag WELK document niet aankwam).
+  const inv = rcpt ? (db().invoices || [])
+    .filter((i) => String(i.sentTo || '').toLowerCase() === rcpt && i.lastSentAt && Date.now() - new Date(i.lastSentAt).getTime() < 7 * 86400000)
+    .sort((a, b) => String(b.lastSentAt || '').localeCompare(String(a.lastSentAt || '')))[0] || null : null;
+  if (!order && inv && inv.orderId) order = (db().orders || []).find((o) => o.id === inv.orderId) || null;
   const who = rcpt || 'de klant';
+  const doc = inv ? `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number}` : '';
+  if (inv) { inv.bounce = { at: now(), to: who, reden: reason.slice(0, 160) }; }
   if (order) {
     if (entry) { entry.delivered = false; entry.bounce = reason.slice(0, 160); }
     order.thread = order.thread || [];
@@ -74,11 +82,25 @@ export function handleBounce(parsed, rawText, mid) {
     order.updatedAt = now();
   }
   logActivity('systeem', 'e-mail gebounced (niet afgeleverd)', `${who}${order ? ` — kaart: ${order.title}` : ''}`);
-  sendPush({ title: 'E-mail niet aangekomen', body: `Mail aan ${who} is geweigerd${order ? ` (kaart: ${order.title})` : ''}. Even checken.`, url: '/' }).catch(() => {});
-  queueCrmWhatsappAlert(`⚠ CRM: e-mail aan ${who} is NIET aangekomen${order ? ` (kaart "${order.title}")` : ''}. Controleer het adres of bel de klant.`);
+  const waar = [doc, order ? `opdracht: ${order.title}` : ''].filter(Boolean).join(' — ');
+  const melding = { title: 'E-mail niet aangekomen', body: `Mail aan ${who} is geweigerd${waar ? ` (${waar})` : ''}. Controleer het adres of bel/app de klant.` };
+  // Kantoor (beheerder + assistente) altijd; daarnaast de monteur van wie het de klant is.
+  sendPush({ ...melding, url: order ? `/?open=${order.id}` : '/' }).catch(() => {});
+  const monteurDoel = bounceMonteurDoel({ order, inv, users: db().users || [] });
+  if (monteurDoel) sendPush({ ...melding, url: order ? `/?open=${order.id}` : '/', aan: monteurDoel }).catch(() => {});
+  queueCrmWhatsappAlert(`⚠ CRM: e-mail aan ${who} is NIET aangekomen${waar ? ` (${waar})` : ''}. Controleer het adres of bel de klant.`);
   // Bounce registreren als verwerkt bericht — nooit een lead, nooit opnieuw verwerken.
   db().messages.push({ id: id('msg'), externalId: mid, channel: 'email', bounce: true, sender: parsed.from?.text || '', subject: parsed.subject || '', at: now() });
   saveSoon();
+  return { order, inv, monteurDoel };
+}
+// Welke monteur hoort deze klant? Die van de opdracht; bij een losse factuur/offerte de
+// monteur die hem zelf maakte. Kantoor krijgt de melding sowieso al.
+export function bounceMonteurDoel({ order, inv, users = [] } = {}) {
+  if (order && order.monteurId) return { monteurId: order.monteurId };
+  const maker = inv && inv.createdById ? users.find((u) => u.id === inv.createdById) : null;
+  if (maker && maker.role === 'monteur') return { userIds: [maker.id] };
+  return null;
 }
 
 let polling = false;
