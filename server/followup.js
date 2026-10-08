@@ -3,7 +3,7 @@
 // WhatsApp (WhatsApp loopt via de outbox -> bridge stuurt naar het klant-nummer).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { getFollowUp, getEmailSignature } from './settings.js';
-import { getInvoiceSettings, klantIsAlVerder } from './invoices.js';
+import { getInvoiceSettings, klantIsAlVerder, klantKreegAlOpvolging } from './invoices.js';
 import { klantvriendelijkMoment } from './tijdvenster.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 
@@ -62,8 +62,10 @@ export async function runFollowUps({ altijd = false } = {}) {
     // is hij al geholpen of reageerde hij (ook buiten deze opdracht om), dan geen follow-up.
     {
       const sindsMs = offerteCase ? offerteSinds : new Date(o.lastReplyAt).getTime();
-      const al = klantIsAlVerder({ customerId: o.customerId, emails: [c.email, o.intake && o.intake.email], phones: [c.phone, o.intake && o.intake.phone], sentMs: sindsMs, sindsMs });
-      if (al) continue;
+      const wie = { customerId: o.customerId, emails: [c.email, o.intake && o.intake.email], phones: [c.phone, o.intake && o.intake.phone] };
+      if (klantIsAlVerder({ ...wie, sentMs: sindsMs, sindsMs })) continue;
+      // Eén herinnering per klant per 30 dagen, ook over opdrachten/offertes heen (8 okt 2026).
+      if (klantKreegAlOpvolging({ ...wie, behalveOrderId: o.id })) continue;
     }
     let sent = false;
 

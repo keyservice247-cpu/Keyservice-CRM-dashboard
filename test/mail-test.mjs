@@ -346,6 +346,40 @@ console.log('\n== Offerte-opvolging stopt bij geannuleerde opdracht (26 sep 2026
     ok('kanban-follow-up: klant met afspraak op een andere opdracht → GEEN follow-up', !fu.includes('ord-q26'), fu.join());
     d.settings.followUp = { ...d.settings.followUp, whatsappEnabled: false };
   }
+  // (10a) ÉÉN herinnering (8 okt 2026, eigenaar: "maar 1 keer een opvolgmail, niet constant").
+  {
+    const { klantKreegAlOpvolging } = await import('../server/invoices.js');
+    const e1 = losse(30);
+    e1.quoteFollowupCount = 1; e1.quoteFollowupAt = dagenGeleden(6);
+    ok('offerte die al één herinnering kreeg → nooit een tweede (ook niet na 6 dagen)', /al een herinnering/.test(offerteOpvolgingBlokkade(e1)), offerteOpvolgingBlokkade(e1));
+    // Twee offertes van dezelfde klant op dezelfde dag → maar één herinnering.
+    d.customers.push(klant(31));
+    const t1 = { id: 'inv-q31a', number: 'OFF-TEST-31A', type: 'offerte', status: 'verzonden', orderId: null, customerId: 'cust-q31', sentAt: dagenGeleden(6), createdAt: dagenGeleden(6), totalIncl: 300, lines: [] };
+    const t2 = { ...t1, id: 'inv-q31b', number: 'OFF-TEST-31B', totalIncl: 450 };
+    d.invoices.push(t1, t2);
+    delete d.settings._quoteFollowupDay;
+    await runQuoteFollowups({ altijd: true });
+    const n31 = [t1, t2].filter((x) => x.quoteFollowupAt).length;
+    ok('twee offertes van dezelfde klant → precies ÉÉN herinnering', n31 === 1, `kregen er ${n31}`);
+    // Klant kreeg 5 dagen geleden de bord-follow-up op een andere opdracht → geen offerte-herinnering.
+    const e3 = losse(32);
+    d.orders.push({ id: 'ord-q32b', title: 'Gouda — andere opdracht', status: 'offerte_verzonden', customerId: 'cust-q32', followUpAt: dagenGeleden(5), createdAt: dagenGeleden(9), thread: [] });
+    ok('klant kreeg recent al een follow-up (andere opdracht) → geen offerte-herinnering', /follow-up/.test(offerteOpvolgingBlokkade(e3)), offerteOpvolgingBlokkade(e3));
+    // Na 30 dagen rust mag een nieuwe offerte wél weer één herinnering krijgen.
+    const e4 = losse(33);
+    d.invoices.push({ id: 'inv-q33-oud', number: 'OFF-TEST-33-OUD', type: 'offerte', status: 'afgekeurd', customerId: 'cust-q33', sentAt: dagenGeleden(60), quoteFollowupAt: dagenGeleden(40), quoteFollowupCount: 1, lines: [] });
+    ok('vorige herinnering >30 dagen geleden → nieuwe offerte mag weer één keer', offerteOpvolgingBlokkade(e4) === '', offerteOpvolgingBlokkade(e4));
+    ok('klantKreegAlOpvolging: herinnering 3 dagen geleden telt', /herinnering/.test(klantKreegAlOpvolging({ customerId: 'cust-q31' })));
+    // Bord-follow-up slaat een klant over die net een offerte-herinnering kreeg.
+    const { runFollowUps } = await import('../server/followup.js');
+    d.settings.followUp = { ...(d.settings.followUp || {}), whatsappEnabled: true, emailEnabled: false, days: 3, whatsappBody: 'Heeft u onze offerte al bekeken?' };
+    d.orders.push({ id: 'ord-q31c', title: 'Rhenen — prijs telefonisch', status: 'offerte_verzonden', customerId: 'cust-q31', createdAt: dagenGeleden(10), updatedAt: dagenGeleden(10), quoteSentAt: dagenGeleden(6), thread: [] });
+    const voor = (d.outbox || []).length;
+    await runFollowUps({ altijd: true });
+    const fu = (d.outbox || []).slice(0, (d.outbox || []).length - voor).filter((x) => x.by === 'follow-up').map((x) => x.orderId);
+    ok('bord-follow-up: klant kreeg net een offerte-herinnering → niet nóg een bericht', !fu.includes('ord-q31c'), fu.join());
+    d.settings.followUp = { ...d.settings.followUp, whatsappEnabled: false };
+  }
   // (10) Nooit meer 's nachts.
   const { klantvriendelijkMoment, nlDag } = await import('../server/tijdvenster.js');
   ok('02:28 Nederlandse tijd (de casus) → géén automatisch klantbericht', klantvriendelijkMoment(new Date('2026-10-03T00:28:00Z')) === false);

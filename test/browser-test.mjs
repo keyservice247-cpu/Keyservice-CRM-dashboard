@@ -1409,6 +1409,20 @@ await page.click('#bk-cancel');
 await page.evaluate(() => closeModal());
 noErr('Trustpilot');
 
+// OFFERTE-HERINNERING ÉÉN KEER (8 okt 2026): geen "Max. aantal" meer, uitleg staat er, en
+// opslaan van de factuur-instellingen werkt nog (de oude regel las #is-quote-max).
+clear();
+await page.evaluate(() => goView('settings'));
+await page.waitForSelector('#saveInvoiceSettings', { timeout: 8000 }).catch(() => {});
+const quoteUi = await page.evaluate(() => ({ max: !!document.querySelector('#is-quote-max'), uitleg: (document.querySelector('#is-quote-uitleg') || {}).textContent || '' }));
+ok('instellingen: geen "Max. aantal" meer bij offerte-opvolging, wel uitleg "één herinnering"', !quoteUi.max && /één/.test(quoteUi.uitleg), JSON.stringify(quoteUi));
+await page.evaluate(() => { const t = document.querySelector('#toast'); if (t) { t.hidden = true; t.textContent = ''; t.className = 'toast'; } });
+await page.evaluate(() => document.querySelector('#saveInvoiceSettings').click());
+await page.waitForFunction(() => /opgeslagen|fout|niet/i.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+const quoteSave = await page.evaluate(() => { const t = document.querySelector('#toast'); return { tekst: t ? t.textContent : '', fout: !!(t && t.classList.contains('err')) }; });
+ok('factuur-instellingen opslaan werkt nog (geen fout)', /Factuurgegevens opgeslagen/.test(quoteSave.tekst) && !quoteSave.fout, JSON.stringify(quoteSave));
+noErr('Offerte-herinnering instellingen');
+
 // WEBSITE-FORMULIEREN (6 okt 2026): controlekaart in Instellingen → Koppelingen.
 clear();
 await page.evaluate(() => goView('settings'));

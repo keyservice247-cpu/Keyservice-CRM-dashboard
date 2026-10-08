@@ -870,6 +870,17 @@ de regressie meegroeit.
   versturen alleen overdag; de "1× per dag"-sleutel is de NEDERLANDSE dag (was UTC →
   eerste ronde na middernacht UTC = 02:00 NL). Runners accepteren `{altijd:true}` (tests).
   Test: mail-test 98 (+15).
+  ÉÉN HERINNERING (8 okt 2026, eigenaar: "het was toch de bedoeling dat een klant maar 1
+  keer een opvolgmail krijgt en niet constant"): de offerte-opvolging bij Facturen stond op
+  max. 2 per offerte (+ herhaling elke 5 dagen) en telde PER offerte (klant met meerdere
+  offertes kreeg er meerdere). Nu: OFFERTE_OPVOLGING_MAX = 1 (vast; quoteFollowupMax in
+  settings wordt altijd 1, veld "Max. aantal" weg uit Instellingen → Facturen, uitleg
+  #is-quote-uitleg) + KLANTBREDE RUST: klantKreegAlOpvolging() — kreeg de klant (zelfde
+  record/e-mail/telefoon) in de laatste 30 dagen al een offerte-herinnering (ook handmatig,
+  inv.quoteFollowupAt) of een bord-follow-up (order.followUpAt, ook op een andere
+  opdracht), dan geen automatische herinnering; geldt in offerteOpvolgingBlokkade én
+  followup.js. Na 30 dagen mag een NIEUWE offerte weer één keer. Handmatige knop blijft
+  altijd mogen. Tests: mail-test 104 (+6), browser (+2: veld weg + opslaan werkt).
 - **Foto's naar de monteur (28 sep 2026, klacht "het CRM stuurt geen foto's meer mee"):**
   oorzaak zat in de bridge (zie BRIDGE v10). CRM-kant: (1) FOTOLINK in het
   opdrachtbericht — `Foto's (N): <APP_URL>/fotos/<orderId>/<sig>` (fotoSig =

@@ -5421,8 +5421,8 @@ async function loadSettingsHtml(s) {
         <p class="muted small" style="margin:4px 0 8px">Zo hoef je na akkoord alleen nog de factuur te controleren en versturen — je vergeet nooit meer te factureren.</p>
         <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="is-autoquote" style="width:auto" ${s.invoiceSettings?.autoQuoteFollowup ? 'checked' : ''}>Verzonden offerte die blijft liggen automatisch opvolgen (vriendelijke mail met de offerte)</label>
         <p class="muted small" style="margin:4px 0 6px">Staat dit aan, dan neemt deze opvolging het over van de algemene "follow-up op offertes" (Automatische berichten) voor opdrachten mét een CRM-offerte — een klant krijgt nooit twee herinneringen.</p>
-        <div class="row" style="margin-top:6px"><label>Dagen na versturen <input id="is-quote-after" type="number" min="1" max="60" value="${esc(String(s.invoiceSettings?.quoteFollowupAfterDays ?? 3))}" style="max-width:100px"></label>
-        <label>Max. aantal <input id="is-quote-max" type="number" min="1" max="5" value="${esc(String(s.invoiceSettings?.quoteFollowupMax ?? 2))}" style="max-width:100px"></label></div>
+        <div class="row" style="margin-top:6px"><label>Dagen na versturen <input id="is-quote-after" type="number" min="1" max="60" value="${esc(String(s.invoiceSettings?.quoteFollowupAfterDays ?? 3))}" style="max-width:100px"></label></div>
+        <p class="muted small" id="is-quote-uitleg" style="margin:4px 0 0">De klant krijgt <strong>één</strong> herinnering per offerte — en nooit meer dan één automatische herinnering per 30 dagen, ook niet bij meerdere offertes. Staat de klant al ingepland, is hij al geholpen of heeft hij gereageerd, dan gaat er niets. Herinneringen gaan alleen overdag (09:00–20:00).</p>
       </div>
       <label>Garantie-regel (dik gedrukt op de factuur) <input id="is-warranty" value="${esc(s.invoiceSettings?.warranty || '')}"></label>
       <label>Juridische tekst (kleine lettertjes onderaan) <textarea id="is-legal" rows="3">${esc(s.invoiceSettings?.legal || '')}</textarea></label>
@@ -5486,7 +5486,7 @@ async function loadSettingsHtml(s) {
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoReply">Opslaan</button></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Automatische follow-up op offertes</h3>
-      <p class="muted small">Staat een offerte langer dan het ingestelde aantal dagen open zonder reactie van de klant? Dan stuurt het systeem automatisch een vriendelijke herinnering (1x per opdracht). <strong>Nooit dubbel:</strong> heeft de opdracht een offerte uit het CRM en staat bij Facturen "offerte automatisch opvolgen" aan, dan doet díe het (met de offerte als bijlage) en slaat deze follow-up de opdracht over.</p>
+      <p class="muted small">Staat een offerte langer dan het ingestelde aantal dagen open zonder reactie van de klant? Dan stuurt het systeem automatisch een vriendelijke herinnering — <strong>één keer</strong>, en een klant krijgt nooit meer dan één automatische herinnering per 30 dagen (ook niet bij meerdere opdrachten of offertes). Staat de klant al ingepland of heeft hij gereageerd, dan gaat er niets. <strong>Nooit dubbel:</strong> heeft de opdracht een offerte uit het CRM en staat bij Facturen "offerte automatisch opvolgen" aan, dan doet díe het (met de offerte als bijlage) en slaat deze follow-up de opdracht over.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-email" style="width:auto" ${s.followUp?.emailEnabled ? 'checked' : ''}> Follow-up via <strong>e-mail</strong> aanzetten</label>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fu-whatsapp" style="width:auto" ${s.followUp?.whatsappEnabled ? 'checked' : ''}> Follow-up via <strong>WhatsApp</strong> aanzetten</label>
       <label>Na hoeveel dagen zonder reactie? <input id="fu-days" type="number" min="1" max="30" value="${esc(String(s.followUp?.days || 3))}" style="max-width:120px"></label>
@@ -5846,7 +5846,6 @@ async function loadSettingsHtml(s) {
       standaardBetaald: $('#is-standaardbetaald').checked,
       autoQuoteFollowup: $('#is-autoquote').checked,
       quoteFollowupAfterDays: Number($('#is-quote-after').value) || 3,
-      quoteFollowupMax: Number($('#is-quote-max').value) || 2,
     };
     try { await api('/api/settings', 'PATCH', { invoiceSettings }); toast('Factuurgegevens opgeslagen'); }
     catch (err) { toast(err.message, true); }

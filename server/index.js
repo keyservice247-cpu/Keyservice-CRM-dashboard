@@ -3534,7 +3534,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       autoQuoteFollowup: !!v.autoQuoteFollowup,
       quoteFollowupAfterDays: Math.max(1, Math.min(60, Number(v.quoteFollowupAfterDays) || 3)),
       quoteFollowupRepeatDays: Math.max(2, Math.min(60, Number(v.quoteFollowupRepeatDays) || 5)),
-      quoteFollowupMax: Math.max(1, Math.min(5, Number(v.quoteFollowupMax) || 2)),
+      quoteFollowupMax: 1, // vast: één herinnering per offerte (8 okt 2026, wens eigenaar)
       btwPct: (Number.isFinite(Number(v.btwPct)) ? Math.max(0, Math.min(21, Number(v.btwPct))) : 21),
       warranty: String(v.warranty || '').slice(0, 300),
       legal: String(v.legal || '').slice(0, 1200),

@@ -51,11 +51,11 @@ export const DEFAULT_INVOICE_SETTINGS = {
   standaardBetaald: true,
   // Automatische offerte-opvolging: verzonden offerte die na X dagen nog niet is
   // goedgekeurd/afgekeurd krijgt een vriendelijke opvolgmail (met de offerte-PDF),
-  // herhaald met tussenpoos en een maximum. Standaard UIT.
+  // één keer per offerte (8 okt 2026, was max. 2 met herhaling). Standaard UIT.
   autoQuoteFollowup: false,
   quoteFollowupAfterDays: 3,
   quoteFollowupRepeatDays: 5,
-  quoteFollowupMax: 2,
+  quoteFollowupMax: 1,
   btwPct: 21,             // standaardtarief; per factuur aan te passen
   warranty: '3 jaar garantie op onze producten, 1 jaar garantie op arbeid.',
   legal: 'Bij reparatie- en montagewerkzaamheden aan bestaande kozijnen, deuren, ramen en beglazing kan ondanks zorgvuldig werken lichte, redelijkerwijs onvermijdbare gebruiksschade ontstaan (zoals kleine krasjes, haarscheurtjes of loslatende verf/kit op verouderde delen). Dergelijke geringe schade valt binnen het acceptabele werkrisico en geeft geen recht op schadevergoeding of verrekening. Reclamaties binnen 48 uur na uitvoering melden.',
@@ -259,7 +259,9 @@ export function autoConvertQuoteToInvoice(inv, actorName = 'systeem') {
 // zelfde klantrecord óf zelfde e-mail/telefoon (alleen harde identificatoren, WET 2), ook
 // het contact van de aanvraag zelf (intake). Geeft een reden terug, of '' als er niets is.
 const normTel = (v) => String(v || '').replace(/[^\d]/g, '').replace(/^0031/, '0').replace(/^31(?=\d{9})/, '0');
-export function klantIsAlVerder({ customerId = '', emails = [], phones = [], sentMs = 0, sindsMs = 0, behalveInvoiceId = '', nu = Date.now() } = {}) {
+// Wie hoort bij deze klant? Zelfde klantrecord óf zelfde e-mail/telefoon (ook dubbele
+// klantrecords en het contact van een aanvraag zelf). Gedeeld door de twee rem-functies.
+function klantSleutels({ customerId = '', emails = [], phones = [] } = {}) {
   const klant = customerId ? (db().customers || []).find((c) => c.id === customerId) : null;
   const mails = new Set([...emails, klant && klant.email].map((e) => String(e || '').trim().toLowerCase()).filter((e) => e.includes('@')));
   const tels = new Set([...phones, klant && klant.phone].map(normTel).filter((t) => t.length >= 9));
@@ -267,9 +269,34 @@ export function klantIsAlVerder({ customerId = '', emails = [], phones = [], sen
   const isKlantTel = (t) => { const n = normTel(t); return n.length >= 9 && tels.has(n); };
   const klantIds = new Set(customerId ? [customerId] : []);
   for (const c of db().customers || []) if (isKlantMail(c.email) || isKlantTel(c.phone)) klantIds.add(c.id);
-  if (!klantIds.size && !mails.size && !tels.size) return '';
-  const afspraakKey = appointmentStatusKey();
   const vanKlant = (o) => klantIds.has(o.customerId) || (o.intake && (isKlantMail(o.intake.email) || isKlantTel(o.intake.phone)));
+  return { klantIds, mails, tels, isKlantMail, isKlantTel, vanKlant, leeg: !klantIds.size && !mails.size && !tels.size };
+}
+
+// ÉÉN HERINNERING (8 okt 2026, eigenaar: "het was toch de bedoeling dat een klant maar 1
+// keer een opvolgmail krijgt en niet constant"): per offerte maximaal één automatische
+// herinnering, en per KLANT nooit meer dan één automatische herinnering per 30 dagen —
+// ook niet bij meerdere offertes of via de algemene follow-up op het bord.
+export const OFFERTE_OPVOLGING_MAX = 1;
+export const KLANT_OPVOLG_RUST_DAGEN = 30;
+export function klantKreegAlOpvolging({ customerId = '', emails = [], phones = [], behalveInvoiceId = '', behalveOrderId = '', nu = Date.now() } = {}) {
+  const k = klantSleutels({ customerId, emails, phones });
+  if (k.leeg) return '';
+  const grens = nu - KLANT_OPVOLG_RUST_DAGEN * 86400000;
+  const recent = (iso) => !!iso && new Date(iso).getTime() > grens;
+  const datum = (iso) => new Date(iso).toLocaleDateString('nl-NL', { timeZone: 'Europe/Amsterdam' });
+  const off = (db().invoices || []).find((i) => i && i.id !== behalveInvoiceId && i.type === 'offerte'
+    && (k.klantIds.has(i.customerId) || k.isKlantMail(i.sentTo)) && recent(i.quoteFollowupAt));
+  if (off) return `de klant kreeg op ${datum(off.quoteFollowupAt)} al een herinnering (offerte ${off.number})`;
+  const ord = (db().orders || []).find((o) => o && o.id !== behalveOrderId && k.vanKlant(o) && recent(o.followUpAt));
+  if (ord) return `de klant kreeg op ${datum(ord.followUpAt)} al een follow-up${ord.title ? ` (${ord.title})` : ''}`;
+  return '';
+}
+
+export function klantIsAlVerder({ customerId = '', emails = [], phones = [], sentMs = 0, sindsMs = 0, behalveInvoiceId = '', nu = Date.now() } = {}) {
+  const { klantIds, mails, isKlantTel, vanKlant, leeg } = klantSleutels({ customerId, emails, phones });
+  if (leeg) return '';
+  const afspraakKey = appointmentStatusKey();
   for (const o of db().orders || []) {
     if (!o || o.deletedAt || o.status === 'geannuleerd' || !vanKlant(o)) continue;
     const naam = o.title ? ` (${o.title})` : '';
@@ -294,6 +321,8 @@ export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
   if (!inv || inv.type !== 'offerte') return 'geen offerte';
   if (inv.status !== 'verzonden') return 'offerte is niet (meer) open';
   if (handmatig) return '';
+  // Eén automatische herinnering per offerte (8 okt 2026; handmatig of automatisch telt mee).
+  if ((inv.quoteFollowupCount || 0) >= OFFERTE_OPVOLGING_MAX) return 'deze offerte kreeg al een herinnering';
   // Er is al een factuur van deze offerte gemaakt ("→ Maak factuur") — de klant is dus al
   // akkoord, ook al staat de offerte zelf nog op verzonden (audit 3 okt 2026).
   if (inv.convertedInvoiceId && (db().invoices || []).some((i) => i.id === inv.convertedInvoiceId)) return 'er is al een factuur van deze offerte gemaakt';
@@ -318,14 +347,13 @@ export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
   }
   // Ook een losse offerte, en ook als de afspraak/reactie op een ANDERE opdracht van
   // dezelfde klant staat (8 okt 2026).
-  return klantIsAlVerder({
+  const wie = {
     customerId: inv.customerId,
     emails: [inv.sentTo, order && order.intake && order.intake.email],
     phones: [order && order.intake && order.intake.phone],
-    sentMs: new Date(inv.sentAt || 0).getTime(),
-    sindsMs: sinds,
-    behalveInvoiceId: inv.id,
-  });
+  };
+  return klantIsAlVerder({ ...wie, sentMs: new Date(inv.sentAt || 0).getTime(), sindsMs: sinds, behalveInvoiceId: inv.id })
+    || klantKreegAlOpvolging({ ...wie, behalveInvoiceId: inv.id });
 }
 
 // Klaarstaande (nog niet verstuurde) opvolg-appjes van een opdracht intrekken — bij

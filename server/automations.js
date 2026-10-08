@@ -16,7 +16,7 @@ import { verwijderBestandenAlsOngebruikt } from './bijlagen.js';
 // Afspraaktijden op TIJDSTIP vergelijken, niet op tekst (de kaart-modal kapt af op
 // 16 tekens). Gedeeld door bevestiging, herinnering en ochtendbriefing (audit 16 sep).
 export const zelfdeTijd = (a, b) => !!(a && b) && new Date(a).getTime() === new Date(b).getTime();
-import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup, offerteOpvolgingBlokkade } from './invoices.js';
+import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup, offerteOpvolgingBlokkade, OFFERTE_OPVOLGING_MAX } from './invoices.js';
 import { klantvriendelijkMoment, nlDag } from './tijdvenster.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
@@ -1039,7 +1039,7 @@ export async function runQuoteFollowups({ altijd = false } = {}) {
     const sent = new Date(inv.sentAt).getTime();
     if (!Number.isFinite(sent) || nowMs - sent > 120 * 86400000) continue;
     if (nowMs - sent < (cfg.quoteFollowupAfterDays || 3) * 86400000) continue;
-    if ((inv.quoteFollowupCount || 0) >= (cfg.quoteFollowupMax || 2)) continue;
+    if ((inv.quoteFollowupCount || 0) >= OFFERTE_OPVOLGING_MAX) continue; // één keer per offerte (8 okt 2026)
     const last = inv.quoteFollowupAt ? new Date(inv.quoteFollowupAt).getTime() : 0;
     if (nowMs - last < (cfg.quoteFollowupRepeatDays || 5) * 86400000) continue;
     // Opdracht geannuleerd/afgerond/prullenbak, afspraak al gepland of klant reageerde
