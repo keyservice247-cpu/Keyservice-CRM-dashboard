@@ -854,6 +854,22 @@ de regressie meegroeit.
   conversie-lezer maakte van "1.250,50" niets); perMonteur.zonderBedrag + totaal
   zonderBedrag → UI "X zonder bedrag" + voetregel. Tests: mail-test 75 (+13), factuur-
   test 62 (+5), conversie-test 41 (+3).
+  KLANTBREED + NOOIT 'S NACHTS (8 okt 2026, casus Erik Kaper OFF-2026-0062: al ingepland,
+  toch meerdere automatische "Nog vragen over offerte…"-mails, o.a. om 02:28): (1) de
+  blokkade keek ALLEEN naar de gekoppelde opdracht — een LOSSE offerte (`!inv.orderId`)
+  had géén enkele controle, en een afspraak op een ANDERE opdracht van dezelfde klant werd
+  niet gezien. Nu `klantIsAlVerder()` (invoices.js): alle opdrachten van de klant (zelfde
+  klantrecord óf zelfde e-mail/telefoon, ook intake; dubbele klantrecords tellen mee) →
+  blokkeren bij afspraak-status, afspraak in de toekomst of ná de offerte, afgerond ná de
+  offerte, klantreactie ná de offerte; óók een factuur voor de klant ná de offerte en elk
+  binnengekomen bericht (mail/app) van de klant ná de offerte. Geannuleerde opdrachten
+  tellen niet. Gebruikt door offerteOpvolgingBlokkade (automatisch; handmatige knop blijft
+  altijd mogen) én de kanban-follow-up (followup.js, offerte- en geen-reactie-geval).
+  (2) TIJDVENSTER: server/tijdvenster.js (klantvriendelijkMoment = 09:00–19:59 NL, nlDag);
+  offerte-opvolging, betaalherinnering, kanban-follow-up en automatisch review-verzoek
+  versturen alleen overdag; de "1× per dag"-sleutel is de NEDERLANDSE dag (was UTC →
+  eerste ronde na middernacht UTC = 02:00 NL). Runners accepteren `{altijd:true}` (tests).
+  Test: mail-test 98 (+15).
 - **Foto's naar de monteur (28 sep 2026, klacht "het CRM stuurt geen foto's meer mee"):**
   oorzaak zat in de bridge (zie BRIDGE v10). CRM-kant: (1) FOTOLINK in het
   opdrachtbericht — `Foto's (N): <APP_URL>/fotos/<orderId>/<sig>` (fotoSig =

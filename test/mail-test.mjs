@@ -257,7 +257,7 @@ console.log('\n== Offerte-opvolging stopt bij geannuleerde opdracht (26 sep 2026
   ok('blokkade: klant reageerde na de offerte', /gereageerd/.test(offerteOpvolgingBlokkade(e.inv)));
   ok('blokkade: afspraak ingepland', /afspraak/.test(offerteOpvolgingBlokkade(f.inv)));
   ok('blokkade: opdracht in de prullenbak', /prullenbak/.test(offerteOpvolgingBlokkade(g.inv)));
-  await runQuoteFollowups();
+  await runQuoteFollowups({ altijd: true });
   const naar = (d.outbox || []).filter((x) => x.by === 'offerte-opvolging').map((x) => x.orderId).sort();
   ok('automatische ronde: ALLEEN de lopende offerte krijgt een opvolging', naar.join() === 'ord-q1', naar.join());
   ok('geannuleerde klant: géén opvolging, teller onaangeroerd', !b.inv.quoteFollowupAt && !b.inv.quoteFollowupCount);
@@ -271,7 +271,7 @@ console.log('\n== Offerte-opvolging stopt bij geannuleerde opdracht (26 sep 2026
     d.customers.push(klant(8));
     d.orders.push({ id: 'ord-q8', title: 'Rhenen — prijs telefonisch', status: 'offerte_verzonden', customerId: 'cust-q8', createdAt: dagenGeleden(10), updatedAt: dagenGeleden(10), quoteSentAt: dagenGeleden(6), thread: [] });
     const voor = (d.outbox || []).length;
-    await runFollowUps();
+    await runFollowUps({ altijd: true });
     const fu = (d.outbox || []).slice(0, (d.outbox || []).length - voor).filter((x) => x.by === 'follow-up').map((x) => x.orderId);
     ok('kanban-follow-up slaat opdrachten MET CRM-offerte over (offerte-opvolging staat aan)', !fu.includes('ord-q1'), fu.join());
     ok('…maar volgt een opdracht ZONDER CRM-offerte wel op', fu.includes('ord-q8'), fu.join());
@@ -292,6 +292,66 @@ console.log('\n== Offerte-opvolging stopt bij geannuleerde opdracht (26 sep 2026
   d.outbox.push(ander);
   trekOpvolgingenIn('ord-q1', 'x');
   ok('andere berichten (bv. afspraakbevestiging) worden NIET ingetrokken', ander.status === 'queued');
+
+  console.log('\n== Offerte-opvolging kijkt naar de HELE klant (8 okt 2026, casus Erik Kaper) ==');
+  const losse = (n, extraKlant = {}) => {
+    d.customers.push({ ...klant(n), ...extraKlant });
+    const inv = { id: `inv-q${n}`, number: `OFF-TEST-${n}`, type: 'offerte', status: 'verzonden', orderId: null, customerId: `cust-q${n}`, sentAt: dagenGeleden(6), createdAt: dagenGeleden(6), totalIncl: 895.4, lines: [] };
+    d.invoices.push(inv);
+    return inv;
+  };
+  // (1) De casus: LOSSE offerte, klant staat op een (andere) opdracht al ingepland.
+  const k1 = losse(20, { email: 'erik@example.nl' });
+  ok('losse offerte zonder afspraak → wél opvolgen (niets aan de hand)', offerteOpvolgingBlokkade(k1) === '', offerteOpvolgingBlokkade(k1));
+  d.orders.push({ id: 'ord-q20b', title: 'Waalwijk — schuifpui', status: 'afspraak_ingepland', customerId: 'cust-q20', appointmentAt: new Date(Date.now() + 2 * 86400000).toISOString(), createdAt: dagenGeleden(2), thread: [] });
+  ok('losse offerte + klant al ingepland op een opdracht → GEEN opvolging', /afspraak/.test(offerteOpvolgingBlokkade(k1)), offerteOpvolgingBlokkade(k1));
+  // (2) Offerte hangt aan opdracht A, de afspraak staat op opdracht B van dezelfde klant.
+  const a2 = maak(21, 'offerte_verzonden');
+  d.orders.push({ id: 'ord-q21b', title: 'Tiel — tweede aanvraag', status: 'in_behandeling', customerId: 'cust-q21', appointmentAt: new Date(Date.now() + 86400000).toISOString(), createdAt: dagenGeleden(1), thread: [] });
+  ok('afspraak op een ANDERE opdracht van dezelfde klant → GEEN opvolging', /afspraak/.test(offerteOpvolgingBlokkade(a2.inv)), offerteOpvolgingBlokkade(a2.inv));
+  // (3) Dubbel klantrecord (zelfde telefoon, andere naam) met een afspraak.
+  const k3 = losse(22);
+  d.customers.push({ id: 'cust-q22-dubbel', name: 'E. Kaper', phone: '+31 6 12300022' });
+  d.orders.push({ id: 'ord-q22b', title: 'Ede — afspraak', status: 'afspraak_ingepland', customerId: 'cust-q22-dubbel', createdAt: dagenGeleden(1), thread: [] });
+  ok('dubbel klantrecord (zelfde telefoon, +31-notatie) met afspraak → GEEN opvolging', /afspraak/.test(offerteOpvolgingBlokkade(k3)), offerteOpvolgingBlokkade(k3));
+  // (4) Klant mailde ná de offerte (bericht hangt aan geen opdracht).
+  const k4 = losse(23, { email: 'mailer@example.nl' });
+  d.messages.push({ id: 'msg-q23', channel: 'email', sender: 'Mailer Klant <mailer@example.nl>', subject: 'Re: offerte', body: 'Akkoord, wanneer kunnen jullie?', receivedAt: dagenGeleden(1) });
+  ok('klant mailde ná de offerte → GEEN opvolging', /bericht/.test(offerteOpvolgingBlokkade(k4)), offerteOpvolgingBlokkade(k4));
+  // (5) Er is na de offerte al een factuur voor deze klant.
+  const k5 = losse(24);
+  d.invoices.push({ id: 'inv-q24f', number: '2026-T24', type: 'factuur', status: 'betaald', customerId: 'cust-q24', createdAt: dagenGeleden(1), lines: [] });
+  ok('factuur na de offerte voor dezelfde klant → GEEN opvolging', /factuur/.test(offerteOpvolgingBlokkade(k5)), offerteOpvolgingBlokkade(k5));
+  // (6) Een GEANNULEERDE andere opdracht houdt de opvolging niet tegen.
+  const k6 = losse(25);
+  d.orders.push({ id: 'ord-q25b', title: 'Oss — geannuleerd', status: 'geannuleerd', customerId: 'cust-q25', appointmentAt: new Date(Date.now() + 86400000).toISOString(), createdAt: dagenGeleden(1), thread: [] });
+  ok('geannuleerde andere opdracht → opvolging gaat gewoon door', offerteOpvolgingBlokkade(k6) === '', offerteOpvolgingBlokkade(k6));
+  // (7) De handmatige knop blijft altijd mogen.
+  ok('handmatige knop mag ook bij een ingeplande klant (mens beslist)', offerteOpvolgingBlokkade(k1, { handmatig: true }) === '');
+  // (8) Automatische ronde: de ingeplande klant krijgt niets, de vrije losse offerte wel.
+  delete d.settings._quoteFollowupDay;
+  await runQuoteFollowups({ altijd: true });
+  ok('automatische ronde: ingeplande klant (losse offerte) krijgt GEEN opvolging', !k1.quoteFollowupAt && !k1.quoteFollowupCount);
+  ok('automatische ronde: klant zonder afspraak/reactie krijgt hem wél', !!k6.quoteFollowupAt, JSON.stringify({ at: k6.quoteFollowupAt }));
+  // (9) Kanban-follow-up (zonder CRM-offerte) kijkt ook klantbreed.
+  {
+    const { runFollowUps } = await import('../server/followup.js');
+    d.settings.followUp = { ...(d.settings.followUp || {}), whatsappEnabled: true, emailEnabled: false, days: 3, whatsappBody: 'Heeft u onze offerte al bekeken?' };
+    d.customers.push(klant(26));
+    d.orders.push({ id: 'ord-q26', title: 'Rhenen — prijs telefonisch', status: 'offerte_verzonden', customerId: 'cust-q26', createdAt: dagenGeleden(10), updatedAt: dagenGeleden(10), quoteSentAt: dagenGeleden(6), thread: [] });
+    d.orders.push({ id: 'ord-q26b', title: 'Rhenen — ingepland', status: 'afspraak_ingepland', customerId: 'cust-q26', createdAt: dagenGeleden(1), thread: [] });
+    const voor = (d.outbox || []).length;
+    await runFollowUps({ altijd: true });
+    const fu = (d.outbox || []).slice(0, (d.outbox || []).length - voor).filter((x) => x.by === 'follow-up').map((x) => x.orderId);
+    ok('kanban-follow-up: klant met afspraak op een andere opdracht → GEEN follow-up', !fu.includes('ord-q26'), fu.join());
+    d.settings.followUp = { ...d.settings.followUp, whatsappEnabled: false };
+  }
+  // (10) Nooit meer 's nachts.
+  const { klantvriendelijkMoment, nlDag } = await import('../server/tijdvenster.js');
+  ok('02:28 Nederlandse tijd (de casus) → géén automatisch klantbericht', klantvriendelijkMoment(new Date('2026-10-03T00:28:00Z')) === false);
+  ok('10:00 Nederlandse tijd → wel', klantvriendelijkMoment(new Date('2026-10-03T08:00:00Z')) === true);
+  ok('20:30 Nederlandse tijd → niet meer', klantvriendelijkMoment(new Date('2026-10-03T18:30:00Z')) === false);
+  ok('"vandaag" = Nederlandse kalenderdag (00:30 NL op de 3e is de 3e, niet de 2e)', nlDag(new Date('2026-10-02T22:30:00Z')) === '2026-10-03');
 }
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);

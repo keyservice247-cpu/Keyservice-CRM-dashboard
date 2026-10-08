@@ -253,6 +253,43 @@ export function autoConvertQuoteToInvoice(inv, actorName = 'systeem') {
 //   HANDMATIG (knop "Herinnering"): altijd toegestaan zolang de offerte open staat —
 //   de mens beslist (wens eigenaar 26 sep: "handmatige herinneringen ondanks
 //   geannuleerde opdrachten moet blijven kunnen").
+// KLANT IS AL VERDER (8 okt 2026, casus Erik Kaper OFF-2026-0062: hij was al ingepland, maar
+// de afspraak stond op een ándere opdracht dan waar de offerte aan hing — of de offerte was
+// los gemaakt — dus de opvolging zag niets en mailde door). Kijkt naar ALLES van de klant:
+// zelfde klantrecord óf zelfde e-mail/telefoon (alleen harde identificatoren, WET 2), ook
+// het contact van de aanvraag zelf (intake). Geeft een reden terug, of '' als er niets is.
+const normTel = (v) => String(v || '').replace(/[^\d]/g, '').replace(/^0031/, '0').replace(/^31(?=\d{9})/, '0');
+export function klantIsAlVerder({ customerId = '', emails = [], phones = [], sentMs = 0, sindsMs = 0, behalveInvoiceId = '', nu = Date.now() } = {}) {
+  const klant = customerId ? (db().customers || []).find((c) => c.id === customerId) : null;
+  const mails = new Set([...emails, klant && klant.email].map((e) => String(e || '').trim().toLowerCase()).filter((e) => e.includes('@')));
+  const tels = new Set([...phones, klant && klant.phone].map(normTel).filter((t) => t.length >= 9));
+  const isKlantMail = (e) => mails.has(String(e || '').trim().toLowerCase());
+  const isKlantTel = (t) => { const n = normTel(t); return n.length >= 9 && tels.has(n); };
+  const klantIds = new Set(customerId ? [customerId] : []);
+  for (const c of db().customers || []) if (isKlantMail(c.email) || isKlantTel(c.phone)) klantIds.add(c.id);
+  if (!klantIds.size && !mails.size && !tels.size) return '';
+  const afspraakKey = appointmentStatusKey();
+  const vanKlant = (o) => klantIds.has(o.customerId) || (o.intake && (isKlantMail(o.intake.email) || isKlantTel(o.intake.phone)));
+  for (const o of db().orders || []) {
+    if (!o || o.deletedAt || o.status === 'geannuleerd' || !vanKlant(o)) continue;
+    const naam = o.title ? ` (${o.title})` : '';
+    if (afspraakKey && o.status === afspraakKey) return `er staat al een afspraak${naam}`;
+    const afspraakMs = o.appointmentAt ? new Date(o.appointmentAt).getTime() : NaN;
+    if (Number.isFinite(afspraakMs) && (afspraakMs > nu || afspraakMs >= sentMs)) return `er staat al een afspraak${naam}`;
+    if (o.status === 'afgerond' && new Date(o.completedAt || o.updatedAt || 0).getTime() > sentMs) return `de klant is na de offerte al geholpen${naam}`;
+    if (o.lastCustomerReplyAt && new Date(o.lastCustomerReplyAt).getTime() > sindsMs) return `de klant heeft na de offerte al gereageerd${naam}`;
+  }
+  if ((db().invoices || []).some((i) => i && i.id !== behalveInvoiceId && i.type !== 'offerte' && klantIds.has(i.customerId)
+    && new Date(i.createdAt || i.sentAt || 0).getTime() > sentMs)) return 'er is na de offerte al een factuur voor deze klant';
+  // Een mail of appje van de klant ná de offerte (ook als die niet aan een opdracht hangt).
+  for (const m of db().messages || []) {
+    if (!m || m.bounce || !m.receivedAt || !(new Date(m.receivedAt).getTime() > sindsMs)) continue;
+    const afz = String(m.sender || '').toLowerCase();
+    if ([...mails].some((e) => afz.includes(e)) || isKlantTel(m.fromPhone)) return 'de klant heeft na de offerte een bericht gestuurd';
+  }
+  return '';
+}
+
 export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
   if (!inv || inv.type !== 'offerte') return 'geen offerte';
   if (inv.status !== 'verzonden') return 'offerte is niet (meer) open';
@@ -266,19 +303,29 @@ export function offerteOpvolgingBlokkade(inv, { handmatig = false } = {}) {
     const ord0 = inv.orderId ? (db().orders || []).find((o) => o.id === inv.orderId) : null;
     if (ord0 && ord0.followUpAt && new Date(ord0.followUpAt).getTime() > new Date(inv.sentAt || 0).getTime()) return 'de klant kreeg al een follow-up op deze opdracht';
   }
-  if (!inv.orderId) return ''; // losse offerte zonder opdracht: niets om tegen te checken
-  const order = (db().orders || []).find((o) => o.id === inv.orderId);
-  if (!order) {
+  const sinds = new Date(inv.quoteFollowupAt || inv.sentAt || 0).getTime();
+  const order = inv.orderId ? (db().orders || []).find((o) => o.id === inv.orderId) : null;
+  if (inv.orderId && !order) {
     const inPrullenbak = (db().trash || []).some((o) => o.id === inv.orderId);
     return inPrullenbak ? 'de opdracht staat in de prullenbak' : 'de opdracht bestaat niet meer';
   }
-  if (order.status === 'geannuleerd') return 'de opdracht staat op Geannuleerd';
-  if (order.status === 'afgerond') return 'de opdracht is al afgerond';
-  const afspraakKey = appointmentStatusKey();
-  if ((afspraakKey && order.status === afspraakKey) || (order.appointmentAt && new Date(order.appointmentAt).getTime() > Date.now())) return 'er staat al een afspraak';
-  const sinds = new Date(inv.quoteFollowupAt || inv.sentAt || 0).getTime();
-  if (order.lastCustomerReplyAt && new Date(order.lastCustomerReplyAt).getTime() > sinds) return 'de klant heeft na de offerte al gereageerd';
-  return '';
+  if (order) {
+    if (order.status === 'geannuleerd') return 'de opdracht staat op Geannuleerd';
+    if (order.status === 'afgerond') return 'de opdracht is al afgerond';
+    const afspraakKey = appointmentStatusKey();
+    if ((afspraakKey && order.status === afspraakKey) || (order.appointmentAt && new Date(order.appointmentAt).getTime() > Date.now())) return 'er staat al een afspraak';
+    if (order.lastCustomerReplyAt && new Date(order.lastCustomerReplyAt).getTime() > sinds) return 'de klant heeft na de offerte al gereageerd';
+  }
+  // Ook een losse offerte, en ook als de afspraak/reactie op een ANDERE opdracht van
+  // dezelfde klant staat (8 okt 2026).
+  return klantIsAlVerder({
+    customerId: inv.customerId,
+    emails: [inv.sentTo, order && order.intake && order.intake.email],
+    phones: [order && order.intake && order.intake.phone],
+    sentMs: new Date(inv.sentAt || 0).getTime(),
+    sindsMs: sinds,
+    behalveInvoiceId: inv.id,
+  });
 }
 
 // Klaarstaande (nog niet verstuurde) opvolg-appjes van een opdracht intrekken — bij

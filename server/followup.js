@@ -3,7 +3,8 @@
 // WhatsApp (WhatsApp loopt via de outbox -> bridge stuurt naar het klant-nummer).
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { getFollowUp, getEmailSignature } from './settings.js';
-import { getInvoiceSettings } from './invoices.js';
+import { getInvoiceSettings, klantIsAlVerder } from './invoices.js';
+import { klantvriendelijkMoment } from './tijdvenster.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 
 export function startFollowUps() {
@@ -13,10 +14,12 @@ export function startFollowUps() {
   console.log('  Offerte follow-ups: actief (controleert elk uur)');
 }
 
-export async function runFollowUps() {
+export async function runFollowUps({ altijd = false } = {}) {
   const cfg = getFollowUp();
   const offerteOn = cfg.emailEnabled || cfg.whatsappEnabled;
   if (!offerteOn && !cfg.noReplyEnabled) return { sent: 0 };
+  // Nooit 's nachts een klant mailen/appen (8 okt 2026).
+  if (!altijd && !klantvriendelijkMoment()) return { sent: 0, buitenKantoortijd: true };
   const offerteCutoff = Date.now() - cfg.days * 86400000;
   const noReplyCutoff = Date.now() - cfg.noReplyDays * 86400000;
   let count = 0;
@@ -55,6 +58,13 @@ export async function runFollowUps() {
       && new Date(o.lastReplyAt).getTime() <= noReplyCutoff;
 
     if (!offerteCase && !noReplyCase) continue;
+    // KLANTBREED (8 okt 2026): staat er op een ándere opdracht van deze klant al een afspraak,
+    // is hij al geholpen of reageerde hij (ook buiten deze opdracht om), dan geen follow-up.
+    {
+      const sindsMs = offerteCase ? offerteSinds : new Date(o.lastReplyAt).getTime();
+      const al = klantIsAlVerder({ customerId: o.customerId, emails: [c.email, o.intake && o.intake.email], phones: [c.phone, o.intake && o.intake.phone], sentMs: sindsMs, sindsMs });
+      if (al) continue;
+    }
     let sent = false;
 
     if (offerteCase) {

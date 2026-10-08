@@ -17,6 +17,7 @@ import { verwijderBestandenAlsOngebruikt } from './bijlagen.js';
 // 16 tekens). Gedeeld door bevestiging, herinnering en ochtendbriefing (audit 16 sep).
 export const zelfdeTijd = (a, b) => !!(a && b) && new Date(a).getTime() === new Date(b).getTime();
 import { getInvoiceSettings, sendInvoiceReminder, sendQuoteFollowup, offerteOpvolgingBlokkade } from './invoices.js';
+import { klantvriendelijkMoment, nlDag } from './tijdvenster.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { sendPush } from './push.js';
 import { lastHealth } from './health.js';
@@ -312,6 +313,7 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
 async function runReviewRequests() {
   const cfg = getReviewRequest();
   if (!cfg.enabled || !cfg.link) return;
+  if (!klantvriendelijkMoment()) return; // review-verzoek nooit 's nachts (8 okt 2026)
   const cutoff = Date.now() - cfg.delayHours * 3600000;
   // VANGRAIL TEGEN EEN STORTVLOED. Zonder deze grenzen zou het aanzetten van de
   // automatische review in één klap naar ELKE oude afgeronde klus gaan — inmiddels
@@ -982,10 +984,12 @@ async function runMailboxQuotaCheck() {
 // Vangrails: nooit voor stokoude facturen (>120 dagen — die zijn vaak buiten het
 // systeem om afgehandeld), max 10 mails per ronde, en de teller telt handmatige én
 // automatische herinneringen samen.
-async function runInvoiceAutoReminders() {
+async function runInvoiceAutoReminders({ altijd = false } = {}) {
   const cfg = getInvoiceSettings();
   if (!cfg.autoRemind || !smtpConfigured()) return;
-  const today = new Date().toISOString().slice(0, 10);
+  // Alleen overdag en per NEDERLANDSE dag (8 okt 2026: ging om ±02:00 's nachts de deur uit).
+  if (!altijd && !klantvriendelijkMoment()) return;
+  const today = nlDag();
   if (db().settings._invRemindDay === today) return;
   db().settings._invRemindDay = today;
   const nowMs = Date.now();
@@ -1018,12 +1022,14 @@ async function runInvoiceAutoReminders() {
 // Verzonden offertes die na de ingestelde periode nog niet zijn goedgekeurd/
 // afgekeurd krijgen een vriendelijke opvolgmail (met de offerte-PDF), herhaald met
 // tussenpoos en een maximum. Zelfde vangrails als de betaalherinnering.
-export async function runQuoteFollowups() {
+export async function runQuoteFollowups({ altijd = false } = {}) {
   const cfg = getInvoiceSettings();
   // Geen SMTP-gate hier: de opvolging kan óók via WhatsApp (klant met alleen een 06);
   // sendQuoteFollowup kiest zelf het kanaal en meldt netjes als beide ontbreken.
   if (!cfg.autoQuoteFollowup) return;
-  const today = new Date().toISOString().slice(0, 10);
+  // Alleen overdag en per NEDERLANDSE dag (8 okt 2026, casus Erik Kaper: mail om 02:28).
+  if (!altijd && !klantvriendelijkMoment()) return;
+  const today = nlDag();
   if (db().settings._quoteFollowupDay === today) return;
   db().settings._quoteFollowupDay = today;
   const nowMs = Date.now();
