@@ -294,7 +294,7 @@ ${lines.join('\n')}`;
 // --- AI-modus: Claude ---
 async function classifyWithClaude(message) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+  const model = process.env.ANTHROPIC_MODEL || MODELLEN.snel;
 
   const system = `Je bent een assistent voor een sleutel-/slotenmaker-bedrijf (Keyservice).
 ${message.companyProfile ? `\nOVER HET BEDRIJF (gebruik dit om aanvragen goed te begrijpen):\n${message.companyProfile}\n` : ''}
@@ -347,35 +347,39 @@ Geef JSON met exact deze velden:
   "reasoning": "korte uitleg in het Nederlands waarom je deze status koos"
 }`;
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 600,
-      system,
-      messages: [{ role: 'user', content: user }],
-    }),
+  // HAIKU 5.5 (12 okt 2026): denkt standaard eerst na en dat telt mee voor max_tokens —
+  // met de oude limiet van 600 kon het JSON-antwoord afgekapt worden. Daarom effort 'low'
+  // (sorteren is eenvoudig werk) en ruimte voor het denkwerk; geen temperature en geen
+  // voorgevuld antwoord (beide 400 op Haiku 5.5). Het antwoord wordt gelezen op type
+  // (tekstblokken), niet op positie — een denkblok vooraan is geen probleem.
+  const bouw = (m) => ({
+    model: m,
+    max_tokens: /haiku-5|sonnet-5|opus-5/.test(m) ? 2000 : 600,
+    ...effortVoor(m, 'low'),
+    system,
+    messages: [{ role: 'user', content: user }],
   });
-
-  if (!resp.ok) {
-    throw new Error(`Claude API gaf status ${resp.status}: ${await resp.text()}`);
+  const lees = (json) => {
+    const text = (json.content || []).map((c) => (c.type === 'text' || !c.type ? c.text || '' : '')).join('').trim();
+    return text.match(/\{[\s\S]*\}/);
+  };
+  // Model niet beschikbaar / overbelast → automatisch Haiku 4.5 (modelKetting).
+  let r = await vraagMetTerugval(apiKey, model, bouw, { timeoutMs: 60000, pogingen: 2 });
+  if (!r.ok) throw new Error(r.fout);
+  let match = lees(r.json);
+  // Weigering door het veiligheidsfilter of geen bruikbare JSON (bv. afgekapt)? Eén
+  // keer opnieuw op Haiku 4.5, zodat een aanvraag nooit stil op de simpele regels valt.
+  if ((!match || r.json.stop_reason === 'refusal') && /haiku-5/.test(r.model)) {
+    const reden = r.json.stop_reason === 'refusal' ? 'geweigerd door veiligheidsfilter' : `geen JSON (stop: ${r.json.stop_reason || '?'})`;
+    const r2 = await vraagMetTerugval(apiKey, MODELLEN.haikuOud, bouw, { timeoutMs: 60000, pogingen: 2 });
+    if (r2.ok && lees(r2.json)) { meldTerugval(r.model, r2.model, reden); r = r2; match = lees(r2.json); }
   }
-
-  const json = await resp.json();
-  recordAIUsage(json.usage, model);
-  const text = (json.content || []).map((c) => c.text || '').join('').trim();
-  const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('Geen JSON in AI-antwoord');
   const parsed = JSON.parse(match[0]);
 
   if (!CANONICAL_STATUSES.includes(parsed.status)) parsed.status = 'open';
   parsed.confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0.5));
-  parsed.engine = `ai:${model}`;
+  parsed.engine = `ai:${r.model}`;
 
   // BELANGRIJK: 'confidence' is de zekerheid over de KOLOM, niet of het een echte
   // opdracht is. Zegt de AI zelf dat het GEEN opdracht is (incasso/leverancier/
@@ -420,18 +424,20 @@ export function aiMode() {
 // Stelt een concept-antwoord voor een klant op, op basis van het probleem,
 // de gesprekshistorie en (optioneel) je standaardsjablonen. Vereist de AI-modus.
 // ---------- Modellen per taak (25 sep 2026, advies + akkoord eigenaar) ----------
-// snel    = Haiku 4.5: inbox-indeling (hoog volume), systeemcheck
+// snel    = Haiku 5.5: inbox-indeling (hoog volume), systeemcheck (12 okt 2026, wens
+//           eigenaar; was Haiku 4.5 — die blijft het vangnet: haikuOud)
 // analyse = Sonnet 5: analyses, statusscan, assistent, concept-antwoorden
 // opus55  = Opus 5.5: dagoverzicht (leest alle WhatsApp + e-mail) en ochtendbriefing
 // Env-overrides blijven werken (ANTHROPIC_MODEL / ANTHROPIC_ANALYZE_MODEL /
 // ANTHROPIC_REPLY_MODEL / ANTHROPIC_BRIEFING_MODEL).
-export const MODELLEN = { snel: 'claude-haiku-4-5-20251001', analyse: 'claude-sonnet-5', opus: 'claude-opus-5', opus55: 'claude-opus-5-5' };
+export const MODELLEN = { snel: 'claude-haiku-5-5', haikuOud: 'claude-haiku-4-5-20251001', analyse: 'claude-sonnet-5', opus: 'claude-opus-5', opus55: 'claude-opus-5-5' };
 // Denkdiepte (effort). Sonnet 5 / Opus 5 / Opus 5.5 "denken" standaard eerst na, en
 // dat telt mee voor max_tokens — bij een korte limiet kon de tekst halverwege
-// afgekapt worden. 'low' voor korte teksten; Haiku en oudere modellen kennen de
-// parameter niet (400), dus daar sturen we hem niet mee.
+// afgekapt worden. 'low' voor korte teksten. Haiku 5.5 denkt óók standaard (effort
+// default 'medium') en kent de parameter; Haiku 4.5 en oudere modellen niet (400),
+// dus daar sturen we hem niet mee.
 export function effortVoor(model, level = 'low') {
-  return /sonnet-5|opus-5|opus-4-[678]|fable/i.test(String(model || '')) ? { output_config: { effort: level } } : {};
+  return /sonnet-5|opus-5|opus-4-[678]|fable|haiku-5/i.test(String(model || '')) ? { output_config: { effort: level } } : {};
 }
 
 // ---------- TERUGVAL + MODELTEST (25 sep 2026) ----------
@@ -443,6 +449,7 @@ export function modelKetting(model) {
   const m = String(model || '');
   if (/opus-5-5/.test(m)) return [m, MODELLEN.opus, MODELLEN.analyse];
   if (/opus-5$/.test(m)) return [m, MODELLEN.analyse];
+  if (/haiku-5/.test(m)) return [m, MODELLEN.haikuOud];
   return [m];
 }
 const TIJDELIJK = [429, 500, 502, 503, 529];
@@ -477,6 +484,16 @@ function magTerugvallen(r) {
   if (r.status === 404 || r.status === 0 || TIJDELIJK.includes(r.status)) return true;
   return r.status === 400 && /model|not[ _]found|not supported|niet ondersteund|effort|thinking|output_config/i.test(r.fout || '');
 }
+// Terugval melden in het logboek — hooguit 1× per uur per modelpaar (de inbox-indeling
+// draait per bericht; zonder rem zou een onbruikbaar model het logboek volschrijven).
+const _terugvalGemeld = new Map();
+export async function meldTerugval(van, naar, fout = '') {
+  console.warn(`[ai] terugval ${van} → ${naar}: ${fout || ''}`);
+  const sleutel = `${van}→${naar}`;
+  if (Date.now() - (_terugvalGemeld.get(sleutel) || 0) < 3600000) return;
+  _terugvalGemeld.set(sleutel, Date.now());
+  try { (await import('../db.js')).logActivity('systeem', 'AI-terugval', `${van} niet bruikbaar (${String(fout || '').slice(0, 120)}) — ${naar} gebruikt`); } catch { /* nooit blokkeren */ }
+}
 // Verzoek met terugval over de ketting. bouwBody(model) maakt het verzoek per model
 // (effort verschilt per model). Geeft {ok, json, model, terugvalVan, fout}.
 export async function vraagMetTerugval(apiKey, model, bouwBody, opts = {}) {
@@ -485,10 +502,7 @@ export async function vraagMetTerugval(apiKey, model, bouwBody, opts = {}) {
     const r = await roepModel(apiKey, bouwBody(m), opts);
     if (r.ok) {
       recordAIUsage(r.json.usage, m);
-      if (m !== model) {
-        try { (await import('../db.js')).logActivity('systeem', 'AI-terugval', `${model} niet bruikbaar (${String(laatste?.fout || '').slice(0, 120)}) — ${m} gebruikt`); } catch { /* nooit blokkeren */ }
-        console.warn(`[ai] terugval ${model} → ${m}: ${laatste?.fout || ''}`);
-      }
+      if (m !== model) meldTerugval(model, m, laatste?.fout);
       return { ok: true, json: r.json, model: m, terugvalVan: m !== model ? model : '' };
     }
     laatste = r;

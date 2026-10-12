@@ -4771,6 +4771,7 @@ function modelNaam(id) {
   if (/opus-5-5/.test(m)) return 'Opus 5.5';
   if (/opus-5\b|opus-5$/.test(m)) return 'Opus 5';
   if (/sonnet-5/.test(m)) return 'Sonnet 5';
+  if (/haiku-5/.test(m)) return 'Haiku 5.5';
   if (/haiku/.test(m)) return 'Haiku 4.5';
   return m;
 }
@@ -5240,7 +5241,7 @@ async function loadSubs() {
   $('#subsPanel').innerHTML = `
     <div class="stat-grid"> <div class="stat"><div class="num">${u.calls}</div><div class="lbl">AI-aanroepen deze maand (${esc(u.month)})</div></div> <div class="stat"><div class="num">$${u.estimatedCostUsd.toFixed(2)}</div><div class="lbl">Geschatte AI-kosten (indicatie)</div></div> <div class="stat"><div class="num">${(u.inputTokens + u.outputTokens).toLocaleString('nl-NL')}</div><div class="lbl">Tokens verbruikt</div></div> </div>
     ${(u.perModel && u.perModel.length) ? `<div class="muted small" style="margin:-6px 0 8px"><strong>Per model deze maand:</strong> ${u.perModel.map((p) => `${esc(p.label || p.tier)}: ${p.calls}× · ${(p.inputTokens + p.outputTokens).toLocaleString('nl-NL')} tokens · ~$${p.estCostUsd.toFixed(2)}`).join(' &nbsp;·&nbsp; ')}</div>` : ''}
-    <p class="muted small" style="margin:0 0 16px">De AI-kosten zijn een <strong>schatting</strong> van het verbruik via dit dashboard (Haiku voor sorteren per bericht, Sonnet 5 voor de statusscan/assistent). Het officiële verbruik/tegoed zie je altijd in de <strong>Claude Console</strong> → Usage.</p> <div class="card-grid"> ${d.services.map((s) => `
+    <p class="muted small" style="margin:0 0 16px">De AI-kosten zijn een <strong>schatting</strong> van het verbruik via dit dashboard (Haiku 5.5 voor sorteren per bericht, Sonnet 5 voor de statusscan/assistent, Opus 5.5 voor het dagoverzicht). Het officiële verbruik/tegoed zie je altijd in de <strong>Claude Console</strong> → Usage.</p> <div class="card-grid"> ${d.services.map((s) => `
         <div class="info-card"> <h3>${esc(s.name)}</h3> <div class="muted small">${esc(s.what)}</div> <div style="margin:8px 0"><span class="chip">${esc(s.cost)}</span></div> <div class="small">${esc(s.note)}</div> ${s.manageUrl ? `<div style="margin-top:10px"><a class="btn btn-sm" href="${esc(s.manageUrl)}" target="_blank" rel="noopener">Beheer / verbruik </a></div>` : ''}
         </div>`).join('')}
     </div>`;

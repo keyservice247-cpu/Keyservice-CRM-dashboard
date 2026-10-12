@@ -2,7 +2,7 @@
 // (database-schrijfactie, AI, SMTP-verbinding, IMAP-instellingen) en bewaart
 // het laatste resultaat zodat het dashboard het kan tonen.
 import { db, save } from './db.js';
-import { aiMode } from './ai/categorizer.js';
+import { aiMode, MODELLEN, effortVoor } from './ai/categorizer.js';
 import { smtpConfigured } from './connectors/email-smtp.js';
 
 let lastResult = null;
@@ -13,7 +13,8 @@ async function checkAI() {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001', max_tokens: 5, messages: [{ role: 'user', content: 'ping' }] }),
+      // Zelfde model als de inbox-indeling (Haiku 5.5 denkt eerst: ruimere limiet, effort low).
+      body: JSON.stringify((() => { const model = process.env.ANTHROPIC_MODEL || MODELLEN.snel; return { model, max_tokens: 64, ...effortVoor(model, 'low'), messages: [{ role: 'user', content: 'ping' }] }; })()),
     });
     if (resp.ok) return { ok: true, mode: 'ai', detail: 'Claude API reageert' };
     if (resp.status === 401) return { ok: false, mode: 'ai', detail: 'AI-sleutel ongeldig (401)' };

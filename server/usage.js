@@ -6,18 +6,21 @@ import { db, saveSoon } from './db.js';
 // Prijsindicatie per 1M tokens (USD), per modeltier. Overschrijfbaar via env.
 // Bijgewerkt 25 sep 2026 (stond nog op oude prijzen: Sonnet $3/$15 en Opus $15/$75 —
 // de teller overschatte Sonnet 1,5x en Opus 3x): Haiku 4.5 $1/$5, Sonnet 5 $2/$10,
-// Opus 5 $5/$25, Opus 5.5 $4/$20.
+// Opus 5 $5/$25, Opus 5.5 $4/$20. 12 okt 2026: Haiku 5.5 $0,10/$0,50 (bij prompts tot
+// 100K tokens — de inbox-indeling blijft daar ruim onder; daarboven $0,50/$2,50).
 const PRICES = {
   haiku: { in: Number(process.env.AI_PRICE_HAIKU_IN || 1.0), out: Number(process.env.AI_PRICE_HAIKU_OUT || 5.0) },
+  haiku55: { in: Number(process.env.AI_PRICE_HAIKU55_IN || 0.10), out: Number(process.env.AI_PRICE_HAIKU55_OUT || 0.50) },
   sonnet: { in: Number(process.env.AI_PRICE_SONNET_IN || 2.0), out: Number(process.env.AI_PRICE_SONNET_OUT || 10.0) },
   opus: { in: Number(process.env.AI_PRICE_OPUS_IN || 5.0), out: Number(process.env.AI_PRICE_OPUS_OUT || 25.0) },
   opus55: { in: Number(process.env.AI_PRICE_OPUS55_IN || 4.0), out: Number(process.env.AI_PRICE_OPUS55_OUT || 20.0) },
   overig: { in: Number(process.env.AI_PRICE_IN || 2.0), out: Number(process.env.AI_PRICE_OUT || 10.0) },
 };
-export const TIER_LABELS = { haiku: 'Haiku 4.5', sonnet: 'Sonnet 5', opus: 'Opus 5', opus55: 'Opus 5.5', overig: 'overig' };
+export const TIER_LABELS = { haiku: 'Haiku 4.5', haiku55: 'Haiku 5.5', sonnet: 'Sonnet 5', opus: 'Opus 5', opus55: 'Opus 5.5', overig: 'overig' };
 
 export function tierOf(model) {
   const m = String(model || '').toLowerCase();
+  if (m.includes('haiku-5')) return 'haiku55';
   if (m.includes('haiku')) return 'haiku';
   if (m.includes('sonnet')) return 'sonnet';
   if (m.includes('opus-5-5')) return 'opus55';

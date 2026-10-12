@@ -37,7 +37,7 @@ const ai = await import('../server/ai/categorizer.js');
 const { db } = await import('../server/db.js');
 
 console.log('\n== Modelkeuze per taak ==');
-ok('MODELLEN: Haiku 4.5 / Sonnet 5 / Opus 5 / Opus 5.5', ai.MODELLEN.snel === 'claude-haiku-4-5-20251001' && ai.MODELLEN.analyse === 'claude-sonnet-5' && ai.MODELLEN.opus55 === 'claude-opus-5-5');
+ok('MODELLEN: Haiku 5.5 (vangnet Haiku 4.5) / Sonnet 5 / Opus 5 / Opus 5.5', ai.MODELLEN.snel === 'claude-haiku-5-5' && ai.MODELLEN.haikuOud === 'claude-haiku-4-5-20251001' && ai.MODELLEN.analyse === 'claude-sonnet-5' && ai.MODELLEN.opus55 === 'claude-opus-5-5');
 
 await ai.suggestReply({ customerName: 'Jan', problem: 'slot kapot', history: '', templates: [] });
 ok('concept-antwoord (Snel antwoord) → Sonnet 5 (was Haiku)', laatste().body.model === 'claude-sonnet-5', laatste().body.model);
@@ -69,7 +69,8 @@ ok('twee keer leeg → duidelijke foutmelding i.p.v. een leeg vak', /kortere per
 leegAntwoorden = 0;
 
 console.log('\n== Denkdiepte alleen waar het model het kent ==');
-ok('Haiku krijgt GEEN effort (anders 400)', JSON.stringify(ai.effortVoor('claude-haiku-4-5-20251001')) === '{}');
+ok('Haiku 4.5 krijgt GEEN effort (anders 400)', JSON.stringify(ai.effortVoor('claude-haiku-4-5-20251001')) === '{}');
+ok('Haiku 5.5 wél (denkt standaard; effort is de rem)', ai.effortVoor('claude-haiku-5-5', 'low').output_config?.effort === 'low');
 ok('Sonnet 5 / Opus 5 / Opus 5.5 wel', ['claude-sonnet-5', 'claude-opus-5', 'claude-opus-5-5'].every((m) => ai.effortVoor(m, 'low').output_config?.effort === 'low'));
 process.env.ANTHROPIC_ANALYZE_MODEL = 'claude-haiku-4-5-20251001';
 await ai.conversieInsight({ facts: 'x' });
@@ -134,11 +135,62 @@ console.log('\n== Terugval: Opus 5.5 geweigerd → volgend model neemt over ==')
   ok('Opus 5.5 aanhoudend overbelast (3 pogingen) → Opus 5', d3.engine === 'ai:claude-opus-5' && aanvragen.filter((m) => m === 'claude-opus-5-5').length === 3, aanvragen.join());
 }
 
+console.log('\n== Inbox-indeling op Haiku 5.5 (12 okt 2026) ==');
+{
+  const KLANT_JSON = JSON.stringify({ isOpdracht: true, status: 'open', title: 'Rhenen — slot klemt', customerName: 'Piet Klant', customerPhone: '0612345678', customerEmail: null, customerAddress: 'Rhenen', problem: 'slot klemt', urgent: false, confidence: 0.9, reasoning: 'nieuwe aanvraag' });
+  const aanvragen = [];
+  let gedrag = () => null; // per test: (body) => Response | null (null = normaal antwoord)
+  globalThis.fetch = async (url, opts = {}) => {
+    const body = JSON.parse(opts.body || '{}'); aanvragen.push(body);
+    const eigen = gedrag(body);
+    if (eigen) return eigen;
+    // Haiku 5.5 begint met een (leeg) denkblok, daarna de tekst — zoals de echte API.
+    return new Response(JSON.stringify({ content: [{ type: 'thinking', thinking: '', signature: 'x' }, { type: 'text', text: KLANT_JSON }], usage: { input_tokens: 900, output_tokens: 300 }, stop_reason: 'end_turn' }), { status: 200 });
+  };
+  const bericht = { channel: 'email', sender: 'Piet Klant <piet@example.nl>', subject: 'Slot klemt', body: 'Mijn voordeurslot klemt, kunnen jullie komen? 0612345678' };
+  const c1 = await ai.classify(bericht);
+  const b1 = aanvragen[0];
+  ok('inbox-indeling → Haiku 5.5', b1.model === 'claude-haiku-5-5', b1.model);
+  ok('… met effort low en ruimte voor het denkwerk (limiet ≥ 2000, was 600)', b1.output_config?.effort === 'low' && b1.max_tokens >= 2000, JSON.stringify([b1.output_config, b1.max_tokens]));
+  ok('… zonder temperature/top_p/top_k en zonder voorgevuld antwoord (beide 400 op Haiku 5.5)', !('temperature' in b1) && !('top_p' in b1) && !('top_k' in b1) && b1.messages[b1.messages.length - 1].role === 'user');
+  ok('denkblok vóór de tekst → JSON toch goed gelezen', c1.customerName === 'Piet Klant' && c1.status === 'open' && c1.engine === 'ai:claude-haiku-5-5', JSON.stringify({ n: c1.customerName, e: c1.engine }));
+  // Model niet beschikbaar op dit account → automatisch Haiku 4.5.
+  aanvragen.length = 0;
+  gedrag = (body) => body.model === 'claude-haiku-5-5' ? new Response(JSON.stringify({ type: 'error', error: { type: 'not_found_error', message: 'model: claude-haiku-5-5' } }), { status: 404 }) : null;
+  const c2 = await ai.classify(bericht);
+  ok('Haiku 5.5 niet beschikbaar (404) → Haiku 4.5 sorteert, zonder effort', c2.engine === 'ai:claude-haiku-4-5-20251001' && aanvragen.map((x) => x.model).join() === 'claude-haiku-5-5,claude-haiku-4-5-20251001' && !aanvragen[1].output_config, JSON.stringify({ e: c2.engine, m: aanvragen.map((x) => x.model) }));
+  // Veiligheidsfilter weigert → één keer opnieuw op Haiku 4.5.
+  aanvragen.length = 0;
+  gedrag = (body) => body.model === 'claude-haiku-5-5' ? new Response(JSON.stringify({ content: [], usage: { input_tokens: 900, output_tokens: 0 }, stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'general_harms' } }), { status: 200 }) : null;
+  const c3 = await ai.classify(bericht);
+  ok('Haiku 5.5 weigert (refusal) → Haiku 4.5 doet het alsnog, geen terugval naar de simpele regels', c3.engine === 'ai:claude-haiku-4-5-20251001' && c3.customerName === 'Piet Klant', JSON.stringify({ e: c3.engine }));
+  // Alleen denkwerk, geen tekst (afgekapt) → idem.
+  aanvragen.length = 0;
+  gedrag = (body) => body.model === 'claude-haiku-5-5' ? new Response(JSON.stringify({ content: [{ type: 'thinking', thinking: '', signature: 'x' }], usage: { input_tokens: 900, output_tokens: 2000 }, stop_reason: 'max_tokens' }), { status: 200 }) : null;
+  const c4 = await ai.classify(bericht);
+  ok('Haiku 5.5 geeft geen JSON (afgekapt) → Haiku 4.5 vangt het op', c4.engine === 'ai:claude-haiku-4-5-20251001', c4.engine);
+  // Beide modellen stuk → de bekende terugval op de regels (nooit een crash).
+  gedrag = () => new Response('{"error":{"message":"Overloaded"}}', { status: 529 });
+  const c5 = await ai.classify(bericht);
+  ok('alles stuk → regels (ai-fallback), lead gaat nooit verloren', /regels/.test(c5.engine), c5.engine);
+  // Logboek-rem: een onbruikbaar model schrijft het logboek niet vol.
+  const { db: db2 } = await import('../server/db.js');
+  const terugvalRegels = (db2().activity || []).filter((x) => x.action === 'AI-terugval' && /haiku/i.test(x.detail || '')).length;
+  ok('terugval-melding in het logboek hooguit 1× per uur per modelpaar (3 terugvallen → 1 regel)', terugvalRegels === 1, String(terugvalRegels));
+  // Systeemcheck gebruikt hetzelfde model.
+  aanvragen.length = 0; gedrag = () => null;
+  const health = await import('../server/health.js');
+  if (typeof health.runHealthCheck === 'function') { await health.runHealthCheck().catch(() => {}); }
+  const hc = aanvragen.find((x) => (x.messages || [])[0]?.content === 'ping');
+  ok('systeemcheck pingt Haiku 5.5 met effort low', !!hc && hc.model === 'claude-haiku-5-5' && hc.output_config?.effort === 'low' && hc.max_tokens >= 64, JSON.stringify(hc || 'geen ping-aanroep'));
+}
+
 console.log('\n== Modeltest (knop Instellingen → AI) ==');
 {
   globalThis.fetch = async (url, opts = {}) => { const m = JSON.parse(opts.body).model; return m === 'claude-opus-5-5' ? new Response(JSON.stringify({ error: { message: 'model: claude-opus-5-5 not found' } }), { status: 404 }) : new Response(JSON.stringify({ content: [{ type: 'text', text: 'OK' }], usage: {} }), { status: 200 }); };
   const r = await ai.testAiModellen();
-  ok('drie modellen getest: Haiku, Sonnet 5, Opus 5.5', r.length === 3 && r.map((x) => x.model).join() === 'claude-haiku-4-5-20251001,claude-sonnet-5,claude-opus-5-5', r.map((x) => x.model).join());
+  ok('drie modellen getest: Haiku 5.5, Sonnet 5, Opus 5.5', r.length === 3 && r.map((x) => x.model).join() === 'claude-haiku-5-5,claude-sonnet-5,claude-opus-5-5', r.map((x) => x.model).join());
+  ok('modeltest Haiku 5.5: met effort low (denkt anders eerst uitgebreid na)', r[0].ok && Array.isArray(r[0].terugval) && r[0].terugval.join() === 'claude-haiku-4-5-20251001', JSON.stringify(r[0]));
   ok('werkende modellen: ok + antwoord', r[0].ok && r[1].ok && r[1].antwoord === 'OK');
   ok('Opus 5.5 niet beschikbaar: eerlijke fout + welke terugval het CRM dan gebruikt', !r[2].ok && /404/.test(r[2].fout) && r[2].terugval.join() === 'claude-opus-5,claude-sonnet-5', JSON.stringify(r[2]));
   delete process.env.ANTHROPIC_API_KEY;
@@ -154,6 +206,7 @@ ok('Sonnet 5 = $2 / $10 per miljoen (was $3 / $15)', r2(u.kostenVan('sonnet', 1e
 ok('Opus 5 = $5 / $25 (was $15 / $75)', r2(u.kostenVan('opus', 1e6, 1e6)) === 30);
 ok('Opus 5.5 = $4 / $20, eigen regel', u.tierOf('claude-opus-5-5') === 'opus55' && r2(u.kostenVan('opus55', 1e6, 1e6)) === 24);
 ok('Haiku 4.5 = $1 / $5', r2(u.kostenVan('haiku', 1e6, 1e6)) === 6);
+ok('Haiku 5.5 = $0,10 / $0,50, eigen regel (niet als Haiku 4.5 geteld)', u.tierOf('claude-haiku-5-5') === 'haiku55' && u.tierOf('claude-haiku-4-5-20251001') === 'haiku' && r2(u.kostenVan('haiku55', 1e6, 1e6)) === 0.6 && u.TIER_LABELS.haiku55 === 'Haiku 5.5');
 ok('Opus 5 wordt niet als 5.5 geteld', u.tierOf('claude-opus-5') === 'opus');
 
 console.log(`\n==========\nAI-modellen-test: ${passed} geslaagd, ${failed} gefaald`);

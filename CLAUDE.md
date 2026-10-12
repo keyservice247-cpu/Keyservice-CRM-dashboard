@@ -161,7 +161,7 @@ de regressie meegroeit.
   `/api/pulse` (5s polling, geen handmatig verversen).
 - **Inbox / AI-controlewachtrij:** AI deelt in; mens keurt goed/wijst af. Filters:
   Te controleren / Overige (geklets) / Prullenbak (afgewezen).
-- **AI (Claude Haiku 4.5; zie AI-MODELLEN PER TAAK):** categorisatie + extractie (naam/tel/e-mail/adres/probleem).
+- **AI (Claude Haiku 5.5 sinds 12 okt 2026, vangnet Haiku 4.5; zie AI-MODELLEN PER TAAK):** categorisatie + extractie (naam/tel/e-mail/adres/probleem).
   Bepaalt `isOpdracht`; bij "geen opdracht" (incasso/leverancier/reclame/factuur) → confidence
   max 0.15, naar Overige, nooit auto-geaccepteerd. Regelfilter `NOT_ORDER_WORDS` als extra net.
 - **Feedback-leren:** elke afwijzing (ook zonder reden) + elke correctie permanent opgeslagen,
@@ -834,6 +834,20 @@ de regressie meegroeit.
   (admin; testAiModellen: één vraag van <1 cent per model, zonder terugval) → tabel
   "werkt ✓ / werkt niet + welke terugval". Test: test/ai-modellen-test.mjs (32, zonder
   server, fetch onderschept — géén echte AI-kosten) + browser (+1).
+  HAIKU 5.5 (12 okt 2026, wens eigenaar "verander naar de nieuwste Haiku"): MODELLEN.snel =
+  `claude-haiku-5-5` (inbox-indeling + systeemcheck), MODELLEN.haikuOud = Haiku 4.5 =
+  vangnet. Haiku 5.5 DENKT standaard (effort default 'medium', telt mee voor max_tokens),
+  weigert temperature/top_p/top_k ≠ standaard, voorgevuld antwoord en budget_tokens (400)
+  en kan een veiligheids-weigering geven (stop_reason 'refusal', géén server-fallback).
+  Daarom: effortVoor kent haiku-5 (effort 'low'), classifyWithClaude limiet 2000 (was
+  600), loopt via vraagMetTerugval (modelKetting haiku-5 → Haiku 4.5 bij 404/400-model/
+  overbelasting) én probeert bij refusal of geen JSON één keer Haiku 4.5; pas als ook dat
+  faalt de regels. Antwoord gelezen op type (denkblok vooraan is normaal). Logboekregel
+  "AI-terugval" hooguit 1×/uur per modelpaar (meldTerugval). Kostenteller tier haiku55
+  $0,10/$0,50 (prompts ≤100K; daarboven $0,50/$2,50 — inbox blijft ruim eronder). health.js
+  pingt hetzelfde model (effort low, max_tokens 64). Modeltest toont "Haiku 5.5" + terugval
+  "Haiku 4.5". Test: ai-modellen-test 49 (+13). LET OP: staat in Render ANTHROPIC_MODEL
+  gezet, dan wint die (modeltest laat zien welk model écht draait).
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek
   alleen naar de OFFERTE (status 'verzonden'), nooit naar de OPDRACHT. Nu

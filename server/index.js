@@ -5477,9 +5477,9 @@ app.post('/api/finance/import-income', requirePerm('finance'), (req, res) => {
 // Modeltest (Instellingen → AI): werkt elk AI-model écht op dit account? Eén
 // piepkleine vraag per model (< 1 cent), zonder terugval — zodat je het ziet.
 app.post('/api/ai/modeltest', requireRole('admin'), async (req, res) => {
-  const namen = { 'claude-opus-5-5': 'Opus 5.5', 'claude-opus-5': 'Opus 5', 'claude-sonnet-5': 'Sonnet 5' };
+  const namen = { 'claude-opus-5-5': 'Opus 5.5', 'claude-opus-5': 'Opus 5', 'claude-sonnet-5': 'Sonnet 5', 'claude-haiku-5-5': 'Haiku 5.5' };
   const lijst = await testAiModellen();
-  const modellen = lijst.map((m) => ({ ...m, naam: namen[m.model] || (/haiku/.test(m.model) ? 'Haiku 4.5' : m.model) }));
+  const modellen = lijst.map((m) => ({ ...m, naam: namen[m.model] || (/haiku-5/.test(m.model) ? 'Haiku 5.5' : /haiku/.test(m.model) ? 'Haiku 4.5' : m.model) }));
   logActivity(req.user.name, 'AI-modellen getest', modellen.map((m) => `${m.naam}: ${m.ok ? 'ok' : 'FOUT'}`).join(', '));
   res.json({ modellen });
 });
