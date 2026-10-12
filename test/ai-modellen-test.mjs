@@ -37,10 +37,10 @@ const ai = await import('../server/ai/categorizer.js');
 const { db } = await import('../server/db.js');
 
 console.log('\n== Modelkeuze per taak ==');
-ok('MODELLEN: Haiku 5.5 (vangnet Haiku 4.5) / Sonnet 5 / Opus 5 / Opus 5.5', ai.MODELLEN.snel === 'claude-haiku-5-5' && ai.MODELLEN.haikuOud === 'claude-haiku-4-5-20251001' && ai.MODELLEN.analyse === 'claude-sonnet-5' && ai.MODELLEN.opus55 === 'claude-opus-5-5');
+ok('MODELLEN: Haiku 5.5 (vangnet 4.5) / Sonnet 5.5 (vangnet 5) / Opus 5 / Opus 5.5', ai.MODELLEN.snel === 'claude-haiku-5-5' && ai.MODELLEN.haikuOud === 'claude-haiku-4-5-20251001' && ai.MODELLEN.analyse === 'claude-sonnet-5-5' && ai.MODELLEN.sonnetOud === 'claude-sonnet-5' && ai.MODELLEN.opus55 === 'claude-opus-5-5');
 
 await ai.suggestReply({ customerName: 'Jan', problem: 'slot kapot', history: '', templates: [] });
-ok('concept-antwoord (Snel antwoord) → Sonnet 5 (was Haiku)', laatste().body.model === 'claude-sonnet-5', laatste().body.model);
+ok('concept-antwoord (Snel antwoord) → Sonnet 5.5', laatste().body.model === 'claude-sonnet-5-5', laatste().body.model);
 ok('concept-antwoord: effort low + ruime limiet (denken telt mee)', laatste().body.output_config?.effort === 'low' && laatste().body.max_tokens >= 2000, JSON.stringify([laatste().body.output_config, laatste().body.max_tokens]));
 
 await ai.morningInsight({ facts: 'Afspraken: 2' });
@@ -48,7 +48,7 @@ ok('ochtendbriefing-duiding → Opus 5.5', laatste().body.model === 'claude-opus
 ok('ochtendbriefing: effort low, limiet ≥ 2000 (was 300 → kon afgekapt worden)', laatste().body.output_config?.effort === 'low' && laatste().body.max_tokens >= 2000);
 
 await ai.conversieInsight({ facts: 'conversie 80%' });
-ok('conversie-briefing → Sonnet 5, effort low, limiet ≥ 2000', laatste().body.model === 'claude-sonnet-5' && laatste().body.output_config?.effort === 'low' && laatste().body.max_tokens >= 2000, JSON.stringify(laatste().body.output_config));
+ok('conversie-briefing → Sonnet 5.5, effort low, limiet ≥ 2000', laatste().body.model === 'claude-sonnet-5-5' && laatste().body.output_config?.effort === 'low' && laatste().body.max_tokens >= 2000, JSON.stringify(laatste().body.output_config));
 
 const dov = await ai.dayOverview({ corpus: 'x', facts: 'y', model: ai.MODELLEN.opus55 });
 ok('dagoverzicht → Opus 5.5, effort medium, limiet 16000, eigen time-out', laatste().body.model === 'claude-opus-5-5' && laatste().body.output_config?.effort === 'medium' && laatste().body.max_tokens === 16000 && laatste().heeftSignal, JSON.stringify({ m: laatste().body.model, e: laatste().body.output_config, t: laatste().body.max_tokens }));
@@ -100,7 +100,7 @@ await auto.haalDagoverzicht();
 ok('tweede keer vandaag: uit de cache, geen nieuwe AI-aanroep', verzoeken.length === voor2);
 db().settings.aiOverviewModel = 'standaard';
 await auto.haalDagoverzicht({ refresh: true });
-ok('instelling "standaard" → dagoverzicht op Sonnet 5', laatste().body.model === 'claude-sonnet-5', laatste().body.model);
+ok('instelling "standaard" → dagoverzicht op Sonnet 5.5', laatste().body.model === 'claude-sonnet-5-5', laatste().body.model);
 db().settings.aiOverviewModel = 'opus';
 
 console.log('\n== Briefing zonder AI blijft gewoon werken ==');
@@ -124,7 +124,7 @@ console.log('\n== Terugval: Opus 5.5 geweigerd → volgend model neemt over ==')
   ok('dagoverzicht: Opus 5.5 404 → Opus 5 levert, engine + terugvalVan kloppen', d1.data && d1.engine === 'ai:claude-opus-5' && d1.terugvalVan === 'claude-opus-5-5' && aanvragen.join() === 'claude-opus-5-5,claude-opus-5', JSON.stringify({ e: d1.engine, t: d1.terugvalVan, a: aanvragen }));
   aanvragen.length = 0; weiger.add('claude-opus-5');
   const t1 = await ai.morningInsight({ facts: 'Afspraken: 1' });
-  ok('ochtendbriefing: Opus 5.5 én Opus 5 weg → Sonnet 5 schrijft de duiding', t1 === 'OK' && aanvragen.join() === 'claude-opus-5-5,claude-opus-5,claude-sonnet-5', aanvragen.join());
+  ok('ochtendbriefing: Opus 5.5 én Opus 5 weg → Sonnet 5.5 schrijft de duiding', t1 === 'OK' && aanvragen.join() === 'claude-opus-5-5,claude-opus-5,claude-sonnet-5-5', aanvragen.join());
   aanvragen.length = 0;
   globalThis.fetch = async (url, opts = {}) => { aanvragen.push(JSON.parse(opts.body).model); return new Response(JSON.stringify({ error: { message: 'messages: text content blocks must be non-empty' } }), { status: 400 }); };
   const d2 = await ai.dayOverview({ corpus: 'x', facts: 'y', model: ai.MODELLEN.opus55 }).catch((e) => ({ fout: e.message }));
@@ -185,14 +185,53 @@ console.log('\n== Inbox-indeling op Haiku 5.5 (12 okt 2026) ==');
   ok('systeemcheck pingt Haiku 5.5 met effort low', !!hc && hc.model === 'claude-haiku-5-5' && hc.output_config?.effort === 'low' && hc.max_tokens >= 64, JSON.stringify(hc || 'geen ping-aanroep'));
 }
 
+console.log('\n== Sonnet 5.5 met vangnet (12 okt 2026) ==');
+{
+  const aanvragen = [];
+  let gedrag = () => null;
+  globalThis.fetch = async (url, opts = {}) => {
+    const body = JSON.parse(opts.body || '{}'); aanvragen.push(body);
+    const eigen = gedrag(body);
+    if (eigen) return eigen;
+    return new Response(JSON.stringify({ content: [{ type: 'thinking', thinking: '', signature: 'x' }, { type: 'text', text: 'Beste Jan, we komen graag langs.' }], usage: { input_tokens: 500, output_tokens: 120 }, stop_reason: 'end_turn' }), { status: 200 });
+  };
+  const r1 = await ai.suggestReply({ customerName: 'Jan', problem: 'slot kapot', history: '', templates: [] });
+  ok('concept-antwoord op Sonnet 5.5, denkblok vooraan → tekst toch goed gelezen', r1.engine === 'ai:claude-sonnet-5-5' && r1.text === 'Beste Jan, we komen graag langs.' && aanvragen[0].output_config?.effort === 'low', JSON.stringify(r1));
+  // Weigering door het veiligheidsfilter → Sonnet 5 neemt over.
+  aanvragen.length = 0;
+  gedrag = (body) => body.model === 'claude-sonnet-5-5' ? new Response(JSON.stringify({ content: [], usage: { input_tokens: 500, output_tokens: 0 }, stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'general_harms' } }), { status: 200 }) : null;
+  const r2 = await ai.suggestReply({ customerName: 'Jan', problem: 'slot kapot', history: '', templates: [] });
+  ok('Sonnet 5.5 weigert (refusal) → Sonnet 5 schrijft het concept alsnog', r2.engine === 'ai:claude-sonnet-5' && r2.text && aanvragen.map((x) => x.model).join() === 'claude-sonnet-5-5,claude-sonnet-5', JSON.stringify({ e: r2.engine, m: aanvragen.map((x) => x.model) }));
+  // Niet beschikbaar (404) → Sonnet 5, ook voor de statusscan en de filterregels.
+  aanvragen.length = 0;
+  gedrag = (body) => body.model === 'claude-sonnet-5-5' ? new Response(JSON.stringify({ type: 'error', error: { type: 'not_found_error', message: 'model: claude-sonnet-5-5' } }), { status: 404 }) : null;
+  const scan = await ai.suggestStatusChanges({ orders: [{ id: 'ord1', title: 'Rhenen — slot', status: 'open' }], messages: [{ body: 'Afgerond 3911AB Rhenen', group: 'Youssef', receivedAt: new Date().toISOString() }], statuses: [{ key: 'afgerond', label: 'Afgerond' }], monteurGroups: ['Youssef'] });
+  ok('statusscan: Sonnet 5.5 weg → Sonnet 5 doet de scan, engine klopt', scan.engine === 'ai:claude-sonnet-5' && aanvragen.some((x) => x.model === 'claude-sonnet-5-5' && x.output_config?.effort === 'high'), JSON.stringify({ e: scan.engine, m: aanvragen.map((x) => x.model) }));
+  const fr = await ai.learnFilterRules({ messages: [{ channel: 'email', sender: 'x', body: 'test' }] });
+  ok('filterregels: ook via het vangnet', fr.engine === 'ai:claude-sonnet-5', fr.engine);
+  const at = await ai.analyzeTraffic({ messages: [{ channel: 'email', sender: 'x', body: 'test' }] });
+  ok('verkeer analyseren: via het vangnet, effort medium, ruime limiet', at.engine === 'ai:claude-sonnet-5' && aanvragen.some((x) => x.model === 'claude-sonnet-5-5' && x.output_config?.effort === 'medium' && x.max_tokens >= 8000), at.engine);
+  // Laatste model in de ketting weigert ook → nette lege uitkomst, geen crash.
+  gedrag = () => new Response(JSON.stringify({ content: [], usage: {}, stop_reason: 'refusal', stop_details: { category: 'general_harms' } }), { status: 200 });
+  const ci = await ai.conversieInsight({ facts: 'conversie 80%' });
+  ok('alles weigert → conversie-briefing gewoon leeg (feiten-tekst neemt over), geen crash', ci === '', JSON.stringify(ci));
+  // Statusscan zonder Haiku-afwaardering: een Haiku-override wordt opgewaardeerd naar Sonnet 5.5.
+  aanvragen.length = 0; gedrag = () => null;
+  process.env.ANTHROPIC_ANALYZE_MODEL = 'claude-haiku-4-5-20251001';
+  await ai.suggestStatusChanges({ orders: [{ id: 'ord1', title: 'Rhenen — slot', status: 'open' }], messages: [{ body: 'Afgerond 3911AB Rhenen', group: 'Youssef', receivedAt: new Date().toISOString() }], statuses: [{ key: 'afgerond', label: 'Afgerond' }], monteurGroups: ['Youssef'] });
+  ok('statusscan: Haiku-override → toch Sonnet 5.5 (nooit lager)', aanvragen[0] && aanvragen[0].model === 'claude-sonnet-5-5', aanvragen[0] && aanvragen[0].model);
+  delete process.env.ANTHROPIC_ANALYZE_MODEL;
+}
+
 console.log('\n== Modeltest (knop Instellingen → AI) ==');
 {
   globalThis.fetch = async (url, opts = {}) => { const m = JSON.parse(opts.body).model; return m === 'claude-opus-5-5' ? new Response(JSON.stringify({ error: { message: 'model: claude-opus-5-5 not found' } }), { status: 404 }) : new Response(JSON.stringify({ content: [{ type: 'text', text: 'OK' }], usage: {} }), { status: 200 }); };
   const r = await ai.testAiModellen();
-  ok('drie modellen getest: Haiku 5.5, Sonnet 5, Opus 5.5', r.length === 3 && r.map((x) => x.model).join() === 'claude-haiku-5-5,claude-sonnet-5,claude-opus-5-5', r.map((x) => x.model).join());
+  ok('drie modellen getest: Haiku 5.5, Sonnet 5.5, Opus 5.5', r.length === 3 && r.map((x) => x.model).join() === 'claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5', r.map((x) => x.model).join());
   ok('modeltest Haiku 5.5: met effort low (denkt anders eerst uitgebreid na)', r[0].ok && Array.isArray(r[0].terugval) && r[0].terugval.join() === 'claude-haiku-4-5-20251001', JSON.stringify(r[0]));
   ok('werkende modellen: ok + antwoord', r[0].ok && r[1].ok && r[1].antwoord === 'OK');
-  ok('Opus 5.5 niet beschikbaar: eerlijke fout + welke terugval het CRM dan gebruikt', !r[2].ok && /404/.test(r[2].fout) && r[2].terugval.join() === 'claude-opus-5,claude-sonnet-5', JSON.stringify(r[2]));
+  ok('Opus 5.5 niet beschikbaar: eerlijke fout + welke terugval het CRM dan gebruikt', !r[2].ok && /404/.test(r[2].fout) && r[2].terugval.join() === 'claude-opus-5,claude-sonnet-5-5,claude-sonnet-5', JSON.stringify(r[2]));
+  ok('Sonnet 5.5 heeft Sonnet 5 als vangnet', r[1].terugval.join() === 'claude-sonnet-5', JSON.stringify(r[1].terugval));
   delete process.env.ANTHROPIC_API_KEY;
   const r2 = await ai.testAiModellen();
   ok('zonder sleutel op de server: duidelijke melding, geen crash', r2.every((x) => !x.ok && /ANTHROPIC_API_KEY/.test(x.fout)));
@@ -208,6 +247,7 @@ ok('Opus 5.5 = $4 / $20, eigen regel', u.tierOf('claude-opus-5-5') === 'opus55' 
 ok('Haiku 4.5 = $1 / $5', r2(u.kostenVan('haiku', 1e6, 1e6)) === 6);
 ok('Haiku 5.5 = $0,10 / $0,50, eigen regel (niet als Haiku 4.5 geteld)', u.tierOf('claude-haiku-5-5') === 'haiku55' && u.tierOf('claude-haiku-4-5-20251001') === 'haiku' && r2(u.kostenVan('haiku55', 1e6, 1e6)) === 0.6 && u.TIER_LABELS.haiku55 === 'Haiku 5.5');
 ok('Opus 5 wordt niet als 5.5 geteld', u.tierOf('claude-opus-5') === 'opus');
+ok('Sonnet 5.5 = $2 / $10, eigen regel (niet als Sonnet 5 geteld)', u.tierOf('claude-sonnet-5-5') === 'sonnet55' && u.tierOf('claude-sonnet-5') === 'sonnet' && r2(u.kostenVan('sonnet55', 1e6, 1e6)) === 12 && u.TIER_LABELS.sonnet55 === 'Sonnet 5.5');
 
 console.log(`\n==========\nAI-modellen-test: ${passed} geslaagd, ${failed} gefaald`);
 if (failed) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

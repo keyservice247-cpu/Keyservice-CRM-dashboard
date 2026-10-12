@@ -673,7 +673,7 @@ export function morningBriefingData() {
 // Leest WhatsApp (7 dagen) + e-mail (14 dagen) + de dashboardfeiten en maakt er één
 // overzicht van. 1x per dag bewaard (db()._dayOverview); een fout wordt 15 min
 // onthouden zodat niet elke pulse een dure aanroep doet. Model: Opus 5.5
-// (standaard, keuze eigenaar) of Sonnet 5 (Instellingen → AI → "standaard").
+// (standaard, keuze eigenaar) of Sonnet 5.5 (Instellingen → AI → "standaard").
 let _dayOvPromise = null;
 let _dayOvErr = null; // { at, payload }
 export async function haalDagoverzicht({ refresh = false } = {}) {

@@ -12,16 +12,19 @@ const PRICES = {
   haiku: { in: Number(process.env.AI_PRICE_HAIKU_IN || 1.0), out: Number(process.env.AI_PRICE_HAIKU_OUT || 5.0) },
   haiku55: { in: Number(process.env.AI_PRICE_HAIKU55_IN || 0.10), out: Number(process.env.AI_PRICE_HAIKU55_OUT || 0.50) },
   sonnet: { in: Number(process.env.AI_PRICE_SONNET_IN || 2.0), out: Number(process.env.AI_PRICE_SONNET_OUT || 10.0) },
+  // Sonnet 5.5 (12 okt 2026): zelfde prijs als Sonnet 5, eigen regel zodat je ziet welk model draaide.
+  sonnet55: { in: Number(process.env.AI_PRICE_SONNET_IN || 2.0), out: Number(process.env.AI_PRICE_SONNET_OUT || 10.0) },
   opus: { in: Number(process.env.AI_PRICE_OPUS_IN || 5.0), out: Number(process.env.AI_PRICE_OPUS_OUT || 25.0) },
   opus55: { in: Number(process.env.AI_PRICE_OPUS55_IN || 4.0), out: Number(process.env.AI_PRICE_OPUS55_OUT || 20.0) },
   overig: { in: Number(process.env.AI_PRICE_IN || 2.0), out: Number(process.env.AI_PRICE_OUT || 10.0) },
 };
-export const TIER_LABELS = { haiku: 'Haiku 4.5', haiku55: 'Haiku 5.5', sonnet: 'Sonnet 5', opus: 'Opus 5', opus55: 'Opus 5.5', overig: 'overig' };
+export const TIER_LABELS = { haiku: 'Haiku 4.5', haiku55: 'Haiku 5.5', sonnet: 'Sonnet 5', sonnet55: 'Sonnet 5.5', opus: 'Opus 5', opus55: 'Opus 5.5', overig: 'overig' };
 
 export function tierOf(model) {
   const m = String(model || '').toLowerCase();
   if (m.includes('haiku-5')) return 'haiku55';
   if (m.includes('haiku')) return 'haiku';
+  if (m.includes('sonnet-5-5')) return 'sonnet55';
   if (m.includes('sonnet')) return 'sonnet';
   if (m.includes('opus-5-5')) return 'opus55';
   if (m.includes('opus')) return 'opus';

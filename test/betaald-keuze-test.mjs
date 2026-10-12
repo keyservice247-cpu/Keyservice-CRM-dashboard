@@ -108,6 +108,7 @@ try {
   ok('automatische omzet-boeking teruggedraaid', (await omzetVoor(f1.id)).length === 0);
   const m1 = decodeer(mails[mails.length - 1] || '');
   ok('mail vraagt om betaling (geen "voldaan")', /graag betalen binnen/i.test(m1) && !/al voldaan/i.test(m1), m1.slice(0, 300));
+  ok('mail noemt de interne opdrachttitel niet (12 okt 2026)', /uitgevoerde werkzaamheden/i.test(m1) && !/slot vervangen/i.test(m1), m1.slice(0, 300));
   await api('POST', '/api/finance/autosync', {});
   ok('volgende autosync boekt hem NIET opnieuw (niet betaald)', (await omzetVoor(f1.id)).length === 0);
   // Later toch betaald → knop ✓ Betaald → telt weer mee.

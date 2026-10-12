@@ -426,11 +426,12 @@ export function aiMode() {
 // ---------- Modellen per taak (25 sep 2026, advies + akkoord eigenaar) ----------
 // snel    = Haiku 5.5: inbox-indeling (hoog volume), systeemcheck (12 okt 2026, wens
 //           eigenaar; was Haiku 4.5 — die blijft het vangnet: haikuOud)
-// analyse = Sonnet 5: analyses, statusscan, assistent, concept-antwoorden
+// analyse = Sonnet 5.5: analyses, statusscan, assistent, concept-antwoorden (12 okt 2026,
+//           wens eigenaar; was Sonnet 5 — die blijft het vangnet: sonnetOud)
 // opus55  = Opus 5.5: dagoverzicht (leest alle WhatsApp + e-mail) en ochtendbriefing
 // Env-overrides blijven werken (ANTHROPIC_MODEL / ANTHROPIC_ANALYZE_MODEL /
 // ANTHROPIC_REPLY_MODEL / ANTHROPIC_BRIEFING_MODEL).
-export const MODELLEN = { snel: 'claude-haiku-5-5', haikuOud: 'claude-haiku-4-5-20251001', analyse: 'claude-sonnet-5', opus: 'claude-opus-5', opus55: 'claude-opus-5-5' };
+export const MODELLEN = { snel: 'claude-haiku-5-5', haikuOud: 'claude-haiku-4-5-20251001', analyse: 'claude-sonnet-5-5', sonnetOud: 'claude-sonnet-5', opus: 'claude-opus-5', opus55: 'claude-opus-5-5' };
 // Denkdiepte (effort). Sonnet 5 / Opus 5 / Opus 5.5 "denken" standaard eerst na, en
 // dat telt mee voor max_tokens — bij een korte limiet kon de tekst halverwege
 // afgekapt worden. 'low' voor korte teksten. Haiku 5.5 denkt óók standaard (effort
@@ -447,8 +448,9 @@ export function effortVoor(model, level = 'low') {
 // door een modelkeuze; welk model het werd staat in 'engine' en in het logboek.
 export function modelKetting(model) {
   const m = String(model || '');
-  if (/opus-5-5/.test(m)) return [m, MODELLEN.opus, MODELLEN.analyse];
-  if (/opus-5$/.test(m)) return [m, MODELLEN.analyse];
+  if (/opus-5-5/.test(m)) return [m, MODELLEN.opus, MODELLEN.analyse, MODELLEN.sonnetOud];
+  if (/opus-5$/.test(m)) return [m, MODELLEN.analyse, MODELLEN.sonnetOud];
+  if (/sonnet-5-5/.test(m)) return [m, MODELLEN.sonnetOud];
   if (/haiku-5/.test(m)) return [m, MODELLEN.haikuOud];
   return [m];
 }
@@ -498,8 +500,17 @@ export async function meldTerugval(van, naar, fout = '') {
 // (effort verschilt per model). Geeft {ok, json, model, terugvalVan, fout}.
 export async function vraagMetTerugval(apiKey, model, bouwBody, opts = {}) {
   let laatste = null;
-  for (const m of modelKetting(model)) {
+  const ketting = modelKetting(model);
+  for (const [i, m] of ketting.entries()) {
     const r = await roepModel(apiKey, bouwBody(m), opts);
+    // WEIGERING (12 okt 2026): Sonnet 5.5 / Haiku 5.5 / Opus 5.5 hebben veiligheidsfilters
+    // die soms ook een gewoon verzoek weigeren (stop_reason 'refusal', HTTP 200). Is er
+    // nog een model in de ketting, dan neemt dat het over — zelf, voor élke categorie.
+    if (r.ok && r.json && r.json.stop_reason === 'refusal' && i < ketting.length - 1) {
+      recordAIUsage(r.json.usage, m);
+      laatste = { ok: false, status: 200, fout: `geweigerd door het veiligheidsfilter (${(r.json.stop_details && r.json.stop_details.category) || 'onbekend'})` };
+      continue;
+    }
     if (r.ok) {
       recordAIUsage(r.json.usage, m);
       if (m !== model) meldTerugval(model, m, laatste?.fout);
@@ -531,7 +542,7 @@ export async function testAiModellen() {
 
 export async function suggestReply({ customerName, problem, history = '', templates = [], companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_REPLY_MODEL || MODELLEN.analyse; // Sonnet 5: beter Nederlands voor de klant
+  const model = process.env.ANTHROPIC_REPLY_MODEL || MODELLEN.analyse; // Sonnet 5.5: beter Nederlands voor de klant
   if (!apiKey) {
     // Demo-modus: geen AI -> geef het meest relevante sjabloon terug (of leeg).
     const t = templates[0];
@@ -554,16 +565,10 @@ Antwoord met ALLEEN de e-mailtekst, geen uitleg eromheen.${tmplText}`;
   const user = `Probleem/omschrijving van de klant: ${problem || '(onbekend)'}
 ${history ? `\nGesprekshistorie:\n${history.slice(0, 2000)}` : ''}`;
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 2000, ...effortVoor(model, 'low'), system, messages: [{ role: 'user', content: user }] }),
-  });
-  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
-  const json = await resp.json();
-  recordAIUsage(json.usage, model);
-  const text = (json.content || []).map((c) => c.text || '').join('').trim();
-  return { text, engine: `ai:${model}` };
+  const r = await vraagMetTerugval(apiKey, model, (m) => ({ model: m, max_tokens: 2000, ...effortVoor(m, 'low'), system, messages: [{ role: 'user', content: user }] }), { timeoutMs: 90000, pogingen: 2 });
+  if (!r.ok) throw new Error(r.fout || 'AI niet bereikbaar');
+  const text = (r.json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
+  return { text, engine: `ai:${r.model}` };
 }
 
 // Analyseert een berg berichten (WhatsApp/e-mail) en geeft inzichten terug:
@@ -571,7 +576,7 @@ ${history ? `\nGesprekshistorie:\n${history.slice(0, 2000)}` : ''}`;
 export async function analyzeTraffic({ messages = [], companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   // Voor een grondige analyse gebruiken we een sterker model als dat kan.
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || MODELLEN.analyse;
   if (!apiKey) return { text: 'Zet eerst de AI aan (ANTHROPIC_API_KEY) om analyses te draaien.', engine: 'demo' };
   if (!messages.length) return { text: 'Geen berichten om te analyseren.', engine: 'n.v.t.' };
 
@@ -590,16 +595,11 @@ geef een helder, praktisch rapport in het Nederlands met deze kopjes:
 4. Concrete verbeterpunten voor de werkwijze (bv. standaardvragen, snellere reactie)
 Houd het bondig en bruikbaar. Geen verzonnen cijfers — baseer je op wat je ziet.`;
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 4000, system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }),
-  });
-  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
-  const json = await resp.json();
-  recordAIUsage(json.usage, model);
-  const text = (json.content || []).map((c) => c.text || '').join('').trim();
-  return { text, engine: `ai:${model}`, analyzed: Math.min(messages.length, 200) };
+  // Effort 'medium' + ruime limiet: het model denkt eerst na en dat telt mee (12 okt 2026).
+  const r = await vraagMetTerugval(apiKey, model, (m) => ({ model: m, max_tokens: 12000, ...effortVoor(m, 'medium'), system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }), { timeoutMs: 240000, pogingen: 2 });
+  if (!r.ok) throw new Error(r.fout || 'AI niet bereikbaar');
+  const text = (r.json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
+  return { text, engine: `ai:${r.model}`, analyzed: Math.min(messages.length, 200) };
 }
 
 // Korte AI-duiding voor de ochtendbriefing: 2-3 zinnen "focus vandaag op X, want Y".
@@ -629,22 +629,16 @@ export async function morningInsight({ facts, companyProfile = '', tone = 'coach
 export async function conversieInsight({ facts, companyProfile = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || !facts) return '';
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || MODELLEN.analyse;
   const system = `Je bent de commerciële rechterhand van Keyservice, een sleutel-/slotenmakersbedrijf. Je krijgt de conversiecijfers uit het CRM: hoeveel aanvragen kwamen binnen en hoeveel daarvan zijn gewonnen (afgerond óf afspraak ingepland — een afspraak is een ja van de klant) of verloren (geannuleerd), per bron, per monteur en per week. Schrijf in het Nederlands een korte wekelijkse briefing voor de eigenaar:
 - Begin met één zin over de stand van de conversie (30 dagen) en of die beter of slechter is dan daarvoor.
 - Daarna maximaal 4 korte opsommingspunten met patronen die je herkent (welke bron of monteur converteert goed/slecht, seizoens- of weektrend, veel open of stilliggende aanvragen, doorlooptijd, omzet per aanvraag). Verwijs naar concrete aantallen.
 - Sluit af met "Aanbevolen acties:" en 2 concrete, uitvoerbare acties voor komende week.
 Wees eerlijk over kleine aantallen (bij minder dan 5 besliste aanvragen is een percentage toeval). Geen begroeting, geen emoji, geen markdown-koppen; opsommingspunten met "- ". Maximaal 180 woorden.${companyProfile ? `\n\nOver het bedrijf:\n${String(companyProfile).slice(0, 1500)}` : ''}`;
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model, max_tokens: 2000, ...effortVoor(model, 'low'), system, messages: [{ role: 'user', content: `Conversiecijfers:\n${facts}` }] }),
-    });
-    if (!resp.ok) return '';
-    const json = await resp.json();
-    recordAIUsage(json.usage, model);
-    return (json.content || []).map((c) => c.text || '').join('').trim();
+    const r = await vraagMetTerugval(apiKey, model, (m) => ({ model: m, max_tokens: 2000, ...effortVoor(m, 'low'), system, messages: [{ role: 'user', content: `Conversiecijfers:\n${facts}` }] }), { timeoutMs: 120000, pogingen: 2 });
+    if (!r.ok) return '';
+    return (r.json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
   } catch { return ''; }
 }
 
@@ -700,7 +694,7 @@ export function repairTruncatedJson(raw) {
 export async function dayOverview({ corpus = '', facts = '', companyProfile = '', model = '' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return { error: 'geen-ai' };
-  const useModel = model || process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const useModel = model || process.env.ANTHROPIC_ANALYZE_MODEL || MODELLEN.analyse;
   const system = `Je bent de scherpe operationeel rechterhand van Keyservice (sleutel-/slotenmakersbedrijf). Je krijgt (1) feiten uit het CRM-dashboard en (2) het ruwe berichtenverkeer van de afgelopen dagen. Maak daar het dagoverzicht van voor de eigenaar/assistente.
 ${companyProfile ? `\nOver het bedrijf:\n${String(companyProfile).slice(0, 1500)}\n` : ''}
 Antwoord UITSLUITEND met geldige JSON (geen tekst eromheen, geen markdown):
@@ -755,7 +749,7 @@ Regels: max 6 acties (belangrijkste eerst; prio = "hoog"|"middel"|"laag"; waar =
 // "wat is er met de opdracht van mevrouw Jansen gebeurd?".
 export async function askAssistant({ question, messages = [], companyProfile = '', dashboard = '', model: modelPref = '', history = [] }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = modelPref || process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const model = modelPref || process.env.ANTHROPIC_ANALYZE_MODEL || MODELLEN.analyse;
   if (!apiKey) return { text: 'Zet eerst de AI aan (ANTHROPIC_API_KEY) om de vraagbaak te gebruiken.', engine: 'demo' };
   if (!question) return { text: 'Stel een vraag.', engine: 'n.v.t.' };
   if (!messages.length && !dashboard) return { text: 'Er zijn nog geen gegevens om in te zoeken.', engine: 'n.v.t.' };
@@ -878,9 +872,10 @@ export async function suggestStatusChanges({ orders = [], messages = [], statuse
   const apiKey = process.env.ANTHROPIC_API_KEY;
   // De statusscan draait ALTIJD minimaal op Sonnet 5 — dit is het denkwerk dat de
   // kaarten sorteert. Een eventuele zwakkere override (bv. Haiku) wordt hier
-  // opgewaardeerd naar Sonnet 5, zodat de kwaliteit nooit stilletjes terugvalt.
-  const requested = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
-  const model = /haiku/i.test(requested) ? 'claude-sonnet-5' : requested;
+  // opgewaardeerd naar Sonnet 5.5 (vangnet Sonnet 5), zodat de kwaliteit nooit stilletjes
+  // terugvalt.
+  const requested = process.env.ANTHROPIC_ANALYZE_MODEL || MODELLEN.analyse;
+  const model = /haiku/i.test(requested) ? MODELLEN.analyse : requested;
   if (!apiKey) return { suggestions: [], engine: 'demo', note: 'Zet de AI aan (ANTHROPIC_API_KEY) voor de statusscan.' };
   if (!orders.length || !messages.length) return { suggestions: [], engine: 'n.v.t.' };
 
@@ -995,15 +990,13 @@ ord_-id mag ook, maar dan exact overgenomen.
 HOUD HET COMPACT: "reason" max 12 woorden, "evidence" max 100 tekens (alleen het relevante
 stukje citeren, niet het hele rapport). Beide lijsten mogen leeg zijn ([]).`;
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 16000, system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }),
-  });
-  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
-  const json = await resp.json();
-  recordAIUsage(json.usage, model);
-  const text = (json.content || []).map((c) => c.text || '').join('').trim();
+  // Effort 'high' (de standaard van Sonnet; dit is het belangrijkste denkwerk) en via de
+  // ketting: is Sonnet 5.5 even niet bruikbaar of weigert hij, dan doet Sonnet 5 het.
+  const rScan = await vraagMetTerugval(apiKey, model, (m) => ({ model: m, max_tokens: 16000, ...effortVoor(m, 'high'), system, messages: [{ role: 'user', content: `Lopende opdrachten:\n${orderList}\n\nRecente berichten:\n${msgList}` }] }), { timeoutMs: 240000, pogingen: 2 });
+  if (!rScan.ok) throw new Error(rScan.fout || 'AI niet bereikbaar');
+  const json = rScan.json;
+  const scanModel = rScan.model;
+  const text = (json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
   const truncated = json.stop_reason === 'max_tokens';
   console.log(`[statusscan] AI-antwoord: ${text.length} tekens, stop_reason=${json.stop_reason}`);
 
@@ -1052,9 +1045,9 @@ stukje citeren, niet het hele rapport). Beide lijsten mogen leeg zijn ([]).`;
   if (truncated && statusChanges.length) note = `Let op: het AI-antwoord was te lang en is afgekapt — ${statusChanges.length} voorstellen zijn gered; draai de scan eventueel nog eens voor de rest.`;
   if (!statusChanges.length && !needsDrsUpdate.length && text.length > 50) {
     note = 'De AI gaf een antwoord dat niet als voorstel-lijst te lezen was. Technische details hieronder.';
-    return { statusChanges, needsDrsUpdate, engine: `ai:${model}`, note, rawSample: text.slice(0, 1200) };
+    return { statusChanges, needsDrsUpdate, engine: `ai:${scanModel}`, note, rawSample: text.slice(0, 1200) };
   }
-  return { statusChanges, needsDrsUpdate, engine: `ai:${model}`, note };
+  return { statusChanges, needsDrsUpdate, engine: `ai:${scanModel}`, note };
 }
 
 // Genereert een bondige "leerregel"-tekst op basis van het verkeer: wat IS en wat
@@ -1062,7 +1055,7 @@ stukje citeren, niet het hele rapport). Beide lijsten mogen leeg zijn ([]).`;
 // toe te voegen, zodat de AI scherper filtert in de inbox.
 export async function learnFilterRules({ messages = [], companyProfile = '', feedback = [] }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_ANALYZE_MODEL || 'claude-sonnet-5';
+  const model = process.env.ANTHROPIC_ANALYZE_MODEL || MODELLEN.analyse;
   if (!apiKey) return { text: '', engine: 'demo' };
   if (!messages.length) return { text: '', engine: 'n.v.t.' };
 
@@ -1081,14 +1074,8 @@ die een AI helpt om te bepalen wat WEL een echte opdracht/aanvraag is en wat NIE
 voorbeelden uit de berichten. Schrijf in het Nederlands, als bullet-punten.
 Begin met de kop "FILTERREGELS (op basis van werkelijk verkeer):".`;
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 3000, system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }),
-  });
-  if (!resp.ok) throw new Error(`Claude API gaf status ${resp.status}`);
-  const json = await resp.json();
-  recordAIUsage(json.usage, model);
-  const text = (json.content || []).map((c) => c.text || '').join('').trim();
-  return { text, engine: `ai:${model}` };
+  const r = await vraagMetTerugval(apiKey, model, (m) => ({ model: m, max_tokens: 8000, ...effortVoor(m, 'low'), system, messages: [{ role: 'user', content: `Berichten:\n${sample}` }] }), { timeoutMs: 180000, pogingen: 2 });
+  if (!r.ok) throw new Error(r.fout || 'AI niet bereikbaar');
+  const text = (r.json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
+  return { text, engine: `ai:${r.model}` };
 }

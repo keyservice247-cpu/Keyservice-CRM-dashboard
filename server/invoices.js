@@ -563,11 +563,12 @@ export function buildInvoicePdf(inv, order, customer) {
       .text(`${isQuote ? 'Offertedatum' : 'Factuurdatum'}: ${nlDate(invDate)}`, 330, y - 12, { width: 215, align: 'right' })
       .text(!isQuote && inv.status === 'betaald' ? `Betaald op: ${nlDate(inv.paidAt || invDate)}` : `Vervaldatum: ${nlDate(isQuote ? validUntil : dueDate)}`, 330, y + 2, { width: 215, align: 'right' });
 
-    // Reparatielocatie + betreft.
+    // Reparatielocatie. De regel "Betreft: <opdrachttitel>" is weg (12 okt 2026, wens
+    // eigenaar): de titel is een interne werknaam ("Zaandijk — hefschuifpui slot kapot en
+    // deur gezakt") en hoort niet op een document voor de klant.
     y += 26;
     doc.fillColor(ink).fontSize(10);
     if (customer.address) { doc.text(`Reparatielocatie: ${customer.address}`, 50, y); y += 14; }
-    if (order?.title) { doc.fillColor(muted).text(`Betreft: ${order.title}`, 50, y); y += 14; }
 
     // Tabel: Aantal | Beschrijving | excl | incl (per regel klein het btw-tarief).
     y += 8;

@@ -848,6 +848,27 @@ de regressie meegroeit.
   pingt hetzelfde model (effort low, max_tokens 64). Modeltest toont "Haiku 5.5" + terugval
   "Haiku 4.5". Test: ai-modellen-test 49 (+13). LET OP: staat in Render ANTHROPIC_MODEL
   gezet, dan wint die (modeltest laat zien welk model écht draait).
+  SONNET 5.5 (12 okt 2026, wens eigenaar): MODELLEN.analyse = `claude-sonnet-5-5`
+  (statusscan/nachtscan, assistent, concept-antwoord, conversie, verkeer, filterregels,
+  dagoverzicht-"standaard"), MODELLEN.sonnetOud = Sonnet 5 = vangnet; zelfde prijs ($2/$10,
+  eigen kostenregel sonnet55). Geen enkele losse fetch meer naar de API: ALLE aanroepen in
+  categorizer.js lopen via vraagMetTerugval (alleen roepModel praat met de API). Ketting:
+  opus55 → opus5 → sonnet55 → sonnet5; opus5 → sonnet55 → sonnet5; sonnet55 → sonnet5;
+  haiku55 → haiku45. NIEUW in vraagMetTerugval: een WEIGERING (stop_reason 'refusal', HTTP
+  200 — Sonnet 5.5 weigert in 5 categorieën) gaat naar het volgende model in de ketting
+  (eigen retry, élke categorie; bewust geen server-side `fallbacks`-beta: die herhaalt
+  alleen cyber/frontier_llm); weigert het laatste model ook, dan komt de lege uitkomst bij
+  de aanroeper (die heeft al een nette terugval). Statusscan nu effort 'high' expliciet +
+  time-out 240 s; verkeer analyseren effort 'medium' + limiet 12000 (was 4000 zonder
+  effort → kon afkappen); filterregels limiet 8000. Antwoorden overal gelezen op type
+  ('text'). Sonnet 5.5-valkuilen die wij NIET gebruiken (gecontroleerd): thinking
+  'disabled' (400), geforceerde tool_choice (400), temperature/prefill. Test:
+  ai-modellen-test 58 (+9).
+  FACTUUR/OFFERTE ZONDER INTERNE TITEL (12 okt 2026, wens eigenaar "het kopje Betreft moet
+  weg"): de PDF-regel "Betreft: <opdrachttitel>" is weg (de titel is een interne werknaam),
+  en de begeleidende mail noemt hem ook niet meer ("factuur X voor de uitgevoerde
+  werkzaamheden." / "onze offerte X."). Reparatielocatie blijft. Test: factuur-test leest
+  de PDF-tekst uit (streams uitpakken + hex decoderen) — 69; betaald-keuze 48.
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek
   alleen naar de OFFERTE (status 'verzonden'), nooit naar de OPDRACHT. Nu

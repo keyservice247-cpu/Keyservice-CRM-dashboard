@@ -45,7 +45,7 @@ import {
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
   can, requirePerm, PERM_KEYS,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen, MODELLEN } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import { amsterdamParts } from './week.js';
 import {
@@ -5281,11 +5281,12 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
     const sig = getEmailSignature(afzenderVan(req));
     const bedrag = `€ ${inv.totalIncl.toFixed(2).replace('.', ',')}`;
+    // Geen interne opdrachttitel in de mail aan de klant (12 okt 2026, wens eigenaar).
     const body = isQuote
-      ? `Beste ${customer.name || 'klant'},\n\nBedankt voor uw aanvraag. In de bijlage vindt u onze offerte ${inv.number}${order ? ` voor: ${order.title}` : ''}.\nTotaalbedrag: ${bedrag} incl. btw. Deze offerte is ${cfg.quoteValidDays || 30} dagen geldig.\n\nGaat u akkoord? Reageer op deze e-mail of bel ons — dan plannen we de werkzaamheden direct in.`
+      ? `Beste ${customer.name || 'klant'},\n\nBedankt voor uw aanvraag. In de bijlage vindt u onze offerte ${inv.number}.\nTotaalbedrag: ${bedrag} incl. btw. Deze offerte is ${cfg.quoteValidDays || 30} dagen geldig.\n\nGaat u akkoord? Reageer op deze e-mail of bel ons — dan plannen we de werkzaamheden direct in.`
       : inv.status === 'betaald'
-        ? `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ` voor de uitgevoerde werkzaamheden (${order.title})` : ''}.\nTotaalbedrag: ${bedrag} — deze factuur is al voldaan. Bedankt voor uw betaling; u ontvangt hem voor uw administratie.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`
-        : `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ` voor de uitgevoerde werkzaamheden (${order.title})` : ''}.\nTotaalbedrag: ${bedrag} — graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`;
+        ? `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ' voor de uitgevoerde werkzaamheden' : ''}.\nTotaalbedrag: ${bedrag} — deze factuur is al voldaan. Bedankt voor uw betaling; u ontvangt hem voor uw administratie.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`
+        : `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ' voor de uitgevoerde werkzaamheden' : ''}.\nTotaalbedrag: ${bedrag} — graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`;
     await sendMail({
       afzender: afzenderVan(req),
       to, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number} — ${cfg.companyName}`,
@@ -5477,7 +5478,7 @@ app.post('/api/finance/import-income', requirePerm('finance'), (req, res) => {
 // Modeltest (Instellingen → AI): werkt elk AI-model écht op dit account? Eén
 // piepkleine vraag per model (< 1 cent), zonder terugval — zodat je het ziet.
 app.post('/api/ai/modeltest', requireRole('admin'), async (req, res) => {
-  const namen = { 'claude-opus-5-5': 'Opus 5.5', 'claude-opus-5': 'Opus 5', 'claude-sonnet-5': 'Sonnet 5', 'claude-haiku-5-5': 'Haiku 5.5' };
+  const namen = { 'claude-opus-5-5': 'Opus 5.5', 'claude-opus-5': 'Opus 5', 'claude-sonnet-5-5': 'Sonnet 5.5', 'claude-sonnet-5': 'Sonnet 5', 'claude-haiku-5-5': 'Haiku 5.5' };
   const lijst = await testAiModellen();
   const modellen = lijst.map((m) => ({ ...m, naam: namen[m.model] || (/haiku-5/.test(m.model) ? 'Haiku 5.5' : /haiku/.test(m.model) ? 'Haiku 4.5' : m.model) }));
   logActivity(req.user.name, 'AI-modellen getest', modellen.map((m) => `${m.naam}: ${m.ok ? 'ok' : 'FOUT'}`).join(', '));
@@ -5909,7 +5910,7 @@ app.post('/api/assistant/ask', requireRole('admin', 'assistent'), async (req, re
   const includeDash = req.body?.scope !== 'messages';
   const dashboard = includeDash ? buildDashboardContext() : '';
   const modelPref = req.body?.model === 'opus' ? 'claude-opus-5'
-    : req.body?.model === 'sonnet' ? 'claude-sonnet-5' : '';
+    : req.body?.model === 'sonnet' ? MODELLEN.analyse : '';
   // Gespreksgeheugen: de browser stuurt de vorige vragen+antwoorden van dit gesprek mee.
   const history = Array.isArray(req.body?.history) ? req.body.history.slice(-6) : [];
   try {

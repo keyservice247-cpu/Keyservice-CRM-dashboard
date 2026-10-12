@@ -42,6 +42,38 @@ const pdf = await fetch(`${BASE}/api/invoices/${ID}/pdf`, { headers: { cookie } 
 ok('PDF 200 + juiste content-type', pdf.status === 200 && /application\/pdf/.test(pdf.headers.get('content-type') || ''));
 ok('PDF heeft inhoud', (await pdf.arrayBuffer()).byteLength > 5000);
 
+console.log('\n== Geen interne opdrachttitel op de factuur (12 okt 2026) ==');
+{
+  const zlib = await import('node:zlib');
+  // Tekst uit een pdfkit-PDF halen: streams uitpakken en de hex-/haakjes-tekst decoderen.
+  const pdfTekst = (buf) => {
+    const s = Buffer.from(buf).toString('latin1'); let uit = '';
+    for (const m of s.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+      let data = Buffer.from(m[1], 'latin1');
+      try { data = zlib.inflateSync(data); } catch { /* niet gecomprimeerd */ }
+      const t = data.toString('latin1');
+      for (const h of t.matchAll(/<([0-9a-fA-F]+)>/g)) uit += Buffer.from(h[1], 'hex').toString('latin1');
+      for (const q of t.matchAll(/\(((?:\\.|[^\\)])*)\)\s*Tj/g)) uit += q[1];
+    }
+    return uit;
+  };
+  const k2 = await api('POST', '/api/customers', { name: 'Titel Klant', phone: '0699999988', email: 'titel@example.nl', address: 'Ravelstraat 1, Zaandijk' });
+  const o2 = await api('POST', '/api/orders', { customerId: k2.json.id, title: 'Zaandijk — hefschuifpui slot kapot en deur gezakt', status: 'afgerond' });
+  const f2r = await api('POST', '/api/invoices', { customerId: k2.json.id, orderId: o2.json.id, type: 'factuur' });
+  const f2 = f2r.json.invoice || f2r.json;
+  await api('PATCH', `/api/invoices/${f2.id}`, { lines: [{ description: 'Hefslot vervangen', qty: 1, priceExcl: 190 }], btwPct: 21, note: '' });
+  const pdf2 = await fetch(`${BASE}/api/invoices/${f2.id}/pdf`, { headers: { cookie } });
+  const tekst2 = pdfTekst(await pdf2.arrayBuffer());
+  ok('PDF leesbaar in de test (controle: factuurnummer + regel staan erin)', tekst2.includes(f2.number) && /Hefslot/.test(tekst2), tekst2.slice(0, 200));
+  ok('factuur-PDF: GEEN "Betreft"-regel en geen interne opdrachttitel', !/Betreft/.test(tekst2) && !/hefschuifpui slot kapot/i.test(tekst2), tekst2.slice(0, 300));
+  ok('factuur-PDF: reparatielocatie staat er nog wel', /Reparatielocatie/.test(tekst2));
+  const off2r = await api('POST', '/api/invoices', { customerId: k2.json.id, orderId: o2.json.id, type: 'offerte' });
+  const off2 = off2r.json.invoice || off2r.json;
+  await api('PATCH', `/api/invoices/${off2.id}`, { lines: [{ description: 'Hefslot vervangen', qty: 1, priceExcl: 190 }], btwPct: 21, note: '' });
+  const tekst3 = pdfTekst(await (await fetch(`${BASE}/api/invoices/${off2.id}/pdf`, { headers: { cookie } })).arrayBuffer());
+  ok('offerte-PDF: ook geen "Betreft"-regel', tekst3.includes(off2.number) && !/Betreft/.test(tekst3) && !/hefschuifpui slot kapot/i.test(tekst3));
+}
+
 console.log('\n== Kopie neemt korting mee ==');
 const copy = await api('POST', `/api/invoices/${ID}/copy`, {});
 ok('kopie heeft zelfde korting', copy.json.discount?.value === 15 && copy.json.discountExcl === 30, JSON.stringify(copy.json.discount));
