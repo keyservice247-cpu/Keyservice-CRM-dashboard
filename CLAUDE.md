@@ -869,6 +869,20 @@ de regressie meegroeit.
   en de begeleidende mail noemt hem ook niet meer ("factuur X voor de uitgevoerde
   werkzaamheden." / "onze offerte X."). Reparatielocatie blijft. Test: factuur-test leest
   de PDF-tekst uit (streams uitpakken + hex decoderen) — 69; betaald-keuze 48.
+- **Facturen VASTPINNEN + teller max. 2 maanden (16 okt 2026, wens eigenaar):** beheerder en
+  assistente kunnen een factuur/offerte vastpinnen (knop "Vastpinnen"/"Losmaken" in de
+  Facturen-lijst én in het geopende venster; monteur niet → 403). Vastpinnen vraagt een
+  OPTIONELE reden (vraagTekst, max 140 tekens). POST /api/invoices/:id/pin {pin:true,
+  notitie?} | {pin:false} → `inv.vastgepind = {at, door, notitie}` (reden bijwerken houdt at/
+  door), logboekregel. Alleen een markering: mag ook op een vergrendelde factuur; een KOPIE
+  neemt de pin niet mee. Scherm: vastgepinde staan BOVENAAN (laatst vastgepind eerst; rest
+  houdt de gewone volgorde), blauwe rand + kopregel "Vastgepind: <reden> — wie, wanneer",
+  filter "Vastgepind" + link "N vastgepind" in de teller. TELLER: "Openstaand (laatste 2
+  mnd)" en "N verlopen" tellen alleen open facturen (status verzonden) waarvan de datum in
+  de lijst (sentAt, anders createdAt) ≤ 2 kalendermaanden oud is; de oudere staan apart
+  ("Niet meegeteld: N open facturen ouder dan 2 maanden (€…)", klik → filter "Open, ouder
+  dan 2 mnd"). Het filter "Verlopen" volgt dezelfde grens. Betaald/Totaal ongewijzigd.
+  Tests: rollen-test 67 (+11), browser 277 (+15, o.a. nagebootste lijst voor de teller).
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek
   alleen naar de OFFERTE (status 'verzonden'), nooit naar de OPDRACHT. Nu

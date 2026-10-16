@@ -13,6 +13,8 @@ const ICON_PATHS = {
   whatsapp: '<path d="M3 21l1.7-5A8 8 0 1 1 8 19.3z"/>',
   bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
   pin: '<path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+  // Punaise (vastpinnen), los van 'pin' (= locatie/kaartspeld).
+  punaise: '<path d="M12 17v5"/><path d="M9 10.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.2V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.8a2 2 0 0 0-1.1-1.8l-1.8-.9A2 2 0 0 1 15 10.8V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
   shield: '<path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
   phone: '<path d="M5 4h3l1.5 5-2 1.5a11 11 0 0 0 5 5l1.5-2 5 1.5V19a2 2 0 0 1-2 2A16 16 0 0 1 4 6a2 2 0 0 1 1-2z"/>',
@@ -3805,6 +3807,25 @@ function openInvoiceModal(o, type = 'factuur') {
 function trustpilotKnopMag() {
   return state.me && state.me.role !== 'monteur' && !!state.meta?.trustpilot?.aan;
 }
+// VASTPINNEN (16 okt 2026): beheerder + assistente zetten een belangrijke factuur/offerte
+// bovenaan. Vastpinnen vraagt een optionele reden; losmaken gaat direct (makkelijk terug).
+function pinKnopMag() {
+  return !!state.me && (state.me.role === 'admin' || state.me.role === 'assistent');
+}
+async function zetFactuurPin(invId, pin, { nummer = '', notitie = '' } = {}) {
+  let reden = '';
+  if (pin) {
+    reden = await vraagTekst({
+      titel: `${nummer ? nummer + ' ' : ''}vastpinnen`,
+      uitleg: 'Vastgepind staat altijd bovenaan bij Facturen, voor jou én je collega. Waarom is hij belangrijk? (mag leeg blijven)',
+      label: 'Reden (optioneel)', waarde: notitie, placeholder: 'bv. klant belt vrijdag terug', knop: 'Vastpinnen', valideer: () => '',
+    });
+    if (reden === null) return null;
+  }
+  const r = await api(`/api/invoices/${invId}/pin`, 'POST', pin ? { pin: true, notitie: reden } : { pin: false });
+  toast(pin ? 'Vastgepind — staat nu bovenaan' : 'Losgemaakt');
+  return r;
+}
 async function stuurTrustpilotFactuur(invId, alDatum, btn, klaar) {
   if (!confirm(alDatum ? `Deze klant is al uitgenodigd voor Trustpilot (${fmtDateShort(alDatum)}). Toch nog een keer sturen?` : 'Trustpilot-uitnodiging sturen?\n\nDe klant krijgt een kort bedankmailtje; Trustpilot stuurt daarna zelf het reviewverzoek.')) return;
   const oud = btn ? btn.innerHTML : '';
@@ -3933,6 +3954,7 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button><button class="btn" id="inv-qremind" title="Vriendelijke herinnering: per e-mail met PDF, of via WhatsApp als de klant alleen een 06 heeft">${icon('bell', 13)} Herinnering${inv.quoteFollowupCount ? ` (${inv.quoteFollowupCount}x)` : ''}</button>` : ''}
         ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">${inv.convertedInvoiceId ? '→ Open factuur' : '→ Maak factuur'}</button>` : ''}
         ${inv.id ? `<button class="btn" id="inv-copy">${icon('merge', 13)} Kopieer</button>` : ''}
+        ${inv.id && pinKnopMag() ? `<button class="btn${inv.vastgepind ? ' inv-pin-aan' : ''}" id="inv-pin" title="${inv.vastgepind ? 'Vastgepind — staat bovenaan bij Facturen. Klik om los te maken.' : 'Bovenaan zetten bij Facturen (voor jou en je collega)'}">${icon('punaise', 13)} ${inv.vastgepind ? 'Losmaken' : 'Vastpinnen'}</button>` : ''}
         ${inv.id && !locked ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}
       </div>
       <div class="right">
@@ -4131,6 +4153,18 @@ function renderInvoiceEditor(ctx) {
   statusBtn('#inv-paid', 'betaald', 'Gemarkeerd als betaald ✓');
   // "Nog niet betaald": verstuurd → Verzonden (open, herinnerbaar); nooit verstuurd → Concept.
   if ($('#inv-tp')) $('#inv-tp').onclick = (e) => stuurTrustpilotFactuur(inv.id, e.currentTarget.dataset.al || inv.trustpilotAt || '', e.currentTarget, (r) => { inv.trustpilotAt = r.trustpilotAt || inv.trustpilotAt; });
+  // Vastpinnen vanuit het venster: venster blijft open, knop wisselt, lijst ververst op de achtergrond.
+  if ($('#inv-pin')) $('#inv-pin').onclick = (ev) => { const b = ev.currentTarget; eenKeer(b, async () => {
+    try {
+      const r = await zetFactuurPin(inv.id, !inv.vastgepind, { nummer: inv.number, notitie: inv.vastgepind?.notitie || '' });
+      if (!r) return;
+      inv.vastgepind = r.vastgepind || undefined;
+      b.innerHTML = `${icon('punaise', 13)} ${inv.vastgepind ? 'Losmaken' : 'Vastpinnen'}`;
+      b.classList.toggle('inv-pin-aan', !!inv.vastgepind);
+      b.title = inv.vastgepind ? 'Vastgepind — staat bovenaan bij Facturen. Klik om los te maken.' : 'Bovenaan zetten bij Facturen (voor jou en je collega)';
+      if ($('#invoiceList')) loadInvoices().catch(() => {});
+    } catch (err) { toast(err.message, true); }
+  }); };
   statusBtn('#inv-unpaid', inv.sentAt ? 'verzonden' : 'concept', 'Gemarkeerd als nog niet betaald');
   statusBtn('#inv-reject', 'afgekeurd', 'Offerte afgekeurd');
   // Goedkeuren: als er automatisch een factuur-concept van wordt gemaakt, dat meteen melden.
@@ -4674,11 +4708,23 @@ function renderInvoices() {
   const isOverdue = (i) => (i.type !== 'offerte') && i.status === 'verzonden'
     && ((i.dueAt && new Date(i.dueAt).getTime() < Date.now())
       || (!i.dueAt && i.sentAt && (Date.now() - new Date(i.sentAt).getTime()) > 7 * 86400000));
+  // TELLER = alleen openstaande facturen van max. 2 maanden oud (16 okt 2026, wens
+  // eigenaar): oude, waarschijnlijk nooit meer te innen facturen vertroebelden het getal.
+  // Datum = dezelfde die in de lijst staat (verstuurd, anders aangemaakt). De oudere staan
+  // apart vermeld en zijn te bekijken met het filter "Open, ouder dan 2 mnd".
+  const grens = new Date(); grens.setMonth(grens.getMonth() - 2);
+  const isOpen = (i) => i.type !== 'offerte' && i.status === 'verzonden';
+  const isOudOpen = (i) => isOpen(i) && new Date(i.sentAt || i.createdAt) < grens;
   let items = all;
   if (f === 'factuur') items = all.filter((i) => i.type !== 'offerte');
   else if (f === 'offerte') items = all.filter((i) => i.type === 'offerte');
-  else if (f === 'verlopen') items = all.filter(isOverdue);
+  else if (f === 'verlopen') items = all.filter((i) => isOverdue(i) && !isOudOpen(i));
+  else if (f === 'oud') items = all.filter(isOudOpen);
+  else if (f === 'vastgepind') items = all.filter((i) => i.vastgepind);
   else if (f !== 'all') items = all.filter((i) => i.status === f);
+  // Vastgepinde bovenaan (laatst vastgepind eerst); de rest houdt de gewone volgorde.
+  const pinAt = (i) => (i.vastgepind ? String(i.vastgepind.at || '1') : '');
+  items = [...items].sort((a, b) => (pinAt(b) > pinAt(a) ? 1 : pinAt(b) < pinAt(a) ? -1 : 0));
   // ZOEKEN (15 aug): op klantnaam, factuurnummer, kaarttitel, e-mail of telefoon —
   // telefoon genormaliseerd (+31 ↔ 06), zodat elk formaat gewoon gevonden wordt.
   const q = ($('#invSearch')?.value || '').trim().toLowerCase();
@@ -4692,19 +4738,26 @@ function renderInvoices() {
       return tel.includes(qDigits);
     });
   }
-  const open = all.filter((i) => i.type !== 'offerte' && i.status === 'verzonden').reduce((s, i) => s + (i.totalIncl || 0), 0);
-  const paid = all.filter((i) => i.type !== 'offerte' && i.status === 'betaald').reduce((s, i) => s + (i.totalIncl || 0), 0);
-  const overdueCount = all.filter(isOverdue).length;
-  let html = `<div class="muted small" style="margin-bottom:12px">Openstaand: <strong>${eur(open)}</strong>${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}</div>
+  const som = (lijst) => lijst.reduce((s, i) => s + (i.totalIncl || 0), 0);
+  const openRecent = all.filter((i) => isOpen(i) && !isOudOpen(i));
+  const oudOpen = all.filter(isOudOpen);
+  const open = som(openRecent);
+  const paid = som(all.filter((i) => i.type !== 'offerte' && i.status === 'betaald'));
+  const overdueCount = openRecent.filter(isOverdue).length;
+  const aantalVast = all.filter((i) => i.vastgepind).length;
+  let html = `<div class="muted small inv-teller" style="margin-bottom:12px">Openstaand <span title="Alleen openstaande facturen van de laatste 2 maanden">(laatste 2 mnd)</span>: <strong>${eur(open)}</strong>${openRecent.length ? ` <span class="muted">(${openRecent.length})</span>` : ''}${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}${aantalVast ? ` · <button type="button" class="linkbtn inv-teller-vast">${icon('punaise', 12)} ${aantalVast} vastgepind</button>` : ''}
+      ${oudOpen.length ? `<div class="inv-teller-oud">Niet meegeteld: <button type="button" class="linkbtn inv-teller-oud-knop">${oudOpen.length} open ${oudOpen.length === 1 ? 'factuur' : 'facturen'} ouder dan 2 maanden (${eur(som(oudOpen))})</button></div>` : ''}</div>
     <div id="invTodoWrap">${invTodoHTML(state._invTodo)}</div>`;
   if (!items.length) html += '<div class="empty">Niets in deze weergave. Maak er één met de knoppen rechtsboven, of via de knop Factuur op een opdracht.</div>';
   html += items.map((i) => {
     const quote = i.type === 'offerte';
     const overdue = isOverdue(i);
     const stLabel = overdue ? 'Nog niet betaald — VERLOPEN' : ({ concept: 'Concept', verzonden: quote ? 'Verzonden' : 'Verzonden — nog niet betaald', betaald: i.sentAt ? 'Betaald ✓' : 'Betaald ✓ (nog niet verstuurd)', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[i.status] || i.status);
+    const vast = i.vastgepind;
     return `
-    <div class="info-card" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+    <div class="info-card inv-rij${vast ? ' inv-vast' : ''}" data-inv="${esc(i.id)}" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
+        ${vast ? `<div class="inv-vast-kop">${icon('punaise', 12)} Vastgepind${vast.notitie ? `: <span class="inv-vast-notitie">${esc(vast.notitie)}</span>` : ''} <span class="muted small">— ${esc(vast.door || '')}${vast.at ? ', ' + esc(fmtDateShort(vast.at)) : ''}</span></div>` : ''}
         <div>${quote ? `<span class="chip" style="font-size:11px">OFFERTE</span> ` : ''}<strong>${esc(i.number)}</strong> · ${esc(i.customerName || 'klant')} <span class="muted small">${i.orderTitle ? '— ' + esc(i.orderTitle) : '(losstaand)'}</span></div>
         <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span class="inv-st ${overdue ? 'verlopen' : esc(i.status)}">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}${i.bounce ? ` · <span class="inv-bounce" title="${esc(i.bounce.reden || '')}">mail NIET aangekomen — adres controleren</span>` : ''}</div>
       </div>
@@ -4720,10 +4773,18 @@ function renderInvoices() {
         ${!quote && (i.status === 'verzonden' || i.status === 'concept') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
         ${!quote && i.status === 'betaald' ? `<button class="btn btn-sm inv-unmark" data-id="${esc(i.id)}" data-status="${i.sentAt ? 'verzonden' : 'concept'}" title="De factuur staat dan weer open">Nog niet betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
+        ${pinKnopMag() ? `<button class="btn btn-sm inv-pin${vast ? ' inv-pin-aan' : ''}" data-id="${esc(i.id)}" data-pin="${vast ? '0' : '1'}" data-nummer="${esc(i.number || '')}" data-notitie="${esc(vast?.notitie || '')}" title="${vast ? 'Losmaken — gaat terug naar de gewone volgorde' : 'Bovenaan zetten (voor jou en je collega)'}">${icon('punaise', 13)} ${vast ? 'Losmaken' : 'Vastpinnen'}</button>` : ''}
       </div>
     </div>`;
   }).join('');
   wrap.innerHTML = html;
+  $$('.inv-pin', wrap).forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    try { if (await zetFactuurPin(b.dataset.id, b.dataset.pin === '1', { nummer: b.dataset.nummer, notitie: b.dataset.notitie })) await loadInvoices(); }
+    catch (err) { toast(err.message, true); }
+  }));
+  const zetFilter = (w) => { const sel = $('#invFilter'); if (sel) { sel.value = w; renderInvoices(); } };
+  const oudKnop = $('.inv-teller-oud-knop', wrap); if (oudKnop) oudKnop.onclick = () => zetFilter('oud');
+  const vastKnop = $('.inv-teller-vast', wrap); if (vastKnop) vastKnop.onclick = () => zetFilter('vastgepind');
   $$('.inv-edit').forEach((b) => b.onclick = () => openStandaloneInvoice(b.dataset.id));
   $$('.inv-share').forEach((b) => b.onclick = (e) => shareInvoicePdf(b.dataset.id, b.dataset.label, e.currentTarget));
   $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices(), { factuur: !!b.dataset.factuur, nummer: b.dataset.nummer, bedrag: b.dataset.bedrag === '' ? null : Number(b.dataset.bedrag), status: b.dataset.status, trustpilotAl: b.dataset.tp || '' }));

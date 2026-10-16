@@ -158,6 +158,40 @@ ok('handtekening staat NIET in de opruimlijst', !lijst.some((x) => x.id === sigI
 const del = await api('POST', '/api/attachments/bulk-delete', { ids: [sigId] });
 ok('handtekening kan NIET worden verwijderd', del.status !== 200 || !(del.json?.removed > 0), JSON.stringify(del.json));
 
+console.log('\n== Facturen vastpinnen (16 okt 2026) ==');
+{
+  cookie = adminCookie;
+  const pin = await api('POST', `/api/invoices/${invId}/pin`, { pin: true, notitie: 'klant belt vrijdag terug' });
+  ok('beheerder pint een factuur vast (met reden)', pin.status === 200 && pin.json?.vastgepind?.notitie === 'klant belt vrijdag terug' && !!pin.json?.vastgepind?.at, JSON.stringify(pin.json));
+  const lijst = (await api('GET', '/api/invoices')).json || [];
+  ok('lijst geeft vastgepind mee (wie + wanneer)', !!lijst.find((i) => i.id === invId)?.vastgepind?.door);
+  const eersteAt = pin.json?.vastgepind?.at;
+  // Vergrendelde factuur (betaald + verstuurd): vastpinnen is alleen een markering en mag dus.
+  const los = await api('POST', '/api/invoices', { customerId: klantId, type: 'factuur' });
+  const losId = los.json?.invoice?.id;
+  await api('PATCH', `/api/invoices/${losId}`, { lines: [{ description: 'Cilinder', qty: 1, priceExcl: 50 }], btwPct: 21 });
+  await api('POST', `/api/invoices/${losId}/status`, { status: 'betaald' });
+  const db0 = (await api('GET', `/api/invoices/${losId}`)).json?.invoice || {};
+  ok('pinnen kan óók op een betaalde factuur', (await api('POST', `/api/invoices/${losId}/pin`, { pin: true })).status === 200 && db0.status === 'betaald');
+  // Assistente: reden aanpassen houdt het oorspronkelijke moment + wie.
+  await login('assistente@keyservice.nl', 'assist123');
+  const bij = await api('POST', `/api/invoices/${invId}/pin`, { pin: true, notitie: 'nu urgent' });
+  ok('assistente mag vastpinnen / reden bijwerken', bij.status === 200 && bij.json?.vastgepind?.notitie === 'nu urgent');
+  ok('reden bijwerken houdt tijdstip en wie vast', bij.json?.vastgepind?.at === eersteAt && bij.json?.vastgepind?.door === pin.json?.vastgepind?.door, JSON.stringify(bij.json));
+  const losmaken = await api('POST', `/api/invoices/${invId}/pin`, { pin: false });
+  ok('assistente maakt hem los', losmaken.status === 200 && losmaken.json?.vastgepind === null);
+  ok('losgemaakt staat niet meer gemarkeerd in de lijst', !((await api('GET', '/api/invoices')).json || []).find((i) => i.id === invId)?.vastgepind);
+  ok('onbekende factuur -> 404', (await api('POST', '/api/invoices/bestaatniet/pin', { pin: true })).status === 404);
+  // Monteur: niet (kantoorwerk).
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  ok('monteur mag NIET vastpinnen (403)', (await api('POST', `/api/invoices/${losId}/pin`, { pin: false })).status === 403);
+  cookie = adminCookie;
+  ok('pin van de monteur-poging bleef staan', !!((await api('GET', '/api/invoices')).json || []).find((i) => i.id === losId)?.vastgepind);
+  const kopie = await api('POST', `/api/invoices/${losId}/copy`, {});
+  const kopieInv = kopie.json?.invoice || kopie.json || {};
+  ok('kopie neemt de pin NIET mee', kopie.status === 200 && !!kopieInv.id && !kopieInv.vastgepind, JSON.stringify(kopie.json).slice(0, 160));
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

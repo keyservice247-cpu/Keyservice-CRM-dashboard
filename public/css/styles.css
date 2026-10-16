@@ -961,6 +961,15 @@ table tbody tr:hover { background: var(--panel-2); }
 .inv-st.betaald, .inv-st.goedgekeurd { background: var(--ok-soft); color: var(--ok); }
 .inv-st.afgekeurd, .inv-st.verlopen { background: var(--danger-soft); color: var(--danger); }
 .inv-bounce { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 11.5px; background: var(--danger-soft); color: var(--danger); }
+/* Vastgepinde facturen (16 okt 2026): accentrand links + kopregel met reden. */
+.inv-rij.inv-vast { border-left: 4px solid var(--accent); background: var(--accent-soft); }
+.inv-vast-kop { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 12px; font-weight: 600; color: var(--accent-ink); margin-bottom: 3px; }
+.inv-vast-notitie { font-weight: 500; color: var(--ink); }
+.btn.inv-pin-aan { color: var(--accent-ink); border-color: var(--accent); }
+.linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent-ink); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; display: inline-flex; align-items: center; gap: 3px; }
+.inv-teller-oud { margin-top: 4px; }
+.inv-teller strong { white-space: nowrap; }
+@media (max-width: 720px) { .linkbtn { min-height: 32px; } }
 
 /* Inbox / AI-controle: rustiger kaartjes met een duidelijke scheiding tussen het
    bericht en het bewerk-formulier eronder. */

@@ -1409,6 +1409,66 @@ await page.click('#bk-cancel');
 await page.evaluate(() => closeModal());
 noErr('Trustpilot');
 
+// FACTUREN VASTPINNEN + TELLER MAX. 2 MAANDEN (16 okt 2026, wens eigenaar).
+clear();
+const pinNieuw = await page.evaluate(async (custFrom) => {
+  // Een nieuwere factuur maken, zodat de Trustpilot-factuur NIET meer bovenaan staat.
+  const r = await fetch('/api/invoices/' + custFrom).then((x) => x.json());
+  const i = await fetch('/api/invoices', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ customerId: (r.invoice || r).customerId, type: 'factuur' }) }).then((x) => x.json());
+  return (i.invoice || i).id;
+}, tpSetup.invId);
+await page.evaluate(() => goView('invoices'));
+await page.waitForSelector(`.inv-pin[data-id="${tpSetup.invId}"]`, { timeout: 8000 }).catch(() => {});
+const pinVooraf = await page.evaluate(() => (document.querySelector('#invoiceList .inv-rij') || {}).dataset?.inv || '');
+ok('vooraf: de te pinnen factuur staat niet bovenaan', !!pinNieuw && pinVooraf !== tpSetup.invId, JSON.stringify({ pinVooraf }));
+await page.click(`.inv-pin[data-id="${tpSetup.invId}"]`);
+await page.waitForSelector('#md-input', { timeout: 4000 }).catch(() => {});
+ok('vastpinnen vraagt om een (optionele) reden', await page.locator('#md-input').count() === 1);
+await page.fill('#md-input', 'klant belt vrijdag terug');
+await page.click('#md-ok');
+await page.waitForFunction((id) => (document.querySelector('#invoiceList .inv-rij') || {}).dataset?.inv === id, tpSetup.invId, { timeout: 6000 }).catch(() => {});
+const pinNa = await page.evaluate(() => { const r = document.querySelector('#invoiceList .inv-rij'); return { id: r?.dataset.inv, vast: r?.classList.contains('inv-vast'), kop: (r?.querySelector('.inv-vast-kop') || {}).textContent || '', knop: (r?.querySelector('.inv-pin') || {}).textContent || '', teller: (document.querySelector('.inv-teller') || {}).textContent || '' }; });
+ok('na vastpinnen staat hij BOVENAAN, gemarkeerd, met reden', pinNa.id === tpSetup.invId && pinNa.vast && /Vastgepind/.test(pinNa.kop) && /vrijdag terug/.test(pinNa.kop) && /Losmaken/.test(pinNa.knop), JSON.stringify(pinNa));
+ok('teller noemt "1 vastgepind"', /1 vastgepind/.test(pinNa.teller), pinNa.teller);
+await page.selectOption('#invFilter', 'vastgepind');
+ok('filter "Vastgepind" toont alleen de vastgepinde', await page.evaluate((id) => { const r = [...document.querySelectorAll('#invoiceList .inv-rij')]; return r.length === 1 && r[0].dataset.inv === id; }, tpSetup.invId));
+await page.selectOption('#invFilter', 'all');
+// Vanuit het geopende venster losmaken: venster blijft open, knop wisselt.
+await page.evaluate((id) => window.openStandaloneInvoice(id), tpSetup.invId);
+await page.waitForSelector('#inv-pin', { timeout: 6000 }).catch(() => {});
+ok('geopende factuur: knop "Losmaken" (staat vast)', /Losmaken/.test(await page.locator('#inv-pin').textContent().catch(() => '')));
+await page.click('#inv-pin');
+await page.waitForFunction(() => /Vastpinnen/.test((document.querySelector('#inv-pin') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+ok('losmaken in het venster: knop wordt "Vastpinnen", venster blijft open', /Vastpinnen/.test(await page.locator('#inv-pin').textContent().catch(() => '')));
+await page.evaluate(() => closeModal());
+await page.waitForFunction((id) => !document.querySelector(`#invoiceList .inv-rij[data-inv="${id}"].inv-vast`), tpSetup.invId, { timeout: 6000 }).catch(() => {});
+ok('na losmaken: niet meer gemarkeerd en niet meer bovenaan', await page.evaluate((id) => !document.querySelector(`.inv-rij[data-inv="${id}"].inv-vast`) && (document.querySelector('#invoiceList .inv-rij') || {}).dataset?.inv !== id, tpSetup.invId));
+// TELLER: nagebootste lijst met een recente open, een OUDE open (3 mnd, verlopen) en een betaalde.
+const dag = 86400000; const nu = Date.now();
+const nepLijst = [
+  { id: 'inv_recent', number: '2026-9001', type: 'factuur', status: 'verzonden', totalIncl: 121, sentAt: new Date(nu - 10 * dag).toISOString(), createdAt: new Date(nu - 10 * dag).toISOString(), dueAt: new Date(nu + 5 * dag).toISOString(), customerName: 'Recent Klant' },
+  { id: 'inv_oud', number: '2026-9002', type: 'factuur', status: 'verzonden', totalIncl: 500, sentAt: new Date(nu - 90 * dag).toISOString(), createdAt: new Date(nu - 90 * dag).toISOString(), dueAt: new Date(nu - 80 * dag).toISOString(), customerName: 'Oud Klant' },
+  { id: 'inv_bet', number: '2026-9003', type: 'factuur', status: 'betaald', totalIncl: 242, sentAt: new Date(nu - 3 * dag).toISOString(), createdAt: new Date(nu - 3 * dag).toISOString(), paidAt: new Date(nu - 3 * dag).toISOString(), customerName: 'Betaald Klant' },
+];
+const nepFacturen = (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(nepLijst) });
+await page.route('**/api/invoices', nepFacturen);
+await page.evaluate(() => loadInvoices());
+await page.waitForFunction(() => document.querySelectorAll('#invoiceList .inv-rij').length === 3, null, { timeout: 6000 }).catch(() => {});
+const teller = await page.evaluate(() => (document.querySelector('.inv-teller') || {}).textContent.replace(/\s+/g, ' ') || '');
+ok('teller "Openstaand" telt alleen open facturen van max. 2 maanden (€ 121, niet € 621)', /Openstaand \(laatste 2 mnd\): € 121,00/.test(teller) && !/621/.test(teller), teller);
+ok('oude open factuur telt NIET mee als "verlopen"', !/verlopen/.test(teller.split('Niet meegeteld')[0]), teller);
+ok('oude open facturen staan apart vermeld (aantal + bedrag)', /Niet meegeteld: 1 open factuur ouder dan 2 maanden \(€ 500,00\)/.test(teller), teller);
+await page.click('.inv-teller-oud-knop');
+ok('klik op "ouder dan 2 maanden" → filter toont alleen de oude', await page.evaluate(() => { const r = [...document.querySelectorAll('#invoiceList .inv-rij')]; return r.length === 1 && r[0].dataset.inv === 'inv_oud' && document.querySelector('#invFilter').value === 'oud'; }));
+await page.selectOption('#invFilter', 'verlopen');
+ok('filter "Verlopen" volgt dezelfde 2-maandengrens (oude staat onder "ouder dan 2 mnd")', await page.evaluate(() => document.querySelectorAll('#invoiceList .inv-rij').length === 0));
+await page.selectOption('#invFilter', 'all');
+await page.unroute('**/api/invoices', nepFacturen);
+await page.evaluate(() => loadInvoices());
+// Assistente-weergave is in rollen-test gedekt; de monteur ziet geen pin-knop.
+ok('pin-knop alleen voor kantoor (pinKnopMag)', await page.evaluate(() => { const echt = state.me.role; state.me.role = 'monteur'; const m = pinKnopMag(); state.me.role = echt; return m === false && pinKnopMag() === true; }));
+noErr('Facturen vastpinnen + teller');
+
 // OFFERTE-HERINNERING ÉÉN KEER (8 okt 2026): geen "Max. aantal" meer, uitleg staat er, en
 // opslaan van de factuur-instellingen werkt nog (de oude regel las #is-quote-max).
 clear();

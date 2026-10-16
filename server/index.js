@@ -5395,6 +5395,31 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
   res.json(autoInvoice ? { ...inv, autoInvoice: { id: autoInvoice.id, number: autoInvoice.number } } : inv);
 });
 
+// VASTPINNEN (16 okt 2026, wens eigenaar): de beheerder en de assistente kunnen een
+// belangrijke factuur/offerte vastzetten — die staat dan bovenaan het overzicht, met
+// een optionele korte reden ("klant belt terug vrijdag"). Alleen een markering, geen
+// wijziging van het document zelf: mag dus óók op een vergrendelde (betaald + verstuurd)
+// factuur. Kopieën nemen de pin bewust niet mee (copyInvoice bouwt een nieuw record).
+app.post('/api/invoices/:id/pin', requireRole('admin', 'assistent'), (req, res) => {
+  const inv = findInv(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  const soort = inv.type === 'offerte' ? 'offerte' : 'factuur';
+  if (req.body?.pin === false) {
+    if (inv.vastgepind) {
+      delete inv.vastgepind;
+      logActivity(req.user.name, `${soort} losgemaakt`, inv.number);
+    }
+  } else {
+    const notitie = String(req.body?.notitie ?? (inv.vastgepind && inv.vastgepind.notitie) ?? '').trim().slice(0, 140);
+    const nieuw = !inv.vastgepind;
+    inv.vastgepind = { at: nieuw ? now() : inv.vastgepind.at, door: nieuw ? req.user.name : inv.vastgepind.door, notitie };
+    logActivity(req.user.name, nieuw ? `${soort} vastgepind` : `pin-notitie ${soort} bijgewerkt`, `${inv.number}${notitie ? ` — ${notitie}` : ''}`);
+  }
+  saveSoon();
+  res.json({ ok: true, vastgepind: inv.vastgepind || null });
+});
+
 // Overzicht (kantoor alles; monteur alleen eigen kaarten + zelf aangemaakte losse).
 app.get('/api/invoices', requireAuth, (req, res) => {
   const maps = buildMaps();
