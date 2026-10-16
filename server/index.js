@@ -61,7 +61,7 @@ import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { formulierStatus, markeerActivatieAfgehandeld } from './formulieren.js';
-import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel } from './drs-rapport.js';
+import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel, alAfgerondGemeldOpAdres } from './drs-rapport.js';
 import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions, removeAutoFeeForOrder, herkoppelDrsFee } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -6309,11 +6309,19 @@ async function computeStatusScan(days) {
     const order = resolveOrder(s.orderId);
     if (!order || !isValidStatus(s.suggestedStatus)) { dropped++; return null; }
     if (order.status === s.suggestedStatus) return null; // staat al goed — geen fout
+    // DRS-opdracht naar afgerond terwijl er op dit adres kort geleden al een andere opdracht
+    // als afgerond aan DRS is gemeld? Dan komt het "bewijs" waarschijnlijk uit ons eigen oude
+    // rapport → waarschuwing en niet mee in "Alles toepassen" (audit 16 okt).
+    let waarschuwing = '';
+    if (s.suggestedStatus === 'afgerond' && isDrsOrder(order)) {
+      const e = alAfgerondGemeldOpAdres(order);
+      if (e) waarschuwing = `Let op: ${e.postcode} is op ${korteDatum(e.datum)} al als afgerond aan DRS gemeld bij "${String(e.titel).slice(0, 50)}". Is dit dezelfde klus, of echt een nieuwe die af is?`;
+    }
     return {
       orderId: order.id, title: order.title,
       from: order.status, fromLabel: labels[order.status] || order.status,
       to: s.suggestedStatus, toLabel: labels[s.suggestedStatus] || s.suggestedStatus,
-      reason: s.reason || '', evidence: s.evidence || '',
+      reason: s.reason || '', evidence: s.evidence || '', ...(waarschuwing ? { waarschuwing } : {}),
     };
   }).filter(Boolean);
   const needsDrsUpdate = (out.needsDrsUpdate || []).map((s) => {

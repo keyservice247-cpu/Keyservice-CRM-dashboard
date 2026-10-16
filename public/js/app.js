@@ -4462,7 +4462,8 @@ function renderStatusScan(out) {
         <div><strong>${esc(s.title)}</strong>: ${esc(s.fromLabel)} → <strong>${esc(s.toLabel)}</strong></div>
         <div class="muted small">${esc(s.reason)}</div>
         ${s.evidence ? `<div class="muted small" style="font-style:italic">"${esc(s.evidence.slice(0, 160))}"</div>` : ''}
-        <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}" data-ev="${esc((s.evidence || '').slice(0, 200))}">Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
+        ${s.waarschuwing ? `<div class="drs-waarschuwing">${icon('bell', 12)} ${esc(s.waarschuwing)}</div>` : ''}
+        <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm btn-success ss-apply" data-id="${s.orderId}" data-to="${esc(s.to)}" data-ev="${esc((s.evidence || '').slice(0, 200))}"${s.waarschuwing ? ' data-letop="1"' : ''}>Toepassen</button><button class="btn btn-sm ss-ignore">Negeren</button></div>
       </div>`).join('');
   }
   if (doneSugg.length) {
@@ -4490,9 +4491,11 @@ function renderStatusScan(out) {
     } catch (err) { toast(err.message, true); }
   });
   if ($('#ss-apply-all')) $('#ss-apply-all').onclick = async () => {
-    const items = $$('.ss-apply');
-    if (!items.length) return;
-    if (!confirm(`${items.length} statuswijziging(en) in één keer toepassen?`)) return;
+    // Voorstellen met een DRS-waarschuwing (mogelijk dubbel) gaan nooit in bulk mee.
+    const items = $$('.ss-apply').filter((b) => !b.dataset.letop);
+    const letop = $$('.ss-apply').length - items.length;
+    if (!items.length) return toast(letop ? 'Alleen voorstellen met een waarschuwing over — beoordeel die per stuk' : 'Niets toe te passen', !!letop);
+    if (!confirm(`${items.length} statuswijziging(en) in één keer toepassen?${letop ? `\n\n${letop} voorstel(len) met een waarschuwing (mogelijk dubbel aan DRS) slaan we over — beoordeel die per stuk.` : ''}`)) return;
     let ok = 0; let mislukt = 0; let laatsteFout = ''; const done = [];
     for (const b of items) {
       // Zelfde velden als de losse knop: anders mist de "Toch niet"-terugdraaiknop juist hier.

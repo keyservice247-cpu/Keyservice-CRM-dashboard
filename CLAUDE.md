@@ -955,7 +955,10 @@ de regressie meegroeit.
   emailAfzenders (adres of domein, Instellingen → DRS-rapport) → isDrsEmailAfzender → review.
   drsBron → bij goedkeuren bron "DRS e-mail" (= DRS: rapport, fee, dispatch onlyDrs). Losse
   e-mails blijven handmatig goedkeuren (Regel 4 ongewijzigd). ZODRA DRS MAILT: het adres invullen.
-  Tests: test/drs-rapport-test.mjs (95, PORT=3145, deels zonder server), scenarios 123
+  Statusscan: voorstel "→ afgerond" voor een DRS-opdracht op een adres dat ≤45 d al als afgerond
+  is gemeld krijgt een waarschuwing en gaat NIET mee in "Alles toepassen" (alAfgerondGemeldOpAdres).
+  Lege whatsappOrderGroups = geen enkele groep is DRS (isDrsOrder).
+  Tests: test/drs-rapport-test.mjs (97, PORT=3145, deels zonder server), scenarios 123
   (plakken: tweede keer 409, force zonder dubbele klant), browser 304.
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek

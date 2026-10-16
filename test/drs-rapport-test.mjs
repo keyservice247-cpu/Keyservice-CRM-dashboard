@@ -327,6 +327,12 @@ console.log('\n== Eenmalige start (oude rapporten inlezen) + avondherinnering �
   ok('start: recente, nooit gemelde opdracht blijft bij nog te melden', !recentNiet.drsGemeld && drs.nogTeMelden({ nu }).some((o) => o.id === recentNiet.id));
   ok('start: alarm uit het verleden zichtbaar (zonder push)', (d.settings._drsAlarmen || []).some((a) => a.postcode === '4879 NB' && a.terugkijken));
   ok('start draait maar één keer', drs.drsStartMigratie({ nu }) === null);
+  // Statusscan-waarschuwing: nieuwe kaart op een adres dat kort geleden al als afgerond is gemeld.
+  const nieuwOpAdres = mkOrder({ title: 'Etten-Leur — nieuwe klus', status: 'open', createdAt: iso(nu), intake: { address: 'Industrieweg 4, 4879 NB Etten-Leur' } });
+  d.orders.push(nieuwOpAdres);
+  const waarsch = drs.alAfgerondGemeldOpAdres(nieuwOpAdres, nu);
+  ok('statusscan: waarschuwing als het adres al als afgerond gemeld is', waarsch && waarsch.postcode === '4879 NB' && waarsch.datum === dag4, JSON.stringify(waarsch));
+  ok('statusscan: geen waarschuwing voor een ander adres', drs.alAfgerondGemeldOpAdres(recentNiet, nu) === null);
   // Avondherinnering: vóór het uur niets, erna één keer per dag.
   const om = (uurNL) => { const t = new Date(`${nlDag(nu)}T12:00:00Z`); const off = Number(t.toLocaleString('en-US', { timeZone: 'Europe/Amsterdam', hour: '2-digit', hour12: false })) - 12; return new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), uurNL - off, 30)); };
   ok('herinnering: om 18:30 nog niet', drs.drsHerinneringVerschuldigd({ nu: om(18) }) === null);

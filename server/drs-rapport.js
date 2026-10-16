@@ -87,7 +87,9 @@ export function isDrsOrder(order) {
   // opdracht via de monteursgroep binnenkwam (audit 16 okt 2026: die kreeg anders geen
   // DRS-rapportregel en geen fee, en de assistente kon het nergens rechtzetten).
   if (/\bdrs\b/.test(bron)) return true;
-  if (order.originGroup) return isWhatsappOrderGroup(order.originGroup);
+  // Lege instelling ("alle groepen") maakt NIET elke groep tot DRS (audit 16 okt): dan zouden
+  // opdrachten uit monteursgroepen in het DRS-rapport en als DRS-fee meetellen.
+  if (order.originGroup) return getWhatsappOrderGroups().length > 0 && isWhatsappOrderGroup(order.originGroup);
   // Zonder herkomstgroep: een groepsbron telt ook. De oude regex /whatsapp|groep|app/ zag
   // élke 1-op-1 WhatsApp-kaart ("Keyservice WhatsApp") als DRS (audit 3 okt 2026).
   return /groep/.test(bron);
@@ -292,6 +294,14 @@ function eerderGemeldOpPostcode(pc, behalveId, nu = Date.now()) {
     if (postcodeVanOrder(o) === pc) uit.push(o);
   }
   return uit;
+}
+// Voor de AI-statusscan (audit 16 okt): wil de AI een DRS-opdracht op afgerond zetten terwijl
+// er op hetzelfde adres kort geleden al een ANDERE opdracht als afgerond aan DRS is gemeld?
+// Dan is het bewijs waarschijnlijk ons eigen oude rapport → waarschuwing, niet blind toepassen.
+export function alAfgerondGemeldOpAdres(order, nu = Date.now()) {
+  const pc = postcodeVanOrder(order);
+  const e = eerderGemeldOpPostcode(pc, order.id, nu)[0];
+  return e ? { datum: e.drsGemeld.afgerond.datum, titel: e.title || '', postcode: toonPostcode(pc) } : null;
 }
 export function rapportVoorstel({ kopjes, nu = Date.now() } = {}) {
   const cfg = getDrsRapportInstellingen();
