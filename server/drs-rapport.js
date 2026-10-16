@@ -34,6 +34,7 @@ export const DEFAULT_DRS_RAPPORT = {
   herinnering: true,                       // 's avonds een melding als er nog iets te melden is
   herinneringUur: 21,                      // Nederlandse tijd
   afzenders: [],                           // extra namen (zoals in WhatsApp) die het rapport plaatsen
+  emailAfzenders: [],                      // e-mailadressen/domeinen waarmee DRS opdrachten mailt
 };
 // BEWUST GEEN "rechtstreeks in de DRS-groep plaatsen" door het CRM: eerdere beslissing van
 // de eigenaar (terugkoppeling gaat nooit direct naar DRS) én whatsapp-web.js kan een fout
@@ -48,6 +49,7 @@ export function getDrsRapportInstellingen() {
     herinnering: s.herinnering !== undefined ? !!s.herinnering : DEFAULT_DRS_RAPPORT.herinnering,
     herinneringUur: Number.isInteger(s.herinneringUur) && s.herinneringUur >= 12 && s.herinneringUur <= 23 ? s.herinneringUur : DEFAULT_DRS_RAPPORT.herinneringUur,
     afzenders: Array.isArray(s.afzenders) ? s.afzenders.map((x) => String(x).trim()).filter(Boolean).slice(0, 20) : [],
+    emailAfzenders: Array.isArray(s.emailAfzenders) ? s.emailAfzenders.map((x) => String(x).trim().toLowerCase()).filter(Boolean).slice(0, 20) : [],
   };
 }
 export function sanitizeDrsRapportInstellingen(b = {}) {
@@ -60,7 +62,16 @@ export function sanitizeDrsRapportInstellingen(b = {}) {
   if ('herinneringUur' in b) { const u = Number(b.herinneringUur); if (Number.isInteger(u) && u >= 12 && u <= 23) uit.herinneringUur = u; }
   if ('afzenders' in b) uit.afzenders = (Array.isArray(b.afzenders) ? b.afzenders : String(b.afzenders || '').split(','))
     .map((x) => String(x).trim().slice(0, 60)).filter((x) => x.length >= 3).slice(0, 20);
+  if ('emailAfzenders' in b) uit.emailAfzenders = (Array.isArray(b.emailAfzenders) ? b.emailAfzenders : String(b.emailAfzenders || '').split(/[,\s]+/))
+    .map((x) => String(x).trim().toLowerCase().replace(/^@/, '')).filter((x) => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(x) || /^[a-z0-9.-]+\.[a-z]{2,}$/.test(x)).slice(0, 20);
   return uit;
+}
+// Mailt DRS? Volledig adres (opdrachten@drs.nl) of alleen het domein (drs.nl).
+export function isDrsEmailAfzender(adres) {
+  const a = String(adres || '').trim().toLowerCase();
+  if (!a.includes('@')) return false;
+  const domein = a.split('@')[1];
+  return getDrsRapportInstellingen().emailAfzenders.some((x) => (x.includes('@') ? x === a : domein === x || domein.endsWith('.' + x)));
 }
 // Bij welk kopje hoort de HUIDIGE status van een opdracht?
 export function catVanStatus(status) {

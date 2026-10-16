@@ -951,7 +951,11 @@ de regressie meegroeit.
   van een klant/adres met een recent AFGESLOTEN DRS-opdracht wordt niet automatisch goedgekeurd
   (review.autoOvergeslagen + mogelijkDubbel; open kaarten volgen Regel 1 ongewijzigd);
   een-regel-rapport in de opdracht-groep = eigen rapport (geen kaart, geen "onvolledig").
-  Tests: test/drs-rapport-test.mjs (91, PORT=3145, deels zonder server), scenarios 123
+  DRS PER E-MAIL (eigenaar vroeg DRS 16 okt om opdrachten óók te mailen): settings.drsRapport.
+  emailAfzenders (adres of domein, Instellingen → DRS-rapport) → isDrsEmailAfzender → review.
+  drsBron → bij goedkeuren bron "DRS e-mail" (= DRS: rapport, fee, dispatch onlyDrs). Losse
+  e-mails blijven handmatig goedkeuren (Regel 4 ongewijzigd). ZODRA DRS MAILT: het adres invullen.
+  Tests: test/drs-rapport-test.mjs (95, PORT=3145, deels zonder server), scenarios 123
   (plakken: tweede keer 409, force zonder dubbele klant), browser 304.
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek

@@ -280,6 +280,23 @@ console.log('\n== Audit-fixes 16 okt: dubbele opdrachten, fee, inklappen, terug 
   ok('direct als afgerond aangemaakt → completedAt + intake van déze aanvraag', !!Y.completedAt && Y.intake?.address === 'Straat 1, 5150 AA Drunen', JSON.stringify({ c: Y.completedAt, i: Y.intake }));
 }
 
+console.log('\n== DRS mailt opdrachten (16 okt): e-mail van een DRS-adres wordt een DRS-opdracht ==');
+{
+  cookie = adminCookie;
+  const inst = await api('POST', '/api/drs-rapport/instellingen', { emailAfzenders: 'planning@drs-test.nl, drsgroep.nl' });
+  ok('instelling e-mailadressen DRS opgeslagen (adres + domein)', inst.status === 200 && inst.json.emailAfzenders.includes('planning@drs-test.nl') && inst.json.emailAfzenders.includes('drsgroep.nl'), JSON.stringify(inst.json.emailAfzenders));
+  const m1 = await api('POST', '/api/ingest/email', { from: 'DRS Planning <planning@drs-test.nl>', subject: 'Nieuwe opdracht', body: 'We sturen je de volgende klant:\nNaam: Mail Klant\nAdres: Kerkweg 3\nWoonplaats: 5050 AB Goirle\nTelefoon: 0611222999\nOpmerkingen: slot klemt', externalId: 'drs-mail-1' }, true);
+  const ap = await api('POST', `/api/reviews/${m1.json.reviewId}/approve`, {});
+  ok('goedgekeurde DRS-mail → bron "DRS e-mail" en telt als DRS', ap.status === 200 && ap.json?.order?.source === 'DRS e-mail' && ap.json?.order?.isDrs === true, JSON.stringify({ s: ap.json?.order?.source, d: ap.json?.order?.isDrs, e: ap.json?.error }));
+  const m2 = await api('POST', '/api/ingest/email', { from: 'Info <info@sub.drsgroep.nl>', subject: 'Opdracht', body: 'Naam: Domein Klant\nAdres: Laan 1\nWoonplaats: 5051 AB Goirle\nTelefoon: 0611222998\nOpmerkingen: deur', externalId: 'drs-mail-2' }, true);
+  const ap2 = await api('POST', `/api/reviews/${m2.json.reviewId}/approve`, {});
+  ok('ook op domein (subdomein) herkend', ap2.json?.order?.source === 'DRS e-mail');
+  const m3 = await api('POST', '/api/ingest/email', { from: 'Klant <klant@gmail.com>', subject: 'Slot kapot', body: 'Naam: Gewone Klant\nAdres: Weg 2, 5052 AB Goirle\nTelefoon: 0611222997\nMijn slot is kapot', externalId: 'drs-mail-3' }, true);
+  const ap3 = await api('POST', `/api/reviews/${m3.json.reviewId}/approve`, {});
+  ok('gewone klantmail blijft "Keyservice e-mail" (geen DRS)', ap3.json?.order?.source === 'Keyservice e-mail' && !ap3.json?.order?.isDrs, JSON.stringify(ap3.json?.order?.source));
+  await api('POST', '/api/drs-rapport/instellingen', { emailAfzenders: '' });
+}
+
 // ---------- Zonder server: eenmalige start + avondherinnering ----------
 console.log('\n== Eenmalige start (oude rapporten inlezen) + avondherinnering — zonder server ==');
 {

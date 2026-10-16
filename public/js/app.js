@@ -5770,6 +5770,8 @@ async function loadSettingsHtml(s) {
       <label>Tijdstip (uur) <input id="dr-uur" type="number" min="12" max="23" value="${esc(String(s.drsRapport?.herinneringUur ?? 21))}" style="max-width:120px"></label>
       <label>Wie plaatsen het rapport in de groep? <input id="dr-afzenders" value="${esc((s.drsRapport?.afzenders || []).join(', '))}" placeholder="bv. Noura, Key service 24/7"></label>
       <p class="muted small" style="margin-top:2px">Namen zoals ze in WhatsApp staan, met komma's. "Key service" en de namen van de kantoor-accounts tellen al vanzelf mee. Lijstjes van anderen (bv. DRS zelf) worden nooit als ons rapport afgevinkt.</p>
+      <label>E-mailadres(sen) waarmee DRS opdrachten mailt <input id="dr-email" value="${esc((s.drsRapport?.emailAfzenders || []).join(', '))}" placeholder="bv. planning@drs.nl of alleen drs.nl"></label>
+      <p class="muted small" style="margin-top:2px">Een aanvraag die van dit adres komt, wordt bij goedkeuren een <strong>DRS-opdracht</strong> (bron "DRS e-mail") — dan staat hij in het DRS-rapport en telt de fee in Cijfers.</p>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveDrsRapport">Opslaan</button></div>
     </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>${icon('message', 15)} "Wacht op antwoord" op Start</h3>
@@ -6047,7 +6049,7 @@ async function loadSettingsHtml(s) {
     const kopjes = $$('#dr-kopjes input').filter((x) => x.checked).map((x) => x.value);
     if (!kopjes.length) return toast('Kies minstens één kopje', true);
     try {
-      const r = await api('/api/drs-rapport/instellingen', 'POST', { kopjes, herinnering: $('#dr-herinnering').checked, herinneringUur: Number($('#dr-uur').value), afzenders: $('#dr-afzenders').value });
+      const r = await api('/api/drs-rapport/instellingen', 'POST', { kopjes, herinnering: $('#dr-herinnering').checked, herinneringUur: Number($('#dr-uur').value), afzenders: $('#dr-afzenders').value, emailAfzenders: $('#dr-email').value });
       if (state.meta?.drsRapport) state.meta.drsRapport.kopjes = r.kopjes;
       try { localStorage.removeItem('ksDrsKopjes'); } catch { /* geen opslag */ }
       toast('DRS-rapport-instellingen opgeslagen');

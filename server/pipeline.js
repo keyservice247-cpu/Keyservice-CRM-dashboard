@@ -1,7 +1,7 @@
 // Gedeelde verwerkingslogica voor inkomende berichten.
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
-import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport } from './drs-rapport.js';
+import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport, isDrsEmailAfzender } from './drs-rapport.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours } from './settings.js';
 import { mergeAttachments, dedupeAttachments } from './storage.js';
@@ -232,7 +232,8 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     source: review.channel,
   });
 
-  const defaultSource = review.channel === 'whatsapp' ? 'Keyservice WhatsApp'
+  const defaultSource = review.drsBron ? 'DRS e-mail'
+    : review.channel === 'whatsapp' ? 'Keyservice WhatsApp'
     : review.channel === 'email' ? 'Keyservice e-mail'
     : 'Handmatig';
 
@@ -1018,6 +1019,10 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
     suggestion.relevanceReason = `Mogelijk een ONVOLLEDIGE opdracht uit "${group}" (klantgegevens deels aanwezig: ${[myPhone || telInTekst ? 'telefoon' : '', echtePostcode ? 'postcode' : '', adresMetNummer ? 'adres' : ''].filter(Boolean).join(', ') || 'naam/adres-regels'}) — geen kaart gemaakt. Controleer en keur zo nodig goed.`;
     notifyPush('Onvolledig DRS-bericht', `${sender || group}: ${String(body || '').replace(/\s+/g, ' ').slice(0, 90)} — staat bij "Geen aanvraag", controleer even.`);
   }
+  // DRS PER E-MAIL (16 okt 2026, eigenaar vroeg DRS om opdrachten óók te mailen): komt de mail
+  // van een ingesteld DRS-adres, dan wordt de kaart bij goedkeuren een DRS-opdracht (bron
+  // "DRS e-mail") — anders telde hij niet in het DRS-rapport en kreeg hij geen fee.
+  if (channel === 'email' && fromEmail && !isEmailReply && isDrsEmailAfzender(fromEmail)) review.drsBron = true;
   db().reviews.push(review);
 
   // AFMELDEN VOOR DE CAMPAGNE (punt 16): de voettekst vraagt om "afmelden" te antwoorden
