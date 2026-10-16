@@ -330,11 +330,14 @@ export function rapportVoorstel({ kopjes, nu = Date.now() } = {}) {
     };
   });
   // Twee opdrachten met dezelfde postcode in hetzelfde kopje van dit rapport.
-  // (Zelfde postcode mét verschillende klantnaam = twee echte opdrachten, geen waarschuwing.)
-  const telPc = new Map();
-  const pcSleutel = (it) => `${it.cat}|${it.postcode}|${String(it.naam || '').toLowerCase()}`;
-  for (const it of items) if (it.postcode) telPc.set(pcSleutel(it), (telPc.get(pcSleutel(it)) || 0) + 1);
-  for (const it of items) if (it.postcode && telPc.get(pcSleutel(it)) > 1) it.waarschuwingen.push(`${it.postcode}${it.naam ? ' (' + it.naam + ')' : ''} staat ${telPc.get(pcSleutel(it))}× in dit rapport — dubbele opdracht? Meld hem maar één keer.`);
+  // Alleen als BEIDE een klantnaam hebben en die verschillen, zijn het twee echte opdrachten
+  // (twee units); een lege naam ("Onbekende klant") = mogelijk dezelfde klus (audit 16 okt).
+  for (const it of items) {
+    if (!it.postcode) continue;
+    const zelfde = items.filter((x) => x !== it && x.cat === it.cat && x.postcode === it.postcode
+      && !(it.naam && x.naam && it.naam.toLowerCase() !== x.naam.toLowerCase()));
+    if (zelfde.length) it.waarschuwingen.push(`${it.postcode} staat ${zelfde.length + 1}× in dit rapport — dubbele opdracht? Meld hem maar één keer.`);
+  }
   // Volgorde: kopjes in vaste volgorde, daarbinnen oudste eerst.
   const volg = DRS_KOPJES.map((k) => k.cat);
   items.sort((a, b) => volg.indexOf(a.cat) - volg.indexOf(b.cat) || String(a.sinds || '').localeCompare(String(b.sinds || '')));
@@ -361,23 +364,25 @@ export function rapportTekst(datum, regels) {
 // geweigerd (conflict) tenzij force — dat is precies de dubbele betaling die we voorkomen.
 export function markeerGemeld({ items = [], datum, via = 'crm', door = '', rapportId = '', force = false, tekst = '' } = {}) {
   const dag = /^\d{4}-\d{2}-\d{2}$/.test(String(datum || '')) ? datum : nlDatum();
-  const conflicten = []; const gemarkeerd = []; const regels = [];
+  const conflicten = []; const gemarkeerd = []; const regels = []; let alGemeld = 0;
   const ordersById = new Map(alleOpdrachten().map((o) => [o.id, o]));
   for (const it of items) {
     const o = ordersById.get(it.orderId);
     const cat = KOPJE_LABEL[it.cat] ? it.cat : null;
     if (!o || !cat) continue;
     const al = o.drsGemeld && o.drsGemeld[cat];
+    // Zelfde dag al gemeld (bv. het rapport kwam via de groep al binnen vóór "Geplaatst —
+    // vink af"): dat is hetzelfde rapport → stil overslaan, geen conflict (audit 16 okt).
+    if (al && al.datum === dag && !force) { alGemeld++; continue; }
     if (al && cat === 'afgerond' && !force) {
       conflicten.push({ orderId: o.id, cat, titel: o.title || '', al: { datum: al.datum, door: al.door, via: al.via } });
       continue;
     }
-    if (al && al.datum === dag && !force) continue; // zelfde dag al gemeld (idempotent)
     o.drsGemeld = { ...(o.drsGemeld || {}), [cat]: { at: now(), datum: dag, door, via, rapportId, regel: String(it.regel || '').slice(0, 300), ...(al ? { eerder: { datum: al.datum, door: al.door } } : {}) } };
     gemarkeerd.push({ orderId: o.id, cat });
     regels.push({ cat, orderId: o.id, tekst: String(it.regel || '').slice(0, 300), uitkomst: al ? 'opnieuw (bewust)' : 'gemeld' });
   }
-  return { conflicten, gemarkeerd, regels, datum: dag, tekst };
+  return { conflicten, gemarkeerd, regels, datum: dag, tekst, alGemeld };
 }
 // Rapport vastleggen in de geschiedenis (ook voor de controle van de DRS-factuur).
 export function legRapportVast({ id: rid, datum, via, door, regels, tekst = '', bronId = '', groep = '' }) {
@@ -466,7 +471,7 @@ export function leesRapport(tekst, ontvangenOp = new Date()) {
 // opdracht-velden (Naam:/Adres:/Telefoon:/Woonplaats: — een DRS-opdracht heeft die altijd).
 export function lijktDrsRapport(tekst) {
   const ruw = String(tekst || '');
-  if (/^\s*\*?(naam|adres|telefoon|telefoonnummer|tel|woonplaats)\*?\s*[:=]/im.test(ruw)) return false;
+  if (/^\s*\*?(naam|naam klant|klant|adres|adres klant|telefoon|telefoonnummer|telefoon ?nr|tel|tel\.|telnr|mobiel|woonplaats)\*?\s*[:=]/im.test(ruw)) return false;
   const { posten, kopjes } = leesRapport(ruw);
   return kopjes >= 1 && posten.length >= 1;
 }
@@ -477,13 +482,20 @@ export function lijktDrsRapport(tekst) {
 export function afzenderVanOns(sender) {
   const s = String(sender || '').toLowerCase().replace(/\s+/g, ' ').trim();
   if (!s) return true; // onbekende afzender (oude route / test): niet blokkeren
-  const lijst = ['key service', 'keyservice', ...getDrsRapportInstellingen().afzenders.map((x) => x.toLowerCase())];
+  const heelWoord = (x) => new RegExp(`(^|[^a-zà-ÿ0-9])${x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-zà-ÿ0-9]|$)`).test(s);
+  // Expliciet ingesteld of "key service" in de naam: telt altijd.
+  const expliciet = ['key service', 'keyservice', ...getDrsRapportInstellingen().afzenders.map((x) => x.toLowerCase())].filter((x) => x.length >= 3);
+  if (expliciet.some((x) => heelWoord(x))) return true;
+  // Iemand met "DRS" als los woord in de naam (bv. "Shemara DRS") is van DRS, niet van ons.
+  if (heelWoord('drs')) return false;
+  // Namen van de kantoor-accounts: alleen als HEEL woord ("Ali" telt niet in "Natalie").
   for (const u of db().users || []) {
     if (!['admin', 'assistent'].includes(u.role) || !u.name) continue;
-    const n = String(u.name).toLowerCase().trim();
-    if (n.length >= 3 && !/^(beheerder|admin|assistente?)$/.test(n)) lijst.push(n, n.split(/\s+/)[0]);
+    const n = String(u.name).toLowerCase().replace(/\s+/g, ' ').trim();
+    if (n.length < 3 || /^(beheerder|admin|assistente?)$/.test(n)) continue;
+    if (heelWoord(n) || (n.split(' ')[0].length >= 3 && heelWoord(n.split(' ')[0]))) return true;
   }
-  return lijst.filter((x) => x && x.length >= 3).some((x) => s.includes(x));
+  return false;
 }
 
 const dubbelUitleg = (d) => `${toonPostcode(d.postcode)}${d.plaats ? ' ' + d.plaats : ''} (${d.zelfdeRapport ? 'staat twee keer in hetzelfde rapport' : d.zelfdeDagNogmaals ? 'vandaag al in een ander bericht in de groep gemeld' : d.mogelijk ? `tweede opdracht op dit adres, eerder gemeld op ${korteDatum(d.eerder)}` : `eerder gemeld op ${korteDatum(d.eerder)}`})`;
@@ -520,6 +532,8 @@ export function verwerkEigenDrsRapport({ body, group, receivedAt, messageId, sen
   const ontvangenDag = nlDatum(ontvangen);
   let datum = gelezen.datum; let kopDatum = '';
   if (datum && (Date.parse(ontvangenDag) - Date.parse(datum)) > DAG) { kopDatum = datum; datum = ontvangenDag; }
+  // Kop in de toekomst (tikfout "14-11" i.p.v. "14-10"): de dag van plaatsen telt.
+  if (datum && datum > ontvangenDag) { kopDatum = datum; datum = ontvangenDag; }
   // Niet van ons (bv. een DRS-medewerker met een eigen lijstje)? Alleen vastleggen ter
   // informatie — nooit afvinken, nooit een alarm.
   if (!afzenderVanOns(sender)) {
@@ -529,76 +543,102 @@ export function verwerkEigenDrsRapport({ body, group, receivedAt, messageId, sen
     saveSoon();
     return info;
   }
-  const drs = alleOpdrachten().filter(isDrsOrder);
+  // Alleen kaarten die er al WAREN toen het rapport binnenkwam (een rapport gaat nooit over
+  // een later aangemaakte kaart — belangrijk bij het terugkijken door de eenmalige start).
+  const grensMs = ontvangen.getTime() + 3600000;
+  const bestond = (o) => !o.createdAt || new Date(o.createdAt).getTime() <= grensMs;
+  const drs = alleOpdrachten().filter((o) => isDrsOrder(o) && bestond(o));
   const perPc = new Map();
   for (const o of drs) { const pc = postcodeVanOrder(o); if (pc) { if (!perPc.has(pc)) perPc.set(pc, []); perPc.get(pc).push(o); } }
   const prullenbakPerPc = new Map();
   for (const o of prullenbakGemeld()) { const pc = postcodeVanOrder(o); if (pc) { if (!prullenbakPerPc.has(pc)) prullenbakPerPc.set(pc, []); prullenbakPerPc.get(pc).push(o); } }
   const regels = []; const dubbels = []; const rapportId = id('drsr');
-  const gezienInDitRapport = new Set();
+  // Per kopje+postcode: welke kaarten zijn in DIT rapport al "gebruikt"?
+  const gebruikt = new Map();
   // Twee échte opdrachten op hetzelfde adres (bv. twee units)? Dan beslist de naam in de
-  // regel ("4879 NB Etten-Leur — Jansen") welke bedoeld wordt (audit 16 okt).
+  // regel ("4880 AB Etten-Leur — Jansen") welke bedoeld wordt (audit 16 okt).
   const naamWoorden = (o) => naamVanOrder(o).toLowerCase().split(/[^a-zà-ÿ0-9]+/).filter((w) => w.length >= 4);
+  // Stond deze postcode (dit kopje) al in een ÁNDER groepsbericht van ons? (Lijstjes van
+  // andere afzenders tellen nooit mee.) Optioneel alleen op één datum.
+  const eerderInGroep = (p, opDatum) => rapportenLijst().some((r) => r.via === 'groep' && !r.vreemdeAfzender && r.id !== rapportId && !r.ongedaan && (!opDatum || r.datum === opDatum)
+    && (r.regels || []).some((x) => x.cat === p.cat && x.postcode === toonPostcode(p.postcode) && x.uitkomst !== 'onbekend' && !/andere afzender/.test(x.uitkomst || '')));
+  const eerderVandaagInGroep = (p) => eerderInGroep(p, datum);
+  // "Zelfde rapport": gemeld op de dag van dit rapport, óf op de (oude) kopdatum ervan zolang
+  // die regel nog nooit in de groep stond (kop in het CRM teruggezet en later geplaatst). Stond
+  // hij er wél al, dan is het een gekopieerd oud rapport = dubbel (audit + review 16 okt).
+  const zelfdeRapportDatum = (g, p) => g && (g.datum === datum || (kopDatum && g.datum === kopDatum && !eerderInGroep(p)));
+  const VENSTER = 45 * DAG; // ouder gemeld = geen dubbel meer (terugkerend adres, nieuwe klus)
+  // "Aangenomen" (bij de start als gemeld verondersteld, nooit echt gezien) geeft nooit een alarm.
+  const binnenVenster = (g) => g && g.via !== 'aangenomen' && g.datum < datum && (Date.parse(datum) - Date.parse(g.datum)) <= VENSTER;
+  const dubbelVan = (p, o, eerder, extra = {}) => dubbels.push({ postcode: p.postcode, plaats: plaatsVanOrder(o || {}), eerder, orderId: (o && o.id) || '', ...extra });
   for (const p of posten) {
     let kandidaten = perPc.get(p.postcode) || [];
     const opNaam = kandidaten.length > 1 ? kandidaten.filter((o) => naamWoorden(o).some((w) => p.tekst.toLowerCase().includes(w))) : [];
     if (opNaam.length === 1) kandidaten = opNaam;
-    const sleutel = `${p.cat}|${p.postcode}|${opNaam.length === 1 ? opNaam[0].id : ''}`;
     const regel = { cat: p.cat, postcode: toonPostcode(p.postcode), tekst: p.tekst.slice(0, 300) };
-    if (gezienInDitRapport.has(sleutel)) {
+    const gk = `${p.cat}|${p.postcode}`;
+    const alGebruikt = gebruikt.get(gk) || new Set();
+    // Al eerder in DIT rapport en niet op naam naar een ándere kaart → twee keer in het rapport.
+    if (alGebruikt.size && !(opNaam.length === 1 && !alGebruikt.has(opNaam[0].id))) {
       regel.uitkomst = p.cat === 'afgerond' ? 'dubbel' : 'twee keer in dit rapport';
-      if (p.cat === 'afgerond') dubbels.push({ postcode: p.postcode, plaats: plaatsVanOrder(kandidaten[0] || {}), eerder: datum, orderId: (kandidaten[0] || {}).id, zelfdeRapport: true });
+      if (p.cat === 'afgerond') dubbelVan(p, kandidaten[0], datum, { zelfdeRapport: true });
       regels.push(regel); continue;
     }
-    gezienInDitRapport.add(sleutel);
+    const gebruik = (o) => { alGebruikt.add(o ? o.id : `x${regels.length}`); gebruikt.set(gk, alGebruikt); };
     if (!kandidaten.length) {
-      const weg = (prullenbakPerPc.get(p.postcode) || []).filter((o) => o.drsGemeld[p.cat] && o.drsGemeld[p.cat].datum < datum);
+      const weg = (prullenbakPerPc.get(p.postcode) || []).filter((o) => binnenVenster(o.drsGemeld[p.cat]));
       if (p.cat === 'afgerond' && weg.length) {
         regel.uitkomst = 'dubbel'; regel.eerder = weg[0].drsGemeld.afgerond.datum;
-        dubbels.push({ postcode: p.postcode, plaats: plaatsVanOrder(weg[0]), eerder: regel.eerder, orderId: '' });
+        dubbelVan(p, weg[0], regel.eerder); regel.orderId = undefined;
       } else regel.uitkomst = 'onbekend';
-      regels.push(regel); continue;
+      gebruik(null); regels.push(regel); continue;
     }
+    const gemeldK = kandidaten.filter((o) => o.drsGemeld && o.drsGemeld[p.cat]);
+    const zelfdeDag = gemeldK.filter((o) => zelfdeRapportDatum(o.drsGemeld[p.cat], p));
     const open = kandidaten.filter((o) => !(o.drsGemeld && o.drsGemeld[p.cat]));
-    const zelfdeDag = kandidaten.filter((o) => o.drsGemeld && o.drsGemeld[p.cat] && o.drsGemeld[p.cat].datum === datum);
-    if (!open.length) {
-      // Zelfde dag al gemeld: via het CRM ("Geplaatst — vink af") is dit gewoon het rapport
-      // zelf dat terugkomt. Via een ANDER bericht in de groep (of hetzelfde rapport nogmaals
-      // geplaatst) staat hij er voor DRS twee keer in.
-      const eerderVandaagInGroep = rapportenLijst().some((r) => r.via === 'groep' && r.id !== rapportId && r.datum === datum && !r.ongedaan
-        && (r.regels || []).some((x) => x.cat === p.cat && x.postcode === toonPostcode(p.postcode) && x.uitkomst !== 'onbekend'));
-      if (zelfdeDag.length && (eerderVandaagInGroep || herhaling) && p.cat === 'afgerond') {
-        regel.uitkomst = 'dubbel'; regel.orderId = zelfdeDag[0].id; regel.eerder = datum;
-        dubbels.push({ postcode: p.postcode, plaats: plaatsVanOrder(zelfdeDag[0]), eerder: datum, orderId: zelfdeDag[0].id, zelfdeDagNogmaals: true });
-        regels.push(regel); continue;
-      }
-      if (zelfdeDag.length) { regel.uitkomst = 'al gemeld (zelfde rapport)'; regel.orderId = zelfdeDag[0].id; regels.push(regel); continue; }
-      const eerder = kandidaten.map((o) => o.drsGemeld[p.cat]).sort((a, b) => String(a.datum).localeCompare(String(b.datum)))[0];
-      if (p.cat === 'afgerond' && eerder && eerder.datum < datum) {
-        regel.uitkomst = 'dubbel'; regel.orderId = kandidaten[0].id; regel.eerder = eerder.datum;
-        dubbels.push({ postcode: p.postcode, plaats: plaatsVanOrder(kandidaten[0]), eerder: eerder.datum, orderId: kandidaten[0].id });
-      } else {
-        regel.uitkomst = 'al eerder gemeld'; regel.orderId = kandidaten[0].id; regel.eerder = eerder && eerder.datum;
-      }
+    const opStatus = open.filter((o) => catVanStatus(o.status) === p.cat);
+    // 1) Al gemeld met de datum van dit rapport (bv. eerst "Geplaatst — vink af" in het CRM,
+    //    daarna komt het rapport via de groep binnen) → dat is DEZE regel. Nooit een andere
+    //    open kaart op hetzelfde adres afvinken (audit 16 okt: dan telde de maandtelling 2).
+    //    Wél dubbel als het vandaag al in een ánder groepsbericht stond of herhaald is.
+    if (zelfdeDag.length && !(opStatus.length && opNaam.length === 1 && !zelfdeDag.includes(opNaam[0]))) {
+      const o = zelfdeDag[0]; regel.orderId = o.id; gebruik(o);
+      if (p.cat === 'afgerond' && (eerderVandaagInGroep(p) || herhaling)) {
+        regel.uitkomst = 'dubbel'; regel.eerder = datum;
+        dubbelVan(p, o, datum, { zelfdeDagNogmaals: true });
+      } else regel.uitkomst = 'al gemeld (zelfde rapport)';
       regels.push(regel); continue;
     }
-    // Meerdere open kandidaten: voorkeur voor de opdracht die in het CRM óók op dit kopje staat.
-    const opStatus = open.filter((o) => catVanStatus(o.status) === p.cat);
-    const keuze = opStatus.length === 1 ? opStatus[0] : open.length === 1 ? open[0] : null;
-    if (!keuze) { regel.uitkomst = 'meerdere opdrachten'; regel.kandidaten = open.slice(0, 5).map((o) => o.id); regels.push(regel); continue; }
+    // 2) Kiezen: een open kaart die in het CRM óók op dit kopje staat. Een open kaart met een
+    //    ANDERE status (oud geannuleerd, lopend) alleen als er op dit adres niets anders is.
+    let keuze = null;
+    if (opStatus.length === 1) keuze = opStatus[0];
+    else if (opStatus.length > 1) { regel.uitkomst = 'meerdere opdrachten'; regel.kandidaten = opStatus.slice(0, 5).map((o) => o.id); gebruik(null); regels.push(regel); continue; }
+    else if (!gemeldK.length && open.length === 1) keuze = open[0];
+    else if (!gemeldK.length && open.length > 1) { regel.uitkomst = 'meerdere opdrachten'; regel.kandidaten = open.slice(0, 5).map((o) => o.id); gebruik(null); regels.push(regel); continue; }
+    if (!keuze) {
+      // 3) Alles op dit adres is al gemeld (op een eerdere dag): de NIEUWSTE melding telt.
+      const laatste = gemeldK.map((o) => ({ o, g: o.drsGemeld[p.cat] })).sort((a, b) => String(b.g.datum).localeCompare(String(a.g.datum)))[0];
+      regel.orderId = laatste.o.id; regel.eerder = laatste.g.datum; gebruik(laatste.o);
+      if (p.cat === 'afgerond' && binnenVenster(laatste.g)) {
+        regel.uitkomst = 'dubbel';
+        dubbelVan(p, laatste.o, laatste.g.datum);
+      } else regel.uitkomst = laatste.g.via === 'aangenomen' ? 'al als gemeld aangenomen (van vóór het DRS-rapport)' : laatste.g.datum < datum ? 'al eerder gemeld (lang geleden — nieuwe klus? vink hem zelf af)' : 'al eerder gemeld';
+      regels.push(regel); continue;
+    }
     const r = markeerGemeld({ items: [{ orderId: keuze.id, cat: p.cat, regel: p.tekst }], datum, via: 'groep', door: sender || 'rapport in de DRS-groep', rapportId });
-    regel.orderId = keuze.id;
+    regel.orderId = keuze.id; gebruik(keuze);
     regel.uitkomst = r.gemarkeerd.length ? (catVanStatus(keuze.status) === p.cat ? 'gemeld' : 'gemeld (status in CRM wijkt af)') : 'al gemeld';
     if (catVanStatus(keuze.status) !== p.cat) regel.crmStatus = keuze.status;
     // Tweede KAART op dezelfde postcode die kort geleden al als afgerond is gemeld: waarschijnlijk
     // dezelfde klus dubbel in het CRM (bv. twee keer doorgestuurd) → ook dan alarm.
     if (p.cat === 'afgerond') {
-      const kortGeleden = [...kandidaten, ...(prullenbakPerPc.get(p.postcode) || [])].filter((o) => o.id !== keuze.id && o.drsGemeld && o.drsGemeld.afgerond && o.drsGemeld.afgerond.datum < datum
+      const kortGeleden = [...kandidaten, ...(prullenbakPerPc.get(p.postcode) || [])].filter((o) => o.id !== keuze.id && o.drsGemeld && o.drsGemeld.afgerond && o.drsGemeld.afgerond.via !== 'aangenomen' && o.drsGemeld.afgerond.datum < datum
         && (Date.parse(datum) - Date.parse(o.drsGemeld.afgerond.datum)) <= 14 * DAG);
       if (kortGeleden.length) {
         regel.uitkomst = 'gemeld — mogelijk dubbel';
         regel.eerder = kortGeleden[0].drsGemeld.afgerond.datum;
-        dubbels.push({ postcode: p.postcode, plaats: plaatsVanOrder(keuze), eerder: regel.eerder, orderId: keuze.id, mogelijk: true });
+        dubbelVan(p, keuze, regel.eerder, { mogelijk: true });
       }
     }
     regels.push(regel);

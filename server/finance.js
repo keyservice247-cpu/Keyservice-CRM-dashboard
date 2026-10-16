@@ -519,9 +519,11 @@ export function removeAutoFeeForOrder(orderId) {
   const ref = `drsfee:${orderId}`;
   const before = fin().entries.length;
   fin().entries = fin().entries.filter((e) => !(e.sourceRef === ref && e.auto));
-  fin().removedRefs = (fin().removedRefs || []).filter((r) => r !== ref);
-  if (fin().entries.length < before) saveSoon();
-  return before - fin().entries.length;
+  const n = before - fin().entries.length;
+  // Alleen als er écht een automatische fee wegging de grafsteen opruimen: een BEWUST door een
+  // mens verwijderde fee (grafsteen) moet weg blijven (audit 16 okt).
+  if (n) { fin().removedRefs = (fin().removedRefs || []).filter((r) => r !== ref); saveSoon(); }
+  return n;
 }
 // Samenvoegen: één klus = één fee. De fee van de samengevoegde kaart gaat over naar de
 // hoofdkaart; heeft die er al een, dan vervalt de dubbele.

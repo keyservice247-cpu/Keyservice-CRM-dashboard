@@ -958,7 +958,30 @@ de regressie meegroeit.
   Statusscan: voorstel "→ afgerond" voor een DRS-opdracht op een adres dat ≤45 d al als afgerond
   is gemeld krijgt een waarschuwing en gaat NIET mee in "Alles toepassen" (alAfgerondGemeldOpAdres).
   Lege whatsappOrderGroups = geen enkele groep is DRS (isDrsOrder).
-  Tests: test/drs-rapport-test.mjs (97, PORT=3145, deels zonder server), scenarios 123
+  REVIEWRONDE (5 Opus-reviewers + 2 controleurs per bevinding) — gefixt: vangnet koppelt een
+  regel eerst aan een kaart die al met de datum van dit rapport gemeld is (CRM eerst
+  afgevinkt) en vinkt nooit een andere open kaart op hetzelfde adres af; open kaart met een
+  andere status alleen als er op dat adres niets gemeld is; "alles al gemeld" pakt de NIEUWSTE
+  melding met venster 45 d ('aangenomen' geeft nooit alarm); zelfde postcode 2× in één rapport
+  (ook met "Onbekende klant") = dubbel; kopdatum in de toekomst → dag van plaatsen; kop
+  teruggezet in het CRM telt als zelfde rapport zolang die regel nog nooit in de groep stond;
+  info-lijstjes van andere afzenders tellen nooit mee; herhaling alleen als het eerdere
+  exemplaar óók in een opdracht-groep stond; afzender-poort op HELE woorden ("Ali" ≠
+  "Natalie"), los woord "DRS" = niet van ons; kaarten die ná het rapport zijn aangemaakt tellen
+  niet (eenmalige start); /markeer: zelfde dag = geen conflict (antwoord alGemeld, scherm zegt
+  "al uit de groep gelezen"), datum nooit in de toekomst, max 14 d terug; DRS-mail blijft "DRS
+  e-mail" ook als het inbox-scherm "Keyservice e-mail" meestuurt (+ voorgeselecteerd);
+  complete DRS-opdracht met kopje "Offerte:/Afspraak:" wordt nooit als eigen rapport
+  weggezet (alleen van ons óf geen complete opdracht; meer label-uitsluitingen);
+  samenvoegen terugdraaien via de prullenbak zet status/vinkjes/fee/herkomst terug
+  (bron.samengevoegdIn); removeAutoFeeForOrder laat een bewuste grafsteen staan;
+  statusscan-resultaat laat al gemelde opdrachten weg bij het lezen; DRS-venster bewaart
+  vinkjes en aangepaste regels bij herladen, overschrijft geen ander venster, kopiëren mislukt
+  → tekst geselecteerd + "Geplaatst" blijft; plakken door monteur toont geen andermans
+  opdracht/inbox; dispatch nooit terug naar de groep waar de opdracht vandaan kwam; goedkeuren
+  direct als afgerond zet completedAt; omzet kiest een betaalde factuur boven een afgeschreven;
+  afgeschreven factuur zonder verstuurknoppen, "Toch betaald" alleen kantoor.
+  Tests: test/drs-rapport-test.mjs (119, PORT=3145, deels zonder server), scenarios 123
   (plakken: tweede keer 409, force zonder dubbele klant), browser 304.
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek

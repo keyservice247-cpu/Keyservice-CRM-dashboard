@@ -204,6 +204,10 @@ console.log('\n== Audit-fixes 16 okt: andere rapportvormen, afzender, twee kluss
   // Oude kop laten staan: rapport van eergisteren opnieuw geplaatst → dubbel.
   const S = await maak({ customerName: 'Oude Kop', customerPhone: '0611000024', customerAddress: 'Dijk 3, 4700 AA Roosendaal', title: 'Roosendaal — slot' }, 'afgerond');
   await api('POST', '/api/drs-rapport/markeer', { datum: drieDagen, items: [{ orderId: S.id, cat: 'afgerond', regel: '4700 AA Roosendaal' }] });
+  // Het oorspronkelijke rapport (kop drie dagen terug) staat in de groep…
+  await api('POST', '/api/ingest/whatsapp', { group: `groep ${RAF_ID}`, name: 'Key service 24/7', body: `*${kopVan(drieDagen)}*\n*Afgerond:*\n4700 AA Roosendaal`, externalId: 'drs-oudekop-0' }, true);
+  ok('oorspronkelijk rapport met teruggezette kop → geen alarm (zelfde rapport)', !((await api('GET', '/api/drs-rapport')).json.alarmen || []).some((a) => a.postcode === '4700 AA'));
+  // …en wordt later gekopieerd en aangevuld opnieuw geplaatst zonder de kop aan te passen.
   await api('POST', '/api/ingest/whatsapp', { group: `groep ${RAF_ID}`, name: 'Key service 24/7', body: `*${kopVan(drieDagen)}*\n*Afgerond:*\n4700 AA Roosendaal\n4561 KZ Hulst nogmaals`, externalId: 'drs-oudekop-1' }, true);
   ok('rapport met een OUDE kop (niet aangepast) → toch dubbel-alarm', ((await api('GET', '/api/drs-rapport')).json.alarmen || []).some((a) => a.postcode === '4700 AA'));
   // Precies hetzelfde rapport twee keer (binnen 24 uur) → tweede keer alarm.
@@ -297,6 +301,99 @@ console.log('\n== DRS mailt opdrachten (16 okt): e-mail van een DRS-adres wordt 
   await api('POST', '/api/drs-rapport/instellingen', { emailAfzenders: '' });
 }
 
+console.log('\n== Review-fixes 16 okt ==');
+{
+  cookie = adminCookie;
+  const grp = { group: `groep ${RAF_ID}`, name: 'Key service 24/7' };
+  const lijstNu = async () => (await api('GET', '/api/orders?includeArchived=1')).json;
+  // (a) CRM vinkt eerst af, daarna komt het rapport uit de groep; op hetzelfde adres staat een
+  //     oude geannuleerde kaart → die mag NIET als afgerond worden afgevinkt.
+  const A1 = await maak({ customerName: 'Echo Klant', customerPhone: '0611000060', customerAddress: 'Kade 1, 4900 AA Oosterhout', title: 'Oosterhout — oud' }, 'geannuleerd');
+  const A2 = await maak({ customerName: 'Echo Klant', customerPhone: '0611000061', customerAddress: 'Kade 1, 4900 AA Oosterhout', title: 'Oosterhout — nu' }, 'afgerond');
+  const tA = await api('POST', '/api/drs-rapport/markeer', { items: [{ orderId: A2.id, cat: 'afgerond', regel: '4900 AA Oosterhout — Echo Klant' }], tekst: 'x' });
+  ok('(a) CRM vinkt af', tA.status === 200 && tA.json.gemarkeerd === 1);
+  await api('POST', '/api/ingest/whatsapp', { ...grp, body: `*${kopVan(vandaag)}*\n*Afgerond:*\n4900 AA Oosterhout — Echo Klant`, externalId: 'rv-echo-1' }, true);
+  const l1 = await lijstNu();
+  ok('(a) rapport uit de groep daarna: de OUDE geannuleerde kaart blijft ongemoeid', !l1.find((o) => o.id === A1.id)?.drsGemeld?.afgerond, JSON.stringify(l1.find((o) => o.id === A1.id)?.drsGemeld));
+  // (b) Eerst de groep, dan "Geplaatst — vink af" → geen vals 409.
+  const B1 = await maak({ customerName: 'Volgorde Klant', customerPhone: '0611000062', customerAddress: 'Weg 1, 4901 AA Oosterhout', title: 'Oosterhout — volgorde' }, 'afgerond');
+  await api('POST', '/api/ingest/whatsapp', { ...grp, body: `*${kopVan(vandaag)}*\n*Afgerond:*\n4901 AA Oosterhout — Volgorde Klant`, externalId: 'rv-volgorde-1' }, true);
+  const tB = await api('POST', '/api/drs-rapport/markeer', { items: [{ orderId: B1.id, cat: 'afgerond', regel: 'x' }], tekst: 'x' });
+  ok('(b) "Geplaatst" ná het groepsbericht → 200, "al afgevinkt" (geen vals dubbel-alarm)', tB.status === 200 && tB.json.gemarkeerd === 0 && tB.json.alGemeld === 1, JSON.stringify(tB.json));
+  // (c) Kopdatum in het CRM teruggezet (rapport van eergisteren, pas vandaag geplaatst) → geen dubbel.
+  const C1 = await maak({ customerName: 'Kopdatum Klant', customerPhone: '0611000063', customerAddress: 'Weg 2, 4902 AA Oosterhout', title: 'Oosterhout — kop' }, 'afgerond');
+  await api('POST', '/api/drs-rapport/markeer', { datum: drieDagen, items: [{ orderId: C1.id, cat: 'afgerond', regel: 'x' }] });
+  await api('POST', '/api/ingest/whatsapp', { ...grp, body: `*${kopVan(drieDagen)}*\n*Afgerond:*\n4902 AA Oosterhout`, externalId: 'rv-kop-1' }, true);
+  const alarmenNu = async () => ((await api('GET', '/api/drs-rapport')).json.alarmen || []);
+  ok('(c) teruggezette kopdatum + later geplaatst → geen vals dubbel-alarm', !(await alarmenNu()).some((x) => x.postcode === '4902 AA'));
+  const toekomst = await api('POST', '/api/drs-rapport/markeer', { datum: '2099-01-01', items: [{ orderId: C1.id, cat: 'geannuleerd', regel: 'x' }] });
+  ok('(c) datum in de toekomst wordt vandaag (nooit een datum in de toekomst)', toekomst.json?.datum === vandaag, JSON.stringify(toekomst.json));
+  // (d) Lijstje van een DRS-medewerker eerder vandaag → ons eigen rapport daarna is GEEN dubbel.
+  const D1 = await maak({ customerName: 'Info Klant', customerPhone: '0611000064', customerAddress: 'Weg 3, 4903 AA Oosterhout', title: 'Oosterhout — info' }, 'afgerond');
+  await api('POST', '/api/ingest/whatsapp', { group: `groep ${RAF_ID}`, name: 'Shemara DRS', body: 'Afgerond:\n4903 AA Oosterhout graag factuur sturen', externalId: 'rv-info-1' }, true);
+  await api('POST', '/api/ingest/whatsapp', { ...grp, body: `*${kopVan(vandaag)}*\n*Afgerond:*\n4903 AA Oosterhout`, externalId: 'rv-info-2' }, true);
+  ok('(d) lijstje van DRS eerder vandaag maakt ons rapport niet "dubbel"', !(await alarmenNu()).some((x) => x.postcode === '4903 AA') && !!(await lijstNu()).find((o) => o.id === D1.id)?.drsGemeld?.afgerond);
+  // (f) Zelfde klus als twee kaarten, één zonder naam → waarschuwing in het voorstel + dubbel in het rapport.
+  const F1 = await maak({ customerName: 'Naam Klant', customerPhone: '0611000065', customerAddress: 'Weg 4, 4904 AA Oosterhout', title: 'Oosterhout — met naam' }, 'afgerond');
+  const F2 = await maak({ customerName: 'Onbekende klant', customerPhone: '0611000066', customerAddress: 'Weg 4, 4904 AA Oosterhout', title: 'Oosterhout — zonder naam' }, 'afgerond');
+  const vf = (await api('GET', '/api/drs-rapport')).json;
+  ok('(f) voorstel waarschuwt: zelfde postcode 2× (één zonder naam)', (vf.items || []).filter((i) => [F1.id, F2.id].includes(i.orderId)).every((i) => i.waarschuwingen.some((w) => /2× in dit rapport/.test(w))));
+  await api('POST', '/api/ingest/whatsapp', { ...grp, body: `*${kopVan(vandaag)}*\n*Afgerond:*\n4904 AA Oosterhout — Naam Klant\n4904 AA Oosterhout`, externalId: 'rv-f-1' }, true);
+  ok('(f) tweede regel zonder naam = dubbel-alarm, tweede kaart NIET afgevinkt', (await alarmenNu()).some((x) => x.postcode === '4904 AA') && !(await lijstNu()).find((o) => o.id === F2.id)?.drsGemeld?.afgerond);
+  // (e) Melding van lang geleden (> 45 dagen) op hetzelfde adres → geen dubbel-alarm.
+  const E1 = await maak({ customerName: 'Oud Adres', customerPhone: '0611000067', customerAddress: 'Weg 5, 4905 AA Oosterhout', title: 'Oosterhout — oud adres' }, 'afgerond');
+  await api('POST', '/api/drs-rapport/markeer', { datum: nlDag(Date.now() - 12 * DAG), items: [{ orderId: E1.id, cat: 'afgerond', regel: 'x' }] });
+  // (12 dagen is binnen de grens van 14 voor de route; > 45 dagen testen we zonder server.)
+  // (g) DRS-mail goedkeuren met de standaard-herkomst uit het scherm → toch "DRS e-mail".
+  await api('POST', '/api/drs-rapport/instellingen', { emailAfzenders: 'planning@drs-test.nl' });
+  const gm = await api('POST', '/api/ingest/email', { from: 'planning@drs-test.nl', subject: 'Opdracht', body: 'Naam: Scherm Klant\nAdres: Laan 9\nWoonplaats: 5060 AB Oisterwijk\nTelefoon: 0611222990\nOpmerkingen: slot', externalId: 'rv-mail-1' }, true);
+  const gap = await api('POST', `/api/reviews/${gm.json.reviewId}/approve`, { source: 'Keyservice e-mail' });
+  ok('(g) goedkeuren met herkomst "Keyservice e-mail" uit het scherm → toch "DRS e-mail"', gap.json?.order?.source === 'DRS e-mail', JSON.stringify(gap.json?.order?.source));
+  await api('POST', '/api/drs-rapport/instellingen', { emailAfzenders: '' });
+  // (h) Eerst ter controle in de monteursgroep, dan in de DRS-groep → eerste keer bij DRS, geen dubbel.
+  const H1 = await maak({ customerName: 'Controle Klant', customerPhone: '0611000068', customerAddress: 'Weg 6, 4906 AA Oosterhout', title: 'Oosterhout — controle' }, 'afgerond');
+  const tekstH = `*${kopVan(vandaag)}*\n\n*Afgerond:*\n\n4906 AA Oosterhout — Controle Klant`;
+  await api('POST', '/api/ingest/whatsapp', { group: 'Youssef Keyservice247', name: 'Key service 24/7', body: tekstH, externalId: 'rv-h-1' }, true);
+  await api('POST', '/api/ingest/whatsapp', { ...grp, body: tekstH, externalId: 'rv-h-2' }, true);
+  ok('(h) eerst in de monteursgroep, dan bij DRS → afgevinkt en GEEN dubbel', !!(await lijstNu()).find((o) => o.id === H1.id)?.drsGemeld?.afgerond && !(await alarmenNu()).some((x) => x.postcode === '4906 AA'));
+  // (i) Samenvoegen terugdraaien via de prullenbak → status, vinkje en fee terug.
+  const maandNu = vandaag.slice(0, 7);
+  const fees = async () => ((await api('GET', `/api/finance?month=${maandNu}`)).json?.report?.entries || []).filter((e) => /^drsfee:/.test(e.sourceRef || ''));
+  const I1 = await maak({ customerName: 'Terug Klant', customerPhone: '0611000069', customerAddress: 'Weg 7, 4907 AA Oosterhout', title: 'Oosterhout — hoofd' });
+  const I2 = await maak({ customerName: 'Terug Klant', customerPhone: '0611000069', customerAddress: 'Weg 7, 4907 AA Oosterhout', title: 'Oosterhout — bron' }, 'afgerond');
+  await api('POST', '/api/drs-rapport/markeer', { items: [{ orderId: I2.id, cat: 'afgerond', regel: 'x' }] });
+  await api('POST', '/api/finance/autosync', {});
+  await api('POST', '/api/orders/merge', { primaryId: I1.id, mergeIds: [I2.id] });
+  const naMerge = (await lijstNu()).find((o) => o.id === I1.id);
+  ok('(i) na samenvoegen: hoofdkaart afgerond + gemeld', naMerge?.status === 'afgerond' && !!naMerge?.drsGemeld?.afgerond);
+  await api('POST', `/api/trash/${I2.id}/restore`, {});
+  const l2 = await lijstNu();
+  const hoofd = l2.find((o) => o.id === I1.id); const bron = l2.find((o) => o.id === I2.id);
+  ok('(i) terughalen: hoofdkaart weer open en niet gemeld; bronkaart weer afgerond + gemeld', hoofd?.status === 'open' && !hoofd?.drsGemeld?.afgerond && bron?.status === 'afgerond' && !!bron?.drsGemeld?.afgerond, JSON.stringify({ h: hoofd?.status, hg: hoofd?.drsGemeld, b: bron?.status }));
+  await api('POST', '/api/finance/autosync', {});
+  const fI = (await fees()).filter((e) => [`drsfee:${I1.id}`, `drsfee:${I2.id}`].includes(e.sourceRef));
+  ok('(i) terughalen: precies één fee, weer op de bronkaart', fI.length === 1 && fI[0].sourceRef === `drsfee:${I2.id}`, JSON.stringify(fI.map((e) => e.sourceRef)));
+  // (j) Bewust verwijderde fee blijft weg, ook na heropenen + opnieuw afronden.
+  const J1 = await maak({ customerName: 'Grafsteen', customerPhone: '0611000070', customerAddress: 'Weg 8, 4908 AA Oosterhout', title: 'Oosterhout — grafsteen' }, 'afgerond');
+  await api('POST', '/api/finance/autosync', {});
+  const fe = (await fees()).find((e) => e.sourceRef === `drsfee:${J1.id}`);
+  await api('DELETE', `/api/finance/${fe.id}`);
+  await api('PATCH', `/api/orders/${J1.id}`, { status: 'open' });
+  await api('PATCH', `/api/orders/${J1.id}`, { status: 'afgerond' });
+  await api('POST', '/api/finance/autosync', {});
+  ok('(j) bewust verwijderde DRS-fee komt niet terug na heropenen', !(await fees()).some((e) => e.sourceRef === `drsfee:${J1.id}`));
+  // (l) Monteur plakt: dubbel bij andermans opdracht → geen details.
+  const mRec = await api('POST', '/api/monteurs', { name: 'Plak Monteur', phone: '0612000099' });
+  await api('POST', '/api/users', { name: 'Plak Monteur', email: 'plakmonteur@keyservice.nl', password: 'monteur123', role: 'monteur', monteurId: mRec.json.id });
+  await login('plakmonteur@keyservice.nl', 'monteur123');
+  const mp = await api('POST', '/api/orders/paste', { text: 'Naam: North Ridge BV\nAdres: Industrieweg 4\nWoonplaats: 4879 NB - Etten-Leur\nTelefoon: 0611000001\nOpmerkingen: x' });
+  ok('(l) monteur: dubbel bij andermans opdracht → 409 zonder titel/id', mp.status === 409 && mp.json?.dubbel?.soort === 'verborgen' && !mp.json?.dubbel?.orderId && !/North Ridge|Etten-Leur — /.test(mp.json?.error || ''), JSON.stringify(mp.json));
+  cookie = adminCookie;
+  // (m) Complete DRS-opdracht die met "Offerte:" begint → GEEN eigen rapport (blijft een aanvraag).
+  const om = await api('POST', '/api/ingest/whatsapp', { group: `groep ${RAF_ID}`, name: 'Kim drs', body: 'Offerte:\nJan de Vries, Hoofdstraat 12, 4879 NB Etten-Leur, 0612345678, wil offerte voor 3 cilinders', externalId: 'rv-off-1' }, true);
+  ok('(m) complete DRS-opdracht met kopje "Offerte:" verdwijnt niet in Overige', om.json?.status && om.json.status !== 'overige', JSON.stringify(om.json));
+}
+
 // ---------- Zonder server: eenmalige start + avondherinnering ----------
 console.log('\n== Eenmalige start (oude rapporten inlezen) + avondherinnering — zonder server ==');
 {
@@ -347,6 +444,24 @@ console.log('\n== Eenmalige start (oude rapporten inlezen) + avondherinnering �
   const l = drs.leesRapport('Woensdag 14-10\nAfgerond: 4007 RS Tiel\n- 7091 DV Dinxperlo\nGeannuleerd\n1. 7543 ZM Enschede, niet geïnteresseerd', new Date(`${nlDag(nu).slice(0, 4)}-10-14T20:00:00Z`));
   ok('lezen: kopje met postcode op dezelfde regel + opsomming', l.posten.map((p) => `${p.cat}:${p.postcode}`).join(',') === 'afgerond:4007RS,afgerond:7091DV,geannuleerd:7543ZM', JSON.stringify(l.posten));
   ok('lezen: datum uit de kop', l.datum.endsWith('-10-14'), l.datum);
+  // Afzender-poort op hele woorden (review 16 okt): "Ali" telt niet in "Natalie DRS".
+  d.users.push({ id: 'u-ali', role: 'assistent', name: 'Ali' }, { id: 'u-anna', role: 'admin', name: 'Anna de Vries' });
+  ok('afzender: "Natalie DRS" en "Johanna | DRS planning" zijn niet van ons', !drs.afzenderVanOns('Natalie DRS') && !drs.afzenderVanOns('Johanna | DRS planning'));
+  ok('afzender: "Ali", "Anna de Vries" en "Key service 24/7" wel', drs.afzenderVanOns('Ali') && drs.afzenderVanOns('Anna de Vries') && drs.afzenderVanOns('Key service 24/7'));
+  // Melding van > 45 dagen geleden op hetzelfde adres → geen dubbel-alarm (terugkerend adres).
+  const oudGemeld = mkOrder({ title: 'Oss — lang geleden', status: 'afgerond', completedAt: iso(nu - 80 * DAG), intake: { address: '5347 AA Oss' }, drsGemeld: { afgerond: { datum: nlDag(nu - 80 * DAG), via: 'crm', at: iso(nu - 80 * DAG) } } });
+  d.orders.push(oudGemeld);
+  const alarmVoor = (d.settings._drsAlarmen || []).length;
+  const rOud = drs.verwerkEigenDrsRapport({ body: `*${kopVan(nlDag(nu))}*\n*Afgerond:*\n5347 AA Oss`, group: g, receivedAt: iso(nu), messageId: 'oud-adres-1', sender: 'Key service 24/7' });
+  // "Aangenomen" bij de start (Oss 5345 HH, 20 dagen) geeft ook geen alarm.
+  const rAang = drs.verwerkEigenDrsRapport({ body: `*${kopVan(nlDag(nu))}*\n*Afgerond:*\n5345 HH Oss`, group: g, receivedAt: iso(nu), messageId: 'aangenomen-1', sender: 'Key service 24/7' });
+  ok('bij de start "aangenomen" als gemeld → later gemeld geeft geen dubbel-alarm', /aangenomen/.test(rAang.regels[0].uitkomst), JSON.stringify(rAang.regels));
+  ok('melding van 80 dagen geleden op hetzelfde adres → geen dubbel-alarm', (d.settings._drsAlarmen || []).length === alarmVoor && /lang geleden/.test(rOud.regels[0].uitkomst), JSON.stringify(rOud.regels));
+  // Eenmalige start: een rapport gaat nooit over een kaart die pas later is aangemaakt.
+  const later = mkOrder({ title: 'Oss — later aangemaakt', status: 'afgerond', createdAt: iso(nu), completedAt: iso(nu), intake: { address: '5346 AA Oss' } });
+  d.orders.push(later);
+  const rLater = drs.verwerkEigenDrsRapport({ body: `*${kopVan(nlDag(nu - 5 * DAG))}*\n*Afgerond:*\n5346 AA Oss`, group: g, receivedAt: iso(nu - 5 * DAG), messageId: 'later-1', sender: 'Key service 24/7' });
+  ok('rapport van 5 dagen geleden vinkt geen kaart af die pas vandaag is aangemaakt', !later.drsGemeld && rLater.regels[0].uitkomst === 'onbekend', JSON.stringify(rLater.regels));
   // Weekgrenzen rond de klokwissel (25 okt 2026): aaneengesloten, geen gat en geen overlap.
   const wk = await import('../server/week.js');
   const w1 = wk.weekBounds(new Date('2026-10-21T12:00:00Z'));

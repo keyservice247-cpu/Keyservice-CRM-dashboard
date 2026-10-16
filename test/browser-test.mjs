@@ -1570,9 +1570,11 @@ ok('opdracht: "Is al gemeld" vinkt weer af', /Gemeld aan DRS/.test(await page.lo
 await page.evaluate(() => closeModal());
 // Dubbel-alarm zichtbaar: ons rapport uit de groep met dezelfde opdracht op een latere dag.
 await page.evaluate(async () => {
-  const morgen = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
-  const kop = `${morgen.slice(8, 10)}-${morgen.slice(5, 7)}`;
-  await fetch('/api/ingest/whatsapp', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ group: 'Raf breda en vliegende keer Rhenen straal 30 KM', name: 'Key service 24/7', body: `*Vrijdag ${kop}*\n\n*Afgerond:*\n\n4879 NB Etten-Leur\n\n4421 BR Kapelle`, externalId: 'br-drs-rapport' }) });
+  // Eerst het rapport zelf (komt terug uit de groep = zelfde rapport, geen alarm), daarna een
+  // tweede bericht met dezelfde opdracht = dubbel aan DRS.
+  const post = (body, ext) => fetch('/api/ingest/whatsapp', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ group: 'Raf breda en vliegende keer Rhenen straal 30 KM', name: 'Key service 24/7', body, externalId: ext }) });
+  await post('*Afgerond:*\n\n4879 NB Etten-Leur — North Ridge BV', 'br-drs-rapport-1');
+  await post('*Afgerond:*\n\n4879 NB Etten-Leur\n\n4421 BR Kapelle', 'br-drs-rapport-2');
 });
 await page.click('#drsReportBtn');
 await page.waitForSelector('.drs-alarm', { timeout: 6000 }).catch(() => {});

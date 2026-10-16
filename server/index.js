@@ -61,7 +61,7 @@ import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { formulierStatus, markeerActivatieAfgehandeld } from './formulieren.js';
-import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel, alAfgerondGemeldOpAdres } from './drs-rapport.js';
+import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel, alAfgerondGemeldOpAdres, nlDatum as drsVandaag } from './drs-rapport.js';
 import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions, removeAutoFeeForOrder, herkoppelDrsFee } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -1870,7 +1870,14 @@ app.post('/api/orders/paste', requireAuth, requireKaartMaken, (req, res) => {
   // keer naar de monteur, twee keer in het rapport, twee keer een DRS-fee. Nu eerst
   // kijken (telefoon of postcode, 30 dagen; inbox 7 dagen); bewust doorgaan kan (force).
   if (!req.body?.force) {
-    const dubbel = zoekMogelijkDubbel({ phone: klantTel, address: adres, tekst, metInbox: true });
+    const isMonteur = req.user.role === 'monteur';
+    const dubbel = zoekMogelijkDubbel({ phone: klantTel, address: adres, tekst, metInbox: !isMonteur });
+    if (dubbel && isMonteur) {
+      const o = dubbel.orderId && db().orders.find((x) => x.id === dubbel.orderId);
+      // Monteur: alleen details van zijn eigen opdrachten (audit 16 okt — geen inkijk in
+      // andermans klussen of in de inbox).
+      if (!(o && canTouchOrder(req, o))) return res.status(409).json({ error: 'Deze klant staat waarschijnlijk al in het CRM. Vraag kantoor even na of de opdracht er al is — of maak hem bewust toch aan.', dubbel: { soort: 'verborgen' } });
+    }
     if (dubbel) {
       const waar = dubbel.soort === 'inbox' ? `in de inbox (${dubbel.datum})`
         : `${dubbel.ingeklapt ? 'ingeklapt' : 'op het bord'}: "${String(dubbel.titel).slice(0, 60)}" (${getStatusLabels()[dubbel.status] || dubbel.status}, ${dubbel.datum})`;
@@ -2093,17 +2100,20 @@ app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
     if (!primary.appointmentAt && other.appointmentAt) primary.appointmentAt = other.appointmentAt;
     if (!primary.price && other.price) primary.price = other.price;
     if (other.notes) primary.notes = `${primary.notes ? primary.notes + '\n' : ''}${other.notes}`;
+    const overgezetCats = [];
     // "Gemeld aan DRS" gaat mee naar de hoofdkaart (16 okt): anders kon de hoofdkaart
     // nogmaals als afgerond gemeld worden terwijl de bronkaart al gemeld was.
     for (const [cat, g] of Object.entries(other.drsGemeld || {})) {
       if (!primary.drsGemeld) primary.drsGemeld = {};
       const huidig = primary.drsGemeld[cat];
-      if (!huidig || String(g.datum || '') < String(huidig.datum || '')) primary.drsGemeld[cat] = { ...g, samengevoegdVan: other.id };
+      if (!huidig || String(g.datum || '') < String(huidig.datum || '')) { primary.drsGemeld[cat] = { ...g, samengevoegdVan: other.id }; overgezetCats.push(cat); }
     }
     // AFGEROND GAAT MEE (audit 16 okt): was de samengevoegde kaart al afgerond en de
     // hoofdkaart nog niet, dan is de klus gedaan — anders bleef de hoofdkaart open staan en
     // werd hij later nóg een keer afgerond (tweede fee, nogmaals in het dagrapport).
+    const overgezet = { primaryId, vorigeStatus: primary.status, vorigCompletedAt: primary.completedAt || null, statusOvergenomen: false, feeOvergezet: false, drsCats: [], bronGewijzigd: null };
     if (other.status === 'afgerond' && primary.status !== 'afgerond') {
+      overgezet.statusOvergenomen = true;
       primary.status = 'afgerond';
       primary.completedAt = other.completedAt || now();
       primary.statusSince = now();
@@ -2113,12 +2123,13 @@ app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
     // DRS-herkomst gaat mee (audit 16 okt): een DRS-klus samengevoegd met een eigen kaart
     // van dezelfde klant viel anders uit het DRS-rapport en kreeg geen fee.
     if (isDrsOrder(other) && !isDrsOrder(primary)) {
-      if (other.originGroup && !primary.originGroup) primary.originGroup = other.originGroup;
-      else primary.source = other.source || 'DRS WhatsApp groep';
+      if (other.originGroup && !primary.originGroup) { overgezet.bronGewijzigd = { originGroup: true }; primary.originGroup = other.originGroup; }
+      else { overgezet.bronGewijzigd = { source: primary.source || '' }; primary.source = /\bdrs\b/i.test(other.source || '') ? other.source : 'DRS WhatsApp groep'; }
       if (!primary.intake && other.intake) primary.intake = { ...other.intake };
     }
     // Eén klus = één DRS-fee: de fee van de bronkaart gaat over naar de hoofdkaart.
     const feeWeg = herkoppelDrsFee(other.id, primaryId);
+    overgezet.feeOvergezet = feeWeg > 0;
     if (feeWeg) logActivity('systeem', feeWeg > 0 ? 'DRS-fee overgezet naar de hoofdkaart' : 'dubbele DRS-fee vervallen (samengevoegd)', primary.title);
     // NAAR DE PRULLENBAK, niet hard weg (17 aug, Vught-casus): een samengevoegde
     // bronkaart verdween definitief — wie per ongeluk op Samenvoegen tikte was de
@@ -2127,6 +2138,10 @@ app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
     const [bron] = db().orders.splice(i, 1);
     bron.deletedAt = now();
     bron.deletedBy = `samengevoegd met "${(primary.title || primaryId).slice(0, 60)}" door ${req.user.name}`;
+    // Wat er naar de hoofdkaart ging (status, DRS-vinkjes, fee): nodig om het terug te draaien
+    // als de bronkaart uit de prullenbak wordt teruggehaald (audit 16 okt).
+    overgezet.drsCats = overgezetCats;
+    bron.samengevoegdIn = overgezet;
     // De bestanden horen nu bij de hoofdkaart — de bron-verwijzingen leegmaken,
     // anders zou het opruimen van de prullenbak bestanden wissen die de hoofdkaart
     // nog gebruikt.
@@ -2181,6 +2196,31 @@ app.post('/api/trash/:id/restore', requirePerm('deleteOrders'), (req, res) => {
   const [order] = db().trash.splice(i, 1);
   delete order.deletedAt; delete order.deletedBy;
   order.updatedAt = now();
+  // SAMENVOEGEN TERUGDRAAIEN (audit 16 okt): kwam deze kaart uit een samenvoeging, dan wat er
+  // naar de hoofdkaart ging terugzetten — anders twee DRS-fees, en de hoofdkaart bleef
+  // "afgerond" en "gemeld aan DRS" (zijn echte klus kwam dan nooit in het rapport).
+  const sv = order.samengevoegdIn;
+  if (sv && sv.primaryId) {
+    const prim = db().orders.find((o) => o.id === sv.primaryId);
+    if (prim) {
+      if (sv.feeOvergezet) herkoppelDrsFee(prim.id, order.id);
+      for (const cat of sv.drsCats || []) {
+        if (prim.drsGemeld && prim.drsGemeld[cat] && prim.drsGemeld[cat].samengevoegdVan === order.id) delete prim.drsGemeld[cat];
+      }
+      if (prim.drsGemeld && !Object.keys(prim.drsGemeld).length) delete prim.drsGemeld;
+      if (sv.statusOvergenomen && prim.status === 'afgerond') {
+        prim.status = sv.vorigeStatus || 'open';
+        if (sv.vorigCompletedAt) prim.completedAt = sv.vorigCompletedAt; else delete prim.completedAt;
+        prim.statusSince = now();
+        if (!sv.feeOvergezet) removeAutoFeeForOrder(prim.id);
+      }
+      if (sv.bronGewijzigd && sv.bronGewijzigd.originGroup) delete prim.originGroup;
+      else if (sv.bronGewijzigd && 'source' in sv.bronGewijzigd) prim.source = sv.bronGewijzigd.source;
+      prim.updatedAt = now();
+      logActivity(req.user.name, 'samenvoegen teruggedraaid', `${order.title} los van "${(prim.title || '').slice(0, 50)}"`);
+    }
+    delete order.samengevoegdIn;
+  }
   db().orders.push(order);
   logActivity(req.user.name, 'opdracht teruggehaald', order.title);
   saveSoon();
@@ -2394,6 +2434,9 @@ function maybeAutoSendToMonteur(order, event) {
   const monteur = routed || db().monteurs.find((m) => m.id === (cfg.autoMonteurId || order.monteurId));
   if (!monteur) { console.log(`[autosend] geen monteur gekozen (autoMonteurId leeg?) — overgeslagen (${order.title})`); return; }
   if (!monteur.waGroup) { console.log(`[autosend] monteur ${monteur.name} heeft geen WhatsApp-groep — overgeslagen (${order.title})`); return; }
+  // Kwam de opdracht uit de groep van deze monteur zelf (bv. doorgestuurd en als DRS gemarkeerd)?
+  // Dan niet nog eens terug in die groep (audit 16 okt).
+  if (order.originGroup && String(order.originGroup).trim().toLowerCase() === String(monteur.waGroup).trim().toLowerCase()) { console.log(`[autosend] opdracht komt uit de groep van ${monteur.name} zelf — overgeslagen (${order.title})`); return; }
   if (!order.monteurId) order.monteurId = monteur.id;
   const r = queueToMonteur(order, monteur, 'automatisch');
   if (!r.error) { console.log(`[autosend] in wachtrij -> ${monteur.name} (${monteur.waGroup})`); logActivity('systeem', 'automatisch naar monteur', `${order.title} -> ${monteur.name}`); saveSoon(); }
@@ -5569,12 +5612,18 @@ app.post('/api/drs-rapport/markeer', drsKantoor, (req, res) => {
     .map((i) => ({ orderId: String(i.orderId || ''), cat: String(i.cat || ''), regel: String(i.regel || '').slice(0, 300) }))
     .filter((i) => i.orderId && KOPJE_LABEL[i.cat]);
   if (!items.length) return res.status(400).json({ error: 'Niets aangevinkt om te melden.' });
-  const datum = /^\d{4}-\d{2}-\d{2}$/.test(String(b.datum || '')) ? b.datum : undefined;
+  let datum = /^\d{4}-\d{2}-\d{2}$/.test(String(b.datum || '')) ? b.datum : undefined;
+  // Kopdatum mag een paar dagen terug (rapport van vrijdag op maandag), nooit in de toekomst.
+  const vandaagDrs = drsVandaag();
+  if (datum && datum > vandaagDrs) datum = vandaagDrs;
+  if (datum && (Date.parse(vandaagDrs) - Date.parse(datum)) > 14 * 86400000) return res.status(400).json({ error: 'De datum in de kop ligt meer dan 14 dagen terug — kies de juiste datum.' });
   const via = b.via === 'handmatig' ? 'handmatig' : 'crm';
   const ordersById = new Map(db().orders.map((o) => [o.id, o]));
   const onbekend = items.filter((i) => !ordersById.get(i.orderId));
   if (onbekend.length === items.length) return res.status(404).json({ error: 'Opdracht(en) niet gevonden — misschien net verwijderd of samengevoegd.' });
-  const conflicten = items.map((i) => ordersById.get(i.orderId)).filter((o, k) => o && items[k].cat === 'afgerond' && o.drsGemeld && o.drsGemeld.afgerond)
+  // Zelfde dag al gemeld = hetzelfde rapport (vaak al via de groep teruggelezen vóór je op
+  // "Geplaatst" tikt) → géén conflict (audit 16 okt: dat gaf een vals "betaal je dubbel").
+  const conflicten = items.map((i) => ordersById.get(i.orderId)).filter((o, k) => o && items[k].cat === 'afgerond' && o.drsGemeld && o.drsGemeld.afgerond && o.drsGemeld.afgerond.datum !== (datum || vandaagDrs))
     .map((o) => ({ orderId: o.id, titel: o.title || '', datum: o.drsGemeld.afgerond.datum, door: o.drsGemeld.afgerond.door || '', via: o.drsGemeld.afgerond.via || '' }));
   if (conflicten.length && !b.force) {
     return res.status(409).json({ error: `${conflicten.length === 1 ? 'Deze opdracht is' : `${conflicten.length} opdrachten zijn`} al als afgerond gemeld aan DRS (${conflicten.map((c) => `${(c.titel || '').slice(0, 40)} op ${korteDatum(c.datum)}`).join(', ')}). Haal ${conflicten.length === 1 ? 'hem' : 'ze'} uit het rapport, anders betaal je dubbel.`, conflicten });
@@ -5587,7 +5636,7 @@ app.post('/api/drs-rapport/markeer', drsKantoor, (req, res) => {
       `${korteDatum(r.datum)}: ${r.gemarkeerd.length} opdracht(en)${b.force && conflicten.length ? ` (waarvan ${conflicten.length} bewust opnieuw als afgerond)` : ''}`);
   }
   saveSoon();
-  res.json({ ok: true, gemarkeerd: r.gemarkeerd.length, datum: r.datum, rapportId: via === 'crm' && r.gemarkeerd.length ? rapportId : null });
+  res.json({ ok: true, gemarkeerd: r.gemarkeerd.length, alGemeld: r.alGemeld || 0, datum: r.datum, rapportId: via === 'crm' && r.gemarkeerd.length ? rapportId : null });
 });
 // Vergissing in het CRM terugdraaien: één rapport, of één opdracht/kopje.
 app.post('/api/drs-rapport/ongedaan', drsKantoor, (req, res) => {
@@ -6370,7 +6419,15 @@ app.post('/api/assistant/status-scan/start', requireRole('admin', 'assistent'), 
 
 // Status + laatste resultaat ophalen (voor pollen én tonen bij heropenen).
 app.get('/api/assistant/status-scan/result', requireRole('admin', 'assistent'), (req, res) => {
-  res.json({ running: _statusScan.running, startedAt: _statusScan.startedAt, last: db().settings._lastStatusScan || null });
+  // Al aan DRS gemeld (DRS-rapport, vinkje, of uit de groep) → niet meer in "Nog terugkoppelen"
+  // tonen, ook niet uit een opgeslagen scan (audit 16 okt).
+  const last = db().settings._lastStatusScan || null;
+  const ordersById = new Map(db().orders.map((o) => [o.id, o]));
+  const gefilterd = last && Array.isArray(last.needsDrsUpdate) ? { ...last, needsDrsUpdate: last.needsDrsUpdate.filter((t) => {
+    const o = ordersById.get(t.orderId); const c = o && catVanStatus(o.status);
+    return !(o && c && o.drsGemeld && o.drsGemeld[c]);
+  }) } : last;
+  res.json({ running: _statusScan.running, startedAt: _statusScan.startedAt, last: gefilterd });
 });
 // Markeer een toegepast/genegeerd voorstel op de laatste scan (blijft zo tot een nieuwe scan).
 app.post('/api/assistant/status-scan/applied', requireRole('admin', 'assistent'), (req, res) => {

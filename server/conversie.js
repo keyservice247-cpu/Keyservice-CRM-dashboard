@@ -125,10 +125,17 @@ export function omzetVan(o, invByOrder) {
 // opdracht er meerdere, dan wint die waar order.invoiceId naar wijst.
 export function factuurPerOpdracht() {
   const map = new Map();
-  for (const i of db().invoices || []) if (i.orderId && i.type !== 'offerte' && i.status !== 'concept') map.set(i.orderId, i);
+  // Een afgeschreven (oninbaar) factuur telt alleen als er geen andere is (review 16 okt):
+  // anders werd een betaalde vervanger genegeerd en stond de omzet op 0.
+  const telt = (i) => i.type !== 'offerte' && i.status !== 'concept';
+  for (const i of db().invoices || []) {
+    if (!i.orderId || !telt(i)) continue;
+    const huidig = map.get(i.orderId);
+    if (!huidig || (huidig.status === 'oninbaar' && i.status !== 'oninbaar')) map.set(i.orderId, i);
+  }
   for (const o of db().orders || []) {
-    const hoofd = o.invoiceId && (db().invoices || []).find((i) => i.id === o.invoiceId && i.type !== 'offerte' && i.status !== 'concept');
-    if (hoofd) map.set(o.id, hoofd);
+    const hoofd = o.invoiceId && (db().invoices || []).find((i) => i.id === o.invoiceId && telt(i));
+    if (hoofd && !(hoofd.status === 'oninbaar' && map.get(o.id) && map.get(o.id).status !== 'oninbaar')) map.set(o.id, hoofd);
   }
   return map;
 }

@@ -3087,7 +3087,7 @@ function reviewHTML(r) {
   const m = r.message || {};
   const conf = Math.round((s.confidence || 0) * 100);
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
-  const defaultSource = r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
+  const defaultSource = r.drsBron ? 'DRS e-mail' : r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
   return `
     <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open opdracht: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}${r.autoOvergeslagen ? `<span class="chip" style="background:#fef3c7;color:#92400e" title="Waarom dit bericht niet automatisch een opdracht werd">Niet automatisch: ${esc(r.autoOvergeslagen)}</span>` : ''}${r.onvolledigeOpdracht && r.status === 'overige' ? `<span class="chip chip-onvolledig" title="Bericht uit de opdracht-groep met een deel van de klantgegevens — geen opdracht gemaakt">Onvolledige opdracht? Controleer</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div class="muted small">${s.engine && s.engine !== 'regels' ? 'AI: ' + esc(s.engine) : ''}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions r-velden"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
@@ -3352,7 +3352,7 @@ function openPasteOrderModal() {
         const d = err.data.dubbel;
         if (confirm(`${err.message}\n\nToch een NIEUWE opdracht maken? (Twee opdrachten voor dezelfde klus = twee keer naar de monteur en twee keer een DRS-fee.)`)) {
           try { await maak(true); return; } catch (e2) { toast(e2.message, true); }
-        } else if (d.soort === 'opdracht' && d.orderId) { closeModal(); openOrderVers(d.orderId); return; }
+        } else if (d.soort === 'opdracht' && d.orderId && state.me?.role !== 'monteur') { closeModal(); openOrderVers(d.orderId); return; }
       } else toast(err.message, true);
       btn.disabled = false; btn.textContent = 'Maak opdracht';
     }
@@ -3996,7 +3996,7 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && !isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button><button class="btn" id="inv-remind">${icon('bell', 13)} Herinnering</button>` : ''}
         ${inv.id && !isQuote && inv.status === 'concept' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button>` : ''}
         ${inv.id && !isQuote && inv.status === 'verzonden' && pinKnopMag() ? `<button class="btn" id="inv-afschrijf" title="Verwacht je dit geld niet meer? Telt daarna niet meer als openstaand en krijgt geen herinneringen">Afschrijven</button>` : ''}
-        ${inv.id && !isQuote && inv.status === 'oninbaar' ? `<span class="inv-st oninbaar" style="align-self:center">Afgeschreven${inv.oninbaar?.reden ? ': ' + esc(inv.oninbaar.reden) : ''}</span><button class="btn btn-success" id="inv-paid">✓ Toch betaald</button>${pinKnopMag() ? `<button class="btn" id="inv-heropen">Terug naar open</button>` : ''}` : ''}
+        ${inv.id && !isQuote && inv.status === 'oninbaar' ? `<span class="inv-st oninbaar" style="align-self:center">Afgeschreven${inv.oninbaar?.reden ? ': ' + esc(inv.oninbaar.reden) : ''}</span>${pinKnopMag() ? `<button class="btn btn-success" id="inv-paid">✓ Toch betaald</button><button class="btn" id="inv-heropen">Terug naar open</button>` : ''}` : ''}
         ${inv.id && !isQuote && inv.status === 'betaald' ? `<button class="btn" id="inv-unpaid" title="${inv.sentAt ? 'Terug naar Verzonden — de factuur staat dan open en kan herinnerd worden' : 'Terug naar Concept — de factuur staat dan open'}">Nog niet betaald</button>` : ''}
         ${inv.id && !isQuote && (inv.sentAt || inv.status === 'betaald') && trustpilotKnopMag() ? `<button class="btn" id="inv-tp" title="${inv.trustpilotAt ? 'Al uitgenodigd op ' + esc(fmtDateShort(inv.trustpilotAt)) : 'Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC)'}">${icon('sparkles', 13)} Trustpilot${inv.trustpilotAt ? ' ✓' : ''}</button>` : ''}
         ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button><button class="btn" id="inv-qremind" title="Vriendelijke herinnering: per e-mail met PDF, of via WhatsApp als de klant alleen een 06 heeft">${icon('bell', 13)} Herinnering${inv.quoteFollowupCount ? ` (${inv.quoteFollowupCount}x)` : ''}</button>` : ''}
@@ -4011,8 +4011,8 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && locked ? `<button class="btn" id="inv-resend">${icon('mail', 14)} Verstuur opnieuw</button>` : ''}
         <button class="btn" id="inv-cancel">Sluiten</button>
         ${locked ? '' : `<button class="btn" id="inv-save">${inv.id && inv.status === 'concept' ? 'Concept opslaan' : 'Opslaan'}</button>
-        <button class="btn btn-primary" id="inv-send">${inv.sentAt ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
-        <button class="btn" id="inv-send-wa" title="Stuur de PDF als WhatsApp-bericht naar de klant">${icon('whatsapp', 14)} Via WhatsApp</button>`}
+        ${inv.status === 'oninbaar' ? '' : `<button class="btn btn-primary" id="inv-send">${inv.sentAt ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
+        <button class="btn" id="inv-send-wa" title="Stuur de PDF als WhatsApp-bericht naar de klant">${icon('whatsapp', 14)} Via WhatsApp</button>`}`}
       </div>
     </div>`);
   const readLines = () => $$('#inv-lines .inv-line').map((row) => ({
@@ -4841,7 +4841,7 @@ function renderInvoices() {
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Opdracht</button>` : ''}
         ${!quote && (i.sentAt || i.status === 'betaald') ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review (mail + WhatsApp)'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
         ${!quote && (i.sentAt || i.status === 'betaald') && trustpilotKnopMag() ? `<button class="btn btn-sm inv-tp" data-id="${esc(i.id)}" data-al="${esc(i.trustpilotAt || '')}" title="${i.trustpilotAt ? 'Al uitgenodigd op ' + esc(fmtDateShort(i.trustpilotAt)) : 'Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC)'}">${icon('sparkles', 13)} Trustpilot${i.trustpilotAt ? ' ✓' : ''}</button>` : ''}
-        ${!quote && (i.status === 'verzonden' || i.status === 'concept' || i.status === 'oninbaar') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
+        ${!quote && (i.status === 'verzonden' || i.status === 'concept' || (i.status === 'oninbaar' && pinKnopMag())) ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
         ${!quote && pinKnopMag() && isOudOpen(i) ? `<button class="btn btn-sm inv-afschrijf" data-id="${esc(i.id)}" title="Verwacht je dit geld niet meer? Afschrijven: telt niet meer als openstaand, geen herinneringen meer">Afschrijven</button>` : ''}
         ${!quote && pinKnopMag() && i.status === 'oninbaar' ? `<button class="btn btn-sm inv-heropen" data-id="${esc(i.id)}" data-status="verzonden" title="Weer als openstaand tellen">Terug naar open</button>` : ''}
         ${!quote && i.status === 'betaald' ? `<button class="btn btn-sm inv-unmark" data-id="${esc(i.id)}" data-status="${i.sentAt ? 'verzonden' : 'concept'}" title="De factuur staat dan weer open">Nog niet betaald</button>` : ''}
@@ -6055,6 +6055,7 @@ async function loadSettingsHtml(s) {
       const r = await api('/api/drs-rapport/instellingen', 'POST', { kopjes, herinnering: $('#dr-herinnering').checked, herinneringUur: Number($('#dr-uur').value), afzenders: $('#dr-afzenders').value, emailAfzenders: $('#dr-email').value });
       if (state.meta?.drsRapport) state.meta.drsRapport.kopjes = r.kopjes;
       try { localStorage.removeItem('ksDrsKopjes'); } catch { /* geen opslag */ }
+      if (state._drs) state._drs.kopjes = null;
       toast('DRS-rapport-instellingen opgeslagen');
     } catch (err) { toast(err.message, true); }
   };
@@ -7109,7 +7110,8 @@ function drsKopjesKeuze(standaard) {
 }
 async function openDrsRapport() {
   const st = state._drs = state._drs || {};
-  modal('<h2>DRS-rapport</h2><p class="muted small">Bezig met ophalen…</p>');
+  // Bij herladen vanuit het venster zelf de lijst laten staan (geen flits); anders "Bezig…".
+  if (!$('#modal [data-drs]')) modal('<h2 data-drs>DRS-rapport</h2><p class="muted small">Bezig met ophalen…</p>');
   let d;
   try {
     const kopjes = st.kopjes || drsKopjesKeuze(state.meta?.drsRapport?.kopjes);
@@ -7118,9 +7120,14 @@ async function openDrsRapport() {
     modal(`<h2>DRS-rapport</h2><p class="error">${esc(err.message)}</p><div class="modal-actions"><span></span><div class="right"><button class="btn" onclick="closeModal()">Sluiten</button><button class="btn btn-primary" onclick="openDrsRapport()">Opnieuw proberen</button></div></div>`);
     return;
   }
+  // Intussen een ánder venster geopend? Dan dat niet overschrijven (review 16 okt).
+  if (!$('#modal [data-drs]') || $('#modalRoot').hidden) return;
   st.data = d; st.kopjes = d.kopjes; st.datum = st.datum && st.datumVoor === d.datum ? st.datum : d.datum; st.datumVoor = d.datum;
   // Vinkjes: recente opdrachten aan, oudere (>2 dagen, misschien al met de hand gemeld) uit.
-  st.keuze = new Map(d.items.map((i) => [`${i.orderId}|${i.cat}`, { aan: !i.ouder, regel: i.regel }]));
+  // Eerder gemaakte keuzes en aangepaste regels BLIJVEN bij herladen (review 16 okt: anders
+  // stond een bewust uitgevinkte opdracht ineens weer aangevinkt).
+  const oud = st.keuze;
+  st.keuze = new Map(d.items.map((i) => { const k = `${i.orderId}|${i.cat}`; return [k, (oud && oud.get(k)) || { aan: !i.ouder, regel: i.regel }]; }));
   tekenDrsRapport();
 }
 function tekenDrsRapport() {
@@ -7154,7 +7161,7 @@ function tekenDrsRapport() {
     </div>`).join('') || '<div class="muted small">Nog geen rapporten.</div>';
   const maandLijst = (d.maand?.rijen || []).map((x) => `<div class="small">${esc(drsKorteDatum(x.datum))} — ${esc(x.regel)}</div>`).join('');
   modal(`
-    <h2>DRS-rapport</h2>
+    <h2 data-drs>DRS-rapport</h2>
     <p class="muted small">Alleen DRS-opdrachten die nog <strong>niet</strong> aan DRS gemeld zijn. Wat al als afgerond gemeld is, komt hier nooit meer terug — zo betaal je nooit twee keer. Plaats je het rapport in de DRS-groep, dan leest het CRM het ook terug en vinkt het vanzelf af.</p>
     ${alarmen}
     <div class="drs-balk" data-geen-wijziging>
@@ -7216,7 +7223,9 @@ function tekenDrsRapport() {
     // Kopiëren meteen in de tik (iOS staat het klembord alleen toe bij een directe tik).
     const tekst = $('#drsTekst').value;
     const gelukt = await kopieerNaarKlembord(tekst, $('#drsTekst'));
-    if (!gelukt) { toast('Kopiëren lukte niet — selecteer de tekst in het voorbeeld en kopieer hem zelf', true); return; }
+    // Lukt kopiëren niet (oudere telefoon)? Dan zelf selecteren — de "Geplaatst"-knop blijft
+    // bruikbaar (review 16 okt: anders kon je niet meer afvinken).
+    if (!gelukt) { const t = $('#drsTekst'); if (t) { t.focus(); t.select(); } toast('Kopiëren lukte niet automatisch — de tekst is geselecteerd: kopieer hem zelf (lang drukken → Kopiëren)', true); }
     st.gekopieerd = { tekst, items: gekozen(), datum: st.datum };
     $('#drsNaKopie').hidden = false;
     $('#drsNaKopie').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -7226,8 +7235,9 @@ function tekenDrsRapport() {
     const g = st.gekopieerd; if (!g || !g.items.length) return;
     try {
       const r = await api('/api/drs-rapport/markeer', 'POST', { items: g.items, datum: g.datum, tekst: g.tekst });
-      toast(`${r.gemarkeerd} opdracht(en) afgevinkt als gemeld aan DRS`);
-      st.gekopieerd = null; st.datum = null;
+      // Het rapport kan al via de groep zijn teruggelezen (dan heeft het CRM ze al afgevinkt).
+      toast(r.gemarkeerd ? `${r.gemarkeerd} opdracht(en) afgevinkt als gemeld aan DRS${r.alGemeld ? ` (${r.alGemeld} stond(en) al afgevinkt uit de groep)` : ''}` : r.alGemeld ? 'Al afgevinkt — het rapport is al uit de DRS-groep gelezen ✓' : 'Niets nieuws af te vinken');
+      st.gekopieerd = null; st.datum = null; st.keuze = null;
       openDrsRapport();
       if (state.view === 'board') loadBoard().catch(() => {});
     } catch (err) { toast(err.message, true); }

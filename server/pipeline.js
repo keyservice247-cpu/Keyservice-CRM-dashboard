@@ -1,7 +1,7 @@
 // Gedeelde verwerkingslogica voor inkomende berichten.
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
-import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport, isDrsEmailAfzender } from './drs-rapport.js';
+import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport, isDrsEmailAfzender, afzenderVanOns } from './drs-rapport.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours } from './settings.js';
 import { mergeAttachments, dedupeAttachments } from './storage.js';
@@ -345,7 +345,9 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     title: overrides.title || s.title || 'Nieuwe opdracht',
     description: overrides.description ?? s.problem ?? '',
     status,
-    source: overrides.source || defaultSource,
+    // DRS-mail (review.drsBron): het inbox-scherm stuurt altijd de keuzelijst mee (standaard
+    // "Keyservice e-mail") — die mag de DRS-herkomst niet wegpoetsen (review 16 okt).
+    source: (review.drsBron && (!overrides.source || overrides.source === 'Keyservice e-mail')) ? 'DRS e-mail' : (overrides.source || defaultSource),
     // Herkomst-WhatsApp-groep (bv. "Raf breda…") voor de DRS-agenda en monteur-overzicht.
     originGroup: (db().messages.find((m) => m.id === review.messageId)?.group) || '',
     customerId: customer.id,
@@ -367,6 +369,10 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     attachments: [],
     createdAt: now(),
     updatedAt: now(),
+    // Meteen als afgerond/geannuleerd goedgekeurd → ook het moment (review 16 okt).
+    statusSince: now(),
+    ...(status === 'afgerond' ? { completedAt: now() } : {}),
+    ...(status === 'geannuleerd' ? { cancelledAt: now() } : {}),
   };
   // Het oorspronkelijke bericht als eerste item in de gesprekshistorie,
   // inclusief eventuele foto's/video's die de klant meestuurde.
@@ -614,7 +620,9 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
       // hier stil weggegooid, terwijl DRS het twee keer ziet (en kan factureren). Nu leest het
       // DRS-rapport-vangnet hem óók: alles staat al als gemeld uit het eerste bericht → alarm.
       if (channel === 'whatsapp' && group) {
-        try { verwerkEigenDrsRapport({ body, group, receivedAt: now(), messageId: `dup:${externalId || id('x')}`, sender, herhaling: true }); }
+        // Herhaling alleen als het eerdere exemplaar óók in een opdracht-groep stond; stond het in
+        // een monteursgroep (eerst ter controle daar geplaatst), dan is dit de EERSTE keer bij DRS.
+        try { verwerkEigenDrsRapport({ body, group, receivedAt: now(), messageId: `dup:${externalId || id('x')}`, sender, herhaling: !!(twin.group && isWhatsappOrderGroup(twin.group)) }); }
         catch (e) { console.error('[drs-rapport] herhaald rapport lezen mislukt:', e.message); }
       }
       // Hang aan de bijbehorende lopende opdracht als die er is.
@@ -775,8 +783,7 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   // 4871DK Etten-Leur, …" (één postcode) gaf een vals "Onvolledig DRS-bericht" of — met een
   // telefoonnummer erin — zelfs een kaart die naar de monteur ging. Zelfde herkenning als
   // het DRS-rapport-vangnet: kopje + postcode eronder en géén Naam:/Adres:/Telefoon:-velden.
-  const isEigenRapport = (RAPPORT_KOP_RE.test(rapportTekst) && postcodeRegels >= 2)
-    || (channel === 'whatsapp' && !!group && isWhatsappOrderGroup(group) && lijktDrsRapport(body));
+  let isEigenRapport = RAPPORT_KOP_RE.test(rapportTekst) && postcodeRegels >= 2;
 
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
@@ -811,6 +818,11 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   const echtePostcode = [...String(body || '').replace(/[*_~]/g, '').matchAll(/\b([1-9]\d{3})\s?([a-z]{2})\b/gi)]
     .some((m) => !POSTCODE_STOP.has(m[2].toLowerCase()));
   const groepIntakeCompleet = telInTekst && (echtePostcode || adresMetNummer);
+  // EEN-REGEL-RAPPORT in de opdracht-groep (zie boven) — maar een COMPLETE opdracht van iemand
+  // anders (bv. DRS: "Offerte: Jan de Vries, Hoofdstraat 12, 4879 NB …, 06…") mag NOOIT als ons
+  // rapport in Overige verdwijnen (review 16 okt). Dus: van ons, óf geen complete opdracht.
+  if (!isEigenRapport && channel === 'whatsapp' && !!group && isWhatsappOrderGroup(group) && lijktDrsRapport(body)
+    && ((String(sender || '').trim() && afzenderVanOns(sender)) || !groepIntakeCompleet)) isEigenRapport = true;
   const isGroepsbericht = channel === 'whatsapp' && !!group;
   const groepsGesprek = isGroepsbericht && !groepIntakeCompleet;
   const otherGroupButOrder = fromOtherGroup && groepIntakeCompleet;
