@@ -72,3 +72,30 @@ export function completedWeek(now = new Date()) {
   const prev = new Date(thisWeek.monday); prev.setUTCDate(prev.getUTCDate() - 1);
   return weekInfo(prev);
 }
+
+// Het UTC-moment van 00:00 Amsterdamse tijd op een kalenderdag (zomer-/wintertijd-vast).
+// Audit 16 okt 2026: de oude berekening trok wandkloktijd af en telde 7 × 24 uur op — in
+// de week van de klokwissel (25 okt) viel zondag 23:00-24:00 in géén week, in maart een
+// uur in twee weken.
+export function amsInstant(j, m, d) {
+  let t = Date.UTC(j, m - 1, d);
+  for (let i = 0; i < 2; i++) {
+    const a = amsterdamParts(new Date(t));
+    const alsUtc = Date.UTC(a.year, a.month - 1, a.day, a.hour, a.minute, a.second || 0);
+    t -= alsUtc - Date.UTC(j, m - 1, d);
+  }
+  return t;
+}
+export function amsMidnightMs(ref = new Date()) {
+  const a = amsterdamParts(ref);
+  return amsInstant(a.year, a.month, a.day);
+}
+export function weekBounds(ref = new Date()) {
+  const a = amsterdamParts(ref);
+  const ma = new Date(Date.UTC(a.year, a.month - 1, a.day - (a.dow - 1)));
+  const start = amsInstant(ma.getUTCFullYear(), ma.getUTCMonth() + 1, ma.getUTCDate());
+  const vlg = new Date(ma.getTime() + 7 * 86400000);
+  const end = amsInstant(vlg.getUTCFullYear(), vlg.getUTCMonth() + 1, vlg.getUTCDate());
+  return { start, end };
+}
+

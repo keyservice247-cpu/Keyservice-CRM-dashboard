@@ -47,7 +47,7 @@ import {
 } from './auth.js';
 import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen, MODELLEN } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
-import { amsterdamParts } from './week.js';
+import { amsterdamParts, amsMidnightMs, weekBounds } from './week.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
   findCustomerStrong, senderPhoneFromText, matchPhone, queueCrmWhatsappAlert,
@@ -61,8 +61,9 @@ import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { formulierStatus, markeerActivatieAfgehandeld } from './formulieren.js';
+import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel } from './drs-rapport.js';
 import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
-import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions } from './finance.js';
+import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions, removeAutoFeeForOrder, herkoppelDrsFee } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { conversieData, maakConversieBriefing, omzetVan, factuurPerOpdracht } from './conversie.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
@@ -225,6 +226,8 @@ app.get('/api/me', (req, res) => {
       emailSignature: getEmailSignature(afzenderVan(req)),
       // Trustpilot (5 okt): alleen of het aan staat + standaard-vinkje, nooit het adres zelf.
       trustpilot: { aan: getTrustpilot().aan, standaardAan: getTrustpilot().standaardAan },
+      // DRS-rapport (16 okt): welke kopjes bijgehouden worden (voor de "DRS gemeld"-chip).
+      drsRapport: req.user && req.user.role !== 'monteur' ? { kopjes: getDrsRapportInstellingen().kopjes } : null,
     },
   });
 });
@@ -1474,9 +1477,14 @@ app.get('/api/archives/zoek', requireAuth, (req, res) => {
   for (const o of db().orders) {
     if (!o.archivedWeek) continue;
     if (req.user.role === 'monteur' && !(o.monteurId && o.monteurId === req.user.monteurId)) continue;
-    const isDrs = !!(o.originGroup && isWhatsappOrderGroup(o.originGroup));
+    const isDrs = isDrsOrder(o);
     if (mont === 'src:drs' && !isDrs) continue;
     if (mont === 'src:eigen' && isDrs) continue;
+    // "DRS: nog te melden" (16 okt): DRS-opdracht in een gevolgd kopje, nog niet gemeld.
+    if (mont === 'src:drsmelden') {
+      const cat = catVanStatus(o.status);
+      if (!isDrs || !cat || !getDrsRapportInstellingen().kopjes.includes(cat) || (o.drsGemeld && o.drsGemeld[cat])) continue;
+    }
     if (mont && !mont.startsWith('src:') && o.monteurId !== mont) continue;
     if ((kanaal === 'email' || kanaal === 'whatsapp') && kanaalVan(o) !== kanaal) continue;
     const c = klanten.get(o.customerId) || {}; const it = o.intake || {};
@@ -1488,7 +1496,7 @@ app.get('/api/archives/zoek', requireAuth, (req, res) => {
     totaal++;
     const k = o.archivedWeek.key;
     if (!perWeek.has(k)) perWeek.set(k, { key: k, label: o.archivedWeek.label, items: [] });
-    perWeek.get(k).items.push({ id: o.id, title: o.title, status: o.status, createdAt: o.createdAt, klant: it.name || c.name || '', telefoon: it.phone || c.phone || '' });
+    perWeek.get(k).items.push({ id: o.id, title: o.title, status: o.status, createdAt: o.createdAt, klant: it.name || c.name || '', telefoon: it.phone || c.phone || '', isDrs, drsGemeld: o.drsGemeld || null });
   }
   const tel = new Map(); for (const o of db().orders) if (o.archivedWeek) tel.set(o.archivedWeek.key, (tel.get(o.archivedWeek.key) || 0) + 1);
   let getoond = 0;
@@ -1708,16 +1716,28 @@ app.post('/api/archives/collapse', requirePerm('orders'), (req, res) => {
   const dateLabel = ts.toLocaleString('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' });
   const chanName = channel === 'email' ? 'E-mail' : channel === 'whatsapp' ? 'WhatsApp' : 'Alle opdrachten';
   const label = `Ingeklapt ${dateLabel} — ${chanName}`;
-  let count = 0;
+  // AUDIT 16 okt 2026: de knop klapte ALLES van het kanaal in — ook Nieuw/In behandeling/
+  // Offerte en afspraken van volgende week (die verloren daarmee herinneringen, agenda en
+  // het DRS-rapport), terwijl de vraag het aantal van het GEFILTERDE bord noemde. Nu: alleen
+  // wat het bord toont (ids) én alleen afgehandeld of een afspraak van vandaag of eerder —
+  // dezelfde soort als het wekelijkse inklappen. Open opdrachten blijven altijd staan.
+  const ids = Array.isArray(req.body?.ids) ? new Set(req.body.ids.map(String)) : null;
+  const vandaagNL = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const apptKey = appointmentStatusKey();
+  const afgehandeld = new Set(getStatuses().filter((x) => x.secondary).map((x) => x.key));
+  const mag = (o) => afgehandeld.has(o.status) || ['afgerond', 'geannuleerd'].includes(o.status)
+    || (o.status === apptKey && o.appointmentAt && String(o.appointmentAt).slice(0, 10) <= vandaagNL);
+  let count = 0; let overgeslagen = 0;
   for (const o of db().orders) {
     if (o.archivedWeek) continue;
     if (channel !== 'all' && orderChannelOf(o) !== channel) continue;
-    o.archivedWeek = { key, label, manual: true };
-    o.updatedAt = now();
+    if (ids && !ids.has(o.id)) continue;
+    if (!mag(o)) { overgeslagen++; continue; }
+    o.archivedWeek = { key, label, manual: true, at: now() };
     count++;
   }
   if (count > 0) { logActivity(req.user.name, 'handmatig ingeklapt', `${label} — ${count} opdrachten`); saveSoon(); }
-  res.json({ ok: true, count, key, label });
+  res.json({ ok: true, count, key, label, overgeslagen });
 });
 
 // Een inklap-bundel ongedaan maken: haal de opdrachten weer terug op het bord.
@@ -1788,6 +1808,16 @@ app.post('/api/orders', requireAuth, requireKaartMaken, (req, res) => {
     createdAt: now(),
     updatedAt: now(),
   };
+  // Direct als afgerond/geannuleerd aangemaakt (achteraf genoteerd)? Dan óók het moment
+  // vastleggen (audit 16 okt): zonder completedAt telde de klus in de verkeerde week.
+  order.statusSince = now();
+  if (order.status === 'afgerond') order.completedAt = now();
+  if (order.status === 'geannuleerd') order.cancelledAt = now();
+  // Gegevens van DÉZE aanvraag (WET 3) ook bij een handmatige opdracht vastleggen (audit 16
+  // okt): zonder intake viel het DRS-rapport terug op een mogelijk oud klantadres.
+  if (!order.intake && (b.customerName || b.customerPhone || b.customerEmail || b.customerAddress)) {
+    order.intake = { name: String(b.customerName || '').slice(0, 120), phone: String(b.customerPhone || '').slice(0, 40), email: String(b.customerEmail || '').slice(0, 120), address: String(b.customerAddress || '').slice(0, 200) };
+  }
   db().orders.push(order);
   logActivity(req.user.name, zelf ? 'opdracht zelf aangemaakt (monteur)' : 'opdracht aangemaakt', order.title);
   saveSoon();
@@ -1835,6 +1865,18 @@ app.post('/api/orders/paste', requireAuth, requireKaartMaken, (req, res) => {
   const plaatsM = (wp || adres).match(/\d{4}\s?[A-Za-z]{2}\s+(.+)$/);
   const plaats = (plaatsM ? plaatsM[1] : (wp.split(' ').pop() || '')).replace(/,.*$/, '').trim();
   if (!klantNaam && !klantTel) return res.status(400).json({ error: 'Geen klantgegevens gevonden in de geplakte tekst. Staat het hele bericht erin (Naam/Telefoon)?' });
+  // DUBBEL-CONTROLE (audit 16 okt 2026): plakken maakte ALTIJD een nieuwe kaart — ook als
+  // dezelfde opdracht al op het bord, ingeklapt of in de inbox stond. Twee kaarten = twee
+  // keer naar de monteur, twee keer in het rapport, twee keer een DRS-fee. Nu eerst
+  // kijken (telefoon of postcode, 30 dagen; inbox 7 dagen); bewust doorgaan kan (force).
+  if (!req.body?.force) {
+    const dubbel = zoekMogelijkDubbel({ phone: klantTel, address: adres, tekst, metInbox: true });
+    if (dubbel) {
+      const waar = dubbel.soort === 'inbox' ? `in de inbox (${dubbel.datum})`
+        : `${dubbel.ingeklapt ? 'ingeklapt' : 'op het bord'}: "${String(dubbel.titel).slice(0, 60)}" (${getStatusLabels()[dubbel.status] || dubbel.status}, ${dubbel.datum})`;
+      return res.status(409).json({ error: `Deze opdracht staat er waarschijnlijk al — zelfde ${dubbel.opTelefoon ? 'telefoonnummer' : 'adres'}, ${waar}.`, dubbel });
+    }
+  }
   const { customer, suggestions: sugg = [] } = upsertCustomer({ name: klantNaam, phone: klantTel, address: adres, source: 'DRS (geplakt)' });
   const kern = (opmerking || fallback.problem || 'nieuwe opdracht').replace(/\s+/g, ' ').slice(0, 70);
   const order = {
@@ -1965,6 +2007,23 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
     // Afrondmoment = de LAATSTE keer dat hij op afgerond ging; heropend → weg (audit 3 okt:
     // een per ongeluk afgeronde en later echt afgeronde opdracht telde in de verkeerde week).
     if (order.status === 'afgerond') order.completedAt = now(); else delete order.completedAt;
+    // Annuleringsmoment + "status sinds" (audit 16 okt): het weekrapport telde
+    // geannuleerd op updatedAt, dat ook bij inklappen/notities verschuift.
+    if (order.status === 'geannuleerd') order.cancelledAt = now(); else delete order.cancelledAt;
+    order.statusSince = now();
+    // Status gewijzigd van een INGEKLAPTE opdracht → terug op het bord (audit 16 okt): een
+    // vanuit het archief afgeronde klus kwam nooit in de kolom Afgerond (en dus ook niet in
+    // het dagrapport), een heropende klus bleef onzichtbaar. Zondag klapt hij vanzelf weer
+    // in, in de juiste week.
+    if (order.archivedWeek) {
+      logActivity(req.user.name, 'opdracht terug op het bord (status gewijzigd)', `${order.title} — was ingeklapt in ${order.archivedWeek.label || order.archivedWeek.key}`);
+      delete order.archivedWeek;
+    }
+    // Niet meer afgerond → automatische DRS-fee terug (wordt bij opnieuw afronden weer geboekt).
+    if (vorigeStatus === 'afgerond' && order.status !== 'afgerond') {
+      const n = removeAutoFeeForOrder(order.id);
+      if (n) logActivity('systeem', 'DRS-fee teruggedraaid', `${order.title} (niet meer afgerond)`);
+    }
     // Kwam deze status uit een AI-STATUSVOORSTEL? Leg dat vast met de vorige status,
     // zodat er een weg terug is ("Toch niet"-knop op de kaart). Zonder dit was een
     // verkeerd toegepast voorstel onomkeerbaar én onzichtbaar.
@@ -2034,6 +2093,33 @@ app.post('/api/orders/merge', requirePerm('orders'), (req, res) => {
     if (!primary.appointmentAt && other.appointmentAt) primary.appointmentAt = other.appointmentAt;
     if (!primary.price && other.price) primary.price = other.price;
     if (other.notes) primary.notes = `${primary.notes ? primary.notes + '\n' : ''}${other.notes}`;
+    // "Gemeld aan DRS" gaat mee naar de hoofdkaart (16 okt): anders kon de hoofdkaart
+    // nogmaals als afgerond gemeld worden terwijl de bronkaart al gemeld was.
+    for (const [cat, g] of Object.entries(other.drsGemeld || {})) {
+      if (!primary.drsGemeld) primary.drsGemeld = {};
+      const huidig = primary.drsGemeld[cat];
+      if (!huidig || String(g.datum || '') < String(huidig.datum || '')) primary.drsGemeld[cat] = { ...g, samengevoegdVan: other.id };
+    }
+    // AFGEROND GAAT MEE (audit 16 okt): was de samengevoegde kaart al afgerond en de
+    // hoofdkaart nog niet, dan is de klus gedaan — anders bleef de hoofdkaart open staan en
+    // werd hij later nóg een keer afgerond (tweede fee, nogmaals in het dagrapport).
+    if (other.status === 'afgerond' && primary.status !== 'afgerond') {
+      primary.status = 'afgerond';
+      primary.completedAt = other.completedAt || now();
+      primary.statusSince = now();
+      delete primary.cancelledAt;
+      logActivity(req.user.name, 'status overgenomen bij samenvoegen', `${primary.title} → afgerond (van "${(other.title || '').slice(0, 50)}")`);
+    }
+    // DRS-herkomst gaat mee (audit 16 okt): een DRS-klus samengevoegd met een eigen kaart
+    // van dezelfde klant viel anders uit het DRS-rapport en kreeg geen fee.
+    if (isDrsOrder(other) && !isDrsOrder(primary)) {
+      if (other.originGroup && !primary.originGroup) primary.originGroup = other.originGroup;
+      else primary.source = other.source || 'DRS WhatsApp groep';
+      if (!primary.intake && other.intake) primary.intake = { ...other.intake };
+    }
+    // Eén klus = één DRS-fee: de fee van de bronkaart gaat over naar de hoofdkaart.
+    const feeWeg = herkoppelDrsFee(other.id, primaryId);
+    if (feeWeg) logActivity('systeem', feeWeg > 0 ? 'DRS-fee overgezet naar de hoofdkaart' : 'dubbele DRS-fee vervallen (samengevoegd)', primary.title);
     // NAAR DE PRULLENBAK, niet hard weg (17 aug, Vught-casus): een samengevoegde
     // bronkaart verdween definitief — wie per ongeluk op Samenvoegen tikte was de
     // kaart kwijt en vond niets terug in de prullenbak. Nu is hij daar gewoon terug
@@ -2067,6 +2153,8 @@ app.delete('/api/orders/:id', requirePerm('deleteOrders'), (req, res) => {
   if (i < 0) return res.status(404).json({ error: 'Niet gevonden' });
   const [removed] = orders.splice(i, 1);
   trekOpvolgingenIn(removed.id, 'opdracht naar de prullenbak');
+  // Weggegooid (bv. als dubbele kaart) → ook de automatische DRS-fee weg (audit 16 okt).
+  if (removeAutoFeeForOrder(removed.id)) logActivity('systeem', 'DRS-fee teruggedraaid', `${removed.title} (naar de prullenbak)`);
   removed.deletedAt = now();
   removed.deletedBy = req.user.name;
   if (removed.googleEvent) removeOrderFromGoogle(removed); // event uit Google halen
@@ -2288,15 +2376,8 @@ app.post('/api/reviews/:id/approve', requirePerm('inbox'), (req, res) => {
   res.json({ review, order: withRelations(order) });
 });
 
-// Is dit een opdracht uit de DRS/Raf Breda-groep (de opdracht-WhatsApp-groep)?
-function isDrsOrder(order) {
-  if (order.originGroup) return isWhatsappOrderGroup(order.originGroup);
-  // Zonder herkomstgroep alleen nog op een expliciete DRS-/groepsbron (bv. "Plak opdracht"
-  // = "DRS WhatsApp groep"). De oude regex /whatsapp|groep|app/ zag élke 1-op-1 WhatsApp-
-  // kaart ("Keyservice WhatsApp") als DRS, waardoor "Alleen opdrachten uit de opdracht-
-  // groepen" eigen leads toch naar de monteursgroep stuurde (audit 3 okt 2026).
-  return /\bdrs\b|groep/.test((order.source || '').toLowerCase());
-}
+// Is dit een opdracht uit de DRS/Raf Breda-groep? → isDrsOrder uit drs-rapport.js (één bron
+// van waarheid, ook voor het DRS-rapport en de terugkoppeling).
 
 // Automatisch versturen naar de monteur als dat is ingesteld én toegestaan op de dag
 // van vandaag, en de juiste trigger optreedt. Niet dubbel versturen.
@@ -2616,16 +2697,6 @@ app.post('/api/whatsapp/groups', checkIngestToken, (req, res) => {
 // "Vandaag" en "deze week" op de NEDERLANDSE klok (Europe/Amsterdam) — de server
 // draait op Render in UTC, waardoor 's nachts (00:00-02:00 NL) en op de
 // zondag/maandag-grens de tellingen anders verschoven.
-function amsMidnightMs(ref = new Date()) {
-  const a = amsterdamParts(ref);
-  return ref.getTime() - (((a.hour * 60 + a.minute) * 60 + (a.second || 0)) * 1000) - (ref.getTime() % 1000);
-}
-function weekBounds(ref = new Date()) {
-  const a = amsterdamParts(ref);
-  const start = amsMidnightMs(ref) - (a.dow - 1) * 86400000;
-  return { start, end: start + 7 * 86400000 };
-}
-
 // Overzicht/Home: kerncijfers (KPI's) + lijstjes die aandacht vragen + activiteit.
 app.get('/api/overview', requireAuth, (req, res) => {
   // MONTEUR ziet alleen zijn eigen werk (browser-audit 16 sep): voorheen kreeg hij
@@ -4782,6 +4853,7 @@ function canTouchInvoice(req, inv) {
   return !!(order && order.monteurId && order.monteurId === req.user.monteurId);
 }
 const findInv = (invId) => (db().invoices || []).find((i) => i.id === invId);
+const OPNIEUW_OPEN_EERST = 'Deze factuur is afgeschreven (oninbaar). Zet hem eerst terug naar open voordat je hem opnieuw verstuurt.';
 
 // Factuur ophalen (of leeg concept-voorstel op basis van de kaart).
 app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
@@ -5184,6 +5256,7 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  if (inv.status === 'oninbaar') return res.status(400).json({ error: OPNIEUW_OPEN_EERST });
   if (!inv.lines || !inv.lines.length) return res.status(400).json({ error: 'Er staan nog geen regels op.' });
   const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
@@ -5251,6 +5324,7 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
   const inv = findInv(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
+  if (inv.status === 'oninbaar') return res.status(400).json({ error: OPNIEUW_OPEN_EERST });
   const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   const to = (req.body?.to || customer.email || '').trim();
@@ -5359,8 +5433,17 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
   const s = String(req.body?.status || '');
-  const allowed = inv.type === 'offerte' ? ['concept', 'verzonden', 'goedgekeurd', 'afgekeurd'] : ['concept', 'verzonden', 'betaald'];
+  const allowed = inv.type === 'offerte' ? ['concept', 'verzonden', 'goedgekeurd', 'afgekeurd'] : ['concept', 'verzonden', 'betaald', 'oninbaar'];
   if (!allowed.includes(s)) return res.status(400).json({ error: 'Ongeldige status' });
+  // AFSCHRIJVEN / ONINBAAR (16 okt 2026, wens eigenaar): een verstuurde factuur die
+  // waarschijnlijk nooit meer betaald wordt. Blijft bewaard, telt niet meer als
+  // openstaand/verlopen, krijgt geen herinneringen en is geen omzet. Alleen kantoor;
+  // alleen vanuit "verzonden" (open); terug kan naar open of naar betaald.
+  if (s === 'oninbaar' || inv.status === 'oninbaar') {
+    if (req.user.role === 'monteur') return res.status(403).json({ error: 'Afschrijven doet kantoor.' });
+    if (s === 'oninbaar' && inv.status !== 'verzonden' && inv.status !== 'oninbaar') return res.status(400).json({ error: 'Alleen een verstuurde, nog niet betaalde factuur kun je afschrijven.' });
+    if (inv.status === 'oninbaar' && !['verzonden', 'betaald', 'oninbaar'].includes(s)) return res.status(400).json({ error: 'Een afgeschreven factuur zet je terug naar open, of op betaald.' });
+  }
   // Een betaalde factuur / goedgekeurde offerte mag NIET terug naar concept/verzonden
   // (dat omzeilde de bewerk-/verwijder-vergrendeling). Alleen de beheerder mag dit,
   // voor het geval een betaling per ongeluk is aangevinkt.
@@ -5373,8 +5456,16 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
     return res.status(403).json({ error: `Een ${inv.status === 'betaald' ? 'verstuurde betaalde factuur' : 'goedgekeurde offerte'} kan alleen de beheerder ${inv.status === 'betaald' ? 'weer bewerkbaar maken' : 'terugzetten'}.` });
   }
   const wasPaid = inv.status === 'betaald';
+  const wasOninbaar = inv.status === 'oninbaar';
   inv.status = s;
   if (s === 'betaald') inv.paidAt = now();
+  if (s === 'oninbaar') {
+    const reden = String(req.body?.reden || '').trim().slice(0, 200);
+    inv.oninbaar = { at: (inv.oninbaar && inv.oninbaar.at) || now(), door: req.user.name, reden };
+  } else if (wasOninbaar) {
+    inv.oninbaarGeweest = { ...(inv.oninbaar || {}), terugAt: now(), terugDoor: req.user.name };
+    delete inv.oninbaar;
+  }
   // Verstuurde betaalde factuur → "Nog niet betaald": betaaltermijn begint nu (audit 3 okt),
   // anders staat hij meteen op VERLOPEN en komt de automatische herinnering direct.
   if (wasPaid && s === 'verzonden' && inv.sentAt) { inv.betaalStart = now(); inv.remindCount = 0; delete inv.remindedAt; }
@@ -5386,7 +5477,9 @@ app.post('/api/invoices/:id/status', requireAuth, (req, res) => {
     if (n) logActivity(req.user.name, 'automatische omzet-boeking teruggedraaid', `${inv.number} (betaling ongedaan)`);
   }
   saveSoon();
-  logActivity(req.user.name, `${inv.type === 'offerte' ? 'offerte' : 'factuur'} ${s}`, inv.number);
+  if (s === 'oninbaar') logActivity(req.user.name, 'factuur afgeschreven (oninbaar)', `${inv.number}${inv.oninbaar.reden ? ` — ${inv.oninbaar.reden}` : ''}`);
+  else if (wasOninbaar) logActivity(req.user.name, `afgeschreven factuur terug naar ${s === 'betaald' ? 'betaald' : 'open'}`, inv.number);
+  else logActivity(req.user.name, `${inv.type === 'offerte' ? 'offerte' : 'factuur'} ${s}`, inv.number);
   // Offerte goedgekeurd -> automatisch een factuur-concept klaarzetten (instelbaar).
   let autoInvoice = null;
   if (s === 'goedgekeurd' && inv.type === 'offerte' && getInvoiceSettings().autoInvoiceOnAccept !== false) {
@@ -5445,6 +5538,99 @@ app.get('/api/invoices', requireAuth, (req, res) => {
 });
 
 
+// ---------- DRS-RAPPORT (16 okt 2026, casus 4879 NB Etten-Leur twee keer gemeld) ----------
+// Elke afgeronde DRS-opdracht kost een fee; DRS factureert op ons dagrapport. Hier: wat is
+// nog NIET gemeld, rapporttekst klaarzetten, afvinken (nooit twee keer als afgerond), en
+// de geschiedenis + maandtelling om de DRS-factuur te controleren. Zie server/drs-rapport.js.
+const drsKantoor = requireRole('admin', 'assistent');
+const drsRapportSamenvatting = (r) => ({
+  id: r.id, datum: r.datum, at: r.at, via: r.via, door: r.door || '', ongedaan: r.ongedaan || null,
+  aantal: (r.regels || []).length, afgerond: (r.regels || []).filter((x) => x.cat === 'afgerond').length,
+  dubbel: (r.regels || []).filter((x) => /dubbel/.test(x.uitkomst || '')).length,
+  regels: (r.regels || []).slice(0, 60),
+});
+app.get('/api/drs-rapport', drsKantoor, (req, res) => {
+  const kopjes = String(req.query.kopjes || '').split(',').filter((k) => KOPJE_LABEL[k]);
+  const v = rapportVoorstel({ kopjes: kopjes.length ? kopjes : undefined });
+  const alarmen = (db().settings._drsAlarmen || []).filter((a) => !a.afgehandeld).slice(0, 20);
+  res.json({
+    ...v, kopjeLabels: KOPJE_LABEL, instellingen: getDrsRapportInstellingen(), alarmen,
+    rapporten: rapportenLijst().slice(0, 15).map(drsRapportSamenvatting),
+    maand: drsMaandOverzicht({ maand: req.query.maand }),
+  });
+});
+app.get('/api/drs-rapport/maand', drsKantoor, (req, res) => res.json(drsMaandOverzicht({ maand: req.query.maand })));
+// Afvinken na het plaatsen in de groep (via 'crm') of "was al gemeld" (via 'handmatig').
+// Alles-of-niets: staat er een opdracht tussen die al als AFGEROND gemeld is, dan 409 met
+// de lijst — tenzij force (bewust nogmaals, bv. DRS vraagt erom).
+app.post('/api/drs-rapport/markeer', drsKantoor, (req, res) => {
+  const b = req.body || {};
+  const items = (Array.isArray(b.items) ? b.items : []).slice(0, 200)
+    .map((i) => ({ orderId: String(i.orderId || ''), cat: String(i.cat || ''), regel: String(i.regel || '').slice(0, 300) }))
+    .filter((i) => i.orderId && KOPJE_LABEL[i.cat]);
+  if (!items.length) return res.status(400).json({ error: 'Niets aangevinkt om te melden.' });
+  const datum = /^\d{4}-\d{2}-\d{2}$/.test(String(b.datum || '')) ? b.datum : undefined;
+  const via = b.via === 'handmatig' ? 'handmatig' : 'crm';
+  const ordersById = new Map(db().orders.map((o) => [o.id, o]));
+  const onbekend = items.filter((i) => !ordersById.get(i.orderId));
+  if (onbekend.length === items.length) return res.status(404).json({ error: 'Opdracht(en) niet gevonden — misschien net verwijderd of samengevoegd.' });
+  const conflicten = items.map((i) => ordersById.get(i.orderId)).filter((o, k) => o && items[k].cat === 'afgerond' && o.drsGemeld && o.drsGemeld.afgerond)
+    .map((o) => ({ orderId: o.id, titel: o.title || '', datum: o.drsGemeld.afgerond.datum, door: o.drsGemeld.afgerond.door || '', via: o.drsGemeld.afgerond.via || '' }));
+  if (conflicten.length && !b.force) {
+    return res.status(409).json({ error: `${conflicten.length === 1 ? 'Deze opdracht is' : `${conflicten.length} opdrachten zijn`} al als afgerond gemeld aan DRS (${conflicten.map((c) => `${(c.titel || '').slice(0, 40)} op ${korteDatum(c.datum)}`).join(', ')}). Haal ${conflicten.length === 1 ? 'hem' : 'ze'} uit het rapport, anders betaal je dubbel.`, conflicten });
+  }
+  const rapportId = id('drsr');
+  const r = markeerGemeld({ items, datum, via, door: req.user.name, rapportId, force: !!b.force });
+  if (r.gemarkeerd.length && via === 'crm') legRapportVast({ id: rapportId, datum: r.datum, via: 'crm', door: req.user.name, regels: r.regels, tekst: String(b.tekst || '') });
+  if (r.gemarkeerd.length) {
+    logActivity(req.user.name, via === 'crm' ? 'DRS-rapport afgevinkt' : 'DRS: als al gemeld gemarkeerd',
+      `${korteDatum(r.datum)}: ${r.gemarkeerd.length} opdracht(en)${b.force && conflicten.length ? ` (waarvan ${conflicten.length} bewust opnieuw als afgerond)` : ''}`);
+  }
+  saveSoon();
+  res.json({ ok: true, gemarkeerd: r.gemarkeerd.length, datum: r.datum, rapportId: via === 'crm' && r.gemarkeerd.length ? rapportId : null });
+});
+// Vergissing in het CRM terugdraaien: één rapport, of één opdracht/kopje.
+app.post('/api/drs-rapport/ongedaan', drsKantoor, (req, res) => {
+  const b = req.body || {};
+  if (!b.rapportId && !(b.orderId && KOPJE_LABEL[b.cat])) return res.status(400).json({ error: 'Kies een rapport of een opdracht.' });
+  const n = maakOngedaan({ rapportId: b.rapportId ? String(b.rapportId) : '', orderId: String(b.orderId || ''), cat: String(b.cat || '') });
+  if (n) logActivity(req.user.name, 'DRS-melding ongedaan gemaakt', b.rapportId ? `rapport ${b.rapportId} (${n} opdracht(en))` : `${(db().orders.find((o) => o.id === b.orderId) || {}).title || b.orderId} — ${KOPJE_LABEL[b.cat]}`);
+  saveSoon();
+  res.json({ ok: true, teruggezet: n });
+});
+// Het vinkje op de opdracht zelf ("Gemeld aan DRS").
+app.post('/api/orders/:id/drs-gemeld', drsKantoor, (req, res) => {
+  const o = db().orders.find((x) => x.id === req.params.id);
+  if (!o) return res.status(404).json({ error: 'Niet gevonden' });
+  if (!isDrsOrder(o)) return res.status(400).json({ error: 'Dit is geen opdracht uit de DRS-groep.' });
+  const cat = KOPJE_LABEL[req.body?.cat] ? req.body.cat : catVanStatus(o.status);
+  if (!cat) return res.status(400).json({ error: 'Deze status hoort niet in het DRS-rapport (alleen afgerond, geannuleerd, offerte of afspraak).' });
+  if (req.body?.gemeld === false) {
+    const n = maakOngedaan({ orderId: o.id, cat });
+    if (n) logActivity(req.user.name, 'DRS-melding ongedaan gemaakt', `${o.title} — ${KOPJE_LABEL[cat]}`);
+  } else {
+    if (o.drsGemeld && o.drsGemeld[cat]) return res.json({ ok: true, drsGemeld: o.drsGemeld, al: true });
+    markeerGemeld({ items: [{ orderId: o.id, cat, regel: regelVoor(o, cat) }], via: 'handmatig', door: req.user.name });
+    logActivity(req.user.name, 'DRS: als gemeld aangevinkt', `${o.title} — ${KOPJE_LABEL[cat]}`);
+  }
+  saveSoon();
+  res.json({ ok: true, drsGemeld: o.drsGemeld || null });
+});
+app.post('/api/drs-rapport/alarm/:id/afgehandeld', drsKantoor, (req, res) => {
+  const a = (db().settings._drsAlarmen || []).find((x) => x.id === req.params.id);
+  if (!a) return res.status(404).json({ error: 'Niet gevonden' });
+  a.afgehandeld = { at: now(), door: req.user.name };
+  logActivity(req.user.name, 'DRS dubbel-melding afgehandeld', `${a.postcode} ${a.plaats || ''}`.trim());
+  saveSoon();
+  res.json({ ok: true });
+});
+app.post('/api/drs-rapport/instellingen', requireRole('admin'), (req, res) => {
+  db().settings.drsRapport = sanitizeDrsRapportInstellingen(req.body || {});
+  logActivity(req.user.name, 'DRS-rapport instellingen gewijzigd', JSON.stringify(db().settings.drsRapport));
+  saveSoon();
+  res.json(getDrsRapportInstellingen());
+});
+
 // ---------- Financiën / Cijfers (admin) ----------
 // Filters op Cijfers (2 okt 2026): ?monteur=<id>|geen&bron=<label>|eigen&website=<host>.
 function cijferFilter(req) {
@@ -5461,7 +5647,9 @@ app.get('/api/finance', requirePerm('finance'), (req, res) => {
     trend: trend(6, month, cijferFilter(req)),
     monteurs: monteurs.map((m) => ({ id: m.id, name: m.name })),
     categories: { income: INCOME_CATEGORIES, expense: EXPENSE_CATEGORIES },
-    quickExpenses: QUICK_EXPENSES,
+    // Boekt de autosync de DRS-fees al (standaard AAN), dan geen snelknop "Fee per opdracht"
+    // meer: met de hand erbij boeken telde elke klus dubbel in Cijfers (audit 16 okt).
+    quickExpenses: QUICK_EXPENSES.filter((q) => !(q.category === 'Fee per opdracht' && getFinanceSettings().autoSync && getFinanceSettings().drsFeePerJob > 0)),
     settings: getFinanceSettings(),
   });
 });
@@ -5828,8 +6016,19 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     // zelfde teller, maar alleen over zijn eigen klanten.
     chatsOngelezen: ['admin', 'assistent'].includes(req.user.role) ? chatsOngelezenTeller()
       : (req.user.role === 'monteur' ? monteurChatsOngelezen(req) : 0),
+    // DRS-opdrachten die nog niet aan DRS gemeld zijn (badge op de knop DRS-rapport).
+    drsTeMelden: ['admin', 'assistent'].includes(req.user.role) ? drsTeMeldenTeller() : 0,
   });
 });
+let _drsTellerCache = { sleutel: '', n: 0 };
+function drsTeMeldenTeller() {
+  const sleutel = `${changeVersion()}|${new Date().toISOString().slice(0, 13)}`;
+  if (_drsTellerCache.sleutel !== sleutel) {
+    let n = 0; try { n = nogTeMelden({ dagen: 30 }).length; } catch { /* 0 */ }
+    _drsTellerCache = { sleutel, n };
+  }
+  return _drsTellerCache.n;
+}
 
 // Pulse-tellers gememoriseerd (28 sep 2026, audit server#4): de pulse komt elke 5 s
 // van elk open scherm en las daarbij ALTIJD de reviews- en berichtenlijst. Elke lees-
@@ -6049,9 +6248,9 @@ async function computeStatusScan(days) {
     .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
     .map((o) => {
       const c = db().customers.find((x) => x.id === o.customerId) || {};
-      const src = (o.source || '').toLowerCase();
-      const isDrs = (o.originGroup && isWhatsappOrderGroup(o.originGroup))
-        || (!o.originGroup && /whatsapp|groep|app/.test(src));
+      // Eén DRS-regel voor het hele CRM (16 okt): de oude /whatsapp|groep|app/ zag ook
+      // 1-op-1 WhatsApp-kaarten als DRS.
+      const isDrs = isDrsOrder(o);
       // Het eigen verhaal van de kaart meegeven (gesprekshistorie + notities), want
       // het bewijs van de juiste status staat vaak ÓP de kaart, niet in losse berichten.
       // De EERSTE regel is de oorspronkelijke aanvraag (met adres en postcode) en gaat
@@ -6120,6 +6319,10 @@ async function computeStatusScan(days) {
   const needsDrsUpdate = (out.needsDrsUpdate || []).map((s) => {
     const order = resolveOrder(s.orderId);
     if (!order) { dropped++; return null; }
+    // Al gemeld aan DRS voor de huidige status (DRS-rapport, 16 okt)? Dan niet nogmaals
+    // voorstellen — het vaste vinkje gaat vóór het AI-oordeel.
+    const drsCat = catVanStatus(order.status);
+    if (drsCat && order.drsGemeld && order.drsGemeld[drsCat]) return null;
     const c = db().customers.find((x) => x.id === order.customerId) || {};
     return {
       orderId: order.id, title: order.title,
@@ -6236,9 +6439,9 @@ app.get('/api/agenda', requireAuth, (req, res) => {
     .map((o) => {
       const c = maps.customers.get(o.customerId) || {};
       const m = maps.monteurs.get(o.monteurId) || null;
-      const src = (o.source || '').toLowerCase();
-      const isDrs = (o.originGroup && isWhatsappOrderGroup(o.originGroup))
-        || (!o.originGroup && /whatsapp|groep|app/.test(src));
+      // Eén DRS-regel voor het hele CRM (16 okt): de oude /whatsapp|groep|app/ zag ook
+      // 1-op-1 WhatsApp-kaarten als DRS.
+      const isDrs = isDrsOrder(o);
       return {
         id: o.id, title: o.title, at: o.appointmentAt, endAt: o.appointmentEndAt || null, status: o.status, statusLabel: labels[o.status] || o.status,
         customer: c.name || '', phone: c.phone || '', address: c.address || '',
@@ -6372,7 +6575,7 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
       omzet += p; row.omzet += p;
       if (!(p > 0)) { zonderBedrag++; row.zonderBedrag++; }
     }
-    if (o.status === 'geannuleerd' && inWeek(o.updatedAt)) cancelCount++;
+    if (o.status === 'geannuleerd' && inWeek(o.cancelledAt || o.updatedAt)) cancelCount++;
     if (!o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status) && o.monteurId && monteurMap.has(o.monteurId)) {
       monteurMap.get(o.monteurId).actief++;
     }
@@ -6601,6 +6804,10 @@ app.listen(PORT, () => {
   startFollowUps();
   startBackupMail();
   startAutomations({ runStatusScan: runStatusScanJob });
+  // DRS-rapport (16 okt): eenmalig bestaande opdrachten + rapporten uit de groep inlezen, en
+  // elke 5 min kijken of de avondherinnering ("nog te melden") verschuldigd is.
+  try { drsStartMigratie(); } catch (e) { console.error('[drs-rapport] start:', e.message); }
+  setInterval(() => { runDrsHerinnering().catch((e) => console.error('[drs-rapport] herinnering:', e.message)); }, 5 * 60 * 1000);
   // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.
   setInterval(() => { runCloudOutbox().catch((e) => console.error('[wa-cloud]', e.message)); }, 20 * 1000);
   // Wachtrij-onderhoud: vervallen, ongeldig nummer, verouderde "wacht op bevestiging".

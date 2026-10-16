@@ -883,6 +883,76 @@ de regressie meegroeit.
   ("Niet meegeteld: N open facturen ouder dan 2 maanden (€…)", klik → filter "Open, ouder
   dan 2 mnd"). Het filter "Verlopen" volgt dezelfde grens. Betaald/Totaal ongewijzigd.
   Tests: rollen-test 67 (+11), browser 277 (+15, o.a. nagebootste lijst voor de teller).
+- **FACTUUR AFSCHRIJVEN / ONINBAAR (16 okt 2026, keuze A eigenaar):** status 'oninbaar' voor
+  facturen (POST /api/invoices/:id/status {status:'oninbaar', reden?}; alleen kantoor, alleen
+  vanuit 'verzonden'; terug naar 'verzonden' of 'betaald', concept kan niet). inv.oninbaar
+  {at, door, reden}; bij terugzetten inv.oninbaarGeweest. Telt niet als openstaand/verlopen,
+  geen herinneringen (sendInvoiceReminder eist verzonden), geen omzet (omzetVan → 0, ook niet
+  via het prijsveld); versturen (mail/WhatsApp) geeft 400 "eerst terug naar open". Scherm:
+  knop "Afschrijven" in de editor (verzonden) en op oude open rijen (> 2 mnd), "Alle N
+  afschrijven" in filter "Open, ouder dan 2 mnd" (schrijfFacturenAf, vraagTekst met reden),
+  "Terug naar open"/"✓ Toch betaald", filter "Afgeschreven", teller "Niet meegeteld: … · N
+  afgeschreven". Tests: rollen-test (+9), browser (+9).
+- **DRS-RAPPORT + AUDIT DRS-TELLING (16 okt 2026, casus 4879 NB Etten-Leur / North Ridge BV
+  op di 13-10 én do 15-10 als afgerond gemeld → twee keer betalen):** elke afgeronde DRS-opdracht
+  kost een fee; DRS factureert op ons dagrapport in de groep. server/drs-rapport.js:
+  (1) `order.drsGemeld = {afgerond|geannuleerd|offerte|afspraak: {at, datum, door, via
+  ('crm'|'groep'|'handmatig'|'aangenomen'), rapportId, regel}}` — gezet via markeerGemeld;
+  een al als AFGEROND gemelde opdracht wordt geweigerd (409 + conflicten) tenzij force. Nooit
+  gewist bij statuswissel; gaat mee bij samenvoegen (vroegste datum wint). (2) Knop
+  **DRS-rapport** op het bord (#drsReportBtn, badge = pulse.drsTeMelden) → venster
+  (openDrsRapport): alleen DRS-opdrachten die nog niet gemeld zijn (30 dagen, óók ingeklapte
+  weken), per kopje, regel = "postcode plaats — klantnaam" (wens DRS; bewerkbaar), reden bij
+  geannuleerd uit de notitie (zonder telefoonnummers), kop "*Donderdag 15-10*", ouder dan 2
+  dagen apart en standaard uit ("was al gemeld"-knop), waarschuwingen (geen postcode,
+  postcode uit klantrecord, naam ontbreekt, al gemeld op een andere opdracht met dezelfde
+  postcode, 2× in dit rapport), voorbeeldtekst, **Kopieer rapport** → "Geplaatst — vink af"
+  (POST /api/drs-rapport/markeer via 'crm'), geschiedenis + **maandtelling** voor de controle
+  van de DRS-factuur, dubbel-alarmen met "Afgehandeld". BEWUST GEEN rechtstreeks posten door
+  het CRM (eerdere beslissing eigenaar + whatsapp-web.js kan falen NÁ bezorgen → dubbel).
+  (3) VANGNET: verwerkEigenDrsRapport (aangeroepen in pipeline na messages.push én in het
+  inhoud-dedup-pad voor een identieke herhaling) leest ons rapport uit de DRS-groep
+  (leesRapport: kop-datum, kopjes ook met emoji/"Afgeronde opdrachten:"/"Afgerond —", postcode
+  overal in de regel, onbekend kopje sluit af; lijktDrsRapport: kopje + postcode en géén
+  Naam:/Adres:/Telefoon:-velden) → vinkt af (via 'groep'), en alarmeert (push kantoor + logboek
+  + settings._drsAlarmen) bij: al eerder als afgerond gemeld, twee keer in één rapport, vandaag
+  al in een ander groepsbericht, identiek rapport nogmaals, tweede kaart op hetzelfde adres
+  (≤14 d, "mogelijk dubbel"), prullenbak-kaart al gemeld. Oude kop (> 1 dag vóór plaatsen) →
+  de dag van plaatsen telt (kopDatum bewaard). Twee klussen op één postcode: de naam in de
+  regel kiest. ALLEEN van ons (afzenderVanOns: naam bevat "key service"/"keyservice", namen
+  van kantoor-accounts of settings.drsRapport.afzenders) — lijstjes van DRS-medewerkers worden
+  alleen ter info bewaard. Alleen als whatsappOrderGroups niet leeg is. Idempotent per bericht
+  (bronId). (4) Eenmalige start (_drsGemeldV1): rapporten van 60 dagen uit de groep inlezen
+  (stil, dubbels als 'terugkijken'-alarm), DRS-opdrachten > 7 dagen als 'aangenomen'.
+  (5) Avondherinnering (settings.drsRapport.herinnering, standaard AAN, uur 21 NL, 1×/dag,
+  alleen als er iets open staat) → push naar /?drsrapport=1. (6) Kaart-chip "DRS gemeld di 13-10"
+  / "DRS: nog melden" (withRelations.drsCat), bordfilter "DRS: nog te melden" (src:drsmelden,
+  ook in /api/archives/zoek), regel + vinkje in de opdracht (POST /api/orders/:id/drs-gemeld),
+  statusscan-knop "✓ Gemeld aan DRS" en needsDrsUpdate laat al gemelde weg. Instellingen →
+  Werkwijze → DRS-rapport (admin: standaard-kopjes, herinnering, uur, namen) via POST
+  /api/drs-rapport/instellingen. Routes (admin+assistent): GET /api/drs-rapport, GET
+  /api/drs-rapport/maand, POST …/markeer, …/ongedaan, …/alarm/:id/afgehandeld.
+  ÉÉN DRS-REGEL (isDrsOrder in drs-rapport.js): bron met "DRS" wint, anders herkomstgroep
+  (opdracht-groep), anders bron met "groep"; gebruikt door bord-chip/filter (withRelations),
+  dispatch, terugkoppeling, agenda, statusscan, archiefzoek én finance (isDrsOpdracht).
+  AUDIT-FIXES (4 Opus-agents + 2 controleurs per bevinding): weekelijks inklappen vergelijkt op
+  NL-kalenderdag (zondag-afspraak bleef een week extra in Afgerond), "afspraak later" geldt
+  alleen voor de afspraak-kolom, afspraak zonder datum klapt niet in, na het weekeinde
+  afgerond hoort bij de nieuwe week, inklappen hoogt updatedAt niet meer op; status wijzigen
+  van een ingeklapte opdracht → terug op het bord; handmatig Inklappen alleen zichtbare én
+  afgehandelde (of afspraak ≤ vandaag), open blijft staan; weekBounds/amsMidnightMs
+  zomer-/wintertijd-vast (week.js, klokwissel 25 okt); completedAt/cancelledAt/statusSince ook
+  bij aanmaken, weekrapport-geannuleerd op cancelledAt; handmatige opdracht krijgt intake;
+  DRS-fee teruggedraaid bij heropenen en prullenbak (removeAutoFeeForOrder), bij samenvoegen
+  overgezet (herkoppelDrsFee) en afgerond gaat mee naar de hoofdkaart, DRS-herkomst gaat mee;
+  snelknop "Fee per opdracht" weg als de autosync fees boekt; terugkoppeling stuurt "Afgerond"
+  nooit twee keer; "Plak opdracht" geeft 409 als dezelfde klant (telefoon) / hetzelfde adres
+  al een opdracht (30 d) of inbox-bericht (7 d) heeft (force = bewust); een DRS-groepsbericht
+  van een klant/adres met een recent AFGESLOTEN DRS-opdracht wordt niet automatisch goedgekeurd
+  (review.autoOvergeslagen + mogelijkDubbel; open kaarten volgen Regel 1 ongewijzigd);
+  een-regel-rapport in de opdracht-groep = eigen rapport (geen kaart, geen "onvolledig").
+  Tests: test/drs-rapport-test.mjs (91, PORT=3145, deels zonder server), scenarios 123
+  (plakken: tweede keer 409, force zonder dubbele klant), browser 304.
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek
   alleen naar de OFFERTE (status 'verzonden'), nooit naar de OPDRACHT. Nu
@@ -1049,8 +1119,7 @@ de regressie meegroeit.
   BEVEILIGINGSUPDATES (6 okt): npm audit fix + nodemailer 6 → 10.0.15 (Node ≥20; Render draait
   22). Alleen xlsx (klantimport, alleen ingelogd) heeft nog geen fix. Alle tests groen.
   LET OP: npm install ruimt playwright-core op → `npm install --no-save playwright-core`.
-  OPEN — HERINNERING EIGENAAR: na de FormSubmit-check terugkomen op Trustpilot
-  ("we komen hier nog op terug, help me herinneren").
+  (Trustpilot-herinnering: afgehandeld 5–6 okt, zie hieronder.)
 - **Trustpilot-uitnodiging, per klant zelf kiezen (5 okt 2026, wens eigenaar):** Trustpilot
   nodigt een klant uit als hun unieke adres (…@invite.trustpilot.com) in BCC staat van een
   mail aan die klant. settings.trustpilot {bcc, standaardAan, subject, body} (getTrustpilot/

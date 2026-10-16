@@ -192,6 +192,37 @@ console.log('\n== Facturen vastpinnen (16 okt 2026) ==');
   ok('kopie neemt de pin NIET mee', kopie.status === 200 && !!kopieInv.id && !kopieInv.vastgepind, JSON.stringify(kopie.json).slice(0, 160));
 }
 
+console.log('\n== Factuur afschrijven / oninbaar (16 okt 2026) ==');
+{
+  cookie = adminCookie;
+  const maak = async () => {
+    const r = await api('POST', '/api/invoices', { customerId: klantId, type: 'factuur' });
+    const id = r.json?.invoice?.id;
+    await api('PATCH', `/api/invoices/${id}`, { lines: [{ description: 'Slot', qty: 1, priceExcl: 80 }], btwPct: 21 });
+    return id;
+  };
+  const a = await maak();
+  ok('concept afschrijven kan NIET (alleen verstuurde open factuur)', (await api('POST', `/api/invoices/${a}/status`, { status: 'concept' })).status === 200
+    && (await api('POST', `/api/invoices/${a}/status`, { status: 'oninbaar' })).status === 400);
+  await api('POST', `/api/invoices/${a}/status`, { status: 'verzonden' });
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  ok('monteur mag niet afschrijven (403 of geen toegang)', [403].includes((await api('POST', `/api/invoices/${a}/status`, { status: 'oninbaar' })).status));
+  await login('assistente@keyservice.nl', 'assist123');
+  const af = await api('POST', `/api/invoices/${a}/status`, { status: 'oninbaar', reden: 'klant reageert niet' });
+  ok('assistente schrijft af (met reden, wie, wanneer)', af.status === 200 && af.json?.status === 'oninbaar' && af.json?.oninbaar?.reden === 'klant reageert niet' && !!af.json?.oninbaar?.door, JSON.stringify(af.json?.oninbaar));
+  ok('afgeschreven factuur: geen herinnering mogelijk', (await api('POST', `/api/invoices/${a}/remind`, {})).status === 400);
+  const opnieuw = await api('POST', `/api/invoices/${a}/send`, { to: 'klant@example.nl' });
+  ok('afgeschreven factuur kan niet opnieuw worden verstuurd (eerst terug naar open)', opnieuw.status === 400 && /afgeschreven/i.test(opnieuw.json?.error || ''), JSON.stringify(opnieuw.json));
+  ok('afgeschreven → concept kan niet', (await api('POST', `/api/invoices/${a}/status`, { status: 'concept' })).status === 400);
+  const terug = await api('POST', `/api/invoices/${a}/status`, { status: 'verzonden' });
+  ok('terug naar open: status verzonden, afschrijving bewaard als historie', terug.status === 200 && terug.json?.status === 'verzonden' && !terug.json?.oninbaar && terug.json?.oninbaarGeweest?.reden === 'klant reageert niet');
+  await api('POST', `/api/invoices/${a}/status`, { status: 'oninbaar' });
+  const betaald = await api('POST', `/api/invoices/${a}/status`, { status: 'betaald' });
+  ok('afgeschreven maar toch betaald → betaald + betaaldatum', betaald.status === 200 && betaald.json?.status === 'betaald' && !!betaald.json?.paidAt);
+  cookie = adminCookie;
+  ok('offerte afschrijven kan niet', (await (async () => { const q = await api('POST', '/api/invoices', { customerId: klantId, type: 'offerte' }); return api('POST', `/api/invoices/${q.json?.invoice?.id}/status`, { status: 'oninbaar' }); })()).status === 400);
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

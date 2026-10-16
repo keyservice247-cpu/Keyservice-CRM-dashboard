@@ -85,6 +85,7 @@
             <button id="digestBtn" class="btn perm-write">Status-scan</button>
             <button id="collapseBtn" class="btn perm-write">Inklappen</button>
             <button id="phoneOrderBtn" class="btn perm-write" title="Snel een telefonische aanvraag noteren">📞 Telefoon</button>
+            <button id="drsReportBtn" class="btn perm-write" title="Dagrapport voor DRS: alleen wat nog niet gemeld is — nooit twee keer dezelfde opdracht">DRS-rapport <span id="drsReportBadge" class="drs-badge" hidden></span></button>
             <button id="pasteOrderBtn" class="btn perm-write" title="Plak een DRS-bericht uit WhatsApp — de klantgegevens worden er automatisch uitgehaald">Plak opdracht</button>
             <button id="newOrderBtn" class="btn btn-primary perm-write">+ Nieuwe opdracht</button>
           </div>
@@ -245,7 +246,7 @@
           <div class="muted small">Alle facturen die vanuit het dashboard zijn gemaakt. Maak of verstuur een factuur via de knop <strong>Factuur</strong> op een opdracht-kaart.</div></div>
           <div class="view-actions">
             <input id="invSearch" type="search" placeholder="Zoek klant, nummer, adres…" autocomplete="off" style="min-width:170px">
-            <select id="invFilter"><option value="all">Alles</option><option value="factuur">Facturen</option><option value="offerte">Offertes</option><option value="concept">Concepten</option><option value="verzonden">Verzonden (open)</option><option value="verlopen">Verlopen</option><option value="oud">Open, ouder dan 2 mnd</option><option value="betaald">Betaald</option><option value="vastgepind">Vastgepind</option></select>
+            <select id="invFilter"><option value="all">Alles</option><option value="factuur">Facturen</option><option value="offerte">Offertes</option><option value="concept">Concepten</option><option value="verzonden">Verzonden (open)</option><option value="verlopen">Verlopen</option><option value="oud">Open, ouder dan 2 mnd</option><option value="betaald">Betaald</option><option value="vastgepind">Vastgepind</option><option value="oninbaar">Afgeschreven</option></select>
             <button id="newQuoteBtn" class="btn">+ Offerte</button>
             <button id="newInvoiceBtn" class="btn btn-primary">+ Factuur</button>
           </div>

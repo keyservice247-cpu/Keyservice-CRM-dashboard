@@ -3,6 +3,7 @@
 // (omzet / kosten / winst + uitsplitsingen). Later: auto-omzet uit monteursrapporten
 // en AI-suggesties. Bewust simpel en stabiel — geen boekhoudpakket, wél clarity.
 import { db, id, now, saveSoon, logActivity } from './db.js';
+import { isDrsOrder } from './drs-rapport.js';
 import { isWhatsappOrderGroup } from './settings.js';
 import { bronVan, websiteVan } from './conversie.js';
 
@@ -148,7 +149,8 @@ export function bookRecurringDue(actorName = 'systeem') {
 // DRS-opdracht? Via de herkomstgroep, of — zonder groep — via de bron. Een opdracht uit
 // "Plak opdracht" (bron "DRS WhatsApp groep", geen originGroup) kreeg anders nooit een
 // DRS-fee en zijn omzet viel onder "Overig" (audit 3 okt 2026). Zelfde regel als bronVan.
-export const isDrsOpdracht = (o) => !!o && (o.originGroup ? isWhatsappOrderGroup(o.originGroup) : /\bdrs\b/i.test(String(o.source || '')));
+// 16 okt 2026: één DRS-regel voor het hele CRM (DRS-rapport, bord, fee) — zie drs-rapport.js.
+export const isDrsOpdracht = (o) => isDrsOrder(o);
 export function collectAutoSyncEntries(since) {
   const s = getFinanceSettings();
   const entries = fin().entries;
@@ -506,6 +508,35 @@ export function removeAutoIncomeForInvoice(invId) {
   fin().removedRefs = (fin().removedRefs || []).filter((r) => r !== ref);
   if (fin().entries.length < before) saveSoon();
   return before - fin().entries.length;
+}
+
+// DRS-FEE VOLGT DE OPDRACHT (audit 16 okt 2026): een fee werd geboekt zodra een DRS-
+// opdracht op afgerond stond, maar nooit teruggedraaid. Per ongeluk afgerond → teruggezet,
+// of als dubbel naar de prullenbak → de fee bleef staan (en de echte kaart boekte er nog
+// één bij). Weghalen ZONDER grafsteen: wordt hij later (weer) afgerond, dan boekt de
+// autosync hem gewoon opnieuw — nooit twee keer (sourceRef drsfee:<id>).
+export function removeAutoFeeForOrder(orderId) {
+  const ref = `drsfee:${orderId}`;
+  const before = fin().entries.length;
+  fin().entries = fin().entries.filter((e) => !(e.sourceRef === ref && e.auto));
+  fin().removedRefs = (fin().removedRefs || []).filter((r) => r !== ref);
+  if (fin().entries.length < before) saveSoon();
+  return before - fin().entries.length;
+}
+// Samenvoegen: één klus = één fee. De fee van de samengevoegde kaart gaat over naar de
+// hoofdkaart; heeft die er al een, dan vervalt de dubbele.
+export function herkoppelDrsFee(vanId, naarId) {
+  const van = `drsfee:${vanId}`; const naar = `drsfee:${naarId}`;
+  const e = fin().entries.find((x) => x.sourceRef === van && x.auto);
+  if (!e) return 0;
+  if (fin().entries.some((x) => x.sourceRef === naar) || (fin().removedRefs || []).includes(naar)) {
+    fin().entries = fin().entries.filter((x) => x !== e);
+    saveSoon();
+    return -1;
+  }
+  e.sourceRef = naar; e.orderId = naarId; e.note = `${e.note || ''} (samengevoegd)`.slice(0, 160);
+  saveSoon();
+  return 1;
 }
 
 // HERKOMST van een boeking (2 okt 2026, filters op Cijfers): via welke opdracht kwam dit

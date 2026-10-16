@@ -1469,6 +1469,134 @@ await page.evaluate(() => loadInvoices());
 ok('pin-knop alleen voor kantoor (pinKnopMag)', await page.evaluate(() => { const echt = state.me.role; state.me.role = 'monteur'; const m = pinKnopMag(); state.me.role = echt; return m === false && pinKnopMag() === true; }));
 noErr('Facturen vastpinnen + teller');
 
+// FACTUUR AFSCHRIJVEN / ONINBAAR (16 okt 2026, keuze A van de eigenaar).
+clear();
+const afId = await page.evaluate(async () => {
+  const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const c = await post('/api/customers', { name: 'Afschrijf Klant', email: 'af@example.nl' });
+  const i = await post('/api/invoices', { customerId: c.id, type: 'factuur' });
+  const inv = i.invoice || i;
+  await fetch('/api/invoices/' + inv.id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ lines: [{ description: 'Slot', qty: 1, priceExcl: 50 }], btwPct: 21 }) });
+  await post('/api/invoices/' + inv.id + '/status', { status: 'verzonden' });
+  return inv.id;
+});
+await page.evaluate(() => goView('invoices'));
+await page.evaluate((id) => window.openStandaloneInvoice(id), afId);
+await page.waitForSelector('#inv-afschrijf', { timeout: 6000 }).catch(() => {});
+ok('open (verstuurde) factuur: knop "Afschrijven" in het venster', await page.locator('#inv-afschrijf').count() === 1);
+await page.click('#inv-afschrijf');
+await page.waitForSelector('#md-input', { timeout: 4000 }).catch(() => {});
+ok('afschrijven vraagt een (optionele) reden met uitleg', /telt daarna niet meer als openstaand/.test(await page.locator('.mini-dialog').textContent().catch(() => '')));
+await page.fill('#md-input', 'klant reageert niet meer');
+await page.click('#md-ok');
+await page.waitForFunction((id) => /Afgeschreven/.test((document.querySelector(`.inv-rij[data-inv="${id}"]`) || {}).textContent || ''), afId, { timeout: 6000 }).catch(() => {});
+const afRij = await page.evaluate((id) => { const r = document.querySelector(`.inv-rij[data-inv="${id}"]`); return { tekst: r ? r.textContent.replace(/\s+/g, ' ') : '', terug: !!(r && r.querySelector('.inv-heropen')), betaald: !!(r && r.querySelector('.inv-mark')) }; }, afId);
+ok('lijst: "Afgeschreven (oninbaar)" met reden, knoppen "Terug naar open" + "✓ Betaald"', /Afgeschreven \(oninbaar\)/.test(afRij.tekst) && /klant reageert niet meer/.test(afRij.tekst) && afRij.terug && afRij.betaald, JSON.stringify(afRij));
+await page.selectOption('#invFilter', 'oninbaar');
+ok('filter "Afgeschreven" toont hem', await page.evaluate((id) => !!document.querySelector(`.inv-rij[data-inv="${id}"]`), afId));
+await page.selectOption('#invFilter', 'all');
+await page.click(`.inv-rij[data-inv="${afId}"] .inv-heropen`);
+await page.waitForFunction((id) => !/Afgeschreven/.test((document.querySelector(`.inv-rij[data-inv="${id}"]`) || {}).textContent || 'Afgeschreven'), afId, { timeout: 6000 }).catch(() => {});
+ok('"Terug naar open" → weer verzonden (open)', await page.evaluate((id) => /nog niet betaald/i.test((document.querySelector(`.inv-rij[data-inv="${id}"]`) || {}).textContent || ''), afId));
+// Bulk in het filter "ouder dan 2 mnd" (nagebootste lijst + nagebootste statusroute).
+const nuB = Date.now();
+const oudLijst = [1, 2].map((n) => ({ id: `inv_oud${n}`, number: `2026-80${n}`, type: 'factuur', status: 'verzonden', totalIncl: 100 * n, sentAt: new Date(nuB - 100 * 86400000).toISOString(), createdAt: new Date(nuB - 100 * 86400000).toISOString(), dueAt: new Date(nuB - 90 * 86400000).toISOString(), customerName: `Oud ${n}` }));
+const nepOud = (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(oudLijst) });
+let bulkPosts = 0;
+const nepStatus = (route) => { bulkPosts++; route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }); };
+await page.route('**/api/invoices', nepOud);
+await page.route('**/api/invoices/inv_oud*/status', nepStatus);
+await page.evaluate(() => loadInvoices());
+await page.selectOption('#invFilter', 'oud');
+await page.waitForSelector('#invBulkAf', { timeout: 4000 }).catch(() => {});
+ok('filter "ouder dan 2 mnd": knop "Alle 2 afschrijven"', /Alle 2 afschrijven/.test(await page.locator('#invBulkAf').textContent().catch(() => '')));
+await page.click('#invBulkAf');
+await page.waitForSelector('#md-ok', { timeout: 4000 }).catch(() => {});
+await page.click('#md-ok');
+await page.waitForFunction(() => /afgeschreven/.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+ok('bulk afschrijven: per factuur één statusverzoek', bulkPosts === 2, String(bulkPosts));
+await page.unroute('**/api/invoices', nepOud);
+await page.unroute('**/api/invoices/inv_oud*/status', nepStatus);
+await page.selectOption('#invFilter', 'all');
+await page.evaluate(() => loadInvoices());
+noErr('Factuur afschrijven');
+
+// DRS-RAPPORT (16 okt 2026, casus 4879 NB Etten-Leur twee keer als afgerond gemeld).
+clear();
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE }).catch(() => {});
+const drsId = await page.evaluate(async () => {
+  const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const o = await post('/api/orders', { source: 'DRS WhatsApp groep', customerName: 'North Ridge BV', customerPhone: '0611222333', customerAddress: 'Industrieweg 4, 4879 NB Etten-Leur', title: 'Etten-Leur — deur sluit niet' });
+  await fetch('/api/orders/' + o.id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'afgerond' }) });
+  await refreshMeta();
+  return o.id;
+});
+await page.evaluate(() => goView('board'));
+await page.waitForSelector(`.card[data-id="${drsId}"]`, { timeout: 8000 }).catch(() => {});
+ok('bord: DRS-opdracht (ook via "Plak opdracht"-bron) heeft chip "DRS: nog melden"', await page.locator(`.card[data-id="${drsId}"] .chip-drs-melden`).count() === 1);
+ok('bord: knop "DRS-rapport" staat er', await page.locator('#drsReportBtn').isVisible());
+await page.selectOption('#boardMonteurFilter', 'src:drsmelden');
+const filterDrs = await page.evaluate((id) => [...document.querySelectorAll('#board .card')].map((c) => c.dataset.id), drsId);
+ok('filter "DRS: nog te melden" toont de niet-gemelde DRS-opdracht', filterDrs.includes(drsId), JSON.stringify(filterDrs.length));
+await page.selectOption('#boardMonteurFilter', '');
+await page.click('#drsReportBtn');
+await page.waitForSelector(`.drs-rij[data-k^="${drsId}"]`, { timeout: 6000 }).catch(() => {});
+const drsModal = await page.evaluate((id) => ({ regel: (document.querySelector(`.drs-rij[data-k^="${id}"] .drs-regel`) || {}).value || '', tekst: (document.querySelector('#drsTekst') || {}).value || '' }), drsId);
+ok('DRS-rapport: regel met postcode + plaats + klantnaam', drsModal.regel === '4879 NB Etten-Leur — North Ridge BV', drsModal.regel);
+ok('DRS-rapport: voorbeeld in het vaste formaat (*kop*, *Afgerond:*)', /^\*\w+dag \d{2}-\d{2}\*/.test(drsModal.tekst) && /\*Afgerond:\*\n\n.*4879 NB Etten-Leur — North Ridge BV/.test(drsModal.tekst), drsModal.tekst.slice(0, 160));
+await page.fill(`.drs-rij[data-k^="${drsId}"] .drs-regel`, '4879 NB Etten-Leur — North Ridge BV (achterdeur)');
+ok('regel aanpassen werkt het voorbeeld meteen bij', /achterdeur/.test(await page.evaluate(() => document.querySelector('#drsTekst').value)));
+await page.click('#drsKopieer');
+await page.waitForSelector('#drsNaKopie:not([hidden])', { timeout: 4000 }).catch(() => {});
+ok('na kopiëren: vraag "Staat het erin?" met knop "Geplaatst — vink af"', await page.locator('#drsGeplaatst').isVisible().catch(() => false));
+await page.click('#drsGeplaatst');
+await page.waitForSelector('.drs-leeg', { timeout: 6000 }).catch(() => {});
+ok('na afvinken: "Alles is gemeld"', await page.locator('.drs-leeg').count() === 1);
+ok('geschiedenis toont het rapport (CRM) met "Ongedaan"-knop', await page.locator('.drs-hist .drs-ongedaan').count() >= 1);
+await page.evaluate(() => closeModal());
+await page.evaluate(() => loadBoard());
+await page.waitForSelector(`.card[data-id="${drsId}"] .chip-drs-ok`, { timeout: 6000 }).catch(() => {});
+ok('bord: chip wordt "DRS gemeld <dag>"', /DRS gemeld \w{2} \d{2}-\d{2}/.test(await page.locator(`.card[data-id="${drsId}"] .chip-drs-ok`).textContent().catch(() => '')));
+await page.evaluate((id) => openOrderVers(id), drsId);
+await page.waitForSelector('#f-drs', { timeout: 6000 }).catch(() => {});
+ok('opdracht: regel "Gemeld aan DRS als Afgerond"', /Gemeld aan DRS als Afgerond/.test(await page.locator('#f-drs').textContent().catch(() => '')));
+page.once('dialog', (dl) => dl.accept());
+await page.click('#f-drs-uit');
+await page.waitForSelector('#f-drs-aan', { timeout: 6000 }).catch(() => {});
+ok('opdracht: vinkje weghalen → "Nog niet gemeld" + knop "Is al gemeld"', /Nog niet gemeld aan DRS/.test(await page.locator('#f-drs').textContent().catch(() => '')));
+await page.click('#f-drs-aan');
+await page.waitForSelector('#f-drs-uit', { timeout: 6000 }).catch(() => {});
+ok('opdracht: "Is al gemeld" vinkt weer af', /Gemeld aan DRS/.test(await page.locator('#f-drs').textContent().catch(() => '')));
+await page.evaluate(() => closeModal());
+// Dubbel-alarm zichtbaar: ons rapport uit de groep met dezelfde opdracht op een latere dag.
+await page.evaluate(async () => {
+  const morgen = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+  const kop = `${morgen.slice(8, 10)}-${morgen.slice(5, 7)}`;
+  await fetch('/api/ingest/whatsapp', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ group: 'Raf breda en vliegende keer Rhenen straal 30 KM', name: 'Key service 24/7', body: `*Vrijdag ${kop}*\n\n*Afgerond:*\n\n4879 NB Etten-Leur\n\n4421 BR Kapelle`, externalId: 'br-drs-rapport' }) });
+});
+await page.click('#drsReportBtn');
+await page.waitForSelector('.drs-alarm', { timeout: 6000 }).catch(() => {});
+ok('DRS-rapport: rood alarm "Dubbel gemeld aan DRS" met knop Afgehandeld', /Dubbel gemeld aan DRS/.test(await page.locator('.drs-alarm').first().textContent().catch(() => '')) && await page.locator('.drs-alarm-ok').count() >= 1);
+await page.click('.drs-alarm-ok');
+await page.waitForFunction(() => !document.querySelector('.drs-alarm'), null, { timeout: 6000 }).catch(() => {});
+ok('alarm afhandelen haalt het weg', await page.locator('.drs-alarm').count() === 0);
+await page.evaluate(() => closeModal());
+// Telefoonformaat: knop in beeld, venster zonder horizontaal schuiven.
+await page.setViewportSize({ width: 390, height: 844 });
+await page.evaluate(() => goView('board'));
+await page.waitForTimeout(400);
+const drsKnopMob = await page.evaluate(() => { const r = document.querySelector('#drsReportBtn')?.getBoundingClientRect(); return r ? { x: r.x, w: r.width, zichtbaar: r.width > 0 } : null; });
+ok('mobiel: knop "DRS-rapport" staat binnen 390 px', !!drsKnopMob && drsKnopMob.zichtbaar && drsKnopMob.x >= 0 && drsKnopMob.x + drsKnopMob.w <= 390, JSON.stringify(drsKnopMob));
+await page.evaluate(() => openDrsRapport());
+await page.waitForSelector('.drs-geschiedenis', { timeout: 6000 }).catch(() => {});
+ok('mobiel: DRS-rapport zonder horizontaal schuiven', await page.evaluate(() => { const m = document.querySelector('#modal'); return m && m.scrollWidth <= m.clientWidth + 2 && document.documentElement.scrollWidth <= 392; }));
+await page.evaluate(() => closeModal());
+await page.setViewportSize({ width: 1280, height: 800 });
+await page.evaluate(() => goView('settings'));
+await page.waitForSelector('#saveDrsRapport', { timeout: 8000 }).catch(() => {});
+ok('instellingen: kaart "DRS-rapport" (beheerder)', await page.locator('#saveDrsRapport').count() === 1);
+noErr('DRS-rapport');
+
 // OFFERTE-HERINNERING ÉÉN KEER (8 okt 2026): geen "Max. aantal" meer, uitleg staat er, en
 // opslaan van de factuur-instellingen werkt nog (de oude regel las #is-quote-max).
 clear();

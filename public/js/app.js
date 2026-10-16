@@ -358,6 +358,8 @@ function hasPerm(key) {
   try {
     const openId = new URLSearchParams(location.search).get('open');
     if (openId) { history.replaceState({}, '', location.pathname); setTimeout(() => { try { openOrderModal(openId); } catch { /* kaart bestaat niet meer */ } }, 600); }
+    // /?drsrapport=1 (avondherinnering / dubbel-alarm) opent het DRS-rapport.
+    if (new URLSearchParams(location.search).get('drsrapport') && state.meta?.drsRapport) { history.replaceState({}, '', location.pathname); setTimeout(() => openDrsRapport(), 600); }
   } catch { /* geen deeplink */ }
   // Terugkomst van de Google Agenda-koppeling.
   try {
@@ -503,6 +505,8 @@ async function startLiveUpdates() {
       if (cb) { cb.textContent = ong; cb.hidden = !ong; }
       const bnc = $('#bnChatBadge');
       if (bnc) { bnc.textContent = ong; bnc.hidden = !ong; }
+      const drsB = $('#drsReportBadge');
+      if (drsB) { const n = p.drsTeMelden || 0; drsB.textContent = n; drsB.hidden = !n; }
       // Mailbox bijna vol? Rood lampje in de zijbalk (verdwijnt vanzelf na opruimen).
       const mw = $('#mailboxWarn');
       if (mw) {
@@ -1616,7 +1620,7 @@ function fillMonteurFilter() {
   // opties die een leeg bord opleverden.
   const toonMonteurs = state.me?.role !== 'monteur' && (state.monteurs || []).length;
   sel.innerHTML = '<option value="">Alle opdrachten</option>' +
-    '<optgroup label="Bron"><option value="src:drs">DRS-opdrachten</option><option value="src:eigen">Keyservice-opdrachten</option></optgroup>' +
+    `<optgroup label="Bron"><option value="src:drs">DRS-opdrachten</option><option value="src:eigen">Keyservice-opdrachten</option>${state.meta?.drsRapport ? '<option value="src:drsmelden">DRS: nog te melden</option>' : ''}</optgroup>` +
     (toonMonteurs ? `<optgroup label="Monteur">${state.monteurs.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</optgroup>` : '');
 }
 
@@ -1764,6 +1768,7 @@ function filteredOrders() {
     // Bron-keuzes (src:…) of een specifieke monteur uit dezelfde lijst.
     if (mont === 'src:drs' && !o.isDrs) return false;
     if (mont === 'src:eigen' && o.isDrs) return false;
+    if (mont === 'src:drsmelden') { const di = drsMeldInfo(o); if (!di || di.gemeld) return false; }
     if (mont && !mont.startsWith('src:') && o.monteurId !== mont) return false;
     if (bereik) {
       const t = new Date(o.createdAt || 0).getTime();
@@ -2263,6 +2268,12 @@ function cardHTML(o) {
   const meta = [`<span class="chip status-pill" style="color:${esc(stCol)};background:${esc(stCol)}1f;border-color:${esc(stCol)}66">${esc(statusLabel(o.status))}</span>`];
   meta.push(`<span class="chip ${sm.cls}">${sourceIcon(o.source)} ${esc(o.source || 'Handmatig')}</span>`);
   if (o.isDrs) { const gl = orderGroupLabel(o); meta.push(`<span class="chip chip-drs" title="Afkomstig uit WhatsApp-groep: ${esc(o.originGroup || 'opdrachtgroep')}">${esc(gl)}</span>`); }
+  // DRS-rapport (16 okt): gemeld aan DRS? Zo zie je in één oogopslag wat er nog in het
+  // dagrapport moet — en wat er al in stond (nooit twee keer betalen).
+  const dmi = drsMeldInfo(o);
+  if (dmi) meta.push(dmi.gemeld
+    ? `<span class="chip chip-drs-ok" title="Al gemeld aan DRS als ${esc(DRS_KOPJE_LABEL[dmi.cat])} op ${esc(drsKorteDatum(dmi.gemeld.datum))}${dmi.gemeld.door ? ' door ' + esc(dmi.gemeld.door) : ''}">${icon('check', 12)} DRS gemeld ${esc(drsKorteDatum(dmi.gemeld.datum))}</span>`
+    : `<span class="chip chip-drs-melden" title="Nog niet aan DRS gemeld — komt in het DRS-rapport">DRS: nog melden</span>`);
   if (o.monteur) meta.push(`<span class="chip mont">${icon('wrench', 13)} ${esc(o.monteur.name)}</span>`);
   if (o.sentToMonteur) meta.push(`<span class="chip src-whatsapp" title="Verstuurd naar ${esc(o.sentToMonteur.monteurName)}">${icon('whatsapp', 13)} naar ${esc(o.sentToMonteur.monteurName)}</span>`);
   if (o.urgent) meta.push(`<span class="chip urgent">${icon('bolt', 13)} spoed</span>`);
@@ -2542,6 +2553,7 @@ function openOrderModal(id, pool) {
   modal(`
     <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
     ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}${fotoStatusHTML(o.sentToMonteur)}</div>` : ''}
+    ${o && canWrite ? drsKaartRegel(o) : ''}
     ${o && isMonteur ? `<div class="snelbalk">
       ${(o.intake?.phone || o.customer?.phone) ? `<a class="btn sb" href="tel:${esc(String(o.intake?.phone || o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 15)} Bellen</a><a class="btn sb" target="_blank" rel="noopener" href="https://wa.me/${esc(String(o.intake?.phone || o.customer.phone).replace(/\D/g, '').replace(/^0/, '31'))}">${icon('whatsapp', 15)} Appen</a>` : ''}
       ${(o.intake?.address || o.customer?.address) ? `<a class="btn sb" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}">${icon('pin', 15)} Navigeer</a>` : `<button type="button" class="btn sb" onclick="toast('Geen adres bekend — vul het adres in bij de klantgegevens hieronder', true); document.querySelector('#f-ccaddress')?.focus()" title="Geen adres bekend">${icon('pin', 15)} Navigeer <span class="muted small">(geen adres)</span></button>`}
@@ -2712,6 +2724,7 @@ function openOrderModal(id, pool) {
     g.href = googleCalUrl({ title: $('#f-title')?.value || o.title, at: appt, end: $('#f-appt-end')?.value, details: det, location: o.customer?.address || '' });
   }; }
   if (o && canWrite) $('#f-merge').onclick = () => openMergeModal(o);
+  if (o && canWrite) bindDrsKaartRegel(o);
   if (o && canWrite) $('#f-send-monteur').onclick = () => openSendMonteurModal(o);
   if (o && canWrite && $('#f-snooze')) $('#f-snooze').onclick = () => openSnoozeModal(o);
   if (o && $('#f-werkbon')) $('#f-werkbon').onclick = () => openWerkbonModal(o);
@@ -3326,12 +3339,23 @@ function openPasteOrderModal() {
     const text = $('#po-text').value.trim();
     if (!text) return toast('Plak eerst het bericht', true);
     const btn = $('#po-save'); btn.disabled = true; btn.textContent = 'Bezig…';
-    try {
-      const o = await api('/api/orders/paste', 'POST', { text });
+    const maak = async (force) => {
+      const o = await api('/api/orders/paste', 'POST', force ? { text, force: true } : { text });
       closeModal(); toast(`Opdracht aangemaakt: ${o.title}`);
       await loadBoard();
       openOrderModal(o.id);
-    } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = 'Maak opdracht'; }
+    };
+    try { await maak(false); }
+    catch (err) {
+      // Staat deze opdracht er waarschijnlijk al (audit 16 okt)? Eerst laten zien, dan bewust kiezen.
+      if (err.status === 409 && err.data?.dubbel) {
+        const d = err.data.dubbel;
+        if (confirm(`${err.message}\n\nToch een NIEUWE opdracht maken? (Twee opdrachten voor dezelfde klus = twee keer naar de monteur en twee keer een DRS-fee.)`)) {
+          try { await maak(true); return; } catch (e2) { toast(e2.message, true); }
+        } else if (d.soort === 'opdracht' && d.orderId) { closeModal(); openOrderVers(d.orderId); return; }
+      } else toast(err.message, true);
+      btn.disabled = false; btn.textContent = 'Maak opdracht';
+    }
   };
 }
 
@@ -3812,6 +3836,28 @@ function trustpilotKnopMag() {
 function pinKnopMag() {
   return !!state.me && (state.me.role === 'admin' || state.me.role === 'assistent');
 }
+// AFSCHRIJVEN / ONINBAAR (16 okt 2026, keuze A van de eigenaar): een open factuur waarvan
+// je het geld niet meer verwacht. Blijft bewaard, telt niet meer als openstaand, krijgt geen
+// herinneringen en is geen omzet. Terugzetten kan altijd. Werkt voor één of meerdere.
+async function schrijfFacturenAf(lijst) {
+  const eurA = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+  const totaal = lijst.reduce((t, i) => t + (Number(i.totalIncl) || 0), 0);
+  const een = lijst.length === 1;
+  const reden = await vraagTekst({
+    titel: een ? `Factuur ${lijst[0].number || ''} afschrijven` : `${lijst.length} facturen afschrijven`,
+    uitleg: `${een ? 'Deze factuur' : 'Deze facturen'} (${eurA(totaal)}) ${een ? 'telt' : 'tellen'} daarna niet meer als openstaand, ${een ? 'krijgt' : 'krijgen'} geen herinneringen meer en ${een ? 'is' : 'zijn'} geen omzet. ${een ? 'Hij blijft' : 'Ze blijven'} bewaard; terugzetten naar open kan altijd.`,
+    label: 'Reden (optioneel)', placeholder: 'bv. klant reageert niet meer', knop: een ? 'Afschrijven' : `Alle ${lijst.length} afschrijven`, valideer: () => '',
+  });
+  if (reden === null) return 0;
+  let gelukt = 0; const fouten = [];
+  for (const i of lijst) {
+    try { await api(`/api/invoices/${i.id}/status`, 'POST', { status: 'oninbaar', reden }); gelukt++; }
+    catch (err) { fouten.push(`${i.number || i.id}: ${err.message}`); }
+  }
+  if (fouten.length) toast(`${gelukt} van ${lijst.length} afgeschreven. Niet gelukt: ${fouten.slice(0, 3).join(' · ')}`, true);
+  else toast(een ? 'Afgeschreven — telt niet meer als openstaand' : `${gelukt} facturen afgeschreven`);
+  return gelukt;
+}
 async function zetFactuurPin(invId, pin, { nummer = '', notitie = '' } = {}) {
   let reden = '';
   if (pin) {
@@ -3949,6 +3995,8 @@ function renderInvoiceEditor(ctx) {
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${inv.id && !isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button><button class="btn" id="inv-remind">${icon('bell', 13)} Herinnering</button>` : ''}
         ${inv.id && !isQuote && inv.status === 'concept' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button>` : ''}
+        ${inv.id && !isQuote && inv.status === 'verzonden' && pinKnopMag() ? `<button class="btn" id="inv-afschrijf" title="Verwacht je dit geld niet meer? Telt daarna niet meer als openstaand en krijgt geen herinneringen">Afschrijven</button>` : ''}
+        ${inv.id && !isQuote && inv.status === 'oninbaar' ? `<span class="inv-st oninbaar" style="align-self:center">Afgeschreven${inv.oninbaar?.reden ? ': ' + esc(inv.oninbaar.reden) : ''}</span><button class="btn btn-success" id="inv-paid">✓ Toch betaald</button>${pinKnopMag() ? `<button class="btn" id="inv-heropen">Terug naar open</button>` : ''}` : ''}
         ${inv.id && !isQuote && inv.status === 'betaald' ? `<button class="btn" id="inv-unpaid" title="${inv.sentAt ? 'Terug naar Verzonden — de factuur staat dan open en kan herinnerd worden' : 'Terug naar Concept — de factuur staat dan open'}">Nog niet betaald</button>` : ''}
         ${inv.id && !isQuote && (inv.sentAt || inv.status === 'betaald') && trustpilotKnopMag() ? `<button class="btn" id="inv-tp" title="${inv.trustpilotAt ? 'Al uitgenodigd op ' + esc(fmtDateShort(inv.trustpilotAt)) : 'Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC)'}">${icon('sparkles', 13)} Trustpilot${inv.trustpilotAt ? ' ✓' : ''}</button>` : ''}
         ${inv.id && isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-accept">✓ Goedgekeurd</button><button class="btn btn-danger" id="inv-reject">✗ Afgekeurd</button><button class="btn" id="inv-qremind" title="Vriendelijke herinnering: per e-mail met PDF, of via WhatsApp als de klant alleen een 06 heeft">${icon('bell', 13)} Herinnering${inv.quoteFollowupCount ? ` (${inv.quoteFollowupCount}x)` : ''}</button>` : ''}
@@ -4167,6 +4215,13 @@ function renderInvoiceEditor(ctx) {
   }); };
   statusBtn('#inv-unpaid', inv.sentAt ? 'verzonden' : 'concept', 'Gemarkeerd als nog niet betaald');
   statusBtn('#inv-reject', 'afgekeurd', 'Offerte afgekeurd');
+  statusBtn('#inv-heropen', 'verzonden', 'Terug naar open — telt weer als openstaand');
+  if ($('#inv-afschrijf')) $('#inv-afschrijf').onclick = (ev) => { const b = ev.currentTarget; eenKeer(b, async () => {
+    try {
+      if (!await bewaarEerst()) return;
+      if (await schrijfFacturenAf([{ id: inv.id, number: inv.number, totalIncl: totaalNu() }])) done('Afgeschreven — telt niet meer als openstaand');
+    } catch (err) { toast(err.message, true); }
+  }); };
   // Goedkeuren: als er automatisch een factuur-concept van wordt gemaakt, dat meteen melden.
   if ($('#inv-accept')) $('#inv-accept').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     try {
@@ -4420,7 +4475,7 @@ function renderStatusScan(out) {
         <div><strong>${esc(t.title)}</strong>${t.address ? ` <span class="muted small">· ${esc(t.address)}</span>` : ''} <span class="muted small">(${esc(t.statusLabel)})</span></div>
         <div class="muted small">${esc(t.reason)}</div>
         ${t.suggestedText ? `<div class="ss-drs-text">${esc(t.suggestedText)}</div>` : ''}
-        <div style="margin-top:6px;display:flex;gap:6px">${t.suggestedText ? `<button class="btn btn-sm btn-primary ss-copy" data-text="${esc(t.suggestedText)}">Kopieer tekst</button>` : ''}<button class="btn btn-sm ss-ignore">Klaar / negeren</button></div>
+        <div style="margin-top:6px;display:flex;gap:6px">${t.suggestedText ? `<button class="btn btn-sm btn-primary ss-copy" data-text="${esc(t.suggestedText)}">Kopieer tekst</button>` : ''}${state.meta?.drsRapport ? '<button class="btn btn-sm ss-drs-gemeld" title="Vinkt de opdracht af als gemeld aan DRS — komt dan niet meer in het DRS-rapport">✓ Gemeld aan DRS</button>' : ''}<button class="btn btn-sm ss-ignore">Klaar / negeren</button></div>
       </div>`).join('');
   }
   if (out.note && (sugg.length || todo.length)) html += `<div class="muted small" style="margin-bottom:8px">${esc(out.note)}</div>`;
@@ -4451,6 +4506,13 @@ function renderStatusScan(out) {
     pollStatusScan(); loadBoard();
   };
   $$('.ss-ignore').forEach((b) => b.onclick = () => b.closest('.ss-item').remove());
+  // Zelfde vinkje als in het DRS-rapport (16 okt): voorheen haalde "Klaar" de regel alleen
+  // uit beeld en bewaarde niets — dan kon dezelfde opdracht later nóg eens gemeld worden.
+  $$('.ss-drs-gemeld').forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    const rijEl = b.closest('.ss-item');
+    try { await api(`/api/orders/${rijEl.dataset.id}/drs-gemeld`, 'POST', { gemeld: true }); toast('Afgevinkt als gemeld aan DRS'); rijEl.remove(); }
+    catch (err) { toast(err.message, true); }
+  }));
   $$('.ss-copy').forEach((b) => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.text); toast('Tekst gekopieerd — plak in de Raf Breda-groep'); b.textContent = 'Gekopieerd ✓'; }
     catch { toast('Kopiëren niet gelukt', true); }
@@ -4745,21 +4807,27 @@ function renderInvoices() {
   const paid = som(all.filter((i) => i.type !== 'offerte' && i.status === 'betaald'));
   const overdueCount = openRecent.filter(isOverdue).length;
   const aantalVast = all.filter((i) => i.vastgepind).length;
+  const afgeschreven = all.filter((i) => i.type !== 'offerte' && i.status === 'oninbaar');
   let html = `<div class="muted small inv-teller" style="margin-bottom:12px">Openstaand <span title="Alleen openstaande facturen van de laatste 2 maanden">(laatste 2 mnd)</span>: <strong>${eur(open)}</strong>${openRecent.length ? ` <span class="muted">(${openRecent.length})</span>` : ''}${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}${aantalVast ? ` · <button type="button" class="linkbtn inv-teller-vast">${icon('punaise', 12)} ${aantalVast} vastgepind</button>` : ''}
-      ${oudOpen.length ? `<div class="inv-teller-oud">Niet meegeteld: <button type="button" class="linkbtn inv-teller-oud-knop">${oudOpen.length} open ${oudOpen.length === 1 ? 'factuur' : 'facturen'} ouder dan 2 maanden (${eur(som(oudOpen))})</button></div>` : ''}</div>
+      ${oudOpen.length || afgeschreven.length ? `<div class="inv-teller-oud">Niet meegeteld: ${oudOpen.length ? `<button type="button" class="linkbtn inv-teller-oud-knop">${oudOpen.length} open ${oudOpen.length === 1 ? 'factuur' : 'facturen'} ouder dan 2 maanden (${eur(som(oudOpen))})</button>` : ''}${oudOpen.length && afgeschreven.length ? ' · ' : ''}${afgeschreven.length ? `<button type="button" class="linkbtn inv-teller-af-knop">${afgeschreven.length} afgeschreven (${eur(som(afgeschreven))})</button>` : ''}</div>` : ''}</div>
     <div id="invTodoWrap">${invTodoHTML(state._invTodo)}</div>`;
+  // Filter "ouder dan 2 mnd": in één keer afschrijven (kantoor).
+  if (f === 'oud' && pinKnopMag() && items.some((i) => isOudOpen(i))) {
+    const oudInBeeld = items.filter((i) => isOudOpen(i));
+    html += `<div class="info-card inv-bulk-af"><span>${oudInBeeld.length} open ${oudInBeeld.length === 1 ? 'factuur' : 'facturen'} ouder dan 2 maanden (${eur(som(oudInBeeld))}). Komt dit geld niet meer binnen?</span><button type="button" class="btn btn-sm" id="invBulkAf">Alle ${oudInBeeld.length} afschrijven</button></div>`;
+  }
   if (!items.length) html += '<div class="empty">Niets in deze weergave. Maak er één met de knoppen rechtsboven, of via de knop Factuur op een opdracht.</div>';
   html += items.map((i) => {
     const quote = i.type === 'offerte';
     const overdue = isOverdue(i);
-    const stLabel = overdue ? 'Nog niet betaald — VERLOPEN' : ({ concept: 'Concept', verzonden: quote ? 'Verzonden' : 'Verzonden — nog niet betaald', betaald: i.sentAt ? 'Betaald ✓' : 'Betaald ✓ (nog niet verstuurd)', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd' }[i.status] || i.status);
+    const stLabel = overdue ? 'Nog niet betaald — VERLOPEN' : ({ concept: 'Concept', verzonden: quote ? 'Verzonden' : 'Verzonden — nog niet betaald', betaald: i.sentAt ? 'Betaald ✓' : 'Betaald ✓ (nog niet verstuurd)', goedgekeurd: 'Goedgekeurd ✓', afgekeurd: 'Afgekeurd', oninbaar: 'Afgeschreven (oninbaar)' }[i.status] || i.status);
     const vast = i.vastgepind;
     return `
     <div class="info-card inv-rij${vast ? ' inv-vast' : ''}" data-inv="${esc(i.id)}" style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
       <div>
         ${vast ? `<div class="inv-vast-kop">${icon('punaise', 12)} Vastgepind${vast.notitie ? `: <span class="inv-vast-notitie">${esc(vast.notitie)}</span>` : ''} <span class="muted small">— ${esc(vast.door || '')}${vast.at ? ', ' + esc(fmtDateShort(vast.at)) : ''}</span></div>` : ''}
         <div>${quote ? `<span class="chip" style="font-size:11px">OFFERTE</span> ` : ''}<strong>${esc(i.number)}</strong> · ${esc(i.customerName || 'klant')} <span class="muted small">${i.orderTitle ? '— ' + esc(i.orderTitle) : '(losstaand)'}</span></div>
-        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span class="inv-st ${overdue ? 'verlopen' : esc(i.status)}">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}${i.bounce ? ` · <span class="inv-bounce" title="${esc(i.bounce.reden || '')}">mail NIET aangekomen — adres controleren</span>` : ''}</div>
+        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span class="inv-st ${overdue ? 'verlopen' : esc(i.status)}">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}${i.bounce ? ` · <span class="inv-bounce" title="${esc(i.bounce.reden || '')}">mail NIET aangekomen — adres controleren</span>` : ''}${i.oninbaar ? ` · <span class="muted">afgeschreven ${esc(fmtDateShort(i.oninbaar.at))}${i.oninbaar.door ? ' door ' + esc(i.oninbaar.door) : ''}${i.oninbaar.reden ? ' — ' + esc(i.oninbaar.reden) : ''}</span>` : ''}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <strong style="font-size:15px">${eur(i.totalIncl)}</strong>
@@ -4770,7 +4838,9 @@ function renderInvoices() {
         ${i.orderId ? `<button class="btn btn-sm inv-open" data-oid="${esc(i.orderId)}">Opdracht</button>` : ''}
         ${!quote && (i.sentAt || i.status === 'betaald') ? `<button class="btn btn-sm inv-review" data-id="${esc(i.id)}" title="${i.reviewRequestedAt ? 'Al gevraagd op ' + esc(fmtDateShort(i.reviewRequestedAt)) : 'Vraag de klant om een Google-review (mail + WhatsApp)'}">${icon('sparkles', 13)} Review${i.reviewRequestedAt ? ' ✓' : ''}</button>` : ''}
         ${!quote && (i.sentAt || i.status === 'betaald') && trustpilotKnopMag() ? `<button class="btn btn-sm inv-tp" data-id="${esc(i.id)}" data-al="${esc(i.trustpilotAt || '')}" title="${i.trustpilotAt ? 'Al uitgenodigd op ' + esc(fmtDateShort(i.trustpilotAt)) : 'Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC)'}">${icon('sparkles', 13)} Trustpilot${i.trustpilotAt ? ' ✓' : ''}</button>` : ''}
-        ${!quote && (i.status === 'verzonden' || i.status === 'concept') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
+        ${!quote && (i.status === 'verzonden' || i.status === 'concept' || i.status === 'oninbaar') ? `<button class="btn btn-sm btn-success inv-mark" data-id="${esc(i.id)}">✓ Betaald</button>` : ''}
+        ${!quote && pinKnopMag() && isOudOpen(i) ? `<button class="btn btn-sm inv-afschrijf" data-id="${esc(i.id)}" title="Verwacht je dit geld niet meer? Afschrijven: telt niet meer als openstaand, geen herinneringen meer">Afschrijven</button>` : ''}
+        ${!quote && pinKnopMag() && i.status === 'oninbaar' ? `<button class="btn btn-sm inv-heropen" data-id="${esc(i.id)}" data-status="verzonden" title="Weer als openstaand tellen">Terug naar open</button>` : ''}
         ${!quote && i.status === 'betaald' ? `<button class="btn btn-sm inv-unmark" data-id="${esc(i.id)}" data-status="${i.sentAt ? 'verzonden' : 'concept'}" title="De factuur staat dan weer open">Nog niet betaald</button>` : ''}
         ${quote && i.status === 'verzonden' ? `<button class="btn btn-sm btn-success inv-ok" data-id="${esc(i.id)}">✓ Goedgekeurd</button>` : ''}
         ${pinKnopMag() ? `<button class="btn btn-sm inv-pin${vast ? ' inv-pin-aan' : ''}" data-id="${esc(i.id)}" data-pin="${vast ? '0' : '1'}" data-nummer="${esc(i.number || '')}" data-notitie="${esc(vast?.notitie || '')}" title="${vast ? 'Losmaken — gaat terug naar de gewone volgorde' : 'Bovenaan zetten (voor jou en je collega)'}">${icon('punaise', 13)} ${vast ? 'Losmaken' : 'Vastpinnen'}</button>` : ''}
@@ -4785,6 +4855,15 @@ function renderInvoices() {
   const zetFilter = (w) => { const sel = $('#invFilter'); if (sel) { sel.value = w; renderInvoices(); } };
   const oudKnop = $('.inv-teller-oud-knop', wrap); if (oudKnop) oudKnop.onclick = () => zetFilter('oud');
   const vastKnop = $('.inv-teller-vast', wrap); if (vastKnop) vastKnop.onclick = () => zetFilter('vastgepind');
+  const afKnop = $('.inv-teller-af-knop', wrap); if (afKnop) afKnop.onclick = () => zetFilter('oninbaar');
+  $$('.inv-afschrijf', wrap).forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    const i = all.find((x) => x.id === b.dataset.id); if (!i) return;
+    if (await schrijfFacturenAf([i])) await loadInvoices();
+  }));
+  const bulkAf = $('#invBulkAf', wrap);
+  if (bulkAf) bulkAf.onclick = () => eenKeer(bulkAf, async () => {
+    if (await schrijfFacturenAf(items.filter((i) => isOudOpen(i)))) await loadInvoices();
+  });
   $$('.inv-edit').forEach((b) => b.onclick = () => openStandaloneInvoice(b.dataset.id));
   $$('.inv-share').forEach((b) => b.onclick = (e) => shareInvoicePdf(b.dataset.id, b.dataset.label, e.currentTarget));
   $$('.inv-resend').forEach((b) => b.onclick = () => resendInvoice(b.dataset.id, b.dataset.label, b.dataset.email, () => loadInvoices(), { factuur: !!b.dataset.factuur, nummer: b.dataset.nummer, bedrag: b.dataset.bedrag === '' ? null : Number(b.dataset.bedrag), status: b.dataset.status, trustpilotAl: b.dataset.tp || '' }));
@@ -4807,6 +4886,7 @@ function renderInvoices() {
   });
   quickStatus('.inv-mark', 'betaald', 'Betaald ✓');
   quickStatus('.inv-unmark', 'verzonden', 'Gemarkeerd als nog niet betaald');
+  quickStatus('.inv-heropen', 'verzonden', 'Terug naar open — telt weer als openstaand');
   // NOG TE FACTUREREN: afgeronde kaarten zonder factuur — nooit meer omzet vergeten.
   // (Getekend in de HTML hierboven uit state._invTodo; hier alleen de knoppen.)
   const box = $('#invTodoWrap');
@@ -5682,6 +5762,16 @@ async function loadSettingsHtml(s) {
       <label>Venster (uren) <input id="amw-hours" type="number" min="0" max="72" value="${esc(String(s.autoMergeWindowHours ?? 6))}" style="max-width:120px"></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoMerge">Opslaan</button></div>
     </div>
+    <div data-sg="werk" class="info-card admin-only" style="margin-bottom:18px"> <h3>${icon('list', 15)} DRS-rapport (dagrapport aan DRS)</h3>
+      <p class="muted small">Elke afgeronde DRS-opdracht kost een fee. Het DRS-rapport (knop op het bord) toont alleen wat nog <strong>niet</strong> gemeld is en voorkomt dat een opdracht twee keer als afgerond wordt gemeld. Het rapport dat in de DRS-groep verschijnt, leest het CRM ook terug: opdrachten worden vanzelf afgevinkt en bij een dubbele melding krijgt kantoor direct een melding.</p>
+      <label style="margin-bottom:4px">Standaard in het rapport</label>
+      <div class="drs-kopjes" id="dr-kopjes">${Object.entries(DRS_KOPJE_LABEL).map(([c, l]) => `<label class="drs-chipkeuze"><input type="checkbox" value="${c}" ${(s.drsRapport?.kopjes || ['afgerond', 'geannuleerd']).includes(c) ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:10px"><input type="checkbox" id="dr-herinnering" style="width:auto" ${s.drsRapport?.herinnering === false ? '' : 'checked'}> 's Avonds een melding als er nog DRS-opdrachten te melden zijn</label>
+      <label>Tijdstip (uur) <input id="dr-uur" type="number" min="12" max="23" value="${esc(String(s.drsRapport?.herinneringUur ?? 21))}" style="max-width:120px"></label>
+      <label>Wie plaatsen het rapport in de groep? <input id="dr-afzenders" value="${esc((s.drsRapport?.afzenders || []).join(', '))}" placeholder="bv. Noura, Key service 24/7"></label>
+      <p class="muted small" style="margin-top:2px">Namen zoals ze in WhatsApp staan, met komma's. "Key service" en de namen van de kantoor-accounts tellen al vanzelf mee. Lijstjes van anderen (bv. DRS zelf) worden nooit als ons rapport afgevinkt.</p>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveDrsRapport">Opslaan</button></div>
+    </div>
     <div data-sg="werk" class="info-card" style="margin-bottom:18px"> <h3>${icon('message', 15)} "Wacht op antwoord" op Start</h3>
       <p class="muted small">Het blok toont klantberichten waar wij langer dan 2 uur niet op hebben gereageerd. Berichten ouder dan deze termijn vallen automatisch af; met de knop <strong>Afgehandeld</strong> haal je een bericht eerder weg. Een opdracht die na het bericht is afgerond of geannuleerd telt ook als afgehandeld.</p>
       <label>Maximaal dagen terug <input id="woa-dagen" type="number" min="1" max="60" value="${esc(String(s.wachtOpAntwoordDagen ?? 14))}" style="max-width:120px"></label>
@@ -5952,6 +6042,16 @@ async function loadSettingsHtml(s) {
   $('#saveAutoMerge').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { autoMergeWindowHours: Number($('#amw-hours').value) }); toast('Samenvoeg-venster opgeslagen'); }
     catch (err) { toast(err.message, true); }
+  };
+  if ($('#saveDrsRapport')) $('#saveDrsRapport').onclick = async () => {
+    const kopjes = $$('#dr-kopjes input').filter((x) => x.checked).map((x) => x.value);
+    if (!kopjes.length) return toast('Kies minstens één kopje', true);
+    try {
+      const r = await api('/api/drs-rapport/instellingen', 'POST', { kopjes, herinnering: $('#dr-herinnering').checked, herinneringUur: Number($('#dr-uur').value), afzenders: $('#dr-afzenders').value });
+      if (state.meta?.drsRapport) state.meta.drsRapport.kopjes = r.kopjes;
+      try { localStorage.removeItem('ksDrsKopjes'); } catch { /* geen opslag */ }
+      toast('DRS-rapport-instellingen opgeslagen');
+    } catch (err) { toast(err.message, true); }
   };
   $('#saveWachtOpAntwoord').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { wachtOpAntwoordDagen: Number($('#woa-dagen').value) }); toast('Termijn "Wacht op antwoord" opgeslagen'); }
@@ -6957,6 +7057,203 @@ async function openDigestModal() {
   $$('[data-open]', $('#modal')).forEach((li) => li.onclick = () => { const id = li.dataset.open; closeModal(); markSeen(id); openOrderModal(id); });
 }
 
+// ---------- DRS-RAPPORT (16 okt 2026, casus 4879 NB Etten-Leur twee keer gemeld) ----------
+// Elke afgeronde DRS-opdracht kost een fee en DRS factureert op ons dagrapport. Dit venster
+// toont alleen wat nog NIET gemeld is, maakt de tekst klaar (met klantnaam, wens van DRS) en
+// vinkt na het plaatsen af. Een opdracht die al als afgerond gemeld is komt hier nooit meer
+// terug. Het rapport dat in de DRS-groep verschijnt wordt óók door het CRM gelezen
+// (vangnet): dat vinkt vanzelf af en geeft een alarm bij een dubbele melding.
+const DRS_KOPJE_LABEL = { afgerond: 'Afgerond', geannuleerd: 'Geannuleerd', offerte: 'Offerte', afspraak: 'Afspraken' };
+const DRS_DAGEN = ['Zondag', 'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag'];
+function drsKorteDatum(datum) {
+  const m = String(datum || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return '';
+  return `${DRS_DAGEN[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12)).getUTCDay()].slice(0, 2).toLowerCase()} ${m[3]}-${m[2]}`;
+}
+function drsKop(datum) {
+  const m = String(datum || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${DRS_DAGEN[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12)).getUTCDay()]} ${m[3]}-${m[2]}` : '';
+}
+// null = niet van toepassing (geen DRS of status hoort niet in het rapport).
+function drsMeldInfo(o) {
+  const kopjes = state.meta?.drsRapport?.kopjes;
+  if (!kopjes || !o || !o.isDrs || !o.drsCat || !kopjes.includes(o.drsCat)) return null;
+  return { cat: o.drsCat, gemeld: (o.drsGemeld && o.drsGemeld[o.drsCat]) || null };
+}
+const DRS_VIA = { crm: 'via het DRS-rapport in het CRM', groep: 'gelezen uit het rapport in de DRS-groep', handmatig: 'met de hand aangevinkt', aangenomen: 'bij de start als gemeld aangenomen' };
+// Tekst in hetzelfde formaat als het dagrapport in de groep (*vet* = WhatsApp-opmaak).
+function drsRapportTekst(datum, regels) {
+  const delen = [`*${drsKop(datum)}*`];
+  for (const cat of Object.keys(DRS_KOPJE_LABEL)) {
+    const lijst = regels.filter((r) => r.cat === cat).map((r) => String(r.regel || '').replace(/\s*\n+\s*/g, ' ').trim()).filter(Boolean);
+    if (lijst.length) delen.push(`*${DRS_KOPJE_LABEL[cat]}:*\n\n${lijst.join('\n\n')}`);
+  }
+  return delen.join('\n\n');
+}
+async function kopieerNaarKlembord(tekst, terugvalVeld) {
+  try { await navigator.clipboard.writeText(tekst); return true; }
+  catch {
+    try { if (terugvalVeld) { terugvalVeld.removeAttribute('readonly'); terugvalVeld.value = tekst; terugvalVeld.select(); const ok = document.execCommand('copy'); terugvalVeld.setAttribute('readonly', ''); return ok; } }
+    catch { /* niets */ }
+    return false;
+  }
+}
+function drsKopjesKeuze(standaard) {
+  try { const k = JSON.parse(localStorage.getItem('ksDrsKopjes') || 'null'); if (Array.isArray(k) && k.length) return k.filter((x) => DRS_KOPJE_LABEL[x]); } catch { /* geen opslag */ }
+  return standaard || ['afgerond', 'geannuleerd'];
+}
+async function openDrsRapport() {
+  const st = state._drs = state._drs || {};
+  modal('<h2>DRS-rapport</h2><p class="muted small">Bezig met ophalen…</p>');
+  let d;
+  try {
+    const kopjes = st.kopjes || drsKopjesKeuze(state.meta?.drsRapport?.kopjes);
+    d = await api(`/api/drs-rapport?kopjes=${encodeURIComponent(kopjes.join(','))}`);
+  } catch (err) {
+    modal(`<h2>DRS-rapport</h2><p class="error">${esc(err.message)}</p><div class="modal-actions"><span></span><div class="right"><button class="btn" onclick="closeModal()">Sluiten</button><button class="btn btn-primary" onclick="openDrsRapport()">Opnieuw proberen</button></div></div>`);
+    return;
+  }
+  st.data = d; st.kopjes = d.kopjes; st.datum = st.datum && st.datumVoor === d.datum ? st.datum : d.datum; st.datumVoor = d.datum;
+  // Vinkjes: recente opdrachten aan, oudere (>2 dagen, misschien al met de hand gemeld) uit.
+  st.keuze = new Map(d.items.map((i) => [`${i.orderId}|${i.cat}`, { aan: !i.ouder, regel: i.regel }]));
+  tekenDrsRapport();
+}
+function tekenDrsRapport() {
+  const st = state._drs; const d = st.data;
+  const sleutel = (i) => `${i.orderId}|${i.cat}`;
+  const rij = (i) => {
+    const k = st.keuze.get(sleutel(i)) || { aan: false, regel: i.regel };
+    return `<div class="drs-rij${i.waarschuwingen.length ? ' drs-let-op' : ''}" data-k="${esc(sleutel(i))}">
+      <label class="drs-vink"><input type="checkbox" class="drs-aan" ${k.aan ? 'checked' : ''} aria-label="Meenemen in het rapport"></label>
+      <div class="drs-rij-in">
+        <input class="drs-regel" value="${esc(k.regel)}" aria-label="Regel in het rapport">
+        <div class="muted small">${esc(DRS_KOPJE_LABEL[i.cat])}${i.sindsDatum ? ` op ${esc(drsKorteDatum(i.sindsDatum))}` : ''}${i.ingeklapt ? ' · al ingeklapt' : ''} · <button type="button" class="linkbtn drs-open" data-id="${esc(i.orderId)}">opdracht</button> · <button type="button" class="linkbtn drs-al" title="Staat al in een eerder rapport (bv. zelf getypt) — vink af zonder hem nu te melden">was al gemeld</button></div>
+        ${i.waarschuwingen.map((w) => `<div class="drs-waarschuwing">${icon('bell', 12)} ${esc(w)}</div>`).join('')}
+      </div>
+    </div>`;
+  };
+  const recent = d.items.filter((i) => !i.ouder); const ouder = d.items.filter((i) => i.ouder);
+  const perKopje = (lijst) => Object.keys(DRS_KOPJE_LABEL).filter((c) => lijst.some((i) => i.cat === c))
+    .map((c) => `<h3 class="drs-kopje">${esc(DRS_KOPJE_LABEL[c])} <span class="muted small">(${lijst.filter((i) => i.cat === c).length})</span></h3>${lijst.filter((i) => i.cat === c).map(rij).join('')}`).join('');
+  const alarmen = (d.alarmen || []).map((a) => `<div class="drs-alarm" data-alarm="${esc(a.id)}">
+      <div><strong>${a.mogelijk ? 'Mogelijk dubbel' : 'Dubbel'} gemeld aan DRS:</strong> ${esc(a.uitleg || `${a.postcode} ${a.plaats || ''}`)} — in het rapport van ${esc(drsKorteDatum(a.datum))}.${a.terugkijken ? ' <span class="muted small">(gevonden bij het terugkijken)</span>' : ''}<div class="muted small">${a.mogelijk ? 'Controleer of het om dezelfde klus gaat.' : 'Laat DRS weten dat het om één opdracht gaat, anders betaal je twee keer.'}</div></div>
+      <div class="drs-alarm-knoppen">${a.orderId ? `<button type="button" class="btn btn-sm drs-open" data-id="${esc(a.orderId)}">Opdracht</button>` : ''}<button type="button" class="btn btn-sm drs-alarm-ok">Afgehandeld</button></div>
+    </div>`).join('');
+  const kopjesKeuze = Object.entries(DRS_KOPJE_LABEL).map(([c, l]) => `<label class="drs-chipkeuze"><input type="checkbox" class="drs-kopje-keuze" value="${c}" ${st.kopjes.includes(c) ? 'checked' : ''}> ${esc(l)}</label>`).join('');
+  const maandNaam = d.maand ? new Date(`${d.maand.maand}-15T12:00:00Z`).toLocaleDateString('nl-NL', { month: 'long', year: 'numeric' }) : '';
+  const VIA_KORT = { crm: 'CRM', groep: 'uit de groep', handmatig: 'met de hand' };
+  const geschiedenis = (d.rapporten || []).map((r) => `<div class="drs-hist">
+      <div><strong>${esc(drsKorteDatum(r.datum))}</strong> · ${esc(VIA_KORT[r.via] || r.via)}${r.door ? ` · ${esc(r.door)}` : ''} · ${r.aantal} regel(s)${r.afgerond ? `, ${r.afgerond} afgerond` : ''}${r.dubbel ? ` · <span class="drs-rood">${r.dubbel} dubbel</span>` : ''}${r.ongedaan ? ' · <span class="muted">ongedaan gemaakt</span>' : ''}
+      ${(r.regels || []).filter((x) => x.uitkomst && !/^gemeld$/.test(x.uitkomst)).slice(0, 6).map((x) => `<div class="muted small">${esc(x.postcode || '')} ${esc(x.uitkomst)}</div>`).join('')}</div>
+      ${r.via === 'crm' && !r.ongedaan ? `<button type="button" class="btn btn-sm drs-ongedaan" data-r="${esc(r.id)}" title="Vinkjes van dit rapport terugzetten (bv. per ongeluk afgevinkt)">Ongedaan</button>` : ''}
+    </div>`).join('') || '<div class="muted small">Nog geen rapporten.</div>';
+  const maandLijst = (d.maand?.rijen || []).map((x) => `<div class="small">${esc(drsKorteDatum(x.datum))} — ${esc(x.regel)}</div>`).join('');
+  modal(`
+    <h2>DRS-rapport</h2>
+    <p class="muted small">Alleen DRS-opdrachten die nog <strong>niet</strong> aan DRS gemeld zijn. Wat al als afgerond gemeld is, komt hier nooit meer terug — zo betaal je nooit twee keer. Plaats je het rapport in de DRS-groep, dan leest het CRM het ook terug en vinkt het vanzelf af.</p>
+    ${alarmen}
+    <div class="drs-balk" data-geen-wijziging>
+      <label>Datum in de kop <input type="date" id="drsDatum" value="${esc(st.datum)}"></label>
+      <div class="drs-kopjes">${kopjesKeuze}</div>
+    </div>
+    ${d.items.length ? `${perKopje(recent)}${ouder.length ? `<details class="drs-ouder"${recent.length ? '' : ' open'}><summary>Ouder dan 2 dagen — controleer of deze al gemeld zijn (${ouder.length})</summary><p class="muted small">Staan standaard uit. Wel gemeld? Tik op "was al gemeld". Nog niet? Vink aan om mee te nemen.</p>${perKopje(ouder)}</details>` : ''}`
+      : `<div class="drs-leeg">${icon('check', 16)} Alles is gemeld — er staat niets meer open voor DRS${st.kopjes.length < 4 ? ' (in de gekozen kopjes)' : ''}.</div>`}
+    ${d.items.length ? `<label class="muted small" style="margin-top:12px">Voorbeeld — zo komt het in de groep</label>
+    <div data-geen-wijziging><textarea id="drsTekst" rows="9" readonly></textarea></div>
+    <div id="drsNaKopie" class="drs-nakopie" hidden>
+      <div><strong>Gekopieerd ✓</strong> Plak het rapport in de DRS-groep (lang drukken → Plakken). Staat het erin?</div>
+      <div class="drs-nakopie-knoppen"><button type="button" class="btn btn-success" id="drsGeplaatst">✓ Geplaatst — vink af</button><button type="button" class="btn" id="drsNogNiet">Nog niet</button></div>
+    </div>` : ''}
+    <details class="drs-geschiedenis"><summary>Geschiedenis en controle DRS-factuur</summary>
+      ${d.maand ? `<p><strong>${esc(maandNaam)}:</strong> ${d.maand.afgerond} opdracht(en) als afgerond gemeld aan DRS. Vergelijk dit met de factuur van DRS.</p>${maandLijst ? `<details><summary class="small">Toon de lijst</summary>${maandLijst}</details>` : ''}` : ''}
+      <h3 class="drs-kopje">Laatste rapporten</h3>${geschiedenis}
+    </details>
+    <div class="modal-actions"><button class="btn" id="drsSluit">Sluiten</button><div class="right">${d.items.length ? `<span class="muted small" id="drsTelling"></span><button class="btn btn-primary" id="drsKopieer">${icon('copy', 14)} Kopieer rapport</button>` : ''}</div></div>`);
+  const m = $('#modal');
+  const gekozen = () => d.items.filter((i) => (st.keuze.get(sleutel(i)) || {}).aan).map((i) => ({ orderId: i.orderId, cat: i.cat, regel: (st.keuze.get(sleutel(i)) || {}).regel || i.regel }));
+  const ververs = () => {
+    const g = gekozen();
+    const t = $('#drsTekst'); if (t) t.value = g.length ? drsRapportTekst(st.datum, g) : '';
+    const tel = $('#drsTelling'); if (tel) tel.textContent = g.length ? `${g.length} opdracht(en)` : 'niets aangevinkt';
+    const kb = $('#drsKopieer'); if (kb) kb.disabled = !g.length;
+  };
+  ververs();
+  $('#drsSluit').onclick = closeModal;
+  $('#drsDatum').onchange = (e) => { if (/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) { st.datum = e.target.value; ververs(); } };
+  $$('.drs-kopje-keuze', m).forEach((c) => c.onchange = () => {
+    const k = $$('.drs-kopje-keuze', m).filter((x) => x.checked).map((x) => x.value);
+    if (!k.length) { c.checked = true; return toast('Kies minstens één kopje', true); }
+    st.kopjes = k; try { localStorage.setItem('ksDrsKopjes', JSON.stringify(k)); } catch { /* geen opslag */ }
+    openDrsRapport();
+  });
+  $$('.drs-rij', m).forEach((r) => {
+    const k = st.keuze.get(r.dataset.k);
+    $('.drs-aan', r).onchange = (e) => { k.aan = e.target.checked; ververs(); };
+    $('.drs-regel', r).oninput = (e) => { k.regel = e.target.value; ververs(); };
+    $('.drs-al', r).onclick = (ev) => { const b = ev.currentTarget; eenKeer(b, async () => {
+      const [orderId, cat] = r.dataset.k.split('|');
+      try { await api('/api/drs-rapport/markeer', 'POST', { via: 'handmatig', items: [{ orderId, cat, regel: k.regel }] }); toast('Afgevinkt als al gemeld'); openDrsRapport(); }
+      catch (err) { toast(err.message, true); }
+    }); };
+  });
+  $$('.drs-open', m).forEach((b) => b.onclick = () => { closeModal(); openOrderVers(b.dataset.id); });
+  $$('.drs-alarm-ok', m).forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    try { await api(`/api/drs-rapport/alarm/${b.closest('[data-alarm]').dataset.alarm}/afgehandeld`, 'POST', {}); openDrsRapport(); }
+    catch (err) { toast(err.message, true); }
+  }));
+  $$('.drs-ongedaan', m).forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    if (!confirm('De vinkjes van dit rapport terugzetten? De opdrachten staan daarna weer bij "nog te melden". Doe dit alleen als het rapport NIET in de groep is geplaatst.')) return;
+    try { const r = await api('/api/drs-rapport/ongedaan', 'POST', { rapportId: b.dataset.r }); toast(`${r.teruggezet} opdracht(en) teruggezet`); openDrsRapport(); }
+    catch (err) { toast(err.message, true); }
+  }));
+  const kopieer = $('#drsKopieer');
+  if (kopieer) kopieer.onclick = async () => {
+    // Kopiëren meteen in de tik (iOS staat het klembord alleen toe bij een directe tik).
+    const tekst = $('#drsTekst').value;
+    const gelukt = await kopieerNaarKlembord(tekst, $('#drsTekst'));
+    if (!gelukt) { toast('Kopiëren lukte niet — selecteer de tekst in het voorbeeld en kopieer hem zelf', true); return; }
+    st.gekopieerd = { tekst, items: gekozen(), datum: st.datum };
+    $('#drsNaKopie').hidden = false;
+    $('#drsNaKopie').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+  const geplaatst = $('#drsGeplaatst');
+  if (geplaatst) geplaatst.onclick = () => eenKeer(geplaatst, async () => {
+    const g = st.gekopieerd; if (!g || !g.items.length) return;
+    try {
+      const r = await api('/api/drs-rapport/markeer', 'POST', { items: g.items, datum: g.datum, tekst: g.tekst });
+      toast(`${r.gemarkeerd} opdracht(en) afgevinkt als gemeld aan DRS`);
+      st.gekopieerd = null; st.datum = null;
+      openDrsRapport();
+      if (state.view === 'board') loadBoard().catch(() => {});
+    } catch (err) { toast(err.message, true); }
+  });
+  const nogNiet = $('#drsNogNiet');
+  if (nogNiet) nogNiet.onclick = () => { $('#drsNaKopie').hidden = true; toast('Niets afgevinkt. Het CRM vinkt ze ook vanzelf af zodra het rapport in de groep staat.'); };
+}
+// Regel in de opdracht: "Gemeld aan DRS" + vinkje (alleen kantoor, alleen DRS).
+function drsKaartRegel(o) {
+  const di = drsMeldInfo(o);
+  if (!di) return '';
+  const g = di.gemeld;
+  return `<div class="drs-kaart ${g ? 'gemeld' : ''}" id="f-drs">${g
+    ? `${icon('check', 14)} <span>Gemeld aan DRS als <strong>${esc(DRS_KOPJE_LABEL[di.cat])}</strong> op ${esc(drsKorteDatum(g.datum))}${g.door ? ` door ${esc(g.door)}` : ''} <span class="muted small">(${esc(DRS_VIA[g.via] || g.via || '')})</span></span> <button type="button" class="btn btn-sm" id="f-drs-uit" title="Alleen als hij NIET in een rapport heeft gestaan">Ongedaan</button>`
+    : `<span><strong>Nog niet gemeld aan DRS</strong> als ${esc(DRS_KOPJE_LABEL[di.cat])} — komt in het DRS-rapport.</span> <button type="button" class="btn btn-sm" id="f-drs-aan" title="Staat al in een rapport (bv. zelf getypt)">✓ Is al gemeld</button>`}</div>`;
+}
+function bindDrsKaartRegel(o) {
+  const zet = (gemeld) => (ev) => { const b = ev.currentTarget; eenKeer(b, async () => {
+    if (!gemeld && !confirm('Vinkje "gemeld aan DRS" weghalen? Doe dit alleen als deze opdracht NIET in een rapport aan DRS heeft gestaan — anders meld je hem dubbel.')) return;
+    try {
+      const r = await api(`/api/orders/${o.id}/drs-gemeld`, 'POST', { cat: o.drsCat, gemeld });
+      o.drsGemeld = r.drsGemeld || undefined;
+      const el = $('#f-drs'); if (el) { el.outerHTML = drsKaartRegel(o); bindDrsKaartRegel(o); }
+      toast(gemeld ? 'Afgevinkt als gemeld aan DRS' : 'Vinkje weggehaald — staat weer bij "nog te melden"');
+      if (state.view === 'board') loadBoard().catch(() => {});
+    } catch (err) { toast(err.message, true); }
+  }); };
+  const aan = $('#f-drs-aan'); if (aan) aan.onclick = zet(true);
+  const uit = $('#f-drs-uit'); if (uit) uit.onclick = zet(false);
+}
+
 // ---------- Dubbele klanten samenvoegen ----------
 async function openDuplicatesModal() {
   modal('<h2>Dubbele klanten</h2><p class="muted small">Zoeken naar dubbele klanten…</p>');
@@ -6989,6 +7286,7 @@ async function openDuplicatesModal() {
 
 // ---------- Buttons & modal infra ----------
 function bindButtons() {
+  $('#drsReportBtn')?.addEventListener('click', () => openDrsRapport());
   $('#newOrderBtn')?.addEventListener('click', () => openOrderModal());
   $('#phoneOrderBtn')?.addEventListener('click', openPhoneIntakeModal);
   $('#newCustomerBtn')?.addEventListener('click', () => openCustomerModal());
@@ -7060,11 +7358,16 @@ function bindButtons() {
   $('#collapseBtnFoot')?.addEventListener('click', () => $('#collapseBtn')?.click()); // mobiel: onderaan het bord
   $('#collapseBtn')?.addEventListener('click', async () => {
     const naam = state.channel === 'email' ? 'E-mail' : state.channel === 'whatsapp' ? 'WhatsApp' : 'Alle';
-    const visible = filteredOrders().length;
-    if (!visible) return toast('Er staan geen opdrachten om in te klappen', true);
-    if (!confirm(`${visible} opdracht(en) van "${naam}" nu inklappen in een gedateerde bundel? Het bord wordt leeg; je vindt ze terug onder "Ingeklapte agenda's" en kunt ze altijd weer openen.`)) return;
+    // Alleen afgehandeld of een afspraak van vandaag of eerder — open opdrachten blijven
+    // staan (audit 16 okt: de knop klapte alles in, ook lopende klussen). Zelfde regel als de server.
+    const vandaag = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+    const afgehandeld = new Set((state.meta?.statuses || []).filter((x) => x.secondary).map((x) => x.key).concat(['afgerond', 'geannuleerd']));
+    const zichtbaar = filteredOrders();
+    const klaar = zichtbaar.filter((o) => afgehandeld.has(o.status) || (o.status === 'afspraak_ingepland' && o.appointmentAt && String(o.appointmentAt).slice(0, 10) <= vandaag));
+    if (!klaar.length) return toast('Er staan geen afgehandelde opdrachten om in te klappen (open opdrachten blijven altijd staan)', true);
+    if (!confirm(`${klaar.length} afgehandelde opdracht(en) van "${naam}" nu inklappen in een gedateerde bundel?${zichtbaar.length > klaar.length ? ` De ${zichtbaar.length - klaar.length} open opdracht(en) blijven op het bord staan.` : ''} Je vindt ze terug onder "Ingeklapte agenda's".`)) return;
     try {
-      const r = await api('/api/archives/collapse', 'POST', { channel: state.channel });
+      const r = await api('/api/archives/collapse', 'POST', { channel: state.channel, ids: klaar.map((o) => o.id) });
       loadBoard();
       if (r.count && r.key) {
         toastUndo(`${r.count} opdracht(en) ingeklapt`, async () => { await api('/api/archives/uncollapse', 'POST', { key: r.key }); toast('Inklappen ongedaan gemaakt'); loadBoard(); }, 12000);

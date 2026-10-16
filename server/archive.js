@@ -54,16 +54,38 @@ function isSecondaryStatus(statusKey) {
   return !!(st && st.secondary);
 }
 
+// Kalenderdag (JJJJ-MM-DD) in Nederlandse tijd. Een afspraak staat als "kale" lokale tijd
+// ("2026-10-18T10:00", datetime-local) opgeslagen → gewoon de datum eraf lezen; een
+// tijdstip mét tijdzone (ISO met Z) omrekenen naar Amsterdam.
+export function nlKalenderdag(waarde) {
+  const t = String(waarde || '');
+  if (/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(t)) return t.slice(0, 10);
+  const d = new Date(t);
+  return isNaN(d) ? '' : d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+}
+
 // Bepaalt of een opdracht ingeklapt mag worden voor de af te sluiten week.
+// AUDIT 16 okt 2026 (tellen van afgeronde opdrachten / DRS-rapport):
+//  - het weekeinde was zondag 00:00 UTC i.p.v. zondag 23:59 NL → een opdracht met een
+//    afspraak op ZONDAG bleef een week extra in de kolom Afgerond staan (en kon zo twee
+//    keer in het dagrapport belanden). Nu op Nederlandse kalenderdag vergeleken;
+//  - "afspraak ná deze week blijft staan" gold voor élke status → een afgeronde opdracht
+//    met een (oude, verzette) afspraakdatum later bleef wekenlang staan. Geldt nu alleen
+//    voor de afspraak-kolom; afgerond/geannuleerd gaan op het moment van afronden;
+//  - een afspraak-kaart ZONDER datum werd ingeklapt terwijl de afspraak nog onbekend is.
 function qualifies(order, week) {
   if (order.archivedWeek) return false;                 // al ingeklapt
-  // Alleen 'Afspraak ingepland' en afgehandelde kolommen klappen wekelijks in.
-  const mayCollapse = order.status === appointmentStatusKey() || isSecondaryStatus(order.status);
-  if (!mayCollapse) return false;
-  if (order.appointmentAt) {
-    const appt = new Date(order.appointmentAt);
-    if (!isNaN(appt) && appt > week.endDate) return false; // afspraak ná deze week blijft staan
+  const zondag = week.endDate.toISOString().slice(0, 10); // zondag van de af te sluiten week
+  if (order.status === appointmentStatusKey()) {
+    if (!order.appointmentAt) return false;             // afspraak nog onbekend → blijft staan
+    const dag = nlKalenderdag(order.appointmentAt);
+    return !!dag && dag <= zondag;                      // afspraak ná deze week blijft staan
   }
+  if (!isSecondaryStatus(order.status)) return false;   // open kolommen klappen nooit in
+  // Afgehandeld NA het weekeinde (bv. maandag 00:10, vóór de ronde van dat uur)? Dan hoort
+  // hij bij de nieuwe week en blijft hij nog staan.
+  const sinds = order.completedAt || order.cancelledAt || order.statusSince;
+  if (sinds && nlKalenderdag(sinds) > zondag) return false;
   return true;
 }
 
@@ -77,8 +99,10 @@ export function runWeeklyArchive(reference = new Date()) {
   let count = 0;
   for (const order of db().orders) {
     if (qualifies(order, week)) {
-      order.archivedWeek = { key: week.key, label: week.label };
-      order.updatedAt = now();
+      // updatedAt NIET meer ophogen (audit 16 okt): inklappen is geen wijziging door een
+      // mens, en tellingen die op updatedAt terugvallen (geannuleerd in het weekrapport,
+      // oude afgeronde kaarten zonder completedAt) schoven daardoor naar de volgende week.
+      order.archivedWeek = { key: week.key, label: week.label, at: now() };
       count++;
     }
   }

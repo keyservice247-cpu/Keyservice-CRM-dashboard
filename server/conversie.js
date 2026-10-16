@@ -111,6 +111,9 @@ export function leesPrijs(str) {
 }
 export function omzetVan(o, invByOrder) {
   const inv = invByOrder.get(o.id);
+  // AFGESCHREVEN factuur (oninbaar, 16 okt 2026): het geld komt niet binnen → geen omzet,
+  // ook niet via het prijsveld.
+  if (inv && inv.status === 'oninbaar') return 0;
   // Een LEGE factuur (geen regels, €0 — bv. "Maak factuur" geopend en niets ingevuld;
   // door standaard-betaald telt die als echte factuur) mag het prijsveld niet op €0
   // zetten (2 okt 2026). Een €0-factuur MÉT regels (garantie) is wél bewust €0.

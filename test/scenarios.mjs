@@ -569,9 +569,13 @@ ok('geplakte DRS-opdracht wordt een kaart', pl.status === 200 && !!pl.json.id, J
 ok('titel begint met de PLAATSNAAM', /^Hoogerheide — /.test(pl.json.title || ''), pl.json.title);
 ok('klantgegevens er goed uitgehaald', pl.json.customer?.name === 'Daniel Winters' && pl.json.customer?.phone === '0682049908');
 ok('intake-adres compleet met postcode', /4631 AJ Hoogerheide/.test(pl.json.intake?.address || ''), pl.json.intake?.address);
-const pl2 = await api('POST', '/api/orders/paste', { text: drsBericht });
+// Sinds 16 okt 2026 (DRS-audit): nogmaals plakken van dezelfde opdracht wordt eerst
+// tegengehouden (409, "staat er waarschijnlijk al"); bewust doorgaan kan met force.
+const pl2a = await api('POST', '/api/orders/paste', { text: drsBericht });
+ok('tweede keer plakken → eerst "staat er waarschijnlijk al" (geen stille dubbele kaart)', pl2a.status === 409 && pl2a.json?.dubbel?.orderId === pl.json.id, JSON.stringify(pl2a.json));
+const pl2 = await api('POST', '/api/orders/paste', { text: drsBericht, force: true });
 const dubbelKlant = (await customers()).filter((k) => String(k.phone || '').includes('682049908'));
-ok('tweede keer plakken maakt GEEN dubbele klant', pl2.status === 200 && dubbelKlant.length === 1, `klanten=${dubbelKlant.length}`);
+ok('tweede keer plakken (bewust) maakt GEEN dubbele klant', pl2.status === 200 && dubbelKlant.length === 1, `klanten=${dubbelKlant.length}`);
 const plLeeg = await api('POST', '/api/orders/paste', { text: 'hoi' });
 ok('onzin plakken geeft een nette uitleg', plLeeg.status === 400 && /klantgegevens|hele bericht/i.test(plLeeg.json.error || ''));
 

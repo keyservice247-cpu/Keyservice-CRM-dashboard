@@ -2,6 +2,7 @@
 // afspraakbevestiging + herinnering naar de klant, review-verzoek na afronding,
 // snooze-herinneringen, uitval-alarm (bridge/e-mail/AI) en de nachtelijke statusscan.
 import { db, id, now, save, saveSoon, logActivity, diskFreeMB, noodOpruimronde, saveFailure } from './db.js';
+import { isDrsOrder } from './drs-rapport.js';
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
@@ -90,10 +91,14 @@ export function maybeSendTerugkoppeling(order) {
     const cfg = getTerugkoppeling();
     if (!cfg.enabled || !cfg.monteurId) return;
     if (!cfg.statuses.includes(order.status)) return;
-    const isDrs = order.originGroup ? isWhatsappOrderGroup(order.originGroup)
-      : /whatsapp|groep|app/.test((order.source || '').toLowerCase());
-    if (!isDrs) return;
+    // Zelfde DRS-herkenning als overal (16 okt 2026): de oude regex /whatsapp|groep|app/
+    // zag ook 1-op-1 WhatsApp-kaarten ("Keyservice WhatsApp") als DRS.
+    if (!isDrsOrder(order)) return;
     if (order.terugkoppeling && order.terugkoppeling.status === order.status) return; // al gemeld
+    // AFGEROND NOOIT TWEE KEER (audit 16 okt 2026): afgerond → afspraak → weer afgerond gaf
+    // een tweede "Status: Afgerond" om door te sturen = DRS kan de klus twee keer factureren.
+    // Ook niet als hij al via het DRS-rapport (of uit de groep) als afgerond gemeld is.
+    if (order.status === 'afgerond' && ((order.terugkoppeling && order.terugkoppeling.gemeld && order.terugkoppeling.gemeld.afgerond) || (order.drsGemeld && order.drsGemeld.afgerond))) return;
     const monteur = db().monteurs.find((m) => m.id === cfg.monteurId);
     if (!monteur || !monteur.waGroup) return;
     const c = custOf(order);
@@ -109,7 +114,7 @@ export function maybeSendTerugkoppeling(order) {
       groupId: groupIdForName(monteur.waGroup) || undefined, // bridge kan dan direct op id versturen
       text: lines.join('\n'), status: 'queued', createdAt: now(), by: 'terugkoppeling',
     });
-    order.terugkoppeling = { status: order.status, at: now() };
+    order.terugkoppeling = { status: order.status, at: now(), gemeld: { ...((order.terugkoppeling && order.terugkoppeling.gemeld) || {}), [order.status]: now() } };
     logActivity('systeem', 'terugkoppeling in wachtrij', `${order.title} -> ${monteur.name}`);
     saveSoon();
   } catch (e) { console.error('[terugkoppeling]', e.message); }

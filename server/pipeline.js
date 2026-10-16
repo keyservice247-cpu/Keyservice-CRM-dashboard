@@ -1,6 +1,7 @@
 // Gedeelde verwerkingslogica voor inkomende berichten.
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
+import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport } from './drs-rapport.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours } from './settings.js';
 import { mergeAttachments, dedupeAttachments } from './storage.js';
@@ -206,8 +207,11 @@ export function withRelations(order, maps) {
   const monteur = maps ? (maps.monteurs.get(order.monteurId) || null)
     : (db().monteurs.find((m) => m.id === order.monteurId) || null);
   // DRS = afkomstig uit de opdracht-WhatsApp-groep (bv. "Raf Breda…").
-  const isDrs = order.originGroup ? isWhatsappOrderGroup(order.originGroup) : false;
-  return { ...order, customer, monteur, isDrs };
+  // Zelfde regel als overal (16 okt 2026): ook een "Plak opdracht"-kaart (bron "DRS WhatsApp
+  // groep", geen herkomstgroep) is DRS — die kreeg wél een DRS-fee maar geen DRS-chip.
+  const isDrs = isDrsOrder(order);
+  // Bij welk DRS-rapport-kopje hoort de huidige status (voor de chip "DRS gemeld")?
+  return { ...order, customer, monteur, isDrs, drsCat: isDrs ? catVanStatus(order.status) : null };
 }
 
 // Maak van een (goedgekeurde) review een echte opdracht + klant.
@@ -605,6 +609,13 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
       return !myPhone || !tp || tp === myPhone; // alleen dubbel bij gelijk/ontbrekend nummer
     });
     if (twin) {
+      // HETZELFDE DAGRAPPORT TWEE KEER IN DE DRS-GROEP (audit 16 okt 2026): dat bericht werd
+      // hier stil weggegooid, terwijl DRS het twee keer ziet (en kan factureren). Nu leest het
+      // DRS-rapport-vangnet hem óók: alles staat al als gemeld uit het eerste bericht → alarm.
+      if (channel === 'whatsapp' && group) {
+        try { verwerkEigenDrsRapport({ body, group, receivedAt: now(), messageId: `dup:${externalId || id('x')}`, sender, herhaling: true }); }
+        catch (e) { console.error('[drs-rapport] herhaald rapport lezen mislukt:', e.message); }
+      }
       // Hang aan de bijbehorende lopende opdracht als die er is.
       const rev = db().reviews.find((r) => r.messageId === twin.id && r.orderId);
       const order = rev ? db().orders.find((o) => o.id === rev.orderId && !o.archivedWeek) : null;
@@ -646,6 +657,15 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
     receivedAt: now(),
   };
   db().messages.push(message);
+  // DRS-RAPPORT VANGNET (16 okt 2026): staat dit in de DRS-groep en is het óns dagrapport
+  // ("*Afgerond:* / 4879 NB Etten-Leur"), dan worden die opdrachten afgevinkt als "gemeld
+  // aan DRS" en gaat er een alarm uit als een opdracht voor de tweede keer als afgerond
+  // gemeld wordt. Raakt de lead-instroom niet: maakt/wijzigt geen kaart of klant, alleen
+  // het gemeld-vinkje. Fouten hier mogen het binnenkomende bericht nooit tegenhouden.
+  if (channel === 'whatsapp' && group) {
+    try { verwerkEigenDrsRapport({ body: message.body, group, receivedAt: message.receivedAt, messageId: message.id, sender: message.sender }); }
+    catch (e) { console.error('[drs-rapport] rapport uit de groep lezen mislukt:', e.message); }
+  }
 
   // Feedback meegeven aan de AI. Afwijzingen ("dit is géén opdracht") zijn het
   // belangrijkst, dus die krijgen voorrang: recente afwijzingen als concrete
@@ -750,7 +770,12 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   const RAPPORT_KOP_RE = new RegExp(`^\\s*${RAPPORT_KOP}\\s*:?\\s*(?:\\d{4}\\s?[A-Za-z]{2}\\b.*)?$`, 'im');
   const POSTCODE_REGEL_RE = new RegExp(`^\\s*(?:${RAPPORT_KOP}\\s*:?\\s*)?\\d{4}\\s?[A-Za-z]{2}\\b`, 'gim');
   const postcodeRegels = (rapportTekst.match(POSTCODE_REGEL_RE) || []).length;
-  const isEigenRapport = RAPPORT_KOP_RE.test(rapportTekst) && postcodeRegels >= 2;
+  // + EEN-REGEL-RAPPORT in de opdracht-groep (audit 16 okt 2026): "*Geannuleerd:* /
+  // 4871DK Etten-Leur, …" (één postcode) gaf een vals "Onvolledig DRS-bericht" of — met een
+  // telefoonnummer erin — zelfs een kaart die naar de monteur ging. Zelfde herkenning als
+  // het DRS-rapport-vangnet: kopje + postcode eronder en géén Naam:/Adres:/Telefoon:-velden.
+  const isEigenRapport = (RAPPORT_KOP_RE.test(rapportTekst) && postcodeRegels >= 2)
+    || (channel === 'whatsapp' && !!group && isWhatsappOrderGroup(group) && lijktDrsRapport(body));
 
   // Ruisfilter: bepaal of dit een echte aanvraag is of geklets. Geklets gaat
   // naar de "Overige"-lijst i.p.v. de gewone te-controleren inbox.
@@ -1049,7 +1074,20 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
     return !(suggestion.customerAddress && addressDiffers((open.intake && open.intake.address) || k.address, suggestion.customerAddress));
   })();
   if (groepKlantOpen) review.autoOvergeslagen = 'klant heeft al een open opdracht — handmatig beoordelen';
-  if ((isOrderGroupMsg || formAutoOk || losAutoOk) && !isEigenRapport && !groepsGesprek && !groepKlantOpen && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  // OPNIEUW GEPOSTE DRS-OPDRACHT (audit 16 okt 2026): zelfde telefoon of postcode als een
+  // DRS-opdracht die de afgelopen 30 dagen al is AFGEROND/GEANNULEERD of ingeklapt? Dan niet
+  // stil automatisch een tweede kaart (die óók naar de monteur gaat en een tweede DRS-fee
+  // kost) — de assistente beslist. Open kaarten volgen gewoon Regel 1 (kaart + suggestie).
+  let groepRecentAfgesloten = null;
+  if (isOrderGroupMsg && !groepKlantOpen && !isEigenRapport && !groepsGesprek && review.status === 'pending') {
+    try { groepRecentAfgesloten = zoekMogelijkDubbel({ phone: suggestion.customerPhone, address: suggestion.customerAddress, tekst: body, alleenAfgesloten: true, alleenDrs: true }); } catch { groepRecentAfgesloten = null; }
+    if (groepRecentAfgesloten) {
+      const st = { afgerond: 'afgerond', geannuleerd: 'geannuleerd' }[groepRecentAfgesloten.status] || 'ingeklapt';
+      review.autoOvergeslagen = `zelfde ${groepRecentAfgesloten.opTelefoon ? 'telefoonnummer' : 'adres'} als "${String(groepRecentAfgesloten.titel).slice(0, 50)}" (${st} ${groepRecentAfgesloten.datum}) — opnieuw gepost? Controleer of het een nieuwe klus is`;
+      review.mogelijkDubbel = { orderId: groepRecentAfgesloten.orderId, titel: groepRecentAfgesloten.titel, status: groepRecentAfgesloten.status, datum: groepRecentAfgesloten.datum };
+    }
+  }
+  if ((isOrderGroupMsg || formAutoOk || losAutoOk) && !isEigenRapport && !groepsGesprek && !groepKlantOpen && !groepRecentAfgesloten && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 
