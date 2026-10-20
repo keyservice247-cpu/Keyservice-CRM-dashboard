@@ -674,6 +674,33 @@ await page.waitForTimeout(1000);
 await page.evaluate(() => goView('chats'));
 await page.waitForTimeout(1200);
 ok('mobiel: lijst zichtbaar, gesprek nog niet', await page.locator('#chatList').isVisible() && await page.locator('#chatPane').isHidden());
+// WHATSAPP-STIJL LIJST (20 okt 2026, screenshot eigenaar): op de telefoon rechtop vielen tijd
+// en groene teller rechts buiten beeld — een lange voorbeeldregel maakte de kolom breder dan
+// het scherm. Nu: rondje met initialen, vinkjes, teller altijd zichtbaar, filterknoppen.
+{
+  await page.evaluate(() => fetch('/api/ingest/whatsapp', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ name: 'Lange Tekst Klant', body: 'Goedemiddag, ik heb een heel lang verhaal over mijn hefschuifpui die al weken tocht en waarvan de hendel steeds vaster komt te zitten, kunnen jullie morgen langskomen?', fromPhone: '0611777555', externalId: 'br-chat-lang' }) }));
+  await page.evaluate(() => loadChats());
+  await page.waitForSelector('.chat-item.ongelezen', { timeout: 6000 }).catch(() => {});
+  const maat = await page.evaluate(() => ({ vw: innerWidth, docW: document.documentElement.scrollWidth, items: [...document.querySelectorAll('.chat-item')].map((e) => Math.round(e.getBoundingClientRect().right)), tellers: [...document.querySelectorAll('.chat-unread, .ci-time')].map((e) => Math.round(e.getBoundingClientRect().right)), zoek: Math.round(document.querySelector('#chatZoek').getBoundingClientRect().right) }));
+  ok('mobiel: gesprekkenlijst valt binnen het scherm (tijd + groene teller zichtbaar)', maat.docW <= maat.vw && maat.items.every((r) => r <= maat.vw) && maat.tellers.length > 0 && maat.tellers.every((r) => r <= maat.vw) && maat.zoek <= maat.vw, JSON.stringify(maat));
+  ok('WhatsApp-stijl: rondje met initialen bij elk gesprek', await page.locator('.chat-item .ci-av').count() === await page.locator('.chat-item').count());
+  const lang = page.locator('.chat-item', { hasText: 'Lange Tekst Klant' });
+  ok('ongelezen gesprek: groene teller + vet (klasse ongelezen)', await lang.locator('.chat-unread').count() === 1 && await lang.evaluate((e) => e.classList.contains('ongelezen')));
+  await page.click('.chat-filter[data-f="ongelezen"]');
+  ok('filter "Ongelezen" toont alleen ongelezen gesprekken', await page.evaluate(() => { const r = [...document.querySelectorAll('.chat-item')]; return r.length > 0 && r.every((e) => e.classList.contains('ongelezen')); }));
+  await page.click('.chat-filter[data-f="wacht"]');
+  ok('filter "Wacht op antwoord" toont alleen gesprekken waar de klant wacht', await page.evaluate(() => { const r = [...document.querySelectorAll('.chat-item')]; return r.length > 0 && r.every((e) => e.classList.contains('wacht')); }));
+  await page.locator('.chat-item').first().click();
+  await page.waitForSelector('#cpAfgehandeld', { timeout: 6000 }).catch(() => {});
+  ok('gesprek met wachtende klant: balk "wacht op een antwoord" + knop Afgehandeld', await page.locator('#cpAfgehandeld').count() === 1);
+  await page.click('#cpAfgehandeld');
+  await page.waitForFunction(() => !document.querySelector('#cpWacht'), null, { timeout: 6000 }).catch(() => {});
+  ok('Afgehandeld haalt de wacht-balk weg', await page.locator('#cpWacht').count() === 0);
+  await page.click('#cpBack');
+  await page.waitForTimeout(600);
+  await page.click('.chat-filter[data-f="alle"]');
+  await page.waitForTimeout(300);
+}
 await page.locator('.chat-item').first().click();
 await page.waitForTimeout(1200);
 ok('mobiel: gesprek vult het scherm, lijst weg', await page.locator('#chatPane').isVisible() && await page.locator('#chatList').isHidden());

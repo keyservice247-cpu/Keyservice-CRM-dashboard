@@ -100,3 +100,29 @@ export function onbeantwoordeGesprekken(urenGrens = 2, maxDagen = wachtOpAntwoor
   uit.sort((a, b) => a.urenWachtend - b.urenWachtend);
   return uit;
 }
+
+// VOORBEELDREGEL in de gesprekkenlijst (20 okt 2026, Berichten in WhatsApp-stijl): alleen
+// het NIEUWE deel van een bericht. Een e-mailantwoord sleepte het hele geciteerde gesprek
+// mee ("Wij gaan akkoord! Op di 20 okt 2026 om 18:06 schreef Keyservice…"), en de bridge
+// plakt onder elk appje "Telefoon: +31…" — dat hoort niet in de voorvertoning.
+const CITAAT_REGEL = [
+  /^\s*>/,                                // geciteerde regel
+  /^\s*-----.*schreef.*-----/i,           // ons eigen citaat-formaat
+  /^\s*Op .*schreef.*:\s*$/i,             // Gmail NL
+  /^\s*On .*wrote:\s*$/i,                 // Gmail EN
+  /^\s*(Van|From|Verzonden|Sent):\s/i,    // Outlook-kopblok
+  /^\s*-{2,}\s*Oorspronkelijk bericht/i,  // Outlook NL
+  /^\s*_{5,}\s*$/,                        // Outlook-scheidingslijn
+];
+export function voorbeeldTekst(body, max = 120) {
+  const regels = String(body || '').replace(/\r\n/g, '\n').split('\n');
+  let eind = regels.length;
+  for (let i = 0; i < regels.length; i++) if (CITAAT_REGEL.some((re) => re.test(regels[i]))) { eind = i; break; }
+  let tekst = regels.slice(0, eind).join('\n');
+  if (!tekst.trim()) tekst = regels.join('\n'); // alles was citaat → dan toch iets tonen
+  tekst = tekst
+    .replace(/\n\s*Telefoon:\s*\+?\d[\d\s()-]{5,}\s*$/i, '')        // nummer dat de bridge eronder plakt
+    .replace(/\s+Op [^\n]{3,90}? schreef [^\n]{0,120}?:\s[\s\S]*$/i, '') // citaatkop op dezelfde regel
+    .replace(/\s+/g, ' ').trim();
+  return tekst.length > max ? tekst.slice(0, max) : tekst;
+}

@@ -618,7 +618,7 @@ async function loadChats(fromPulse) {
   if (!wrap) return;
   if (!wrap.dataset.init) {
     wrap.dataset.init = '1';
-    wrap.innerHTML = `<div id="chatStatusBar" class="chat-statusbar" hidden></div><div class="chats-layout" id="chatsLayout"><aside class="chat-list-kolom"><div class="chat-zoek">${icon('search', 13)}<input id="chatZoek" type="search" placeholder="Zoek klant, nummer of opdracht" autocomplete="off"></div><div id="chatList" class="chat-list"></div></aside><section id="chatPane" class="chat-pane"><div class="cp-empty muted">Kies links een gesprek</div></section></div>`;
+    wrap.innerHTML = `<div id="chatStatusBar" class="chat-statusbar" hidden></div><div class="chats-layout" id="chatsLayout"><aside class="chat-list-kolom"><div class="chat-zoek">${icon('search', 13)}<input id="chatZoek" type="search" placeholder="Zoek klant, nummer of opdracht" autocomplete="off"></div><div id="chatFilters" class="chat-filters" role="tablist" aria-label="Gesprekken filteren"></div><div id="chatList" class="chat-list"></div></aside><section id="chatPane" class="chat-pane"><div class="cp-empty muted">Kies links een gesprek</div></section></div>`;
     // Zoeken filtert de lijst lokaal (naam / telefoon / e-mail / opdrachttitel), 150 ms debounce.
     let zoekTimer = null;
     $('#chatZoek').oninput = () => { clearTimeout(zoekTimer); zoekTimer = setTimeout(() => { _lastChatListHtml = ''; tekenChatLijst(_chatList); }, 150); };
@@ -658,17 +658,86 @@ function chatMatcht(c, q) {
   const tel = String(c.phone || c.id || '').replace(/\D/g, '').replace(/^(0031|31)/, '0');
   return tel.includes(qd);
 }
+// ---- Gesprekkenlijst in WhatsApp-stijl (20 okt 2026, wens eigenaar: "op mijn telefoon zie
+// ik niet welke berichten open staan … maak het zoals WhatsApp"). Rondje met initialen,
+// naam + tijd, vinkjes bij ons laatste bericht, groene teller bij ongelezen, en
+// filterknoppen Alle / Ongelezen / Wacht op antwoord.
+let _chatFilter = 'alle';
+const CHAT_AVATAR_KLEUREN = ['#00a884', '#4a7fd6', '#c2554f', '#d4893a', '#8e6cd1', '#3f9d6b', '#cc5f8f', '#2b9fb3', '#b08d57', '#6b7fa3'];
+function chatInitialen(naam) {
+  const woorden = String(naam || '').replace(/\b(b\.?v\.?|v\.?o\.?f\.?|n\.?v\.?)\b/gi, '').split(/[\s\-–—&,.]+/).filter((w) => /[a-zà-ÿ]/i.test(w));
+  if (!woorden.length) return '';
+  const eerste = woorden[0][0];
+  const tweede = woorden.length > 1 ? woorden[woorden.length - 1][0] : (woorden[0][1] || '');
+  return (eerste + tweede).toUpperCase();
+}
+function chatAvatarHTML(c) {
+  const ini = c.nieuw ? '' : chatInitialen(c.name);
+  if (!ini) return `<span class="ci-av ci-av-leeg" aria-hidden="true">${icon('user', 26)}</span>`;
+  let h = 0; for (const ch of String(c.name || c.id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `<span class="ci-av" style="background:${CHAT_AVATAR_KLEUREN[h % CHAT_AVATAR_KLEUREN.length]}" aria-hidden="true">${esc(ini)}</span>`;
+}
+// Tijd zoals WhatsApp: vandaag "19:42", gisteren "gisteren", deze week de dag, daarna de datum.
+function chatTijd(at) {
+  const d = new Date(at || 0);
+  if (!at || isNaN(d)) return '';
+  const nu = new Date();
+  const dagStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const verschil = Math.round((dagStart(nu) - dagStart(d)) / 86400000);
+  if (verschil <= 0) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (verschil === 1) return 'gisteren';
+  if (verschil < 7) return d.toLocaleDateString('nl-NL', { weekday: 'long' });
+  const dm = `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return d.getFullYear() === nu.getFullYear() ? dm : `${dm}-${String(d.getFullYear()).slice(2)}`;
+}
+function chatVinkjeHTML(c) {
+  switch (c.lastTick) {
+    case 'mislukt': return '<span class="ci-tick ci-tick-fout" title="Niet bezorgd">!</span>';
+    case 'wachtrij': return `<span class="ci-tick" title="Staat klaar voor verzending">${icon('clock', 13)}</span>`;
+    case 'gelezen': return '<span class="ci-tick ci-tick-blauw" title="Gelezen">✓✓</span>';
+    case 'afgeleverd': return '<span class="ci-tick" title="Afgeleverd">✓✓</span>';
+    case 'verstuurd': return '<span class="ci-tick" title="Verstuurd">✓</span>';
+    case 'mail': return `<span class="ci-tick ci-tick-mail" title="Verstuurd per e-mail">${icon('mail', 13)}</span>`;
+    default: return c.lastOut ? '<span class="ci-tick" title="Verstuurd">✓</span>' : '';
+  }
+}
+function chatFilterTellers(list) {
+  return { ongelezen: list.filter((c) => c.unread > 0).length, wacht: list.filter((c) => c.wacht).length };
+}
+function tekenChatFilters(list) {
+  const el = $('#chatFilters'); if (!el) return;
+  const t = chatFilterTellers(list || []);
+  const knoppen = [['alle', 'Alle', 0], ['ongelezen', 'Ongelezen', t.ongelezen]];
+  if (state.me?.role !== 'monteur') knoppen.push(['wacht', 'Wacht op antwoord', t.wacht]);
+  const html = knoppen.map(([k, l, n]) => `<button type="button" class="chat-filter${_chatFilter === k ? ' active' : ''}" data-f="${k}" role="tab" aria-selected="${_chatFilter === k}">${l}${n ? ` <span class="chat-filter-n">${n}</span>` : ''}</button>`).join('');
+  if (el.innerHTML !== html) {
+    el.innerHTML = html;
+    $$('.chat-filter', el).forEach((b) => b.onclick = () => { _chatFilter = b.dataset.f; _lastChatListHtml = ''; tekenChatLijst(_chatList); $('#chatList') && ($('#chatList').scrollTop = 0); });
+  }
+}
 function tekenChatLijst(list) {
+  tekenChatFilters(list);
   const q = ($('#chatZoek')?.value || '').trim().toLowerCase();
-  const zichtbaar = (list || []).filter((c) => chatMatcht(c, q));
-  const listHtml = zichtbaar.length ? zichtbaar.map((c) => `
-    <button type="button" class="chat-item ${c.id === _chatActive ? 'active' : ''}" data-cid="${esc(c.id)}">
-      <div class="ci-top"><span class="ci-name">${esc(c.name)}</span><span class="muted small">${c.lastAt ? fmtDate(c.lastAt) : ''}</span></div>
-      <div class="ci-bottom"><span class="ci-last">${c.lastOut ? '↦ ' : ''}${esc(c.lastBody || '')}</span>${c.unread ? `<span class="chat-unread">${c.unread}</span>` : ''}</div>
-      ${c.orderTitle ? `<div class="ci-order muted small">${icon('tag', 11)} ${esc(c.orderTitle.slice(0, 48))}</div>` : ''}
-    </button>`).join('')
-    : (q ? `<div class="muted small" style="padding:14px">Geen gesprek gevonden voor "${esc(q)}".</div>`
-      : '<div class="muted small" style="padding:14px">Nog geen gesprekken. Zodra een klant appt of mailt, verschijnt het gesprek hier.</div>');
+  const filter = _chatFilter === 'ongelezen' ? (c) => c.unread > 0 : _chatFilter === 'wacht' ? (c) => c.wacht : () => true;
+  const zichtbaar = (list || []).filter((c) => filter(c) && chatMatcht(c, q));
+  const rij = (c) => {
+    const ongelezen = c.unread > 0;
+    const kanaal = !c.lastOut && c.lastKanaal === 'email' ? `<span class="ci-kanaal" title="E-mail">${icon('mail', 13)}</span>` : '';
+    return `
+    <button type="button" class="chat-item${ongelezen ? ' ongelezen' : ''}${c.wacht ? ' wacht' : ''}${c.id === _chatActive ? ' active' : ''}" data-cid="${esc(c.id)}">
+      ${chatAvatarHTML(c)}
+      <span class="ci-main">
+        <span class="ci-top"><span class="ci-name">${esc(c.name)}</span><span class="ci-time">${esc(chatTijd(c.lastAt))}</span></span>
+        <span class="ci-bottom"><span class="ci-last">${chatVinkjeHTML(c)}${kanaal}${esc(c.lastBody || '')}</span>${ongelezen ? `<span class="chat-unread" aria-label="${c.unread} ongelezen">${c.unread}</span>` : (c.wacht ? '<span class="ci-wacht" title="De klant wacht op een antwoord">wacht</span>' : '')}</span>
+        ${c.orderTitle ? `<span class="ci-order">${icon('tag', 11)} ${esc(c.orderTitle)}</span>` : (c.nieuw ? '<span class="ci-order ci-nieuw">nieuw nummer — nog geen klant</span>' : '')}
+      </span>
+    </button>`;
+  };
+  const leeg = q ? `Geen gesprek gevonden voor "${esc(q)}".`
+    : _chatFilter === 'ongelezen' ? 'Alles is gelezen.'
+      : _chatFilter === 'wacht' ? 'Niemand wacht op een antwoord.'
+        : 'Nog geen gesprekken. Zodra een klant appt of mailt, verschijnt het gesprek hier.';
+  const listHtml = zichtbaar.length ? zichtbaar.map(rij).join('') : `<div class="chat-leeg muted small">${leeg}</div>`;
   const listEl = $('#chatList');
   if (listEl && listHtml !== _lastChatListHtml) {
     const scrollY = listEl.scrollTop;
@@ -1188,10 +1257,11 @@ async function renderChatPane(scrollDown) {
   pane.innerHTML = `
     <div class="cp-head">
       <button type="button" class="btn btn-sm cp-back" id="cpBack" title="Terug naar de lijst">←</button>
-      <span class="cp-avatar">${esc(initiaal)}</span>
+      ${chatAvatarHTML({ ...info, name: info.name || h.customer?.name || initiaal })}
       <div class="cp-who"><strong>${esc(info.name || h.customer?.name || 'Klant')}</strong>${info.phone ? `<span class="muted small"> · ${esc(info.phone)}</span>` : ''}</div>
-      ${info.orderId ? `<button type="button" class="btn btn-sm" id="cpCard">${icon('tag', 12)} Opdracht openen</button>` : ''}
+      ${info.orderId ? `<button type="button" class="btn btn-sm" id="cpCard">${icon('tag', 12)} Opdracht</button>` : ''}
     </div>
+    ${info.wacht && magTypen ? `<div class="cp-wacht" id="cpWacht"><span>${icon('clock', 13)} De klant wacht op een antwoord</span><button type="button" class="btn btn-sm" id="cpAfgehandeld" title="Geen antwoord nodig — haal hem uit &quot;Wacht op antwoord&quot;">✓ Afgehandeld</button></div>` : ''}
     <div class="cp-msgs" id="cpMsgs">${msgsHtml}</div>
     <div class="cp-send">
       ${kanSturen
@@ -1208,6 +1278,17 @@ async function renderChatPane(scrollDown) {
   $('#cpBack')?.addEventListener('click', sluitChat);
   const kaartKnop = $('#cpCard');
   if (kaartKnop) kaartKnop.onclick = () => openOrderVers(info.orderId);
+  // "Afgehandeld" (zelfde markering als op Start): geen antwoord nodig → uit "Wacht op antwoord".
+  const afgKnop = $('#cpAfgehandeld');
+  if (afgKnop) afgKnop.onclick = () => eenKeer(afgKnop, async () => {
+    try {
+      await api(`/api/chats/${encodeURIComponent(doel)}/afgehandeld`, 'POST', {});
+      const it = _chatList.find((c) => c.id === doel); if (it) it.wacht = false;
+      $('#cpWacht')?.remove();
+      tekenChatLijst(_chatList);
+      toast('Afgehandeld — staat niet meer bij "Wacht op antwoord"');
+    } catch (err) { toast(err.message, true); }
+  });
   // Kanaal-knop + passende invoerhint. De knop toont ALTIJD waar het bericht heen gaat.
   const zetKanaalUi = () => {
     const veldEl = $('#cpText');

@@ -53,7 +53,7 @@ import {
   findCustomerStrong, senderPhoneFromText, matchPhone, queueCrmWhatsappAlert,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
-import { onbeantwoordeGesprekken, wachtOpAntwoordDagen } from './gesprekken.js';
+import { onbeantwoordeGesprekken, wachtOpAntwoordDagen, voorbeeldTekst } from './gesprekken.js';
 import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, kantoor, gedeeldMetNamen, zetVolgorde } from './taken.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
@@ -559,18 +559,20 @@ function telOngelezenChats(extraMarks) {
 app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) => {
   const mijnKlanten = monteurChatKlanten(req); // null = admin/assistent: alles
   const perKlant = new Map(); // customerId -> samenvatting
-  const bump = (cid, at, body, uitgaand) => {
+  // extra = { kanaal: 'whatsapp'|'email', outboxId?, status?, result? } — voor de vinkjes
+  // (✓ / ✓✓ / ◷ / !) en het kanaal-icoon in de lijst (WhatsApp-stijl, 20 okt 2026).
+  const bump = (cid, at, body, uitgaand, extra = {}) => {
     if (!cid) return;
     const cur = perKlant.get(cid);
-    if (!cur || String(at || '').localeCompare(String(cur.lastAt || '')) > 0) {
-      perKlant.set(cid, { lastAt: at, lastBody: body, lastOut: !!uitgaand });
-    } else if (!cur.lastAt) perKlant.set(cid, { lastAt: at, lastBody: body, lastOut: !!uitgaand });
+    if (!cur || String(at || '').localeCompare(String(cur.lastAt || '')) > 0 || !cur.lastAt) {
+      perKlant.set(cid, { lastAt: at, lastBody: body, lastOut: !!uitgaand, ...extra });
+    }
   };
   for (const o of [...(db().orders || []), ...(db().trash || [])]) {
     if (!o.customerId) continue;
     for (const t of o.thread || []) {
       if (t.channel === 'systeem') continue; // systeemnotities zijn geen gesprek
-      bump(o.customerId, t.at, t.body, !!t.outgoing);
+      bump(o.customerId, t.at, t.body, !!t.outgoing, { kanaal: t.channel === 'email' ? 'email' : 'whatsapp', outboxId: t.outboxId || undefined });
     }
   }
   // Losse WhatsApp-berichten -> klant op het GENORMALISEERDE nummer (Regel 2).
@@ -584,11 +586,11 @@ app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) =
   // maar het gesprek moet WEL meteen zichtbaar zijn — anders "verdwijnt" het appje
   // voor de gebruiker in de Inbox. Zo'n gesprek krijgt id "tel:<genormaliseerd nummer>".
   const onbekend = new Map(); // norm nummer -> {naam, lastAt, lastBody, lastOut, aantal}
-  const bumpOnbekend = (p, naam, at, body, uitgaand) => {
+  const bumpOnbekend = (p, naam, at, body, uitgaand, extra = {}) => {
     const cur = onbekend.get(p) || { naam: '', lastAt: '', lastBody: '', lastOut: false };
     if (naam && !cur.naam) cur.naam = naam;
     if (String(at || '').localeCompare(String(cur.lastAt || '')) > 0) {
-      cur.lastAt = at; cur.lastBody = body; cur.lastOut = !!uitgaand;
+      Object.assign(cur, { lastAt: at, lastBody: body, lastOut: !!uitgaand, kanaal: 'whatsapp', outboxId: undefined, status: undefined, result: undefined, ...extra });
     }
     onbekend.set(p, cur);
   };
@@ -605,22 +607,42 @@ app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) =
     const p = matchPhone(m.fromPhone || senderPhoneFromText(m.body));
     if (!echtNummer(p)) continue;
     const c = perNummer.get(p);
-    if (c) bump(c.id, m.receivedAt, m.body, false);
+    if (c) bump(c.id, m.receivedAt, m.body, false, { kanaal: 'whatsapp' });
     else bumpOnbekend(p, m.sender || '', m.receivedAt, m.body, false);
   }
   // Eén keer indexeren i.p.v. per gesprek de hele kaartenlijst doorlopen (punt 21).
   // 28 sep 2026 (audit server#10): de index staat nu vóór de outbox-lus — daar zocht
   // elk wachtrij-item de klant met customers.find (1500 items x 1200 klanten).
   const klantIndex = new Map((db().customers || []).map((c) => [c.id, c]));
+  const outboxStatus = new Map();
   for (const ob of db().outbox || []) {
     if (ob.group && ob.group !== '__klant_dm__') continue;
+    outboxStatus.set(ob.id, { status: ob.status, result: ob.lastResult || '' });
     const obTel = matchPhone(ob.phone || '');
     const c = (ob.customerId && klantIndex.get(ob.customerId)) || perNummer.get(obTel);
-    if (c) bump(c.id, ob.createdAt, ob.text, true);
-    else if (echtNummer(obTel)) bumpOnbekend(obTel, '', ob.createdAt, ob.text, true);
+    const extra = { kanaal: 'whatsapp', outboxId: ob.id, status: ob.status, result: ob.lastResult || '' };
+    if (c) bump(c.id, ob.createdAt, ob.text, true, extra);
+    else if (echtNummer(obTel)) bumpOnbekend(obTel, '', ob.createdAt, ob.text, true, extra);
   }
   // Losse uitgaande e-mails (via Berichten verstuurd aan een klant zonder kaart).
-  for (const mu of db().mailUit || []) bump(mu.customerId, mu.at, mu.body, true);
+  for (const mu of db().mailUit || []) bump(mu.customerId, mu.at, mu.body, true, { kanaal: 'email' });
+  // Vinkje van het LAATSTE bericht (alleen als wij het stuurden), zoals in WhatsApp:
+  // wachtrij ◷ · verstuurd ✓ · afgeleverd ✓✓ · gelezen ✓✓ (blauw) · mislukt ! · e-mail.
+  const vinkjeVan = (v) => {
+    if (!v.lastOut) return '';
+    if (v.kanaal === 'email') return 'mail';
+    const st = v.status ? v : (v.outboxId && outboxStatus.get(v.outboxId)) || {};
+    if (st.status === 'failed') return 'mislukt';
+    if (st.status === 'queued') return 'wachtrij';
+    if (/gelezen/i.test(st.result || '')) return 'gelezen';
+    if (/afgeleverd/i.test(st.result || '')) return 'afgeleverd';
+    if (st.status === 'sent') return 'verstuurd';
+    return '';
+  };
+  // "Wacht op antwoord" (zelfde regels als het blok op Start, zonder de 2-uursgrens):
+  // de klant had het laatste woord en er is nog niet menselijk gereageerd.
+  const wachtend = new Set();
+  if (!mijnKlanten) { try { for (const w of onbeantwoordeGesprekken(0)) wachtend.add(w.chatId); } catch { /* lijst blijft gewoon werken */ } }
   const uit = [];
   // Ongelezen per gesprek op leesmarkering (15 aug) — dekt óók klanten zonder open
   // kaart en onbekende nummers; order.unreadReplies blijft alleen de bord-badge doen.
@@ -638,7 +660,8 @@ app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) =
     const open = openPerKlant.get(cid);
     uit.push({
       id: cid, name: c.name || 'Onbekende klant', phone: c.phone || '', email: c.email || '',
-      lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
+      lastAt: v.lastAt || '', lastBody: voorbeeldTekst(v.lastBody), lastOut: v.lastOut,
+      lastKanaal: v.kanaal || 'whatsapp', lastTick: vinkjeVan(v), wacht: wachtend.has(cid),
       unread: ongelezen.get(cid) || 0, orderId: open ? open.id : null, orderTitle: open ? (open.title || '') : '',
     });
   }
@@ -646,7 +669,8 @@ app.get('/api/chats', requireRole('admin', 'assistent', 'monteur'), (req, res) =
   if (!mijnKlanten) for (const [p, v] of onbekend) {
     uit.push({
       id: `tel:${p}`, name: v.naam || `Onbekend nummer ${p}`, phone: p,
-      lastAt: v.lastAt || '', lastBody: String(v.lastBody || '').replace(/\s+/g, ' ').slice(0, 120), lastOut: v.lastOut,
+      lastAt: v.lastAt || '', lastBody: voorbeeldTekst(v.lastBody), lastOut: v.lastOut,
+      lastKanaal: 'whatsapp', lastTick: vinkjeVan(v), wacht: wachtend.has(`tel:${p}`),
       unread: ongelezen.get(`tel:${p}`) || 0, orderId: null, orderTitle: '', nieuw: true,
     });
   }

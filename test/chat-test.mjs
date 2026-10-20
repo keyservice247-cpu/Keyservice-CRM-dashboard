@@ -357,6 +357,33 @@ const saMont = await api('POST', `/api/orders/${saKaart.json.id}/whatsapp-antwoo
 ok('monteur mag geen vrij antwoord typen (403)', saMont.status === 403, String(saMont.status));
 cookie = ''; await api('POST', '/api/login', { email: 'admin@keyservice.nl', password: 'admin123' });
 
+console.log('\n== Gesprekkenlijst in WhatsApp-stijl (20 okt 2026) ==');
+{
+  const wk = await api('POST', '/api/customers', { name: 'Wacht Klant', phone: '0612121299' });
+  await api('POST', '/api/ingest/whatsapp', { name: 'Wacht Klant', body: 'Wij gaan akkoord!\n\nOp di 20 okt 2026 om 18:06 schreef Keyservice <info@keyservice247.nl>:\n> Beste klant, hierbij de offerte', fromPhone: '0612121299', externalId: 'wa-stijl-1' }, true);
+  let lijst = (await api('GET', '/api/chats')).json;
+  let rij = lijst.find((c) => c.id === wk.json.id);
+  ok('voorbeeldregel zonder geciteerde mailtekst', rij?.lastBody === 'Wij gaan akkoord!', JSON.stringify(rij?.lastBody));
+  ok('klant had het laatste woord → wacht op antwoord', rij?.wacht === true && rij?.lastOut === false && rij?.lastTick === '', JSON.stringify(rij));
+  ok('kanaal van het laatste bericht = WhatsApp', rij?.lastKanaal === 'whatsapp');
+  await api('POST', `/api/chats/${wk.json.id}/send`, { text: 'Top, we plannen het in!' });
+  lijst = (await api('GET', '/api/chats')).json;
+  rij = lijst.find((c) => c.id === wk.json.id);
+  ok('na ons antwoord: niet meer "wacht", vinkje = wachtrij', rij?.wacht === false && rij?.lastOut === true && rij?.lastTick === 'wachtrij', JSON.stringify({ w: rij?.wacht, t: rij?.lastTick }));
+  // Bridge meldt "verstuurd" → vinkje ✓
+  const item = ((await api('GET', '/api/whatsapp/outbox-status?full=1')).json || []).find((x) => x.customerId === wk.json.id || /plannen het in/.test(x.text || ''));
+  await api('POST', `/api/outbox/${item.id}/done`, { ok: true }, true);
+  rij = (await api('GET', '/api/chats')).json.find((c) => c.id === wk.json.id);
+  ok('verstuurd door de bridge → vinkje "verstuurd"', rij?.lastTick === 'verstuurd', rij?.lastTick);
+  // Nieuw klantbericht met het bridge-telefoonregeltje → niet in de voorbeeldregel.
+  await api('POST', '/api/ingest/whatsapp', { name: 'Wacht Klant', body: 'Nog één vraag: hoe laat ongeveer?\nTelefoon: +31612121299', fromPhone: '0612121299', externalId: 'wa-stijl-2' }, true);
+  rij = (await api('GET', '/api/chats')).json.find((c) => c.id === wk.json.id);
+  ok('voorbeeldregel zonder het "Telefoon:"-regeltje van de bridge', rij?.lastBody === 'Nog één vraag: hoe laat ongeveer?', JSON.stringify(rij?.lastBody));
+  const afg = await api('POST', `/api/chats/${wk.json.id}/afgehandeld`, {});
+  rij = (await api('GET', '/api/chats')).json.find((c) => c.id === wk.json.id);
+  ok('"Afgehandeld" haalt hem uit wacht op antwoord', afg.status === 200 && rij?.wacht === false);
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

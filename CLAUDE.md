@@ -1526,7 +1526,28 @@ terugknop; scherm begint op mobiel ALTIJD met de lijst. Techniek:
   de telefoon"), spraakbericht "(spraakbericht)". renderChatPane toont bij een oud
   leeg bericht zonder bijlage een grijze uitleg i.p.v. niets. Test: 7 assertions in
   whatsapp-cloud-test.mjs (43).
-- Tests: test/chat-test.mjs (57 assertions, PORT=3127) + browser-assertions
+- **Gesprekkenlijst in WhatsApp-stijl (20 okt 2026, klacht eigenaar "in verticale modus
+  zie ik niet welke berichten open staan"):** oorzaak: de mobiele grid stond op `1fr`; een
+  lange voorbeeldregel (white-space:nowrap) maakte de kolom breder dan het scherm → tijd
+  en groene teller vielen rechts weg (liggend paste het wel). Nu `minmax(0,1fr)` +
+  `min-width:0` op de kinderen (.chat-list-kolom/.ci-main/.ci-top/.ci-bottom); hover alleen
+  op apparaten met muis (`@media (hover:hover)` — op iOS bleef de markering anders
+  "plakken"). Lijst als WhatsApp: ronde avatar met initialen (kleur uit de naam; onbekend
+  nummer = grijs poppetje), naam + tijd (vandaag HH:MM / gisteren / weekdag / datum),
+  voorbeeld met het vinkje van ONS laatste bericht (◷ wachtrij, ✓ verstuurd, ✓✓
+  afgeleverd, blauw ✓✓ gelezen, ! mislukt, envelop = e-mail), groene ongelezen-teller,
+  oranje label "wacht", regel met de open opdracht. Filterknoppen Alle / Ongelezen / Wacht
+  op antwoord (#chatFilters, met tellers; "wacht" niet voor de monteur). In het gesprek:
+  balk "De klant wacht op een antwoord" (#cpWacht) + knop ✓ Afgehandeld (bestaande POST
+  /api/chats/:id/afgehandeld van Start). Server: GET /api/chats geeft per gesprek
+  `lastTick` (mislukt/wachtrij/gelezen/afgeleverd/verstuurd/mail/''), `lastKanaal` en
+  `wacht` (= onbeantwoordeGesprekken(0): klant had het laatste woord, nog geen menselijk
+  antwoord, binnen wachtOpAntwoordDagen, niet afgehandeld; alleen kantoor) en een
+  opgeschoonde `lastBody` via voorbeeldTekst() in gesprekken.js (geen geciteerde
+  e-mailtekst "Op … schreef …"/Outlook-kopblok, geen "Telefoon:"-regel van de bridge).
+  Tests: chat-test 85 (+7), browser 311 (+9: op 390 px past alles binnen het scherm,
+  filters, Afgehandeld).
+- Tests: test/chat-test.mjs (85 assertions, PORT=3127) + browser-assertions
   (desktop + iPhone-formaat, echt versturen, live-update mét getypte tekst).
 
 ## SNELHEIDSREM OP DE UITGAANDE WACHTRIJ (6 aug 2026) — NIET verzwakken
