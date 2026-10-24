@@ -983,6 +983,20 @@ de regressie meegroeit.
   afgeschreven factuur zonder verstuurknoppen, "Toch betaald" alleen kantoor.
   Tests: test/drs-rapport-test.mjs (119, PORT=3145, deels zonder server), scenarios 123
   (plakken: tweede keer 409, force zonder dubbele klant), browser 304.
+  OFFERTE + AFSPRAKEN STANDAARD (24 okt 2026, wens eigenaar "ook in de tabbladen offerte
+  verzonden en afspraak ingepland"): DEFAULT_DRS_RAPPORT.kopjes = alle vier; label op het bord,
+  regel in de opdracht, rapport, teller op de knop, filter "DRS: nog te melden" en avond-
+  herinnering volgen allemaal de kopjes. Eenmalige migratie drsKopjesMigratie
+  (settings._drsKopjesV2, bij boot ná drsStartMigratie): opgeslagen kopjes krijgen offerte +
+  afspraak erbij (latere keuze van de beheerder blijft daarna staan); DRS-opdrachten die al
+  > 7 dagen in die kolom staan → 'aangenomen' (zelfde regel als de start, helper
+  neemAanAlsGemeld). BUG GEFIXT: GET /api/settings gaf `drsRapport` niet mee → de kaart in
+  Instellingen toonde altijd de standaard en een tweede keer opslaan wiste de e-mailadressen
+  van DRS, de namen en de kopjes. Keuze per toestel in het venster: localStorage
+  ksDrsKopjesV2 (oude ksDrsKopjes wordt genegeerd en opgeruimd). Zinnen over één opdracht
+  zeggen "als Afspraak" (DRS_KOPJE_EEN). Demo-opdracht uit seed.js (DRS, Afspraak ingepland)
+  telt in een verse test-DB nu mee → drs-rapport-test vinkt die eerst af. Tests:
+  drs-rapport-test 134 (+15), browser 318 (+7).
 - **Offerte-opvolging stopt bij geannuleerd + weekrapport-omzet uit facturen (26 sep 2026):**
   (1) KLACHT "geannuleerde klanten krijgen alsnog een vervolg": runQuoteFollowups keek
   alleen naar de OFFERTE (status 'verzonden'), nooit naar de OPDRACHT. Nu

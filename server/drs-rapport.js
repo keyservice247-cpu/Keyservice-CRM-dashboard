@@ -30,7 +30,10 @@ export const DRS_KOPJES = [
 ];
 export const KOPJE_LABEL = Object.fromEntries(DRS_KOPJES.map((k) => [k.cat, k.label]));
 export const DEFAULT_DRS_RAPPORT = {
-  kopjes: ['afgerond', 'geannuleerd'],     // wat er standaard in het rapport staat
+  // Wat er standaard in het rapport staat. Alle vier sinds 24 okt 2026 (wens eigenaar): ook
+  // kaarten in "Offerte verzonden" en "Afspraak ingepland" krijgen op het bord het label
+  // "DRS gemeld" / "DRS: nog melden" (was: alleen afgerond + geannuleerd).
+  kopjes: ['afgerond', 'geannuleerd', 'offerte', 'afspraak'],
   herinnering: true,                       // 's avonds een melding als er nog iets te melden is
   herinneringUur: 21,                      // Nederlandse tijd
   afzenders: [],                           // extra namen (zoals in WhatsApp) die het rapport plaatsen
@@ -682,16 +685,47 @@ export function drsStartMigratie({ nu = Date.now() } = {}) {
     if (!isDrsOrder(o)) continue;
     const cat = catVanStatus(o.status);
     if (!cat || (o.drsGemeld && o.drsGemeld[cat])) continue;
-    const sinds = sindsVan(o, cat);
-    if (!sinds || nu - new Date(sinds).getTime() > 7 * DAG) {
-      o.drsGemeld = { ...(o.drsGemeld || {}), [cat]: { at: now(), datum: sinds ? nlDatum(new Date(sinds)) : nlDatum(new Date(nu)), door: 'systeem', via: 'aangenomen', regel: '' } };
-      aangenomen++;
-    }
+    if (neemAanAlsGemeld(o, cat, nu)) aangenomen++;
   }
   s._drsGemeldV1 = { at: now(), gelezen, dubbel, aangenomen };
   logActivity('systeem', 'DRS-rapport ingericht', `${gelezen} rapport(en) uit de groep gelezen, ${aangenomen} oude opdracht(en) als gemeld aangenomen${dubbel ? `, ${dubbel} dubbele melding(en) uit het verleden gevonden` : ''}`);
   saveSoon();
   return s._drsGemeldV1;
+}
+// Staat de opdracht al langer dan 7 dagen op dit kopje, dan geldt hij als gemeld ("aangenomen":
+// nooit echt gezien, geeft nooit een dubbel-alarm en telt niet in de maandtelling).
+function neemAanAlsGemeld(o, cat, nu) {
+  const sinds = sindsVan(o, cat);
+  if (sinds && !(nu - new Date(sinds).getTime() > 7 * DAG)) return false;
+  o.drsGemeld = { ...(o.drsGemeld || {}), [cat]: { at: now(), datum: sinds ? nlDatum(new Date(sinds)) : nlDatum(new Date(nu)), door: 'systeem', via: 'aangenomen', regel: '' } };
+  return true;
+}
+
+// ---------- eenmalig: Offerte en Afspraken erbij (24 okt 2026, wens eigenaar) ----------
+// De kopjes stonden standaard op Afgerond + Geannuleerd, dus kaarten in "Offerte verzonden" en
+// "Afspraak ingepland" kregen op het bord geen DRS-label. Een al opgeslagen instelling krijgt
+// ze er één keer bij — het instellingenscherm toonde tot nu toe altijd alleen die twee, ook als
+// er iets anders was opgeslagen. Zelfde regel als bij de start: staat een opdracht al langer
+// dan 7 dagen in die kolom, dan geldt hij als gemeld (anders begint het bord met een rij oranje
+// labels voor opdrachten die allang met de hand gemeld zijn).
+const NIEUWE_KOPJES_V2 = ['offerte', 'afspraak'];
+export function drsKopjesMigratie({ nu = Date.now() } = {}) {
+  const s = db().settings;
+  if (s._drsKopjesV2) return null;
+  const opgeslagen = s.drsRapport && Array.isArray(s.drsRapport.kopjes) ? s.drsRapport.kopjes.filter((k) => KOPJE_LABEL[k]) : null;
+  if (opgeslagen) s.drsRapport.kopjes = DRS_KOPJES.map((k) => k.cat).filter((c) => opgeslagen.includes(c) || NIEUWE_KOPJES_V2.includes(c));
+  let aangenomen = 0;
+  for (const o of alleOpdrachten()) {
+    if (!isDrsOrder(o)) continue;
+    const cat = catVanStatus(o.status);
+    if (!NIEUWE_KOPJES_V2.includes(cat) || (o.drsGemeld && o.drsGemeld[cat])) continue;
+    if (neemAanAlsGemeld(o, cat, nu)) aangenomen++;
+  }
+  const kopjes = getDrsRapportInstellingen().kopjes;
+  s._drsKopjesV2 = { at: now(), van: opgeslagen, kopjes, aangenomen };
+  logActivity('systeem', 'DRS-rapport: Offerte en Afspraken toegevoegd', `Kopjes nu: ${kopjes.map((k) => KOPJE_LABEL[k]).join(', ')}${aangenomen ? ` — ${aangenomen} opdracht(en) die al langer dan 7 dagen in die kolom stonden als gemeld aangenomen` : ''}`);
+  saveSoon();
+  return s._drsKopjesV2;
 }
 
 // ---------- avondherinnering ----------

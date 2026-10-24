@@ -2353,7 +2353,7 @@ function cardHTML(o) {
   // dagrapport moet — en wat er al in stond (nooit twee keer betalen).
   const dmi = drsMeldInfo(o);
   if (dmi) meta.push(dmi.gemeld
-    ? `<span class="chip chip-drs-ok" title="Al gemeld aan DRS als ${esc(DRS_KOPJE_LABEL[dmi.cat])} op ${esc(drsKorteDatum(dmi.gemeld.datum))}${dmi.gemeld.door ? ' door ' + esc(dmi.gemeld.door) : ''}">${icon('check', 12)} DRS gemeld ${esc(drsKorteDatum(dmi.gemeld.datum))}</span>`
+    ? `<span class="chip chip-drs-ok" title="Al gemeld aan DRS als ${esc(DRS_KOPJE_EEN[dmi.cat])} op ${esc(drsKorteDatum(dmi.gemeld.datum))}${dmi.gemeld.door ? ' door ' + esc(dmi.gemeld.door) : ''}">${icon('check', 12)} DRS gemeld ${esc(drsKorteDatum(dmi.gemeld.datum))}</span>`
     : `<span class="chip chip-drs-melden" title="Nog niet aan DRS gemeld — komt in het DRS-rapport">DRS: nog melden</span>`);
   if (o.monteur) meta.push(`<span class="chip mont">${icon('wrench', 13)} ${esc(o.monteur.name)}</span>`);
   if (o.sentToMonteur) meta.push(`<span class="chip src-whatsapp" title="Verstuurd naar ${esc(o.sentToMonteur.monteurName)}">${icon('whatsapp', 13)} naar ${esc(o.sentToMonteur.monteurName)}</span>`);
@@ -5849,7 +5849,8 @@ async function loadSettingsHtml(s) {
     <div data-sg="werk" class="info-card admin-only" style="margin-bottom:18px"> <h3>${icon('list', 15)} DRS-rapport (dagrapport aan DRS)</h3>
       <p class="muted small">Elke afgeronde DRS-opdracht kost een fee. Het DRS-rapport (knop op het bord) toont alleen wat nog <strong>niet</strong> gemeld is en voorkomt dat een opdracht twee keer als afgerond wordt gemeld. Het rapport dat in de DRS-groep verschijnt, leest het CRM ook terug: opdrachten worden vanzelf afgevinkt en bij een dubbele melding krijgt kantoor direct een melding.</p>
       <label style="margin-bottom:4px">Standaard in het rapport</label>
-      <div class="drs-kopjes" id="dr-kopjes">${Object.entries(DRS_KOPJE_LABEL).map(([c, l]) => `<label class="drs-chipkeuze"><input type="checkbox" value="${c}" ${(s.drsRapport?.kopjes || ['afgerond', 'geannuleerd']).includes(c) ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div>
+      <div class="drs-kopjes" id="dr-kopjes">${Object.entries(DRS_KOPJE_LABEL).map(([c, l]) => `<label class="drs-chipkeuze"><input type="checkbox" value="${c}" ${(s.drsRapport?.kopjes || Object.keys(DRS_KOPJE_LABEL)).includes(c) ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div>
+      <p class="muted small" style="margin-top:2px">Elk aangevinkt kopje krijgt op het bord ook het label <strong>DRS gemeld</strong> of <strong>DRS: nog melden</strong> (Offerte = kolom "Offerte verzonden", Afspraken = "Afspraak ingepland").</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:10px"><input type="checkbox" id="dr-herinnering" style="width:auto" ${s.drsRapport?.herinnering === false ? '' : 'checked'}> 's Avonds een melding als er nog DRS-opdrachten te melden zijn</label>
       <label>Tijdstip (uur) <input id="dr-uur" type="number" min="12" max="23" value="${esc(String(s.drsRapport?.herinneringUur ?? 21))}" style="max-width:120px"></label>
       <label>Wie plaatsen het rapport in de groep? <input id="dr-afzenders" value="${esc((s.drsRapport?.afzenders || []).join(', '))}" placeholder="bv. Noura, Key service 24/7"></label>
@@ -6135,7 +6136,7 @@ async function loadSettingsHtml(s) {
     try {
       const r = await api('/api/drs-rapport/instellingen', 'POST', { kopjes, herinnering: $('#dr-herinnering').checked, herinneringUur: Number($('#dr-uur').value), afzenders: $('#dr-afzenders').value, emailAfzenders: $('#dr-email').value });
       if (state.meta?.drsRapport) state.meta.drsRapport.kopjes = r.kopjes;
-      try { localStorage.removeItem('ksDrsKopjes'); } catch { /* geen opslag */ }
+      try { localStorage.removeItem(DRS_KOPJES_OPSLAG); localStorage.removeItem('ksDrsKopjes'); } catch { /* geen opslag */ }
       if (state._drs) state._drs.kopjes = null;
       toast('DRS-rapport-instellingen opgeslagen');
     } catch (err) { toast(err.message, true); }
@@ -7151,6 +7152,8 @@ async function openDigestModal() {
 // terug. Het rapport dat in de DRS-groep verschijnt wordt óók door het CRM gelezen
 // (vangnet): dat vinkt vanzelf af en geeft een alarm bij een dubbele melding.
 const DRS_KOPJE_LABEL = { afgerond: 'Afgerond', geannuleerd: 'Geannuleerd', offerte: 'Offerte', afspraak: 'Afspraken' };
+// In een zin over één opdracht: "gemeld aan DRS als Afspraak" (niet "als Afspraken").
+const DRS_KOPJE_EEN = { ...DRS_KOPJE_LABEL, afspraak: 'Afspraak' };
 const DRS_DAGEN = ['Zondag', 'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag'];
 function drsKorteDatum(datum) {
   const m = String(datum || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -7185,9 +7188,16 @@ async function kopieerNaarKlembord(tekst, terugvalVeld) {
     return false;
   }
 }
+// Keuze per toestel in het venster. Nieuwe sleutel sinds 24 okt 2026 (Offerte en Afspraken
+// standaard erbij): een oude keuze van vóór die tijd zou ze op dit toestel blijven verbergen.
+const DRS_KOPJES_OPSLAG = 'ksDrsKopjesV2';
 function drsKopjesKeuze(standaard) {
-  try { const k = JSON.parse(localStorage.getItem('ksDrsKopjes') || 'null'); if (Array.isArray(k) && k.length) return k.filter((x) => DRS_KOPJE_LABEL[x]); } catch { /* geen opslag */ }
-  return standaard || ['afgerond', 'geannuleerd'];
+  try {
+    localStorage.removeItem('ksDrsKopjes');
+    const k = JSON.parse(localStorage.getItem(DRS_KOPJES_OPSLAG) || 'null');
+    if (Array.isArray(k) && k.length) return k.filter((x) => DRS_KOPJE_LABEL[x]);
+  } catch { /* geen opslag */ }
+  return standaard || Object.keys(DRS_KOPJE_LABEL);
 }
 async function openDrsRapport() {
   const st = state._drs = state._drs || {};
@@ -7276,7 +7286,7 @@ function tekenDrsRapport() {
   $$('.drs-kopje-keuze', m).forEach((c) => c.onchange = () => {
     const k = $$('.drs-kopje-keuze', m).filter((x) => x.checked).map((x) => x.value);
     if (!k.length) { c.checked = true; return toast('Kies minstens één kopje', true); }
-    st.kopjes = k; try { localStorage.setItem('ksDrsKopjes', JSON.stringify(k)); } catch { /* geen opslag */ }
+    st.kopjes = k; try { localStorage.setItem(DRS_KOPJES_OPSLAG, JSON.stringify(k)); } catch { /* geen opslag */ }
     openDrsRapport();
   });
   $$('.drs-rij', m).forEach((r) => {
@@ -7332,8 +7342,8 @@ function drsKaartRegel(o) {
   if (!di) return '';
   const g = di.gemeld;
   return `<div class="drs-kaart ${g ? 'gemeld' : ''}" id="f-drs">${g
-    ? `${icon('check', 14)} <span>Gemeld aan DRS als <strong>${esc(DRS_KOPJE_LABEL[di.cat])}</strong> op ${esc(drsKorteDatum(g.datum))}${g.door ? ` door ${esc(g.door)}` : ''} <span class="muted small">(${esc(DRS_VIA[g.via] || g.via || '')})</span></span> <button type="button" class="btn btn-sm" id="f-drs-uit" title="Alleen als hij NIET in een rapport heeft gestaan">Ongedaan</button>`
-    : `<span><strong>Nog niet gemeld aan DRS</strong> als ${esc(DRS_KOPJE_LABEL[di.cat])} — komt in het DRS-rapport.</span> <button type="button" class="btn btn-sm" id="f-drs-aan" title="Staat al in een rapport (bv. zelf getypt)">✓ Is al gemeld</button>`}</div>`;
+    ? `${icon('check', 14)} <span>Gemeld aan DRS als <strong>${esc(DRS_KOPJE_EEN[di.cat])}</strong> op ${esc(drsKorteDatum(g.datum))}${g.door ? ` door ${esc(g.door)}` : ''} <span class="muted small">(${esc(DRS_VIA[g.via] || g.via || '')})</span></span> <button type="button" class="btn btn-sm" id="f-drs-uit" title="Alleen als hij NIET in een rapport heeft gestaan">Ongedaan</button>`
+    : `<span><strong>Nog niet gemeld aan DRS</strong> als ${esc(DRS_KOPJE_EEN[di.cat])} — komt in het DRS-rapport.</span> <button type="button" class="btn btn-sm" id="f-drs-aan" title="Staat al in een rapport (bv. zelf getypt)">✓ Is al gemeld</button>`}</div>`;
 }
 function bindDrsKaartRegel(o) {
   const zet = (gemeld) => (ev) => { const b = ev.currentTarget; eenKeer(b, async () => {

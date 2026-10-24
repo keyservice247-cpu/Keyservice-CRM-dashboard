@@ -1562,6 +1562,20 @@ await page.evaluate(() => goView('board'));
 await page.waitForSelector(`.card[data-id="${drsId}"]`, { timeout: 8000 }).catch(() => {});
 ok('bord: DRS-opdracht (ook via "Plak opdracht"-bron) heeft chip "DRS: nog melden"', await page.locator(`.card[data-id="${drsId}"] .chip-drs-melden`).count() === 1);
 ok('bord: knop "DRS-rapport" staat er', await page.locator('#drsReportBtn').isVisible());
+// Ook in de kolommen "Offerte verzonden" en "Afspraak ingepland" (24 okt 2026, wens eigenaar).
+const [drsOffId, drsAfsId] = await page.evaluate(async () => {
+  const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const patch = (id, b) => fetch('/api/orders/' + id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  const of = await post('/api/orders', { source: 'DRS WhatsApp groep', customerName: 'Offerte Klant', customerPhone: '0611222444', customerAddress: 'Markt 6, 4661 AA Halsteren', title: 'Halsteren — offerte cilinders' });
+  await patch(of.id, { status: 'offerte_verzonden', notes: 'Offerte 3 cilinders verstuurd' });
+  const af = await post('/api/orders', { source: 'DRS WhatsApp groep', customerName: 'Afspraak Klant', customerPhone: '0611222555', customerAddress: 'Plein 7, 4703 AB Roosendaal', title: 'Roosendaal — slot vervangen' });
+  await patch(af.id, { status: 'afspraak_ingepland', appointmentAt: '2026-10-28T09:30' });
+  await loadBoard();
+  return [of.id, af.id];
+});
+await page.waitForSelector(`.column[data-status="afspraak_ingepland"] .card[data-id="${drsAfsId}"]`, { timeout: 8000 }).catch(() => {});
+ok('bord: kolom "Offerte verzonden" — DRS-kaart heeft chip "DRS: nog melden"', await page.locator(`.column[data-status="offerte_verzonden"] .card[data-id="${drsOffId}"] .chip-drs-melden`).count() === 1);
+ok('bord: kolom "Afspraak ingepland" — DRS-kaart heeft chip "DRS: nog melden"', await page.locator(`.column[data-status="afspraak_ingepland"] .card[data-id="${drsAfsId}"] .chip-drs-melden`).count() === 1);
 await page.selectOption('#boardMonteurFilter', 'src:drsmelden');
 const filterDrs = await page.evaluate((id) => [...document.querySelectorAll('#board .card')].map((c) => c.dataset.id), drsId);
 ok('filter "DRS: nog te melden" toont de niet-gemelde DRS-opdracht', filterDrs.includes(drsId), JSON.stringify(filterDrs.length));
@@ -1571,6 +1585,7 @@ await page.waitForSelector(`.drs-rij[data-k^="${drsId}"]`, { timeout: 6000 }).ca
 const drsModal = await page.evaluate((id) => ({ regel: (document.querySelector(`.drs-rij[data-k^="${id}"] .drs-regel`) || {}).value || '', tekst: (document.querySelector('#drsTekst') || {}).value || '' }), drsId);
 ok('DRS-rapport: regel met postcode + plaats + klantnaam', drsModal.regel === '4879 NB Etten-Leur — North Ridge BV', drsModal.regel);
 ok('DRS-rapport: voorbeeld in het vaste formaat (*kop*, *Afgerond:*)', /^\*\w+dag \d{2}-\d{2}\*/.test(drsModal.tekst) && /\*Afgerond:\*\n\n.*4879 NB Etten-Leur — North Ridge BV/.test(drsModal.tekst), drsModal.tekst.slice(0, 160));
+ok('DRS-rapport: ook *Offerte:* en *Afspraken:* (met notitie en tijd)', /\*Offerte:\*\n\n(?:[^*\n][^\n]*\n\n)*4661 AA Halsteren — Offerte Klant, Offerte 3 cilinders verstuurd/.test(drsModal.tekst) && /\*Afspraken:\*\n\n(?:[^*\n][^\n]*\n\n)*4703 AB Roosendaal — Afspraak Klant \(28-10 09:30\)/.test(drsModal.tekst), drsModal.tekst);
 await page.fill(`.drs-rij[data-k^="${drsId}"] .drs-regel`, '4879 NB Etten-Leur — North Ridge BV (achterdeur)');
 ok('regel aanpassen werkt het voorbeeld meteen bij', /achterdeur/.test(await page.evaluate(() => document.querySelector('#drsTekst').value)));
 await page.click('#drsKopieer');
@@ -1584,6 +1599,11 @@ await page.evaluate(() => closeModal());
 await page.evaluate(() => loadBoard());
 await page.waitForSelector(`.card[data-id="${drsId}"] .chip-drs-ok`, { timeout: 6000 }).catch(() => {});
 ok('bord: chip wordt "DRS gemeld <dag>"', /DRS gemeld \w{2} \d{2}-\d{2}/.test(await page.locator(`.card[data-id="${drsId}"] .chip-drs-ok`).textContent().catch(() => '')));
+ok('bord: ook de offerte- en afspraakkaart staan nu op "DRS gemeld"', await page.locator(`.card[data-id="${drsOffId}"] .chip-drs-ok`).count() === 1 && await page.locator(`.card[data-id="${drsAfsId}"] .chip-drs-ok`).count() === 1);
+await page.evaluate((id) => openOrderVers(id), drsAfsId);
+await page.waitForSelector('#f-drs', { timeout: 6000 }).catch(() => {});
+ok('opdracht in "Afspraak ingepland": regel "Gemeld aan DRS als Afspraak"', /Gemeld aan DRS als Afspraak op/.test(await page.locator('#f-drs').textContent().catch(() => '')));
+await page.evaluate(() => closeModal());
 await page.evaluate((id) => openOrderVers(id), drsId);
 await page.waitForSelector('#f-drs', { timeout: 6000 }).catch(() => {});
 ok('opdracht: regel "Gemeld aan DRS als Afgerond"', /Gemeld aan DRS als Afgerond/.test(await page.locator('#f-drs').textContent().catch(() => '')));
@@ -1624,6 +1644,19 @@ await page.setViewportSize({ width: 1280, height: 800 });
 await page.evaluate(() => goView('settings'));
 await page.waitForSelector('#saveDrsRapport', { timeout: 8000 }).catch(() => {});
 ok('instellingen: kaart "DRS-rapport" (beheerder)', await page.locator('#saveDrsRapport').count() === 1);
+ok('instellingen: alle vier kopjes staan standaard aan (ook Offerte + Afspraken)', await page.locator('#dr-kopjes input:checked').count() === 4);
+// Opgeslagen waarden komen terug na opnieuw openen (toonde altijd de standaard → een tweede
+// keer opslaan wiste het e-mailadres van DRS).
+await page.click('.sg-chip[data-g="werk"]');
+await page.fill('#dr-email', 'planning@drs-test.nl');
+await page.click('#saveDrsRapport');
+await page.waitForFunction(() => /DRS-rapport-instellingen opgeslagen/.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+await page.evaluate(() => loadSettings());
+await page.waitForSelector('#dr-email', { timeout: 6000 }).catch(() => {});
+ok('instellingen: opgeslagen e-mailadres van DRS staat er weer na opnieuw openen', await page.locator('#dr-email').inputValue().catch(() => '') === 'planning@drs-test.nl');
+await page.fill('#dr-email', '');
+await page.click('#saveDrsRapport');
+await page.waitForTimeout(300);
 noErr('DRS-rapport');
 
 // OFFERTE-HERINNERING ÉÉN KEER (8 okt 2026): geen "Max. aantal" meer, uitleg staat er, en

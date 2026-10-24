@@ -47,6 +47,11 @@ console.log('\n== Setup ==');
 ok('admin inloggen', (await login('admin@keyservice.nl', 'admin123')).status === 200);
 const adminCookie = cookie;
 await api('PATCH', '/api/settings', { whatsappOrderGroups: 'raf breda', autoMergeWindowHours: 0 });
+// Een verse database krijgt demo-opdrachten (seed.js), waaronder een DRS-opdracht op Afspraak
+// ingepland. Sinds 24 okt telt die mee (alle vier kopjes) — eerst afvinken als "al gemeld",
+// zodat de tellingen hieronder alleen over de testopdrachten gaan.
+const demo = (await api('GET', '/api/drs-rapport')).json?.items || [];
+if (demo.length) await api('POST', '/api/drs-rapport/markeer', { via: 'handmatig', items: demo.map((i) => ({ orderId: i.orderId, cat: i.cat, regel: i.regel })) });
 const maak = async (velden, status) => {
   const r = await api('POST', '/api/orders', { source: 'DRS WhatsApp groep', ...velden });
   if (status) await api('PATCH', `/api/orders/${r.json.id}`, { status, ...(velden.notesNa ? { notes: velden.notesNa } : {}) });
@@ -71,7 +76,7 @@ ok('regel = postcode + plaats + klantnaam (wens DRS)', regelA === '4879 NB Etten
 const regelC = (v.items || []).find((i) => i.orderId === C.id)?.regel || '';
 ok('geannuleerd: reden uit de notitie erbij', /4871 DK Etten-Leur — Mevr\. Timmer, Langs geweest/.test(regelC), regelC);
 ok('kop met dagnaam + datum', v.kop === kopVan(vandaag), v.kop);
-ok('standaard kopjes: afgerond + geannuleerd', JSON.stringify(v.kopjes) === JSON.stringify(['afgerond', 'geannuleerd']));
+ok('standaard kopjes: alle vier (sinds 24 okt ook Offerte + Afspraken)', JSON.stringify(v.kopjes) === JSON.stringify(['afgerond', 'geannuleerd', 'offerte', 'afspraak']), JSON.stringify(v.kopjes));
 const pulse = (await api('GET', '/api/pulse')).json;
 ok('pulse geeft teller "nog te melden" (3)', pulse.drsTeMelden === 3, JSON.stringify(pulse.drsTeMelden));
 
@@ -394,6 +399,42 @@ console.log('\n== Review-fixes 16 okt ==');
   ok('(m) complete DRS-opdracht met kopje "Offerte:" verdwijnt niet in Overige', om.json?.status && om.json.status !== 'overige', JSON.stringify(om.json));
 }
 
+console.log('\n== Offerte verzonden + Afspraak ingepland krijgen het DRS-label (24 okt 2026) ==');
+{
+  cookie = adminCookie;
+  const ALLE = ['afgerond', 'geannuleerd', 'offerte', 'afspraak'];
+  // Een eerdere stap zette 3 kopjes. Het instellingenscherm moet de OPGESLAGEN waarden
+  // terugtonen (toonde altijd de standaard → tweede keer opslaan wiste het DRS-mailadres).
+  await api('POST', '/api/drs-rapport/instellingen', { kopjes: ALLE, afzenders: 'Noura Test', emailAfzenders: 'planning@drs-test.nl' });
+  const st = (await api('GET', '/api/settings')).json;
+  ok('Instellingen tonen de opgeslagen DRS-instellingen (kopjes, namen, e-mail van DRS)', JSON.stringify(st?.drsRapport?.kopjes) === JSON.stringify(ALLE) && (st.drsRapport.afzenders || []).includes('Noura Test') && (st.drsRapport.emailAfzenders || []).includes('planning@drs-test.nl'), JSON.stringify(st?.drsRapport));
+  const me = (await api('GET', '/api/me')).json;
+  ok('scherm krijgt Offerte + Afspraken mee (labels op het bord)', ['offerte', 'afspraak'].every((k) => (me?.meta?.drsRapport?.kopjes || []).includes(k)), JSON.stringify(me?.meta?.drsRapport));
+  const voor = (await api('GET', '/api/pulse')).json.drsTeMelden;
+  const OF = await maak({ customerName: 'Offerte Klant', customerPhone: '0611000090', customerAddress: 'Markt 6, 4661 AA Halsteren', title: 'Halsteren — offerte cilinders', notesNa: 'Offerte 3 cilinders verstuurd' }, 'offerte_verzonden');
+  const AF = await maak({ customerName: 'Afspraak Klant', customerPhone: '0611000091', customerAddress: 'Plein 7, 4703 AB Roosendaal', title: 'Roosendaal — slot vervangen' });
+  await api('PATCH', `/api/orders/${AF.id}`, { status: 'afspraak_ingepland', appointmentAt: '2026-10-28T09:30' });
+  const lijst = (await api('GET', '/api/orders')).json;
+  const ofo = lijst.find((o) => o.id === OF.id); const afo = lijst.find((o) => o.id === AF.id);
+  ok('bord: DRS-kaart in "Offerte verzonden" hoort bij kopje Offerte', ofo?.isDrs === true && ofo.drsCat === 'offerte', JSON.stringify({ d: ofo?.isDrs, c: ofo?.drsCat }));
+  ok('bord: DRS-kaart in "Afspraak ingepland" hoort bij kopje Afspraken', afo?.isDrs === true && afo.drsCat === 'afspraak', JSON.stringify({ d: afo?.isDrs, c: afo?.drsCat }));
+  const rv = (await api('GET', '/api/drs-rapport')).json;
+  const it = (oid) => (rv.items || []).find((i) => i.orderId === oid);
+  ok('rapport: offerte staat erin onder Offerte, met de notitie', it(OF.id)?.cat === 'offerte' && it(OF.id).regel === '4661 AA Halsteren — Offerte Klant, Offerte 3 cilinders verstuurd', JSON.stringify(it(OF.id)));
+  ok('rapport: afspraak staat erin onder Afspraken, met datum en tijd', it(AF.id)?.cat === 'afspraak' && it(AF.id).regel === '4703 AB Roosendaal — Afspraak Klant (28-10 09:30)', JSON.stringify(it(AF.id)));
+  const na1 = (await api('GET', '/api/pulse')).json.drsTeMelden;
+  ok('teller op de knop DRS-rapport telt ze mee (+2)', na1 === voor + 2, JSON.stringify({ voor, na1 }));
+  // Per kopje: als offerte gemeld, klant akkoord en afgerond → opnieuw te melden, nu als afgerond.
+  const vk = await api('POST', `/api/orders/${OF.id}/drs-gemeld`, { gemeld: true });
+  ok('offerte afvinken op de opdracht', vk.status === 200 && vk.json?.drsGemeld?.offerte?.via === 'handmatig', JSON.stringify(vk.json));
+  ok('daarna niet meer bij nog te melden', !((await api('GET', '/api/drs-rapport')).json.items || []).some((i) => i.orderId === OF.id));
+  await api('PATCH', `/api/orders/${OF.id}`, { status: 'afgerond' });
+  const afg = ((await api('GET', '/api/drs-rapport')).json.items || []).find((i) => i.orderId === OF.id);
+  const ofNa = (await api('GET', '/api/orders?includeArchived=1')).json.find((o) => o.id === OF.id);
+  ok('afgerond → staat er weer in, nu onder Afgerond (offerte-melding blijft bewaard)', afg?.cat === 'afgerond' && !!ofNa?.drsGemeld?.offerte, JSON.stringify({ afg, g: ofNa?.drsGemeld }));
+  await api('POST', '/api/drs-rapport/instellingen', { afzenders: '', emailAfzenders: '' });
+}
+
 // ---------- Zonder server: eenmalige start + avondherinnering ----------
 console.log('\n== Eenmalige start (oude rapporten inlezen) + avondherinnering — zonder server ==');
 {
@@ -491,6 +532,19 @@ console.log('\n== Eenmalige start (oude rapporten inlezen) + avondherinnering �
   // regel hoort gewoon bij Afgerond (postcode mag overal in de regel staan).
   const od = drs.leesRapport('Afgerond:\n4007 RS Tiel\nOpenen deur 5000 AA Tilburg').posten;
   ok('lezen: "Openen deur …" is geen kopje (regel blijft bij Afgerond)', od.length === 2 && od.every((p) => p.cat === 'afgerond'), JSON.stringify(od));
+  // Offerte + Afspraken erbij (24 okt 2026): eenmalige migratie van een al opgeslagen instelling.
+  d.settings.drsRapport = { kopjes: ['afgerond', 'geannuleerd'], herinnering: true, herinneringUur: 21, afzenders: [], emailAfzenders: ['planning@drs.nl'] };
+  const offOud = mkOrder({ title: 'Breda — offerte oud', status: 'offerte_verzonden', statusSince: iso(nu - 10 * DAG), intake: { address: '4811 AA Breda' } });
+  const afsNieuw = mkOrder({ title: 'Tilburg — afspraak', status: 'afspraak_ingepland', statusSince: iso(nu - 2 * DAG), appointmentAt: '2026-10-28T10:00', intake: { address: '5038 AA Tilburg' } });
+  const afgOud = mkOrder({ title: 'Oss — afgerond oud', status: 'afgerond', completedAt: iso(nu - 10 * DAG), intake: { address: '5341 AA Oss' } });
+  d.orders.push(offOud, afsNieuw, afgOud);
+  const km = drs.drsKopjesMigratie({ nu });
+  ok('kopjes-migratie: opgeslagen instelling krijgt Offerte + Afspraken erbij (rest blijft)', JSON.stringify(drs.getDrsRapportInstellingen().kopjes) === JSON.stringify(['afgerond', 'geannuleerd', 'offerte', 'afspraak']) && drs.getDrsRapportInstellingen().emailAfzenders.includes('planning@drs.nl'), JSON.stringify(d.settings.drsRapport));
+  ok('kopjes-migratie: offerte die al >7 dagen in de kolom staat → als gemeld aangenomen', offOud.drsGemeld?.offerte?.via === 'aangenomen' && km?.aangenomen >= 1, JSON.stringify({ g: offOud.drsGemeld, km }));
+  ok('kopjes-migratie: recente afspraak blijft bij nog te melden', !afsNieuw.drsGemeld && drs.nogTeMelden({ nu }).some((o) => o.id === afsNieuw.id));
+  ok('kopjes-migratie: afgerond wordt niet aangeraakt (alleen de nieuwe kopjes)', !afgOud.drsGemeld);
+  d.settings.drsRapport.kopjes = ['afgerond'];
+  ok('kopjes-migratie draait maar één keer (latere keuze van de beheerder blijft)', drs.drsKopjesMigratie({ nu }) === null && JSON.stringify(drs.getDrsRapportInstellingen().kopjes) === '["afgerond"]');
 }
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);

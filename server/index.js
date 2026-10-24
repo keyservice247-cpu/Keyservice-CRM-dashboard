@@ -61,7 +61,7 @@ import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { formulierStatus, markeerActivatieAfgehandeld } from './formulieren.js';
-import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel, alAfgerondGemeldOpAdres, nlDatum as drsVandaag } from './drs-rapport.js';
+import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, drsKopjesMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel, alAfgerondGemeldOpAdres, nlDatum as drsVandaag } from './drs-rapport.js';
 import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions, removeAutoFeeForOrder, herkoppelDrsFee } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
@@ -3495,6 +3495,10 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     whatsappCloudReady: cloudConfigured(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
     wachtOpAntwoordDagen: wachtOpAntwoordDagen(),
+    // DRS-rapport (24 okt 2026): ontbrak hier, waardoor de kaart in Instellingen altijd de
+    // standaardwaarden toonde — en een tweede keer opslaan de opgeslagen e-mailadressen van
+    // DRS, de namen en de gekozen kopjes weer wiste.
+    drsRapport: getDrsRapportInstellingen(),
     htmlSignature: getHtmlSignature(),
     aiOverviewModel: db().settings.aiOverviewModel === 'standaard' ? 'standaard' : 'opus',
     invoiceSettings: getInvoiceSettings(),
@@ -6896,6 +6900,8 @@ app.listen(PORT, () => {
   // DRS-rapport (16 okt): eenmalig bestaande opdrachten + rapporten uit de groep inlezen, en
   // elke 5 min kijken of de avondherinnering ("nog te melden") verschuldigd is.
   try { drsStartMigratie(); } catch (e) { console.error('[drs-rapport] start:', e.message); }
+  // 24 okt 2026: Offerte en Afspraken eenmalig bij de kopjes (labels op het bord).
+  try { drsKopjesMigratie(); } catch (e) { console.error('[drs-rapport] kopjes:', e.message); }
   setInterval(() => { runDrsHerinnering().catch((e) => console.error('[drs-rapport] herinnering:', e.message)); }, 5 * 60 * 1000);
   // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.
   setInterval(() => { runCloudOutbox().catch((e) => console.error('[wa-cloud]', e.message)); }, 20 * 1000);
