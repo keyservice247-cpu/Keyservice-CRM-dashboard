@@ -961,6 +961,12 @@ table tbody tr:hover { background: var(--panel-2); }
 .inv-st.betaald, .inv-st.goedgekeurd { background: var(--ok-soft); color: var(--ok); }
 .inv-st.afgekeurd, .inv-st.verlopen { background: var(--danger-soft); color: var(--danger); }
 .inv-st.oninbaar { background: var(--line-soft); color: var(--ink-soft); }
+/* Kiezen op een opdracht: bestaande factuur/offerte openen of een nieuwe maken (26 okt 2026). */
+.doc-keuze-acties { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 14px; }
+.doc-keuze-lijst { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.doc-keuze-rij { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; min-height: 48px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+@media (hover: hover) { .doc-keuze-rij:hover { border-color: var(--accent); } }
+.doc-keuze-kop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* DRS-rapport (16 okt 2026) */
 .chip.chip-drs-ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .chip.chip-drs-melden { background: var(--warn-soft); color: var(--warn); border-color: transparent; font-weight: 600; }

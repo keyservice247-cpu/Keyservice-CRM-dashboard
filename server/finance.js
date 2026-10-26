@@ -159,6 +159,7 @@ export function collectAutoSyncEntries(since) {
   const seen = new Set([...entries.map((e) => e.sourceRef), ...(fin().removedRefs || [])].filter(Boolean));
   // Alleen echte kaarten — een kaart in de prullenbak mag nooit een fee boeken.
   const orderById = new Map((db().orders || []).map((o) => [o.id, o]));
+  const userById = new Map((db().users || []).map((u) => [u.id, u]));
   const nlDay = (d) => new Date(d || Date.now()).toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   const out = [];
   for (const inv of db().invoices || []) {
@@ -170,6 +171,11 @@ export function collectAutoSyncEntries(since) {
     const ref = `inv:${inv.id}`;
     if (seen.has(ref)) continue;
     const order = inv.orderId ? orderById.get(inv.orderId) : null;
+    // Losse factuur (zonder opdracht) die een MONTEUR zelf maakte telt bij die monteur (26 okt
+    // 2026: monteurs maken nu ook nieuwe facturen voor hun bestaande klanten) — anders stond
+    // die omzet in Cijfers bij "geen monteur" en klopte zijn uitbetaling niet.
+    const maker = !order && inv.createdById ? userById.get(inv.createdById) : null;
+    const monteurId = (order && order.monteurId) || (maker && maker.role === 'monteur' && maker.monteurId) || null;
     const hay = `${(order && order.title) || ''} ${(inv.lines || []).map((l) => l.description).join(' ')}`;
     const category = isDrsOpdracht(order) ? 'DRS opdracht'
       : /schuifpui|schuifdeur|schuifwand/i.test(hay) ? 'Schuifpui reparatie'
@@ -177,7 +183,7 @@ export function collectAutoSyncEntries(since) {
     out.push({
       kind: 'income', date, amount, category,
       source: category === 'DRS opdracht' ? 'DRS' : category === 'Schuifpui reparatie' ? 'Schuifpui' : 'Overig',
-      monteurId: (order && order.monteurId) || null, orderId: (order && order.id) || null,
+      monteurId, orderId: (order && order.id) || null,
       note: `Factuur ${inv.number || ''} betaald (excl. btw)${order ? ` — ${order.title}` : ''}`.trim(),
       sourceRef: ref, createdBy: 'systeem (facturen)',
     });

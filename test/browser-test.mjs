@@ -1341,6 +1341,38 @@ noErr('Mobiel plakkende balken');
   ok('monteur: bij versturen van een factuur óók de vraag "Kan deze factuur als betaald worden verstuurd?"', mBk.ja && mBk.nee && /betaald/i.test(mBk.tekst), JSON.stringify({ ...mBk, tekst: mBk.tekst.slice(0, 80), inv: mInvId }));
   await mp.click('#bk-cancel').catch(() => {});
   ok('monteur-scherm zonder JS-fouten', !mErr.filter((e) => !/favicon|manifest|ServiceWorker/i.test(e)).length, mErr.join(' | '));
+  // NIEUWE OFFERTE/FACTUUR BIJ EEN BESTAANDE, AFGERONDE KLANT (26 okt 2026, wens eigenaar): de
+  // knoppen op de opdracht openden altijd de oude (betaalde) factuur. Nu eerst kiezen.
+  const oudeKlus = await page.evaluate(async (monteurId) => {
+    const post = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+    const o = await post('/api/orders', { customerName: 'Afgeronde Klant', customerPhone: '0611009966', title: 'Ede — oude klus', monteurId });
+    await post(`/api/orders/${o.id}/invoice`, { lines: [{ description: 'Slot', qty: 1, priceExcl: 120 }], btwPct: 21, type: 'factuur' });
+    await fetch('/api/orders/' + o.id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'afgerond' }) });
+    return o.id;
+  }, mSetup.monteurId);
+  mErr.length = 0;
+  await mp.evaluate((id) => { if (typeof closeModal === 'function') closeModal(); openOrderVers(id); }, oudeKlus);
+  await mp.waitForSelector('#f-quote', { timeout: 6000 }).catch(() => {});
+  await mp.click('#f-quote').catch(() => {});
+  await mp.waitForSelector('[data-dockeuze]', { timeout: 6000 }).catch(() => {});
+  const keuze = await mp.evaluate(() => ({ titel: (document.querySelector('[data-dockeuze]') || {}).textContent || '', rijen: document.querySelectorAll('#dk-lijst .doc-keuze-rij').length, nieuw: (document.querySelector('#dk-nieuw') || {}).textContent || '' }));
+  ok('monteur: "Offerte" op een afgeronde opdracht met factuur → eerst kiezen (oude factuur + "+ Nieuwe offerte")', /Offerte/.test(keuze.titel) && keuze.rijen === 1 && /Nieuwe offerte/.test(keuze.nieuw), JSON.stringify(keuze));
+  ok('monteur: keuzevenster past op 390 px', await mp.evaluate(() => document.documentElement.scrollWidth <= 392));
+  await mp.click('#dk-nieuw').catch(() => {});
+  await mp.waitForFunction(() => /OFF-\d{4}-\d+/.test((document.querySelector('#modal') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+  const editor = await mp.evaluate(() => ({ h: (document.querySelector('#modal h2') || {}).textContent || '', nr: ((document.querySelector('#modal') || {}).textContent || '').match(/OFF-\d{4}-\d+/)?.[0] || '' }));
+  ok('monteur: "+ Nieuwe offerte" opent een nieuwe offerte voor die klant (eigen nummer)', /Offerte — Afgeronde Klant/.test(editor.h) && !!editor.nr, JSON.stringify(editor));
+  ok('monteur: geen knoppen "Regels → prijslijst/pakket" (alleen kantoor; gaven een foutmelding)', await mp.locator('#il-to-pricelist, #il-to-bundle').count() === 0);
+  const docsNa = await mp.evaluate((id) => fetch(`/api/orders/${id}/invoice`).then((r) => r.json()).then((d) => (d.documenten || []).map((x) => `${x.type}:${x.bijDezeOpdracht ? 'bij' : 'los'}`)), oudeKlus);
+  ok('monteur: nieuwe offerte is los (de oude opdracht houdt zijn factuur)', docsNa.includes('offerte:los') && docsNa.includes('factuur:bij'), JSON.stringify(docsNa));
+  await mp.evaluate(() => closeModal());
+  // + Offerte op Facturen: zijn afgeronde klant staat in de lijst, met de laatste opdracht.
+  await mp.evaluate(() => openNewInvoiceFlow('offerte'));
+  await mp.waitForSelector('.ni-hit', { timeout: 6000 }).catch(() => {});
+  const nfl = await mp.evaluate(() => ({ hits: [...document.querySelectorAll('.ni-hit')].map((h) => h.textContent.replace(/\s+/g, ' ').trim()), nieuweKlant: !!document.querySelector('#ni-newcust') }));
+  ok('monteur: + Offerte toont zijn afgeronde klant met laatste opdracht, zonder "nieuwe klant"-knop die toch niet mag', nfl.hits.some((t) => /Afgeronde Klant/.test(t) && /Laatste opdracht: Ede — oude klus/.test(t)) && !nfl.nieuweKlant, JSON.stringify(nfl));
+  await mp.evaluate(() => closeModal());
+  ok('monteur: keuzevenster en nieuwe offerte zonder JS-fouten', !mErr.filter((e) => !/favicon|manifest|ServiceWorker/i.test(e)).length, mErr.join(' | '));
   await mp.close();
 }
 

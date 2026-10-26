@@ -3897,7 +3897,8 @@ function openWerkbonModal(o) {
 // type = 'factuur' of 'offerte' — telt alleen bij het AANMAKEN; bestaat er al een
 // gekoppeld document, dan opent gewoon dat document (type wijzigt nooit stiekem).
 function openInvoiceModal(o, type = 'factuur') {
-  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [], bundles = [] }) => {
+  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [], bundles = [], documenten = [] }) => {
+    if (documentKiezen(o, type, invoice)) return kiesDocument(o, type, { invoice, documenten });
     renderInvoiceEditor({
       inv: invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept', type },
       customer: o.customer || {}, order: o, contextTitle: o.title, werkbon: o.werkbon || null, priceList, bundles,
@@ -3905,6 +3906,61 @@ function openInvoiceModal(o, type = 'factuur') {
       after: () => loadBoard(),
     });
   }).catch((err) => toast(err.message, true));
+}
+// Eerst kiezen of meteen de editor? (26 okt 2026, wens eigenaar: ook een monteur moet bij een
+// bestaande, afgeronde klant een NIEUWE offerte of factuur kunnen maken.) De knoppen openden
+// altijd het éne gekoppelde document: de betaalde factuur van de oude klus, en bij "Offerte"
+// zelfs die factuur. Meteen de editor alleen bij de gewone gang van zaken: nog geen document,
+// of een lopende opdracht met een bewerkbaar document van hetzelfde soort.
+function documentKiezen(o, type, invoice) {
+  if (!invoice) return false;
+  const vast = (invoice.status === 'betaald' && !!invoice.sentAt) || ['goedgekeurd', 'afgekeurd', 'oninbaar'].includes(invoice.status);
+  return ['afgerond', 'geannuleerd'].includes(o.status) || invoice.type !== type || vast;
+}
+// Keuzevenster: bestaande facturen/offertes van deze klant (openen = bekijken/wijzigen) of
+// een nieuwe. Een nieuwe is LOS (niet aan deze opdracht): een afgeronde opdracht blijft zo
+// ongemoeid (status, DRS-fee, opvolging), en wie hem maakt ziet hem altijd terug bij Facturen.
+function kiesDocument(o, type, { invoice, documenten = [] }) {
+  const klant = o.customer?.name || o.intake?.name || 'deze klant';
+  const andere = type === 'offerte' ? 'factuur' : 'offerte';
+  const naam = (t) => (t === 'offerte' ? 'Offerte' : 'Factuur');
+  const eurD = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+  const stTekst = (d) => (d.type === 'offerte'
+    ? ({ concept: 'Concept', verzonden: 'Verzonden', goedgekeurd: 'Akkoord', afgekeurd: 'Afgewezen' }[d.status])
+    : ({ concept: 'Concept', verzonden: 'Nog niet betaald', betaald: d.sentAt ? 'Betaald' : 'Betaald (nog niet verstuurd)', oninbaar: 'Afgeschreven' }[d.status])) || d.status;
+  // Factuur gevraagd terwijl er een offerte aan de opdracht hangt: de juiste weg is die offerte
+  // omzetten (blijft aan de opdracht gekoppeld, nooit twee facturen uit één offerte).
+  const vanOfferte = type === 'factuur' && invoice && invoice.type === 'offerte' && invoice.status !== 'afgekeurd' ? invoice : null;
+  modal(`
+    <h2 data-dockeuze>${icon(type === 'offerte' ? 'file' : 'mail', 16)} ${naam(type)} — ${esc(klant)}</h2>
+    <p class="muted small">${documenten.length ? `Deze klant heeft al ${documenten.length === 1 ? 'een factuur of offerte' : `${documenten.length} facturen/offertes`}. Tik erop om te bekijken of te wijzigen, of maak een nieuwe.` : 'Maak een nieuwe factuur of offerte voor deze klant.'}${['afgerond', 'geannuleerd'].includes(o.status) ? ' De afgeronde opdracht zelf blijft zoals hij is.' : ''}</p>
+    <div class="doc-keuze-acties">
+      ${vanOfferte ? `<button class="btn btn-primary" id="dk-van-offerte">Factuur maken van offerte ${esc(vanOfferte.number || '')}</button>` : ''}
+      <button class="btn${vanOfferte ? '' : ' btn-primary'}" id="dk-nieuw">+ Nieuwe ${naam(type).toLowerCase()}</button>
+      <button class="btn" id="dk-nieuw-ander">+ Nieuwe ${naam(andere).toLowerCase()}</button>
+    </div>
+    <div class="doc-keuze-lijst" id="dk-lijst">${documenten.map((d) => `
+      <button type="button" class="doc-keuze-rij" data-inv="${esc(d.id)}">
+        <span class="doc-keuze-kop"><strong>${naam(d.type)} ${esc(d.number)}</strong> <span class="inv-st ${esc(d.status)}">${esc(stTekst(d))}</span></span>
+        <span class="muted small">${esc(fmtDateShort(d.sentAt || d.createdAt))} · ${eurD(d.totalIncl)} · ${d.bijDezeOpdracht ? 'bij deze opdracht' : d.orderTitle ? esc(d.orderTitle.slice(0, 40)) : 'los'}${d.vergrendeld ? ' · vergrendeld (wijzigen via Kopieer)' : ''}</span>
+      </button>`).join('')}</div>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="dk-sluit">Sluiten</button></div></div>`);
+  $('#dk-sluit').onclick = closeModal;
+  $$('#dk-lijst .doc-keuze-rij').forEach((b) => { b.onclick = () => openStandaloneInvoice(b.dataset.inv); });
+  const nieuw = (t) => (ev) => eenKeer(ev.currentTarget, async () => {
+    try { const r = await api('/api/invoices', 'POST', { customerId: o.customerId, type: t }); openStandaloneInvoice((r.invoice || r).id); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#dk-nieuw').onclick = nieuw(type);
+  $('#dk-nieuw-ander').onclick = nieuw(andere);
+  const vo = $('#dk-van-offerte');
+  if (vo) vo.onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    try {
+      const f = await api(`/api/invoices/${vanOfferte.id}/copy`, 'POST', { type: 'factuur' });
+      toast(f.bestaand ? `Factuur ${f.number} bestond al — geopend` : `Factuur ${f.number} aangemaakt`);
+      openStandaloneInvoice(f.id);
+    } catch (err) { toast(err.message, true); }
+  });
 }
 
 // TRUSTPILOT VANAF EEN FACTUUR (6 okt 2026): knop naast Review in de lijst én in de editor.
@@ -4058,8 +4114,8 @@ function renderInvoiceEditor(ctx) {
     <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
     ${locked ? '' : `<button type="button" class="btn btn-sm" id="il-add">+ Regel toevoegen</button>
     ${ctx.werkbon?.work ? `<button type="button" class="btn btn-sm" id="il-werkbon">Werkbon overnemen als regel</button>` : ''}
-    <button type="button" class="btn btn-sm" id="il-to-pricelist" title="Alle regels hierboven toevoegen aan je vaste prijzenlijst">${icon('tag', 12)} Regels → prijslijst</button>
-    <button type="button" class="btn btn-sm" id="il-to-bundle" title="Deze regels bewaren als pakket, om ze later met één klik toe te voegen">${icon('tag', 12)} Regels → pakket</button>
+    ${hasPerm('settings') ? `<button type="button" class="btn btn-sm" id="il-to-pricelist" title="Alle regels hierboven toevoegen aan je vaste prijzenlijst">${icon('tag', 12)} Regels → prijslijst</button>
+    <button type="button" class="btn btn-sm" id="il-to-bundle" title="Deze regels bewaren als pakket, om ze later met één klik toe te voegen">${icon('tag', 12)} Regels → pakket</button>` : ''}
     <button type="button" class="btn btn-sm" id="il-refresh-prices" title="Regels bijwerken naar de huidige prijzen uit je prijslijst (op omschrijving)">${icon('refresh', 12)} Prijzen bijwerken</button>`}
     <div class="row" style="margin-top:10px"> <label>Btw-tarief <select id="inv-btw" ${locked ? 'disabled' : ''}><option value="21" ${Number(inv.btwPct) === 21 ? 'selected' : ''}>21%</option><option value="9" ${Number(inv.btwPct) === 9 ? 'selected' : ''}>9%</option><option value="0" ${Number(inv.btwPct) === 0 ? 'selected' : ''}>0%</option></select></label>
       <label>Opmerking op de ${esc(woord.toLowerCase())} <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel" ${locked ? 'disabled' : ''}></label> </div>
@@ -4343,16 +4399,23 @@ function renderInvoiceEditor(ctx) {
 // Nieuwe losse factuur/offerte: eerst klant kiezen (bestaand of nieuw).
 function openNewInvoiceFlow(type) {
   const woord = type === 'offerte' ? 'Offerte' : 'Factuur';
-  api('/api/customers').then((customers) => {
+  api('/api/customers').then((alle) => {
+    // Meest recente klanten bovenaan (26 okt 2026): zonder zoekterm zag je de 8 OUDSTE.
+    const customers = alle.slice().sort((a, b) => String(b.lastOrder?.at || b.createdAt || '').localeCompare(String(a.lastOrder?.at || a.createdAt || '')));
+    // Een monteur zonder klanten-recht kan geen nieuwe klant aanmaken (server: 403) — dan
+    // ook geen knop die op een foutmelding uitloopt.
+    const monteur = state.me?.role === 'monteur';
+    const nieuweKlantMag = !monteur || hasPerm('customers');
     modal(`
       <h2>${icon('mail', 16)} Nieuwe ${esc(woord.toLowerCase())} — kies de klant</h2>
-      <label>Zoek bestaande klant <input id="ni-search" data-geen-wijziging placeholder="Typ naam, telefoon of e-mail…" autocomplete="off"></label>
-      <div id="ni-results" style="max-height:220px;overflow:auto;margin:6px 0 12px"></div>
-      <details id="ni-newcust"><summary style="cursor:pointer;font-weight:600;padding:6px 0">+ Of maak een nieuwe klant</summary>
+      ${monteur ? '<p class="muted small">Je ziet de klanten van je eigen opdrachten, ook van afgeronde.</p>' : ''}
+      <label>Zoek bestaande klant <input id="ni-search" data-geen-wijziging placeholder="Typ naam, telefoon, e-mail of plaats…" autocomplete="off"></label>
+      <div id="ni-results" style="max-height:260px;overflow:auto;margin:6px 0 12px"></div>
+      ${nieuweKlantMag ? `<details id="ni-newcust"><summary style="cursor:pointer;font-weight:600;padding:6px 0">+ Of maak een nieuwe klant</summary>
         <div class="row"><label>Naam <input id="ni-name"></label><label>Telefoon <input id="ni-phone"></label></div>
         <div class="row"><label>E-mail <input id="ni-email"></label><label>Adres (straat, postcode, plaats) <input id="ni-address"></label></div>
         <button class="btn btn-primary" id="ni-create" style="margin-top:8px">${esc(woord)} maken voor nieuwe klant</button>
-      </details>
+      </details>` : ''}
       <div class="modal-actions"><span></span><div class="right"><button class="btn" id="ni-cancel">Annuleren</button></div></div>`);
     // Eén slot voor alle klant-tegels + "nieuwe klant" (28 sep 2026): een dubbelklik
     // (of twee tegels snel na elkaar) gaf twee facturen met verbruikte nummers.
@@ -4366,17 +4429,18 @@ function openNewInvoiceFlow(type) {
     };
     const renderResults = () => {
       const q = ($('#ni-search').value || '').toLowerCase().trim();
-      const hits = !q ? customers.slice(0, 8) : customers.filter((c) => `${c.name} ${c.phone} ${c.email}`.toLowerCase().includes(q)).slice(0, 12);
+      const hits = !q ? customers.slice(0, 8) : customers.filter((c) => `${c.name} ${c.phone} ${c.email} ${c.address || ''} ${c.searchPlaces || ''}`.toLowerCase().includes(q)).slice(0, 12);
       $('#ni-results').innerHTML = hits.length ? hits.map((c) => `
         <div class="ni-hit" data-id="${esc(c.id)}" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:5px;cursor:pointer">
           <strong>${esc(c.name || 'Onbekend')}</strong> <span class="muted small">${esc(c.phone || '')}${c.email ? ' · ' + esc(c.email) : ''}${c.address ? ' · ' + esc(c.address) : ''}</span>
-        </div>`).join('') : '<div class="muted small" style="padding:6px">Geen klant gevonden — maak hieronder een nieuwe aan.</div>';
+          ${c.lastOrder ? `<div class="muted small">Laatste opdracht: ${esc(String(c.lastOrder.title || '').slice(0, 60))} (${esc(c.lastOrder.statusLabel || c.lastOrder.status || '')})</div>` : ''}
+        </div>`).join('') : `<div class="muted small" style="padding:6px">Geen klant gevonden${nieuweKlantMag ? ' — maak hieronder een nieuwe aan' : ''}.</div>`;
       $$('.ni-hit').forEach((el) => el.onclick = () => start({ customerId: el.dataset.id }));
     };
     renderResults();
     $('#ni-search').oninput = renderResults;
     $('#ni-search').focus();
-    $('#ni-create').onclick = () => start({ newCustomer: { name: $('#ni-name').value, phone: $('#ni-phone').value, email: $('#ni-email').value, address: $('#ni-address').value } });
+    if ($('#ni-create')) $('#ni-create').onclick = () => start({ newCustomer: { name: $('#ni-name').value, phone: $('#ni-phone').value, email: $('#ni-email').value, address: $('#ni-address').value } });
     $('#ni-cancel').onclick = closeModal;
   }).catch((err) => toast(err.message, true));
 }

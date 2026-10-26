@@ -223,6 +223,46 @@ console.log('\n== Factuur afschrijven / oninbaar (16 okt 2026) ==');
   ok('offerte afschrijven kan niet', (await (async () => { const q = await api('POST', '/api/invoices', { customerId: klantId, type: 'offerte' }); return api('POST', `/api/invoices/${q.json?.invoice?.id}/status`, { status: 'oninbaar' }); })()).status === 400);
 }
 
+console.log('\n== Monteur: nieuwe offerte/factuur voor een bestaande, afgeronde klant (26 okt 2026) ==');
+{
+  cookie = adminCookie;
+  // Oude klus van Youssef Zelf: afgerond, met (standaard betaalde) factuur.
+  const oud = await api('POST', '/api/orders', { customerName: 'Oude Klant', customerPhone: '0612777055', customerEmail: 'oud@example.nl', title: 'Ede — slot vervangen', monteurId: montRec.json?.id });
+  const oudId = oud.json?.id; const oudKlant = oud.json?.customerId;
+  const oudInv = await api('POST', `/api/orders/${oudId}/invoice`, { lines: [{ description: 'Slot', qty: 1, priceExcl: 120 }], btwPct: 21, type: 'factuur' });
+  const oudInvId = oudInv.json?.id || oudInv.json?.invoice?.id;
+  await api('PATCH', `/api/orders/${oudId}`, { status: 'afgerond' });
+  // Losse offerte van KANTOOR voor dezelfde klant: die ziet de monteur niet (alleen eigen records).
+  const kantoorLos = (await api('POST', '/api/invoices', { customerId: oudKlant, type: 'offerte' })).json?.invoice?.id;
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  ok('monteur ziet zijn afgeronde klant bij + Factuur / + Offerte', ((await api('GET', '/api/customers')).json || []).some((c) => c.id === oudKlant));
+  const d1 = await api('GET', `/api/orders/${oudId}/invoice`);
+  const docs1 = d1.json?.documenten || [];
+  ok('opdracht geeft de facturen/offertes van de klant mee (alleen wat hij mag zien)', d1.status === 200 && docs1.length === 1 && docs1[0].id === oudInvId && docs1[0].bijDezeOpdracht === true && !docs1.some((d) => d.id === kantoorLos), JSON.stringify(docs1));
+  const off = await api('POST', '/api/invoices', { customerId: oudKlant, type: 'offerte' });
+  const offId = off.json?.invoice?.id;
+  ok('monteur maakt een NIEUWE offerte voor de afgeronde klant (los, eigen nummer)', off.status === 200 && off.json?.invoice?.type === 'offerte' && !off.json.invoice.orderId && /^OFF-/.test(off.json.invoice.number || ''), JSON.stringify(off.json?.invoice));
+  const wijzig = await api('PATCH', `/api/invoices/${offId}`, { lines: [{ description: 'Cilinder', qty: 2, priceExcl: 45 }], btwPct: 21 });
+  ok('monteur kan zijn nieuwe offerte wijzigen', wijzig.status === 200 && wijzig.json?.lines?.length === 1 && wijzig.json.lines[0].qty === 2, JSON.stringify(wijzig.json?.lines));
+  const fact = await api('POST', '/api/invoices', { customerId: oudKlant, type: 'factuur' });
+  const factId = fact.json?.invoice?.id;
+  ok('…en een nieuwe factuur', fact.status === 200 && fact.json?.invoice?.type === 'factuur' && !fact.json.invoice.orderId);
+  const docs2 = (await api('GET', `/api/orders/${oudId}/invoice`)).json?.documenten || [];
+  ok('daarna staan de nieuwe documenten erbij (los), de oude factuur blijft "bij deze opdracht"', docs2.length === 3 && docs2.some((d) => d.id === offId && !d.bijDezeOpdracht) && docs2.some((d) => d.id === oudInvId && d.bijDezeOpdracht), JSON.stringify(docs2.map((d) => [d.number, d.bijDezeOpdracht])));
+  const oudNa = (await api('GET', `/api/orders/${oudId}`)).json;
+  ok('de afgeronde opdracht blijft ongemoeid (status + gekoppelde factuur)', oudNa?.status === 'afgerond' && oudNa?.invoiceId === oudInvId, JSON.stringify({ s: oudNa?.status, i: oudNa?.invoiceId }));
+  ok('nieuwe offerte staat in zijn Facturen-lijst', ((await api('GET', '/api/invoices')).json || []).some((i) => i.id === offId));
+  ok('niet voor een klant van een collega/kantoor (403)', (await api('POST', '/api/invoices', { customerId: klantId, type: 'offerte' })).status === 403);
+  // Cijfers: een betaalde LOSSE factuur van de monteur telt bij die monteur (uitbetaling).
+  await api('PATCH', `/api/invoices/${factId}`, { lines: [{ description: 'Extra sleutel', qty: 1, priceExcl: 30 }], btwPct: 21 });
+  await api('POST', `/api/invoices/${factId}/status`, { status: 'betaald' });
+  cookie = adminCookie;
+  await api('POST', '/api/finance/autosync', {});
+  const maand = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }).slice(0, 7);
+  const boeking = ((await api('GET', `/api/finance?month=${maand}`)).json?.report?.entries || []).find((e) => e.sourceRef === `inv:${factId}`);
+  ok('Cijfers: betaalde losse factuur van de monteur staat bij die monteur', boeking?.monteurId === montRec.json?.id, JSON.stringify(boeking));
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

@@ -4932,8 +4932,25 @@ app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const inv = (db().invoices || []).find((i) => i.id === order.invoiceId) || null;
-  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: getPriceList(), bundles: getPriceBundles() });
+  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: getPriceList(), bundles: getPriceBundles(), documenten: documentenVanKlant(req, order) });
 });
+// Alle facturen/offertes van de klant van deze opdracht die deze gebruiker mag zien (26 okt
+// 2026, wens eigenaar: ook monteurs maken bij een bestaande, afgeronde klant een NIEUWE
+// offerte of factuur). De knoppen op de opdracht openden altijd het éne gekoppelde document;
+// het scherm laat nu kiezen tussen een bestaand document openen of een nieuw maken.
+function documentenVanKlant(req, order) {
+  const titelVan = (oid) => ((db().orders || []).find((o) => o.id === oid) || {}).title || '';
+  return (db().invoices || [])
+    .filter((i) => (i.id === order.invoiceId || (order.customerId && i.customerId === order.customerId)) && canTouchInvoice(req, i))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, 30)
+    .map((i) => ({
+      id: i.id, number: i.number || '', type: i.type === 'offerte' ? 'offerte' : 'factuur', status: i.status,
+      totalIncl: i.totalIncl || 0, createdAt: i.createdAt || '', sentAt: i.sentAt || null,
+      orderId: i.orderId || null, orderTitle: i.orderId ? titelVan(i.orderId) : '',
+      bijDezeOpdracht: i.id === order.invoiceId || i.orderId === order.id, vergrendeld: isVergrendeld(i),
+    }));
+}
 
 // Factuur aanmaken/bijwerken via de kaart (concept).
 app.post('/api/orders/:id/invoice', requireAuth, (req, res) => {

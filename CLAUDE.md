@@ -893,6 +893,29 @@ de regressie meegroeit.
   afschrijven" in filter "Open, ouder dan 2 mnd" (schrijfFacturenAf, vraagTekst met reden),
   "Terug naar open"/"✓ Toch betaald", filter "Afgeschreven", teller "Niet meegeteld: … · N
   afgeschreven". Tests: rollen-test (+9), browser (+9).
+- **Nieuwe offerte/factuur bij een bestaande (afgeronde) klant — ook voor monteurs (26 okt 2026,
+  wens eigenaar):** de knoppen Factuur/Offerte op een opdracht openden ALTIJD het éne
+  gekoppelde document (order.invoiceId) — bij een afgeronde klus de betaalde factuur, en
+  "Offerte" opende zelfs die factuur; een nieuwe maken kon daar niet. Nu: GET
+  /api/orders/:id/invoice geeft `documenten` mee (documentenVanKlant: alle facturen/offertes
+  van de klant die deze gebruiker mag zien via canTouchInvoice — monteur dus alleen eigen
+  kaarten + zelf gemaakte, nooit kantoor-losse; max 30, nieuwste eerst, met bijDezeOpdracht/
+  vergrendeld). openInvoiceModal → `documentKiezen()`: meteen de editor bij nog geen document
+  of een lopende opdracht met een bewerkbaar document van hetzelfde soort; anders (afgeronde/
+  geannuleerde opdracht, ander soort, betaald+verstuurd/goedgekeurd/afgekeurd/afgeschreven)
+  het keuzevenster `kiesDocument()` ([data-dockeuze]): lijst (tik = openen/wijzigen; vergrendeld
+  → "wijzigen via Kopieer"), "+ Nieuwe offerte/factuur" en — bij een gekoppelde offerte en de
+  knop Factuur — "Factuur maken van offerte X" (copy type factuur, blijft gekoppeld). Een
+  NIEUW document uit het venster is LOS (POST /api/invoices zonder orderId): de oude opdracht
+  blijft ongemoeid (status, DRS-fee, offerte-opvolging), de maker ziet hem via createdById.
+  Monteur mocht dit server-side al (klanten van eigen opdrachten, ook afgeronde/ingeklapte).
+  "+ Factuur/+ Offerte" op Facturen: klanten op recentheid (lastOrder.at), regel "Laatste
+  opdracht: …", zoeken ook op adres/plaats (searchPlaces), monteur zonder klanten-recht ziet
+  geen "nieuwe klant"-blok meer (gaf 403). Editor: "Regels → prijslijst/pakket" alleen met
+  recht settings (route eist dat; gaf monteur/assistente een foutmelding). CIJFERS: betaalde
+  LOSSE factuur die een monteur zelf maakte telt bij die monteur (finance.js collect…: maker =
+  createdById → user.monteurId; was "geen monteur" → uitbetaling klopte niet). Tests:
+  rollen-test 86 (+10), browser 325 (+7).
 - **DRS-RAPPORT + AUDIT DRS-TELLING (16 okt 2026, casus 4879 NB Etten-Leur / North Ridge BV
   op di 13-10 én do 15-10 als afgerond gemeld → twee keer betalen):** elke afgeronde DRS-opdracht
   kost een fee; DRS factureert op ons dagrapport in de groep. server/drs-rapport.js:
