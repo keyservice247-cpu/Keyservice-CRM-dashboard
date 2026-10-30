@@ -6595,6 +6595,10 @@ async function loadSettingsHtml(s) {
     const row = document.createElement('div');
     row.className = 'editor-row';
     row.dataset.key = st.key || '';
+    // Vlaggen die je hier niet ziet gaan ongewijzigd mee (30 okt 2026): zonder "secondary"
+    // klapten Afgerond/Geannuleerd na zondag niet meer in.
+    if (typeof st.secondary === 'boolean') row.dataset.secondary = st.secondary ? '1' : '0';
+    if (typeof st.noteRequired === 'boolean') row.dataset.noteRequired = st.noteRequired ? '1' : '0';
     row.innerHTML = `<input type="color" value="${esc(st.color || '#64748b')}"><input type="text" value="${esc(st.label || '')}" placeholder="Kolomnaam"><button class="btn btn-sm btn-danger" title="Kolom verwijderen" aria-label="Kolom verwijderen">${icon('trash', 13)}</button>`;
     row.querySelector('button').onclick = async () => {
       // Bord nog niet geladen (app begint op Start)? Eerst de opdrachten ophalen, anders
@@ -6613,6 +6617,8 @@ async function loadSettingsHtml(s) {
       key: row.dataset.key || undefined,
       label: row.querySelector('input[type=text]').value,
       color: row.querySelector('input[type=color]').value,
+      ...(row.dataset.secondary ? { secondary: row.dataset.secondary === '1' } : {}),
+      ...(row.dataset.noteRequired ? { noteRequired: row.dataset.noteRequired === '1' } : {}),
     })).filter((x) => x.label.trim());
     if (!statuses.length) return toast('Minimaal één kolom nodig', true);
     try { await api('/api/settings', 'PATCH', { statuses }); await refreshMeta(); toast('Kolommen opgeslagen'); loadSettings(); }

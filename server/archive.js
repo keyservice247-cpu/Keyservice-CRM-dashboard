@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db, now, save, saveSoon, logActivity, dbFilePath } from './db.js';
 import { appointmentStatusKey, getStatuses } from './settings.js';
-import { completedWeek } from './week.js';
+import { completedWeek, weekInfo } from './week.js';
 
 // Oude ruwe berichten opschonen zodat db.json niet oneindig groeit (en elke opslag
 // traag wordt). VEILIG: berichten worden EERST naar een archiefbestand geschreven
@@ -48,8 +48,11 @@ export function pruneOldMessages(days = 90) {
   return { archived: archive.length, remaining: keep.length };
 }
 
-// Is dit een 'afgehandelde' kolom (Afgerond/Geannuleerd)?
+// Is dit een 'afgehandelde' kolom (Afgerond/Geannuleerd)? Die twee ALTIJD, ook zonder vinkje
+// (30 okt 2026): "Kolommen opslaan" in Instellingen wiste het vinkje, en sindsdien klapten
+// Afgerond en Geannuleerd na zondag niet meer in (casus: 47 geannuleerd op het bord).
 function isSecondaryStatus(statusKey) {
+  if (['afgerond', 'geannuleerd'].includes(statusKey)) return true;
   const st = getStatuses().find((s) => s.key === statusKey);
   return !!(st && st.secondary);
 }
@@ -112,10 +115,37 @@ export function runWeeklyArchive(reference = new Date()) {
   return { archived: count, week };
 }
 
+// INHAALSLAG (30 okt 2026): afgehandelde opdrachten uit een al AFGESLOTEN week die door het
+// gewiste vinkje op het bord bleven staan, gaan alsnog in de bundel van hun EIGEN week (niet
+// allemaal in die van vorige week). Eenmalig na de update; daarna doet de zondagronde het
+// weer. Wat in de lopende week is afgehandeld blijft staan tot zondag.
+export function archiefInhaalslag(reference = new Date()) {
+  const s = db().settings;
+  if (s._archiefInhaalV1) return null;
+  const laatste = completedWeek(reference);
+  const perWeek = {}; let n = 0;
+  for (const o of db().orders) {
+    if (o.archivedWeek || o.deletedAt || !isSecondaryStatus(o.status)) continue;
+    const sinds = o.completedAt || o.cancelledAt || o.statusSince || o.updatedAt || o.createdAt;
+    const d = sinds ? new Date(sinds) : null;
+    if (!d || isNaN(d)) continue;
+    const week = weekInfo(d);
+    if (week.key > laatste.key) continue; // lopende week → zondag
+    o.archivedWeek = { key: week.key, label: week.label, at: now(), inhaal: true };
+    perWeek[week.label] = (perWeek[week.label] || 0) + 1;
+    n++;
+  }
+  s._archiefInhaalV1 = { at: now(), n, perWeek };
+  if (n) logActivity('systeem', 'achtergebleven opdrachten alsnog ingeklapt', `${n} opdrachten — ${Object.entries(perWeek).map(([l, c]) => `${l}: ${c}`).join(', ')}`);
+  saveSoon();
+  return s._archiefInhaalV1;
+}
+
 // Start een lichte timer die elk uur controleert of er een week afgesloten
 // moet worden. Draait ook één keer bij het opstarten (inhaalslag).
 export function startWeeklyArchiver() {
   const tick = () => {
+    try { archiefInhaalslag(); } catch (e) { console.error('Inhaalslag inklappen faalde:', e.message); }
     try { runWeeklyArchive(); } catch (e) { console.error('Wekelijkse archivering faalde:', e.message); }
     // Hooguit één keer per dag oude berichten opschonen.
     try {

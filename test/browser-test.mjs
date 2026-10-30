@@ -1,8 +1,11 @@
 // ECHTE browsertest: opent de CRM in headless Chromium, logt in, en opent de
 // factuur- én offerte-editor. Vangt elke JS-console-fout (zoals "Can't find
 // variable: bundles") — de test die de vorige bug had moeten vangen.
+import fs from 'node:fs';
 import { chromium } from 'playwright-core';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+// De werkomgeving wisselt van Chromium-versie; /opt/pw-browsers/chromium wijst altijd naar de
+// geïnstalleerde. Het oude vaste pad blijft als terugval (of zet CHROME_PATH).
+const EXEC = [process.env.CHROME_PATH, '/opt/pw-browsers/chromium', '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'].find((p) => p && fs.existsSync(p));
 const BASE = 'http://localhost:3122';
 let pass = 0, fail = 0; const bad = [];
 const ok = (n, c, e = '') => { if (c) { pass++; console.log('  ✓ ' + n); } else { fail++; bad.push(n); console.log('  ✗ FAIL: ' + n + (e ? ' — ' + e : '')); } };
@@ -1689,6 +1692,13 @@ ok('instellingen: opgeslagen e-mailadres van DRS staat er weer na opnieuw openen
 await page.fill('#dr-email', '');
 await page.click('#saveDrsRapport');
 await page.waitForTimeout(300);
+// KOLOMMEN OPSLAAN (30 okt 2026): wiste het vinkje "afgehandeld" van Afgerond/Geannuleerd →
+// die klapten na zondag niet meer in. Nu blijft het staan.
+await page.click('.sg-chip[data-g="werk"]').catch(() => {});
+await page.click('#saveStatuses');
+await page.waitForFunction(() => /Kolommen opgeslagen/.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+const kolNa = await page.evaluate(() => fetch('/api/settings').then((r) => r.json()).then((s) => (s.statuses || []).filter((x) => ['afgerond', 'geannuleerd'].includes(x.key)).map((x) => x.secondary)));
+ok('instellingen: "Kolommen opslaan" houdt Afgerond/Geannuleerd als afgehandeld (klappen zondag in)', kolNa.length === 2 && kolNa.every((v) => v === true), JSON.stringify(kolNa));
 noErr('DRS-rapport');
 
 // OFFERTE-HERINNERING ÉÉN KEER (8 okt 2026): geen "Max. aantal" meer, uitleg staat er, en

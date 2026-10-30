@@ -3534,7 +3534,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     logActivity(req.user.name, 'automatisch goedkeuren alle kanalen', db().settings.autoApproveAllChannels ? 'AAN' : 'UIT');
   }
   if ('statuses' in b) {
-    const clean = sanitizeStatuses(b.statuses);
+    const clean = sanitizeStatuses(b.statuses, getStatuses());
     if (!clean) return res.status(400).json({ error: 'Minimaal één geldige kolom vereist' });
     db().settings.statuses = clean;
   }

@@ -13,7 +13,9 @@ Vóór elke `git push`/deploy geldt: eerst testen, dan live. Zeg nooit "getest" 
    wetten) — die MOET groen blijven.
 3. **Frontend-wijziging** (public/js/app.js, public/*.html/css): draai ALTIJD de
    headless-browser-smoketest (`scratchpad/browser-test.mjs`, Chromium via
-   playwright-core op `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`). Die
+   playwright-core op `/opt/pw-browsers/chromium` — symlink naar de geïnstalleerde
+   versie; de test kiest die zelf, CHROME_PATH overschrijft. Verse container:
+   `npm install` + `npm install --no-save playwright-core`). Die
    logt in, opent de betrokken schermen (o.a. factuur/offerte-editor, instellingen)
    en FAALT bij elke JS-console-fout. Reden: server-tests vangen een
    ReferenceError in het scherm NIET — dat kostte ooit een kapotte factuur-editor
@@ -916,6 +918,23 @@ de regressie meegroeit.
   LOSSE factuur die een monteur zelf maakte telt bij die monteur (finance.js collect…: maker =
   createdById → user.monteurId; was "geen monteur" → uitbetaling klopte niet). Tests:
   rollen-test 86 (+10), browser 325 (+7).
+- **Afgerond/Geannuleerd klapten na zondag niet meer in (30 okt 2026, screenshot eigenaar:
+  47 geannuleerd op het bord):** OORZAAK: "Kolommen opslaan" (Instellingen → Werkwijze)
+  stuurde alleen sleutel/naam/kleur, en sanitizeStatuses maakte daarvan `secondary:false`
+  voor ÉLKE kolom; runWeeklyArchive klapt afgehandelde kolommen alleen in via dat vinkje
+  (isSecondaryStatus) → sindsdien bleven Afgerond en Geannuleerd staan (de afspraak-kolom
+  klapte wél in), en op de pc verdween de tweede rij "Afgehandeld". FIX: (1) isSecondaryStatus
+  (archive.js) telt 'afgerond'/'geannuleerd' ALTIJD als afgehandeld; (2) sanitizeStatuses(input,
+  vorige) behoudt secondary/noteRequired die het scherm niet meestuurt (PATCH /api/settings geeft
+  getStatuses() mee; nieuwe kolom met sleutel afgerond/geannuleerd = afgehandeld); het scherm
+  stuurt ze nu ook mee (row.dataset.secondary/noteRequired); (3) eenmalig herstel bij het
+  opstarten (ensureSettings, settings.statusesSecondaryV3); (4) eenmalige INHAALSLAG
+  archiefInhaalslag() (settings._archiefInhaalV1, in de uurlijkse tick vóór runWeeklyArchive):
+  afgehandelde opdrachten uit een al afgesloten week (datum = completedAt/cancelledAt/
+  statusSince/updatedAt/createdAt) gaan in de bundel van HUN EIGEN week (archivedWeek.inhaal);
+  wat in de lopende week is afgehandeld blijft staan tot zondag. Browsertest vindt Chromium nu
+  zelf (/opt/pw-browsers/chromium of CHROME_PATH). Tests: drs-rapport-test 141 (+7), browser
+  326 (+1).
 - **DRS-RAPPORT + AUDIT DRS-TELLING (16 okt 2026, casus 4879 NB Etten-Leur / North Ridge BV
   op di 13-10 én do 15-10 als afgerond gemeld → twee keer betalen):** elke afgeronde DRS-opdracht
   kost een fee; DRS factureert op ons dagrapport in de groep. server/drs-rapport.js:

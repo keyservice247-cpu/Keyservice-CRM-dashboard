@@ -435,6 +435,16 @@ console.log('\n== Offerte verzonden + Afspraak ingepland krijgen het DRS-label (
   await api('POST', '/api/drs-rapport/instellingen', { afzenders: '', emailAfzenders: '' });
 }
 
+console.log('\n== Kolommen opslaan bewaart "afgehandeld" (30 okt 2026, casus 47 geannuleerd op het bord) ==');
+{
+  cookie = adminCookie;
+  const cur = (await api('GET', '/api/settings')).json?.statuses || [];
+  // Precies wat het oude scherm stuurde: alleen sleutel, naam en kleur.
+  const r = await api('PATCH', '/api/settings', { statuses: cur.map(({ key, label, color }) => ({ key, label, color })) });
+  const na = (await api('GET', '/api/settings')).json?.statuses || [];
+  ok('kolommen opslaan zonder vlaggen: Afgerond/Geannuleerd blijven "afgehandeld"', r.status === 200 && na.find((x) => x.key === 'afgerond')?.secondary === true && na.find((x) => x.key === 'geannuleerd')?.secondary === true && na.find((x) => x.key === 'open')?.secondary === false, JSON.stringify(na.map((x) => [x.key, x.secondary])));
+}
+
 // ---------- Zonder server: eenmalige start + avondherinnering ----------
 console.log('\n== Eenmalige start (oude rapporten inlezen) + avondherinnering — zonder server ==');
 {
@@ -545,6 +555,35 @@ console.log('\n== Eenmalige start (oude rapporten inlezen) + avondherinnering �
   ok('kopjes-migratie: afgerond wordt niet aangeraakt (alleen de nieuwe kopjes)', !afgOud.drsGemeld);
   d.settings.drsRapport.kopjes = ['afgerond'];
   ok('kopjes-migratie draait maar één keer (latere keuze van de beheerder blijft)', drs.drsKopjesMigratie({ nu }) === null && JSON.stringify(drs.getDrsRapportInstellingen().kopjes) === '["afgerond"]');
+  // INKLAPPEN ZONDER "AFGEHANDELD"-VINKJE (30 okt 2026): "Kolommen opslaan" wiste het vinkje
+  // en daarna klapten Afgerond/Geannuleerd na zondag niet meer in.
+  const st = await import('../server/settings.js');
+  const kolommen = st.getStatuses().map((x) => ({ ...x, ...(x.key === 'offerte_verzonden' ? { noteRequired: false } : {}) }));
+  const bewaard = st.sanitizeStatuses(kolommen.map(({ key, label, color }) => ({ key, label, color })), kolommen);
+  ok('opslaan zonder vlaggen houdt "afgehandeld" én een eigen notitie-keuze', bewaard.find((x) => x.key === 'afgerond')?.secondary === true && bewaard.find((x) => x.key === 'nieuw')?.secondary === false && bewaard.find((x) => x.key === 'offerte_verzonden')?.noteRequired === false, JSON.stringify(bewaard));
+  d.settings.statuses = kolommen.map((x) => ({ ...x, secondary: false })); // de kapotte situatie
+  d.settings.lastArchivedWeek = '';
+  const mk3 = (o) => ({ id: dbm.id('ord'), createdAt: '2026-10-20T08:00:00.000Z', updatedAt: '2026-10-20T08:00:00.000Z', ...o });
+  const gean = mk3({ title: 'geannuleerd in week 19-25 okt', status: 'geannuleerd', cancelledAt: '2026-10-21T10:00:00.000Z' });
+  const afg = mk3({ title: 'afgerond in week 19-25 okt', status: 'afgerond', completedAt: '2026-10-22T10:00:00.000Z' });
+  d.orders.push(gean, afg);
+  arch.runWeeklyArchive(new Date('2026-10-26T06:00:00Z'));
+  ok('zonder vinkje klappen Afgerond en Geannuleerd na zondag tóch in (week 19-25 okt)', gean.archivedWeek?.key === '2026-10-19' && afg.archivedWeek?.key === '2026-10-19', JSON.stringify([gean.archivedWeek, afg.archivedWeek]));
+  // Inhaalslag: blijven hangende afgehandelde opdrachten uit eerdere weken → elk in hun eigen week.
+  delete d.settings._archiefInhaalV1;
+  const oud1 = mk3({ title: 'geannuleerd 7 okt', status: 'geannuleerd', cancelledAt: '2026-10-07T10:00:00.000Z' });
+  const oud2 = mk3({ title: 'afgerond 14 okt', status: 'afgerond', completedAt: '2026-10-14T10:00:00.000Z' });
+  const ditWeek = mk3({ title: 'geannuleerd deze week', status: 'geannuleerd', cancelledAt: '2026-10-28T10:00:00.000Z' });
+  const lopend = mk3({ title: 'nog open', status: 'open' });
+  d.orders.push(oud1, oud2, ditWeek, lopend);
+  const ih = arch.archiefInhaalslag(new Date('2026-10-30T12:00:00Z'));
+  ok('inhaalslag: oude afgehandelde opdrachten gaan in de bundel van hun eigen week', oud1.archivedWeek?.key === '2026-10-05' && oud2.archivedWeek?.key === '2026-10-12' && /5 t\/m 11 okt/.test(oud1.archivedWeek?.label || ''), JSON.stringify([oud1.archivedWeek, oud2.archivedWeek]));
+  ok('inhaalslag: deze week afgehandeld blijft staan tot zondag, open blijft altijd staan', !ditWeek.archivedWeek && !lopend.archivedWeek);
+  ok('inhaalslag draait maar één keer', !!ih && ih.n >= 2 && arch.archiefInhaalslag(new Date('2026-10-30T12:00:00Z')) === null, JSON.stringify(ih));
+  // Herstel bij het opstarten: het vinkje komt één keer terug (tweede rij "Afgehandeld" op het bord).
+  delete d.settings.statusesSecondaryV3;
+  st.ensureSettings();
+  ok('herstel bij opstarten: Afgerond/Geannuleerd weer "afgehandeld"', st.getStatuses().filter((x) => ['afgerond', 'geannuleerd'].includes(x.key)).every((x) => x.secondary === true), JSON.stringify(st.getStatuses().map((x) => [x.key, x.secondary])));
 }
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);

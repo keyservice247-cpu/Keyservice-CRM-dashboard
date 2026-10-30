@@ -93,6 +93,12 @@ export function ensureSettings() {
     s.statuses.forEach((x) => { x.secondary = ['afgerond', 'geannuleerd'].includes(x.key); });
     s.statusesMigratedV2 = true;
   }
+  // Herstel (30 okt 2026): "Kolommen opslaan" wiste het afgehandeld-vinkje van Afgerond en
+  // Geannuleerd (zie sanitizeStatuses). Eén keer terugzetten; daarna blijft het staan.
+  if (!s.statusesSecondaryV3) {
+    for (const x of s.statuses) if (['afgerond', 'geannuleerd'].includes(x.key)) x.secondary = true;
+    s.statusesSecondaryV3 = true;
+  }
   if (!Array.isArray(s.sources) || s.sources.length === 0) {
     s.sources = structuredClone(DEFAULT_SOURCES);
   }
@@ -783,8 +789,12 @@ export function slugify(label) {
 }
 
 // Valideer/normaliseer een door de gebruiker aangeleverde statussenlijst.
-export function sanitizeStatuses(input) {
+// `vorige` = de huidige kolommen: een vlag die het scherm NIET meestuurt blijft zoals hij was
+// (30 okt 2026). "Kolommen opslaan" stuurde alleen naam + kleur → secondary werd overal
+// false, en daarmee klapten Afgerond en Geannuleerd na zondag niet meer in.
+export function sanitizeStatuses(input, vorige = []) {
   if (!Array.isArray(input)) return null;
+  const oud = new Map((vorige || []).map((x) => [x.key, x]));
   const seen = new Set();
   const out = [];
   for (const item of input) {
@@ -793,7 +803,12 @@ export function sanitizeStatuses(input) {
     let key = (item.key || slugify(label)).trim();
     while (seen.has(key)) key = key + '_';
     seen.add(key);
-    out.push({ key, label, color: /^#[0-9a-fA-F]{6}$/.test(item.color) ? item.color : '#64748b', secondary: !!item.secondary, ...(typeof item.noteRequired === 'boolean' ? { noteRequired: item.noteRequired } : {}) });
+    const prev = oud.get(key);
+    const secondary = typeof item.secondary === 'boolean' ? item.secondary
+      : prev ? !!prev.secondary : ['afgerond', 'geannuleerd'].includes(key);
+    const noteRequired = typeof item.noteRequired === 'boolean' ? item.noteRequired
+      : prev && typeof prev.noteRequired === 'boolean' ? prev.noteRequired : undefined;
+    out.push({ key, label, color: /^#[0-9a-fA-F]{6}$/.test(item.color) ? item.color : '#64748b', secondary, ...(typeof noteRequired === 'boolean' ? { noteRequired } : {}) });
   }
   return out.length ? out : null;
 }
