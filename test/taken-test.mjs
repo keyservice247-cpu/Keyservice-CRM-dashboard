@@ -66,7 +66,10 @@ ok('dagen = 2', snel.json?.dagen === 2, JSON.stringify(snel.json?.dagen));
 const ver = await api('POST', '/api/taken', { titel: 'Deadline over 40 dagen', urgentie: 'laag', deadline: isoOver(40) });
 const vandaag = (await api('GET', '/api/taken/vandaag')).json;
 ok('Vandaag-blok: max 5', Array.isArray(vandaag) && vandaag.length <= 5);
-ok('Vandaag-blok bevat de taak met deadline ≤ 3 dagen bovenaan', vandaag[0]?.id === snel.json.id, JSON.stringify(vandaag.map((t) => t.titel)));
+// Alleen al VERLOPEN taken mogen ervoor staan (de starttaak "Afspraken met Youssef …" heeft
+// een vaste deadline 1 nov 2026 en is sindsdien verlopen — verouderde testdata, 12 nov).
+const posSnel = vandaag.findIndex((t) => t.id === snel.json.id);
+ok('Vandaag-blok bevat de taak met deadline ≤ 3 dagen bovenaan (alleen verlopen taken ervoor)', posSnel >= 0 && vandaag.slice(0, posSnel).every((t) => typeof t.dagen === 'number' && t.dagen < 0), JSON.stringify(vandaag.map((t) => [t.titel, t.dagen])));
 ok('Vandaag-blok bevat GEEN lage-urgentie-taak met deadline over 40 dagen', !vandaag.some((t) => t.id === ver.json.id));
 await api('PATCH', `/api/taken/${snel.json.id}`, { deadline: null });
 ok('deadline weghalen -> dagen null', (await api('GET', '/api/taken')).json.find((t) => t.id === snel.json.id)?.dagen === null);

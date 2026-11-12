@@ -4862,10 +4862,13 @@ app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {
   // bevestigvenster noemde het intake-nummer, maar het appje ging naar het oude nummer.
   const email = String((order.intake && order.intake.email) || customer.email || '').trim();
   if (email && /@/.test(email) && smtpConfigured()) {
-    const sig = getEmailSignature(afzenderVan(req));
+    // Afzender óók aan sendMail (12 nov 2026): zonder kwam onder Youssefs eigen groet nog
+    // de HTML-handtekening van de eigenaar — "2× namen, 2× groeten" bij de klant.
+    const afzender = afzenderVan(req);
+    const sig = getEmailSignature(afzender);
     const body = fill(cfg.emailBody);
     try {
-      await sendMail({ to: email, subject: fill(cfg.emailSubject), text: sig ? `${body}\n\n${sig}` : body });
+      await sendMail({ to: email, subject: fill(cfg.emailSubject), text: sig ? `${body}\n\n${sig}` : body, afzender });
       order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (onderweg-bericht)', subject: fill(cfg.emailSubject), body, at: now() });
       sent.push('e-mail');
     } catch (e) { console.error('[onderweg] e-mail mislukt:', e.message); }
@@ -5020,7 +5023,7 @@ app.post('/api/invoices/:id/review-request', requireAuth, async (req, res) => {
   // Losstaande factuur (geen opdracht): review rechtstreeks naar de klant van de factuur (23 sep).
   if (inv.type === 'offerte') return res.status(400).json({ error: 'Een review vraag je na een factuur, niet na een offerte.' });
   try {
-    const r = await sendReviewRequest(order, { actorName: req.user.name, force: !!req.body?.force, invoice: inv });
+    const r = await sendReviewRequest(order, { actorName: req.user.name, force: !!req.body?.force, invoice: inv, afzender: afzenderVan(req) });
     if (r.error) return res.status(400).json(r);
     inv.reviewRequestedAt = now();
     saveSoon();
@@ -5496,7 +5499,7 @@ app.post('/api/invoices/:id/remind', requireAuth, async (req, res) => {
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
   try {
-    const r = await sendInvoiceReminder(inv, { to: req.body?.to || '', by: req.user.name });
+    const r = await sendInvoiceReminder(inv, { to: req.body?.to || '', by: req.user.name, afzender: afzenderVan(req) });
     if (r.error) return res.status(400).json({ error: r.error });
     res.json({ ok: true, invoice: inv });
   } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
@@ -5509,7 +5512,7 @@ app.post('/api/invoices/:id/quote-followup', requireAuth, async (req, res) => {
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze offerte' });
   try {
-    const r = await sendQuoteFollowup(inv, { by: req.user.name, handmatig: true });
+    const r = await sendQuoteFollowup(inv, { by: req.user.name, handmatig: true, afzender: afzenderVan(req) });
     if (r.error) return res.status(400).json({ error: r.error });
     res.json({ ok: true, via: r.via, to: r.to, invoice: inv });
   } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }

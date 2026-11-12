@@ -198,6 +198,34 @@ console.log('\n== Persoonlijke handtekening (23 sep 2026) ==');
   ok('voetregel komt VÓÓR de persoonlijke handtekening', md.indexOf('DIT IS AUTOMATISCH') < md.indexOf('Met vriendelijke groet'), JSON.stringify(md));
 }
 
+console.log('\n== Geen dubbele groet/naam (12 nov 2026, casus onderweg-mail "2× namen, 2× groeten") ==');
+{
+  // Youssef als echte gebruiker in de database, zoals in productie.
+  d.users = d.users || [];
+  d.users.push({ id: 'u-yous', role: 'monteur', name: 'Youssef', monteurId: 'm-y' });
+  const youssef = afzenderProfiel(d.users.find((u) => u.id === 'u-yous'));
+  const zijnSig = getEmailSignature(youssef);
+  const onderweg = `Beste Nicolet,\n\nGoed nieuws: onze monteur Youssef is nu naar u onderweg.\n\nZorgt u dat er iemand aanwezig is? Tot zo!\n\n${zijnSig}`;
+  const telGroet = (s) => (String(s || '').match(/Met vriendelijke groet/g) || []).length;
+  const handtekeningDeel = (h) => String(h || '').slice(String(h || '').indexOf('<table'));
+  // Precies de oude onderweg-mail: handtekening van Youssef, maar GEEN afzender meegegeven.
+  const h1 = wrapHtmlMail(onderweg);
+  ok('zonder afzender: Youssefs platte handtekening wordt herkend (geen tweede groet)', !!h1 && telGroet(h1) === 0, h1 && h1.slice(0, 300));
+  ok('zonder afzender: de nette handtekening is van Youssef, niet van de eigenaar', /Youssef/.test(handtekeningDeel(h1)) && /Monteur \|/.test(handtekeningDeel(h1)) && !/Abdel Rafour/.test(h1 || ''));
+  const h2 = wrapHtmlMail(onderweg, youssef);
+  ok('met afzender (zoals de route nu doet): één handtekening, van Youssef', !!h2 && telGroet(h2) === 0 && /Youssef/.test(handtekeningDeel(h2)) && !/Abdel Rafour/.test(h2));
+  // Beantwoorden met "Vorig bericht citeren": het citaat stond ná de handtekening.
+  const sara = afzenderProfiel({ name: 'Sara Jansen', role: 'assistent' });
+  const antwoord = `Dat kan, we komen donderdag.\n\n${getEmailSignature(sara)}\n\n----- Op 11-11 15:01 schreef Piet: -----\n> Kunnen jullie donderdag?\n> Groet, Piet`;
+  const h3 = wrapHtmlMail(antwoord, sara);
+  ok('antwoord met citaat: geen tweede handtekening onder het citaat', !!h3 && telGroet(h3) === 0 && (h3.match(/Sara Jansen/g) || []).length === 1, h3 && h3.slice(-300));
+  ok('antwoord met citaat: het citaat staat ONDER de handtekening', !!h3 && h3.indexOf('Kunnen jullie donderdag') > h3.indexOf('Sara Jansen'));
+  const md2 = metDisclaimer(onderweg, 'DIT IS AUTOMATISCH');
+  ok('voetregel ook zonder afzender vóór Youssefs handtekening', md2.indexOf('DIT IS AUTOMATISCH') < md2.indexOf('Met vriendelijke groet') && md2.trim().endsWith(zijnSig), JSON.stringify(md2.slice(-160)));
+  const h4 = wrapHtmlMail(`Beste klant,\n\nTot morgen!\n\n${getEmailSignature()}`);
+  ok('vaste bedrijfshandtekening: één keer (automatische mails)', !!h4 && telGroet(h4) === 0 && (h4.match(/Abdel Rafour/g) || []).length === 1);
+}
+
 console.log('\n== Back-up-mail 2x per maand (25 sep 2026) ==');
 {
   const { backupPeriode, backupMailVerschuldigd } = await import('../server/backup-mail.js');

@@ -782,6 +782,24 @@ de regressie meegroeit.
   = mail in naam van die medewerker naar een gekozen adres). PATCH /api/users/:id
   accepteert sigNaam/sigTel/sigEmail/sigUit (+ bestaand functie). Tests: mail-test
   (51, +11 zonder server), rollen-test (56, +7), browser (+1).
+  DUBBELE GROET/NAAM OPGELOST (12 nov 2026, screenshot eigenaar: onderweg-mail met "Met
+  vriendelijke groet, Youssef, Monteur …" én daaronder de HTML-handtekening van Abdel
+  Rafour): OORZAAK 1 — POST /api/orders/:id/onderweg plakte getEmailSignature(afzenderVan
+  (req)) maar gaf sendMail géén afzender mee; de herkenning kende alleen afzender + vaste
+  handtekening, dus Youssefs platte handtekening bleef staan en de eigenaar kwam eronder.
+  OORZAAK 2 — Beantwoorden met "Vorig bericht citeren" zet het citaat ná de handtekening →
+  niet herkend → nóg een handtekening onder het citaat. FIX (email-smtp.js): zoekHandtekening
+  (text, afzender) herkent de handtekening van de afzender, de vaste én die van ÉLKE
+  medewerker (bekendeHandtekeningen: afzenderProfiel over db().users), aan het einde óf vlak
+  vóór een citaat (CITAAT_START: "----- … schreef", "Op … schreef", "On … wrote", ">");
+  wrapHtmlMail toont de HTML-handtekening van díe persoon (afzender, anders wie de platte
+  handtekening schreef) met het citaat grijs eronder; metDisclaimer idem. De onderweg-route
+  geeft de afzender nu mee; de handmatige knoppen Herinnering (factuur), offerte-Herinnering
+  en Review ondertekenen met wie klikt (sendInvoiceReminder/sendQuoteFollowup/
+  sendReviewRequest accepteren `afzender`; de automatische rondes houden de bedrijfs-
+  handtekening). Tests: mail-test 111 (+7, rood op de oude code), betaald-keuze-test 52 (+4:
+  echte onderweg-mail door een ingelogde monteur via de nep-SMTP). Taken-test: de
+  Vandaag-blok-assertie laat verlopen taken ervoor toe (starttaak met vaste deadline 1 nov).
 - **Review vanaf élke betaalde factuur + zoekbalk in Berichten (23 sep 2026):**
   (1) de Review-knop in het Facturen-overzicht verscheen alleen bij `sentAt && orderId`
   — een LOSSTAANDE factuur (zonder opdracht) kreeg 'm nooit, en de route weigerde

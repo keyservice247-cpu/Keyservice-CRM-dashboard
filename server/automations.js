@@ -264,7 +264,9 @@ export function reviewAutoAllowed(order) {
 // Werkt vanaf een OPDRACHT (order) óf — sinds 23 sep 2026 — vanaf een LOSSTAANDE
 // factuur zonder opdracht: dan gaat `invoice` mee en komt de klant uit de factuur;
 // de "al gevraagd"-vlag staat dan op de factuur (reviewRequestedAt).
-export async function sendReviewRequest(order, { actorName = 'systeem', force = false, invoice = null } = {}) {
+// `afzender` = wie op de knop drukt (persoonlijke handtekening); de automatische ronde
+// stuurt zonder → de vaste bedrijfshandtekening.
+export async function sendReviewRequest(order, { actorName = 'systeem', force = false, invoice = null, afzender = null } = {}) {
   const cfg = getReviewRequest();
   if (!cfg.link) return { error: 'Er staat nog geen review-link ingesteld (Instellingen → Automatische berichten).' };
   if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
@@ -291,8 +293,8 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   // 1) E-mail
   if (c.email) {
     try {
-      const sig = getEmailSignature();
-      await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body, automatisch: true });
+      const sig = getEmailSignature(afzender);
+      await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body, automatisch: true, afzender });
       noteer({ id: id('thr'), channel: 'email', outgoing: true, sender: 'Keyservice (review-verzoek)', subject: fill(cfg.subject, vars), body, at: now() });
       via.push('e-mail');
     } catch (e) { console.error('[review-verzoek] mail mislukt:', e.message); }

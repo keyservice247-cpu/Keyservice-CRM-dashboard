@@ -275,6 +275,28 @@ try {
   ok('factuur: bewust nog een keer (force) → verstuurd', kf3.status === 200 && enveloppen.length === n + 1);
   const kf4 = await api('POST', `/api/invoices/${offTpId}/trustpilot`, {});
   ok('offerte: geen Trustpilot-knop (400)', kf4.status === 400, JSON.stringify(kf4.json));
+
+  // ONDERWEG-MAIL VAN DE MONTEUR (12 nov 2026, klacht "2× namen, 2× groeten"): onder
+  // Youssefs eigen groet kwam ook nog de handtekening van de eigenaar.
+  console.log('\n== Onderweg-mail van de monteur: één groet, één handtekening ==');
+  {
+    const mont = (await api('POST', '/api/monteurs', { name: 'Youssef', phone: '0612000077' })).json;
+    await api('POST', '/api/users', { name: 'Youssef', email: 'youssef.onderweg@keyservice.nl', password: 'monteur123', role: 'monteur', monteurId: mont.id });
+    const kl = (await api('POST', '/api/customers', { name: 'Nicolet Klant', email: 'nicolet@example.nl' })).json;
+    const ow = (await api('POST', '/api/orders', { customerId: kl.id, title: 'Ede — slot vervangen', monteurId: mont.id })).json;
+    const adminC = cookie; cookie = '';
+    ok('monteur inloggen', (await api('POST', '/api/login', { email: 'youssef.onderweg@keyservice.nl', password: 'monteur123' })).status === 200);
+    const voorOw = mails.length;
+    const r = await api('POST', `/api/orders/${ow.id}/onderweg`, {});
+    const m = decodeer(mails.slice(voorOw).find((x) => /nicolet@example\.nl/i.test(x)) || '');
+    const htmlStart = m.search(/Content-Type: text\/html/i);
+    const tekstDeel = htmlStart > 0 ? m.slice(0, htmlStart) : m;
+    const htmlDeel = htmlStart > 0 ? m.slice(htmlStart) : '';
+    ok('onderweg-mail verstuurd door de monteur', r.status === 200 && !!m && htmlDeel.length > 50, JSON.stringify(r.json));
+    ok('HTML: geen tweede groet en geen handtekening van de eigenaar, wél die van Youssef', !/Met vriendelijke groet/.test(htmlDeel) && !/Abdel Rafour/.test(htmlDeel) && /#1d4ed8">Youssef</.test(htmlDeel), htmlDeel.slice(0, 300));
+    ok('tekst: precies één groet, ondertekend door Youssef (Monteur)', (tekstDeel.match(/Met vriendelijke groet/g) || []).length === 1 && /Youssef\s*\r?\nMonteur \|/.test(tekstDeel));
+    cookie = adminC;
+  }
   void o2;
 } finally {
   proc.kill('SIGTERM');

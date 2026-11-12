@@ -13,32 +13,54 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, now, logActivity, saveSoon } from '../db.js';
-import { getHtmlSignature, getEmailSignature, getAutoMailDisclaimer } from '../settings.js';
+import { getHtmlSignature, getEmailSignature, getAutoMailDisclaimer, afzenderProfiel } from '../settings.js';
 
 // Voetregel onder automatisch gegenereerde klantmails (wens eigenaar 10 sep 2026).
 // Komt VÓÓR de platte handtekening te staan: wrapHtmlMail herkent de handtekening
-// alleen als die het einde van de tekst is — erachter plakken gaf 'm dubbel in HTML.
+// alleen aan het einde (of vlak vóór een citaat) — erachter plakken gaf 'm dubbel in HTML.
 export function metDisclaimer(text, disclaimer = getAutoMailDisclaimer(), afzender = null) {
   const d = String(disclaimer || '').trim();
-  let t = String(text || '');
+  const t = String(text || '');
   if (!d || t.includes(d)) return t;
-  // Zowel de vaste als de persoonlijke handtekening herkennen (23 sep).
-  const plain = plakteHandtekening(t, afzender);
-  if (plain) {
-    const kern = t.trim().slice(0, t.trim().length - plain.length).trim();
-    return `${kern}\n\n${d}\n\n${plain}`;
-  }
+  const delen = zoekHandtekening(t, afzender);
+  if (delen) return [delen.voor, d, delen.sig, delen.na].filter(Boolean).join('\n\n');
   return `${t.trim()}\n\n${d}`;
 }
 
-// Eindigt de tekst op een van onze platte handtekeningen (vast of persoonlijk)? Geeft
-// die handtekening terug, anders ''.
-function plakteHandtekening(text, afzender = null) {
+// Onze platte handtekeningen: die van de meegegeven afzender, de vaste, en die van ÉLKE
+// medewerker (12 nov 2026, klacht eigenaar "2× namen, 2× groeten"): de onderweg-mail
+// plakte Youssefs eigen handtekening maar gaf geen afzender mee — zijn platte
+// handtekening werd niet herkend, bleef staan, en de HTML-handtekening van de eigenaar
+// kwam eronder. Nu wordt elke bekende handtekening herkend, wie de mail ook verstuurt.
+function bekendeHandtekeningen(afzender = null) {
+  const lijst = [];
+  const voeg = (prof) => {
+    try {
+      const sig = String(getEmailSignature(prof) || '').trim();
+      if (sig && !lijst.some((x) => x.sig === sig)) lijst.push({ sig, prof: prof || null });
+    } catch { /* geen handtekening */ }
+  };
+  voeg(afzender);
+  voeg(null);
+  for (const u of db().users || []) { try { voeg(afzenderProfiel(u)); } catch { /* overslaan */ } }
+  return lijst;
+}
+// Waar staat de handtekening? Aan het einde, of vlak vóór het citaat van het vorige
+// bericht ("----- Op … schreef …", "> …") dat "Beantwoorden" eronder zet — ook dan kwam er
+// nog een handtekening onder het citaat. Geeft { voor, sig, prof, na } of null.
+const CITAAT_START = /^\s*(?:-{2,}[^\n]*schreef|Op [^\n]*schreef|On [^\n]*wrote|>)/i;
+export function zoekHandtekening(text, afzender = null) {
   const t = String(text || '').trim();
-  const kandidaten = [];
-  try { kandidaten.push(String(getEmailSignature(afzender) || '').trim()); } catch { /* geen */ }
-  try { kandidaten.push(String(getEmailSignature() || '').trim()); } catch { /* geen */ }
-  return kandidaten.find((k) => k && t.endsWith(k)) || '';
+  let beste = null;
+  for (const k of bekendeHandtekeningen(afzender)) {
+    const i = t.lastIndexOf(k.sig);
+    if (i < 0) continue;
+    const na = t.slice(i + k.sig.length);
+    if (na.trim() && !CITAAT_START.test(na)) continue; // er volgt nog eigen tekst → geen handtekening
+    const eind = i + k.sig.length;
+    if (!beste || eind > beste.eind || (eind === beste.eind && k.sig.length > beste.sig.length)) beste = { i, eind, sig: k.sig, prof: k.prof, na: na.trim() };
+  }
+  return beste ? { voor: t.slice(0, beste.i).trim(), sig: beste.sig, prof: beste.prof, na: beste.na } : null;
 }
 
 let transporter = null;
@@ -79,20 +101,20 @@ function signatureHtml(sig) {
 export function wrapHtmlMail(text, afzender = null) {
   let sig;
   try { sig = getHtmlSignature(); } catch { return null; }
+  let delen = null;
+  try { delen = zoekHandtekening(text, afzender); } catch { /* fallback: hele tekst tonen */ }
   // Wie stuurt deze mail? Verstuurt Youssef of de assistente een factuur of antwoord,
-  // dan hoort daar HÚN naam en functie onder — niet die van de eigenaar.
-  // Alleen overnemen als er ÉN een naam ÉN een functie is ingevuld voor die gebruiker.
-  // Zonder functie blijft de vaste handtekening staan; anders kwam de accountnaam
-  // ("Beheerder") boven de handtekening te staan in plaats van de eigenaar.
-  // Persoonlijke handtekening (23 sep): naam + functie van de afzender, eigen telefoon/
-  // e-mail als die zijn ingevuld, anders die van het bedrijf.
-  if (afzender && afzender.name) sig = { ...sig, name: afzender.name, role: afzender.role || sig.role, phone: afzender.phone || sig.phone, email: afzender.email || sig.email };
+  // dan hoort daar HÚN naam en functie onder — niet die van de eigenaar (23 sep). Geen
+  // afzender meegegeven? Dan wie de platte handtekening in de tekst ondertekende (12 nov),
+  // zodat de HTML-handtekening altijd dezelfde persoon is als die erboven.
+  const wie = afzender || (delen && delen.prof) || null;
+  if (wie && wie.name) sig = { ...sig, name: wie.name, role: wie.role || sig.role, phone: wie.phone || sig.phone, email: wie.email || sig.email };
   if (!sig || !sig.enabled) return null;
-  let t = String(text || '');
-  try {
-    const plain = plakteHandtekening(t, afzender);
-    if (plain) t = t.trim().slice(0, t.trim().length - plain.length).trim();
-  } catch { /* fallback: hele tekst tonen */ }
+  const t = delen ? delen.voor : String(text || '');
+  // Citaat van het vorige bericht (Beantwoorden) komt ONDER de handtekening, grijs.
+  const citaat = delen && delen.na
+    ? `<div style="margin-top:18px;padding-left:12px;border-left:3px solid #d7dbe3;color:#6b7580;font-size:13px">${escHtml(delen.na).replace(/\n/g, '<br>')}</div>`
+    : '';
   // De disclaimer-alinea klein en grijs, zodat hij als voetregel leest en niet als
   // onderdeel van het bericht.
   let discl = '';
@@ -101,7 +123,7 @@ export function wrapHtmlMail(text, afzender = null) {
     .map((p) => (discl && p.trim() === discl)
       ? `<p style="margin:14px 0;padding-top:10px;border-top:1px solid #e3e7ec;font-size:12.5px;color:#6b7580">${p.replace(/\n/g, '<br>')}</p>`
       : `<p style="margin:0 0 14px">${p.replace(/\n/g, '<br>')}</p>`).join('');
-  return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14.5px;color:#1f2530;line-height:1.6;max-width:640px">${paras}${signatureHtml(sig)}</div>`;
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14.5px;color:#1f2530;line-height:1.6;max-width:640px">${paras}${signatureHtml(sig)}${citaat}</div>`;
 }
 
 // ÉÉN centraal punt voor mislukte mails: elke sendMail-fout (waar dan ook vandaan:

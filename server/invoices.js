@@ -192,7 +192,8 @@ const eersteGeldigeMail = (...kandidaten) => kandidaten.map((x) => String(x || '
 // Betaalherinnering — gedeeld door de handmatige knop én de automatische ronde:
 // zelfde nette mail met de PDF opnieuw als bijlage; teller en tijdstip worden
 // bijgehouden zodat er nooit te vaak herinnerd wordt.
-export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'systeem' } = {}) {
+// `afzender` = wie op de knop drukt (persoonlijke handtekening); automatisch = bedrijf.
+export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'systeem', afzender = null } = {}) {
   if (inv.type === 'offerte') return { error: 'Herinnering is voor facturen. Verstuur de offerte desnoods opnieuw.' };
   if (inv.status !== 'verzonden') return { error: 'Alleen voor verzonden (nog niet betaalde) facturen.' };
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
@@ -208,12 +209,12 @@ export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'syst
   const cfg = getInvoiceSettings();
   const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
   const pdf = await buildInvoicePdf(inv, order, customer);
-  const sig = getEmailSignature();
+  const sig = getEmailSignature(afzender);
   const body = `Beste ${customer.name || 'klant'},\n\nVolgens onze administratie staat factuur ${inv.number} (€ ${inv.totalIncl.toFixed(2).replace('.', ',')}) nog open. Mogelijk is het aan uw aandacht ontsnapt — dat kan gebeuren.\n\nWilt u het bedrag overmaken${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer? De factuur zit nogmaals in de bijlage.\n\nHeeft u al betaald of heeft u een vraag? Reageer gerust op deze e-mail.`;
   await sendMail({
     to, subject: `Betaalherinnering: factuur ${inv.number} — ${cfg.companyName}`,
     text: sig ? `${body}\n\n${sig}` : body,
-    automatisch: true,
+    automatisch: true, afzender,
     attachments: [{ filename: `factuur-${inv.number}.pdf`, content: pdf }],
   });
   inv.remindedAt = now();
@@ -374,7 +375,7 @@ export function trekOpvolgingenIn(orderId, reden = 'opdracht gesloten') {
   return n;
 }
 
-export async function sendQuoteFollowup(inv, { by = 'systeem', handmatig = false } = {}) {
+export async function sendQuoteFollowup(inv, { by = 'systeem', handmatig = false, afzender = null } = {}) {
   if (inv.type !== 'offerte') return { error: 'Alleen voor offertes.' };
   if (inv.status !== 'verzonden') return { error: 'Alleen voor verzonden (nog niet beantwoorde) offertes.' };
   {
@@ -397,12 +398,12 @@ export async function sendQuoteFollowup(inv, { by = 'systeem', handmatig = false
   const to = eersteGeldigeMail(customer.email, inv.sentTo);
   if (EMAIL_RE.test(to) && smtpConfigured()) {
     const pdf = await buildInvoicePdf(inv, order || {}, customer);
-    const sig = getEmailSignature();
+    const sig = getEmailSignature(afzender);
     const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (${bedrag} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!`;
     await sendMail({
       to, subject: `Nog vragen over offerte ${inv.number}? — ${cfg.companyName}`,
       text: sig ? `${body}\n\n${sig}` : body,
-      automatisch: true,
+      automatisch: true, afzender,
       attachments: [{ filename: `offerte-${inv.number}.pdf`, content: pdf }],
     });
     markFollowedUp();
