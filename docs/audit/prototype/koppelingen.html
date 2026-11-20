@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Koppelingen — voorstel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="prototype.css">
+</head>
+<body data-pagina="instellingen">
+<div data-schil>
+  <div class="paginakop">
+    <div><h1>Koppelingen</h1><p>Instellingen · alles wat het CRM met de buitenwereld verbindt, op één scherm</p></div>
+    <button class="btn" data-zeg="Alle zes getest: vijf werken, WhatsApp-groepen reageert traag (9 seconden)." data-in="alles-uit">Alles testen</button>
+  </div>
+  <p id="alles-uit" class="melding" hidden></p>
+
+  <div class="melding">WhatsApp-groepen: sinds 08:55 geen teken van leven. De beheerder krijgt een melding als dit 15 minuten duurt.</div>
+
+  <section class="vlak">
+    <header><h2>Status</h2><span class="klein">bijgewerkt 09:12</span></header>
+    <div class="schuif"><table class="tabel">
+      <tr><th>Koppeling</th><th>Status</th><th>Laatste bericht binnen</th><th>Laatste verstuurd</th><th>Wachtrij</th><th></th></tr>
+      <tr><td><b style="font-weight:500">WhatsApp-groepen</b><br><span class="klein">DRS en monteurs · aparte server</span></td><td><span class="status"><i class="stip let"></i>traag</span></td><td class="num">08:47</td><td class="num">08:52</td><td class="num">2</td><td><button class="btn" data-zeg="Testbericht verstuurd. Antwoord na 9 seconden." data-in="t1">Test</button><p id="t1" class="klein" hidden></p></td></tr>
+      <tr><td><b style="font-weight:500">WhatsApp klanten</b><br><span class="klein">officiële route van Meta</span></td><td><span class="status"><i class="stip ok"></i>werkt</span></td><td class="num">08:31</td><td class="num">gisteren 17:02</td><td class="num">0</td><td><button class="btn" data-zeg="Werkt. Antwoord na 1 seconde." data-in="t2">Test</button><p id="t2" class="klein" hidden></p></td></tr>
+      <tr><td><b style="font-weight:500">E-mail ontvangen</b><br><span class="klein">2 mailboxen</span></td><td><span class="status"><i class="stip ok"></i>werkt</span></td><td class="num">09:02</td><td>—</td><td class="num">0</td><td><button class="btn" data-zeg="Beide mailboxen bereikbaar." data-in="t3">Test</button><p id="t3" class="klein" hidden></p></td></tr>
+      <tr><td><b style="font-weight:500">E-mail versturen</b></td><td><span class="status"><i class="stip ok"></i>werkt</span></td><td>—</td><td class="num">08:47</td><td class="num">0</td><td><button class="btn" data-zeg="Testmail verstuurd naar jezelf." data-in="t4">Test</button><p id="t4" class="klein" hidden></p></td></tr>
+      <tr><td><b style="font-weight:500">Websiteformulieren</b><br><span class="klein">14 websites</span></td><td><span class="status"><i class="stip ok"></i>werkt</span></td><td class="num">08:47</td><td>—</td><td class="num">0</td><td><button class="btn" data-zeg="Proefaanvraag kwam binnen en is weer verwijderd." data-in="t5">Test</button><p id="t5" class="klein" hidden></p></td></tr>
+      <tr><td><b style="font-weight:500">Google Agenda</b></td><td><span class="status"><i class="stip ok"></i>werkt</span></td><td>—</td><td class="num">gisteren 16:40</td><td class="num">0</td><td><button class="btn" data-zeg="Verbinding geldig. Proefafspraak gemaakt en verwijderd." data-in="t6">Test</button><p id="t6" class="klein" hidden></p></td></tr>
+      <tr><td><b style="font-weight:500">AI</b><br><span class="klein">indelen en samenvatten</span></td><td><span class="status"><i class="stip ok"></i>werkt</span></td><td>—</td><td class="num">09:02</td><td class="num">0</td><td><button class="btn" data-zeg="Werkt. Valt de AI uit, dan komt alles toch in de inbox." data-in="t7">Test</button><p id="t7" class="klein" hidden></p></td></tr>
+    </table></div>
+  </section>
+
+  <div class="twee">
+    <section class="vlak">
+      <header><h2>Wie krijgt een melding bij storing</h2></header>
+      <div class="rij"><div class="midden"><b>Push op de telefoon</b><span>beheerder · direct</span></div><span class="status"><i class="stip ok"></i>aan</span></div>
+      <div class="rij"><div class="midden"><b>E-mail</b><span>beheerder · na 15 minuten storing</span></div><span class="status"><i class="stip ok"></i>aan</span></div>
+      <div class="rij"><div class="midden"><b>Balk bovenaan voor kantoor</b><span>assistente ziet meteen dat iets niet werkt</span></div><span class="status"><i class="stip ok"></i>aan</span></div>
+    </section>
+    <section class="vlak">
+      <header><h2>Laatste storingen</h2></header>
+      <div class="rij"><div class="midden"><b>WhatsApp-groepen 12 minuten weg</b><span>10 september · herstelde zichzelf</span></div></div>
+      <div class="rij"><div class="midden"><b>Google Agenda losgekoppeld</b><span>7 augustus · opnieuw verbonden door beheerder</span></div></div>
+      <div class="rij"><div class="midden"><b>Geen</b><span>in de laatste 30 dagen</span></div></div>
+    </section>
+  </div>
+</div>
+<script src="prototype.js"></script>
+</body>
+</html>

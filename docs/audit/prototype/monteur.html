@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mijn dag — voorstel monteur</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="prototype.css">
+</head>
+<body data-pagina="monteur">
+<div class="telefoon-wrap">
+  <div class="telefoon" data-tabgroep>
+
+    <!-- LIJST: drie tabbladen -->
+    <div data-scherm="lijst" style="display:flex;flex-direction:column;flex:1">
+      <div class="t-kop"><p class="klein">vrijdag 20 november</p><h1>Hoi Sam</h1></div>
+
+      <div class="t-lijf" data-vlak="dag">
+        <p class="kop-klein">Nu</p>
+        <button class="klus" data-klus>
+          <span class="tijd num">10:00 – 11:00</span>
+          <span><b style="font-weight:600">Voordeurslot vervangen</b><br><span class="zacht">Dhr. Meijer · Schoolstraat 17, Testdorp</span></span>
+          <span class="status"><i class="stip ok"></i>klant heeft bevestigd · 18 min rijden</span>
+        </button>
+        <p class="kop-klein">Straks</p>
+        <button class="klus" data-klus>
+          <span class="tijd num">14:30 – 16:00</span>
+          <span><b style="font-weight:600">Schuifpui loopwagens</b><br><span class="zacht">Familie De Groot · Tuinlaan 9, Voorbeeldstad</span></span>
+          <span class="status"><i class="stip let"></i>nog niet bevestigd · kantoor belt</span>
+        </button>
+        <p class="klein">2 afspraken vandaag · 1 vraag van kantoor</p>
+      </div>
+
+      <div class="t-lijf" data-vlak="alles" hidden>
+        <p class="kop-klein">Nog in te plannen</p>
+        <button class="klus" data-klus><span><b style="font-weight:600">Achterdeur sluit niet</b><br><span class="zacht">Bakkerij Smit · Proefwijk</span></span><span class="status"><i class="stip blauw"></i>bel de klant voor een afspraak</span></button>
+        <p class="kop-klein">Wacht op onderdeel</p>
+        <button class="klus" data-klus><span><b style="font-weight:600">Meerpuntssluiting defect</b><br><span class="zacht">Mevr. Mulder · Demoveen</span></span><span class="status"><i class="stip let"></i>besteld op 17 november</span></button>
+        <p class="kop-klein">Afgerond deze week</p>
+        <button class="klus" data-klus><span><b style="font-weight:600">Deur geopend na buitensluiting</b><br><span class="zacht">Dhr. Hendriks · Demoveen</span></span><span class="status"><i class="stip ok"></i>betaald met pin · factuur verstuurd</span></button>
+      </div>
+
+      <div class="t-lijf" data-vlak="vragen" hidden>
+        <p class="kop-klein">Open</p>
+        <div class="klus">
+          <span><b style="font-weight:600">Heb je de klant in Proefwijk al gebeld?</b><br><span class="zacht">Noor · bij Achterdeur sluit niet · 08:15</span></span>
+          <div class="drie">
+            <button class="btn" data-zeg="Antwoord verstuurd: ja, gebeld." data-in="v-uit">Ja</button>
+            <button class="btn" data-zeg="Antwoord verstuurd: nog niet." data-in="v-uit">Nog niet</button>
+            <button class="btn" data-zeg="Kantoor belt je zo." data-in="v-uit">Bel mij</button>
+          </div>
+          <p id="v-uit" class="melding ok" hidden></p>
+        </div>
+        <p class="kop-klein">Beantwoord</p>
+        <div class="klus"><span><b style="font-weight:600">Kun je woensdag in Proefwijk?</b><br><span class="zacht">Jij: woensdag tussen 9 en 11 kan. · gisteren</span></span></div>
+        <button class="btn btn-groot">Vraag aan kantoor</button>
+      </div>
+
+      <div class="t-nav" data-tabs role="tablist" aria-label="Monteur">
+        <button data-tab="dag" aria-selected="true">Mijn dag</button>
+        <button data-tab="alles">Mijn opdrachten</button>
+        <button data-tab="vragen">Vragen · 1</button>
+      </div>
+    </div>
+
+    <!-- EEN KLUS: vaste kop, één volgende stap -->
+    <div data-scherm="klus" hidden style="display:flex;flex-direction:column;flex:1">
+      <div class="t-kop">
+        <button class="btn btn-stil" data-terug style="padding-left:0">Terug</button>
+        <p class="klein">Key Service 24/7 · DRS · vandaag 10:00</p>
+        <h2>Voordeurslot vervangen</h2>
+        <p>Dhr. Meijer<br><span class="zacht">Schoolstraat 17, 1234 CD Testdorp</span></p>
+      </div>
+      <div class="t-lijf">
+        <button class="btn btn-hoofd btn-groot" data-zeg="De klant kreeg een bericht. Kantoor ziet waar je bent." data-in="k-uit" data-volgende="Ik ben er|Klus afronden|Afgerond">Ik ga onderweg</button>
+        <p id="k-uit" class="melding ok" hidden></p>
+        <div class="drie">
+          <button class="btn">Bellen</button><button class="btn">Navigeer</button><button class="btn">Foto</button>
+        </div>
+        <section class="vlak">
+          <header><h3>Wat is er aan de hand</h3></header>
+          <div class="rij"><div class="midden" style="white-space:normal">Voordeurslot draait zwaar en blijft soms hangen. Klant wil een nieuw slot, SKG2.</div></div>
+          <div class="rij"><span class="zacht">Prijsafspraak</span><span class="rechts num" style="margin-left:auto;color:var(--ink)">€ 145 incl. cilinder</span></div>
+          <div class="rij"><span class="zacht">Betalen</span><span class="rechts" style="margin-left:auto;color:var(--ink)">pin bij de monteur</span></div>
+        </section>
+        <section class="vlak">
+          <header><h3>Afronden</h3><span class="klein">komt na "Klus afronden"</span></header>
+          <div class="rij"><div class="midden"><b>1. Wat heb je gedaan?</b><span>kies uit de prijslijst of typ een regel</span></div></div>
+          <div class="rij"><div class="midden"><b>2. Foto van het resultaat</b><span>één tik op Foto</span></div></div>
+          <div class="rij"><div class="midden"><b>3. Betaald?</b><span>pin · contant · op factuur</span></div></div>
+          <div class="rij"><div class="midden"><b>4. Handtekening klant</b><span>factuur gaat daarna vanzelf naar de klant</span></div></div>
+        </section>
+        <button class="btn btn-groot">Vraag aan kantoor over deze klus</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="uitleg">
+    <div><p class="kop-klein">Voorstel voor de monteur</p><h1>Mijn dag</h1></div>
+    <p class="zacht">Links zie je de telefoon van de monteur. Tik op een afspraak om de klus te openen en op de blauwe knop om de stappen te doorlopen.</p>
+    <ul style="padding-left:18px;margin:0">
+      <li>De app opent op de afspraken van vandaag, op volgorde van tijd. Nu opent hij op een leeg tabblad.</li>
+      <li>Eén grote knop voor de volgende stap: onderweg, ik ben er, afronden.</li>
+      <li>Vragen van kantoor staan op één plek, met antwoordknoppen. Geen losse appjes meer.</li>
+      <li>Afronden is één vaste reeks van vier stappen in plaats van zoeken in een lang formulier.</li>
+      <li>Een onderaannemer krijgt hetzelfde scherm, maar ziet alleen zijn eigen klussen en geen prijzen van anderen.</li>
+    </ul>
+    <p><a href="index.html">Terug naar het overzicht</a></p>
+  </div>
+</div>
+<script src="prototype.js"></script>
+</body>
+</html>

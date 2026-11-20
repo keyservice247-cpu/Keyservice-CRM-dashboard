@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Opdrachten — voorstel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="prototype.css">
+</head>
+<body data-pagina="opdrachten">
+<div data-schil data-tabgroep>
+  <div class="paginakop">
+    <div><h1>Opdrachten</h1><p>9 lopend · 4 afgerond deze week</p></div>
+    <div class="acties">
+      <div class="tabs" data-tabs role="tablist" aria-label="Weergave"><button data-tab="bord" aria-selected="true">Bord</button><button data-tab="lijst">Lijst</button></div>
+      <button class="btn btn-hoofd">Nieuwe opdracht</button>
+    </div>
+  </div>
+
+  <div class="kiezers" data-filters aria-label="Bewaarde filters">
+    <button data-filter="alle" aria-pressed="true">Alles</button>
+    <button data-filter="wacht" aria-pressed="false">Klant wacht op ons</button>
+    <button data-filter="drs" aria-pressed="false">DRS</button>
+    <button data-filter="schuifpui" aria-pressed="false">Schuifpui</button>
+    <button data-filter="sam" aria-pressed="false">Van Sam</button>
+    <button data-filter="stil" aria-pressed="false">Ligt stil</button>
+  </div>
+
+  <div data-vlak="bord" class="bord">
+    <div class="kolom"><header><span>Nieuw</span><span class="num" data-telt>2</span></header><div class="kaarten">
+      <button class="kaart" data-open data-soort="schuifpui" data-titel="Testdorp — schuifpui loopt zwaar" data-klant="Familie Jansen · 06 11 00 00 01" data-adres="Lindelaan 12, 1234 AB Testdorp" data-status="Nieuw" data-merk="Schuifpuiservice" data-stap="Offerte maken"><b>Testdorp — schuifpui loopt zwaar</b><span class="zacht">Familie Jansen</span><span class="onderregel"><span>Website</span><span>vandaag 08:12</span></span></button>
+      <button class="kaart" data-open data-soort="wacht" data-titel="Voorbeeldstad — cilinder vervangen" data-klant="Mevr. De Boer · 06 11 00 00 02" data-adres="Kerkpad 3, 2345 BC Voorbeeldstad" data-status="Nieuw · spoed" data-merk="Key Service 24/7" data-stap="Monteur kiezen"><b>Voorbeeldstad — cilinder vervangen</b><span class="zacht">Mevr. De Boer</span><span class="onderregel"><span class="status"><i class="stip fout"></i>spoed</span><span>gisteren</span></span></button>
+    </div></div>
+    <div class="kolom"><header><span>In behandeling</span><span class="num" data-telt>3</span></header><div class="kaarten">
+      <button class="kaart" data-open data-soort="drs sam" data-titel="Proefwijk — achterdeur sluit niet" data-klant="Bakkerij Smit · 06 11 00 00 03" data-adres="Marktstraat 8, 3456 CD Proefwijk" data-status="In behandeling" data-merk="Key Service 24/7 · DRS" data-stap="Afspraak plannen"><b>Proefwijk — achterdeur sluit niet</b><span class="zacht">Bakkerij Smit · Sam</span><span class="onderregel"><span>DRS</span><span>2 dagen</span></span></button>
+      <button class="kaart" data-open data-soort="stil" data-titel="Demoveen — sleutel afgebroken in slot" data-klant="Dhr. Visser · 06 11 00 00 04" data-adres="Havenweg 21, 4567 DE Demoveen" data-status="In behandeling" data-merk="Key Service 24/7" data-stap="Klant bellen"><b>Demoveen — sleutel afgebroken in slot</b><span class="zacht">Dhr. Visser · Daan</span><span class="onderregel"><span class="status"><i class="stip let"></i>16 dagen stil</span><span>Telefoon</span></span></button>
+      <button class="kaart" data-open data-soort="" data-titel="Testdorp — centrale toegangsdeur klemt" data-klant="VvE Parkzicht · 06 11 00 00 05" data-adres="Parkzicht 1-40, 5678 EF Testdorp" data-status="In behandeling" data-merk="Key Service 24/7 · project" data-stap="Offerte maken"><b>Testdorp — centrale toegangsdeur klemt</b><span class="zacht">VvE Parkzicht</span><span class="onderregel"><span>Project</span><span>4 dagen</span></span></button>
+    </div></div>
+    <div class="kolom"><header><span>Offerte verzonden</span><span class="num" data-telt>2</span></header><div class="kaarten">
+      <button class="kaart" data-open data-soort="wacht schuifpui" data-titel="Proefwijk — schuifpui complete reparatie" data-klant="Familie Bakker · 06 11 00 00 06" data-adres="Molenweg 5, 6789 FG Proefwijk" data-status="Offerte verzonden · klant akkoord" data-merk="Schuifpuiservice" data-stap="Afspraak plannen"><b>Proefwijk — schuifpui complete reparatie</b><span class="zacht">Familie Bakker</span><span class="onderregel"><span class="status"><i class="stip fout"></i>klant wacht 41 min</span><span class="num">€ 640</span></span></button>
+      <button class="kaart" data-open data-soort="drs sam stil" data-titel="Demoveen — meerpuntssluiting defect" data-klant="Mevr. Mulder · 06 11 00 00 07" data-adres="Dijkstraat 44, 7890 GH Demoveen" data-status="Offerte verzonden" data-merk="Key Service 24/7 · DRS" data-stap="Herinnering sturen"><b>Demoveen — meerpuntssluiting defect</b><span class="zacht">Mevr. Mulder · Sam</span><span class="onderregel"><span>DRS</span><span class="num">€ 285</span></span></button>
+    </div></div>
+    <div class="kolom"><header><span>Afspraak ingepland</span><span class="num" data-telt>2</span></header><div class="kaarten">
+      <button class="kaart" data-open data-soort="drs sam" data-titel="Testdorp — voordeurslot vervangen" data-klant="Dhr. Meijer · 06 11 00 00 08" data-adres="Schoolstraat 17, 1234 CD Testdorp" data-status="Afspraak vandaag 10:00" data-merk="Key Service 24/7 · DRS" data-stap="Wacht op monteur"><b>Testdorp — voordeurslot vervangen</b><span class="zacht">Dhr. Meijer · Sam</span><span class="onderregel"><span class="status"><i class="stip ok"></i>onderweg</span><span>vandaag 10:00</span></span></button>
+      <button class="kaart" data-open data-soort="schuifpui sam" data-titel="Voorbeeldstad — schuifpui loopwagens" data-klant="Familie De Groot · 06 11 00 00 09" data-adres="Tuinlaan 9, 2345 DE Voorbeeldstad" data-status="Afspraak vandaag 14:30" data-merk="Schuifpuiservice" data-stap="Afspraak bevestigen"><b>Voorbeeldstad — schuifpui loopwagens</b><span class="zacht">Familie De Groot · Sam</span><span class="onderregel"><span>vandaag 14:30</span><span class="num">€ 520</span></span></button>
+    </div></div>
+  </div>
+
+  <section data-vlak="lijst" class="vlak" hidden>
+    <div class="schuif"><table class="tabel">
+      <tr><th>Opdracht</th><th>Klant</th><th>Status</th><th>Monteur</th><th>Volgende stap</th></tr>
+      <tr data-open data-soort="wacht schuifpui" data-titel="Proefwijk — schuifpui complete reparatie" data-klant="Familie Bakker · 06 11 00 00 06" data-adres="Molenweg 5, 6789 FG Proefwijk" data-status="Offerte verzonden · klant akkoord" data-merk="Schuifpuiservice" data-stap="Afspraak plannen"><td>Proefwijk — schuifpui complete reparatie</td><td>Familie Bakker</td><td><span class="status"><i class="stip fout"></i>klant wacht</span></td><td>—</td><td>Afspraak plannen</td></tr>
+      <tr data-open data-soort="wacht" data-titel="Voorbeeldstad — cilinder vervangen" data-klant="Mevr. De Boer · 06 11 00 00 02" data-adres="Kerkpad 3, 2345 BC Voorbeeldstad" data-status="Nieuw · spoed" data-merk="Key Service 24/7" data-stap="Monteur kiezen"><td>Voorbeeldstad — cilinder vervangen</td><td>Mevr. De Boer</td><td><span class="status"><i class="stip fout"></i>spoed</span></td><td>—</td><td>Monteur kiezen</td></tr>
+      <tr data-open data-soort="drs sam" data-titel="Testdorp — voordeurslot vervangen" data-klant="Dhr. Meijer · 06 11 00 00 08" data-adres="Schoolstraat 17, 1234 CD Testdorp" data-status="Afspraak vandaag 10:00" data-merk="Key Service 24/7 · DRS" data-stap="Wacht op monteur"><td>Testdorp — voordeurslot vervangen</td><td>Dhr. Meijer</td><td><span class="status"><i class="stip ok"></i>onderweg</span></td><td>Sam</td><td>Wacht op monteur</td></tr>
+      <tr data-open data-soort="stil" data-titel="Demoveen — sleutel afgebroken in slot" data-klant="Dhr. Visser · 06 11 00 00 04" data-adres="Havenweg 21, 4567 DE Demoveen" data-status="In behandeling" data-merk="Key Service 24/7" data-stap="Klant bellen"><td>Demoveen — sleutel afgebroken in slot</td><td>Dhr. Visser</td><td><span class="status"><i class="stip let"></i>16 dagen stil</span></td><td>Daan</td><td>Klant bellen</td></tr>
+      <tr data-open data-soort="schuifpui" data-titel="Testdorp — schuifpui loopt zwaar" data-klant="Familie Jansen · 06 11 00 00 01" data-adres="Lindelaan 12, 1234 AB Testdorp" data-status="Nieuw" data-merk="Schuifpuiservice" data-stap="Offerte maken"><td>Testdorp — schuifpui loopt zwaar</td><td>Familie Jansen</td><td><span class="status"><i class="stip blauw"></i>nieuw</span></td><td>—</td><td>Offerte maken</td></tr>
+    </table></div>
+  </section>
+</div>
+
+<!-- Zijpaneel: de opdracht. Vaste kop met één volgende stap, daaronder tabbladen. -->
+<aside id="paneel" class="paneel" hidden data-tabgroep aria-label="Opdracht">
+  <div class="paneel-kop">
+    <div class="boven">
+      <div style="min-width:0"><p class="klein" id="p-merk">Schuifpuiservice</p><h2 id="p-titel">Proefwijk — schuifpui complete reparatie</h2></div>
+      <button class="btn btn-stil" data-sluit aria-label="Sluiten">Sluiten</button>
+    </div>
+    <div><span id="p-klant">Familie Bakker · 06 11 00 00 06</span><br><span class="zacht" id="p-adres">Molenweg 5, 6789 FG Proefwijk</span></div>
+    <div class="acties" style="justify-content:space-between">
+      <span class="status"><i class="stip blauw"></i><span id="p-status">Offerte verzonden · klant akkoord</span></span>
+      <button class="btn btn-hoofd" id="p-stap" data-zeg="Gedaan. De volgende stap staat nu klaar." data-in="p-uit">Afspraak plannen</button>
+    </div>
+    <p id="p-uit" class="melding ok" hidden></p>
+    <div class="tabs" data-tabs role="tablist" aria-label="Onderdelen van de opdracht">
+      <button data-tab="gesprek" aria-selected="true">Gesprek</button><button data-tab="details">Details</button><button data-tab="fotos">Foto's</button><button data-tab="planning">Planning</button><button data-tab="historie">Geschiedenis</button>
+    </div>
+  </div>
+  <div class="paneel-lijf">
+    <div data-vlak="gesprek" class="gesprek">
+      <div class="bel wij">Goedemiddag, in de bijlage vindt u onze offerte voor de schuifpui: € 640 excl. btw.<small>Noor · e-mail · gisteren 15:20 · afgeleverd</small></div>
+      <div class="bel">Goedemorgen, wij gaan akkoord met de offerte. Wanneer kunnen jullie komen?<small>Klant · WhatsApp · vandaag 08:31</small></div>
+      <div class="bel intern"><b>Vraag aan Sam</b> — Kun jij volgende week dinsdag of woensdag in Proefwijk? Klant is akkoord.<small>Noor · intern, de klant ziet dit niet · 08:40 · Sam heeft het gelezen</small></div>
+      <div class="bel intern"><b>Sam</b> — Woensdag tussen 9 en 11 kan.<small>Sam · intern · 08:52</small></div>
+    </div>
+    <div data-vlak="details" hidden>
+      <dl class="gegevens">
+        <dt>Klant</dt><dd>Familie Bakker</dd><dt>Telefoon</dt><dd class="num">06 11 00 00 06</dd><dt>E-mail</dt><dd>bakker@voorbeeld.test</dd>
+        <dt>Adres</dt><dd>Molenweg 5, 6789 FG Proefwijk <span class="merkje">gecontroleerd</span></dd><dt>Merk</dt><dd>Schuifpuiservice</dd>
+        <dt>Bron</dt><dd>Website schuifpuiservice.com</dd><dt>Prijs</dt><dd class="num">€ 640 excl. btw (vaste prijs)</dd><dt>Betaling</dt><dd>nog niet betaald</dd>
+      </dl>
+    </div>
+    <div data-vlak="fotos" hidden><div class="fotos"><div>foto klant 1</div><div>foto klant 2</div><div>toevoegen</div></div></div>
+    <div data-vlak="planning" hidden>
+      <div class="velden">
+        <label class="veld" for="pl-dag">Dag<input id="pl-dag" value="woensdag 25 november"></label>
+        <label class="veld" for="pl-tijd">Tijd (Nederlandse tijd)<input id="pl-tijd" value="09:00 – 11:00"></label>
+        <label class="veld" for="pl-mont">Monteur<select id="pl-mont"><option>Sam</option><option>Daan</option></select></label>
+        <label class="veld" for="pl-bev">Bevestiging naar klant<select id="pl-bev"><option>WhatsApp en e-mail</option><option>Alleen WhatsApp</option><option>Niet sturen</option></select></label>
+      </div>
+    </div>
+    <div data-vlak="historie" hidden>
+      <div class="rij" style="border-top:0;padding-left:0"><div class="midden"><b>Klant akkoord met offerte</b><span>WhatsApp · vandaag 08:31</span></div></div>
+      <div class="rij" style="padding-left:0"><div class="midden"><b>Offerte OFF-2026-0061 verstuurd</b><span>Noor · gisteren 15:20</span></div></div>
+      <div class="rij" style="padding-left:0"><div class="midden"><b>Aanvraag goedgekeurd</b><span>Noor · gisteren 14:02 · bron website</span></div></div>
+    </div>
+  </div>
+  <div class="paneel-voet">
+    <label class="veld" for="p-typ" style="flex:1;flex-direction:row"><input id="p-typ" placeholder="Antwoord aan de klant, of @Sam voor een interne vraag"></label>
+    <button class="btn">Versturen</button>
+  </div>
+</aside>
+<script src="prototype.js"></script>
+</body>
+</html>

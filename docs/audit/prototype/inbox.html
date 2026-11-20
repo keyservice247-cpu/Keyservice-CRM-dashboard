@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Inbox — voorstel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="prototype.css">
+</head>
+<body data-pagina="inbox">
+<div data-schil>
+  <div class="paginakop">
+    <div><h1>Inbox</h1><p>3 aanvragen te beoordelen · 12 berichten zonder aanvraag</p></div>
+    <div class="kiezers" data-filters>
+      <button data-filter="alle" aria-pressed="true">Te beoordelen</button>
+      <button data-filter="geen" aria-pressed="false">Geen aanvraag</button>
+      <button data-filter="weg" aria-pressed="false">Afgewezen</button>
+    </div>
+  </div>
+
+  <section class="vlak inbox">
+    <div class="lijst">
+      <button class="rij" data-kies="a" aria-current="true"><i class="stip blauw"></i><div class="midden"><b>Dhr. Smits · Testdorp</b><span>Voordeur klemt, graag vandaag</span></div><span class="rechts">DRS<br>08:30</span></button>
+      <button class="rij" data-kies="b" aria-current="false"><i class="stip blauw"></i><div class="midden"><b>Lisa Kok · Demoveen</b><span>Prijs voor 3 cilinders, SKG3</span></div><span class="rechts">Website<br>08:47</span></button>
+      <button class="rij" data-kies="c" aria-current="false"><i class="stip let"></i><div class="midden"><b>Mevr. Koster · Voorbeeldstad</b><span>Slot achterdeur draait door</span></div><span class="rechts">DRS<br>09:02</span></button>
+    </div>
+
+    <div class="detail" data-detail="a">
+      <div>
+        <p class="klein">WhatsApp-groep DRS · vandaag 08:30 · wacht 42 minuten</p>
+        <h2>Dhr. Smits — voordeur klemt</h2>
+      </div>
+      <div class="bericht">Hallo. We sturen je de volgende klant:
+Naam: Dhr. Smits
+Adres: Eikenlaan 14
+Woonplaats: 1234 EF - Testdorp
+Telefoon: 0611000021
+Opmerkingen: voordeur klemt, graag vandaag</div>
+      <div class="melding ok">Adres gecontroleerd: Eikenlaan 14, 1234 EF Testdorp bestaat. Nieuwe klant, geen eerdere opdrachten.</div>
+      <div class="velden">
+        <label class="veld" for="a-naam">Klant<input id="a-naam" value="Dhr. Smits"></label>
+        <label class="veld" for="a-tel">Telefoon<input id="a-tel" value="06 11 00 00 21"></label>
+        <label class="veld" for="a-adres">Adres<input id="a-adres" value="Eikenlaan 14, 1234 EF Testdorp"></label>
+        <label class="veld" for="a-merk">Merk<select id="a-merk"><option>Key Service 24/7</option><option>Schuifpuiservice</option></select></label>
+        <label class="veld" for="a-mont">Monteur<select id="a-mont"><option>Sam (dichtstbij, 2 afspraken vandaag)</option><option>Daan</option><option>Later kiezen</option></select></label>
+        <label class="veld" for="a-wat">Probleem<input id="a-wat" value="Voordeur klemt, graag vandaag"></label>
+      </div>
+      <div class="acties">
+        <button class="btn btn-hoofd" data-zeg="Opdracht gemaakt en naar Sam gestuurd. De klant krijgt een bevestiging." data-in="a-uit">Goedkeuren en naar Sam</button>
+        <button class="btn" data-zeg="Opdracht gemaakt zonder monteur. Hij staat bij Nieuw." data-in="a-uit">Alleen goedkeuren</button>
+        <button class="btn btn-stil" data-zeg="Verplaatst naar Geen aanvraag. Ongedaan maken kan 10 seconden." data-in="a-uit">Geen aanvraag</button>
+      </div>
+      <p id="a-uit" class="melding ok" hidden></p>
+    </div>
+
+    <div class="detail" data-detail="b" hidden>
+      <div>
+        <p class="klein">Websiteformulier keyservice247.nl · vandaag 08:47</p>
+        <h2>Lisa Kok — 3 cilinders vervangen</h2>
+      </div>
+      <div class="bericht">Graag een prijs voor het vervangen van 3 cilinders, SKG3.
+Adres: Dennenweg 7, 4567 HJ Demoveen</div>
+      <div class="melding ok">Adres gecontroleerd. Nieuwe klant. De klant kreeg om 08:47 automatisch een ontvangstbevestiging.</div>
+      <div class="acties">
+        <button class="btn btn-hoofd" data-zeg="Opdracht gemaakt. Offerte-concept staat klaar met 3 × cilinder SKG3." data-in="b-uit">Goedkeuren en offerte maken</button>
+        <button class="btn" data-zeg="Opdracht gemaakt. Hij staat bij Nieuw." data-in="b-uit">Alleen goedkeuren</button>
+        <button class="btn btn-stil" data-zeg="Verplaatst naar Geen aanvraag." data-in="b-uit">Geen aanvraag</button>
+      </div>
+      <p id="b-uit" class="melding ok" hidden></p>
+    </div>
+
+    <div class="detail" data-detail="c" hidden>
+      <div>
+        <p class="klein">WhatsApp-groep DRS · vandaag 09:02</p>
+        <h2>Mevr. Koster — slot achterdeur draait door</h2>
+      </div>
+      <div class="bericht">Naam: Mevr. Koster
+Adres: Wilgenhof 3
+Woonplaats: 2345 FG - Voorbeeldstad
+Telefoon: 0611000022
+Opmerkingen: slot achterdeur draait door</div>
+      <div class="melding">Let op: op dit adres staat al een open opdracht van 3 dagen geleden (Voorbeeldstad — cilinder vervangen). Zelfde klus of een nieuwe?</div>
+      <div class="acties">
+        <button class="btn btn-hoofd" data-zeg="Toegevoegd aan de bestaande opdracht. De monteur ziet het nieuwe bericht." data-in="c-uit">Bij bestaande opdracht voegen</button>
+        <button class="btn" data-zeg="Nieuwe opdracht gemaakt naast de bestaande." data-in="c-uit">Nieuwe opdracht</button>
+        <button class="btn btn-stil" data-zeg="Verplaatst naar Geen aanvraag." data-in="c-uit">Geen aanvraag</button>
+      </div>
+      <p id="c-uit" class="melding ok" hidden></p>
+    </div>
+  </section>
+</div>
+<script src="prototype.js"></script>
+</body>
+</html>

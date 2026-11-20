@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ontwerpregels — voorstel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="prototype.css">
+<style>
+  .schaal div { display: flex; align-items: baseline; gap: 16px; padding: 10px 16px; border-top: 1px solid var(--line); }
+  .schaal span { color: var(--ink-3); font-size: var(--t-xs); width: 132px; flex: none; }
+  .ruimte i { display: inline-block; height: 16px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 3px; vertical-align: middle; }
+</style>
+</head>
+<body data-pagina="ontwerp">
+<div data-schil>
+  <div class="paginakop"><div><h1>Ontwerpregels</h1><p>Eén set afspraken, zodat elk scherm er hetzelfde uitziet en hetzelfde werkt</p></div></div>
+
+  <section class="vlak">
+    <header><h2>Kleur</h2><span class="klein">nu: 87 losse kleuren · voorstel: 14</span></header>
+    <div class="voorbeeld stalen" style="display:grid">
+      <div class="staal"><i style="background:var(--accent)"></i><span>Blauw huisstijl<br>knoppen, links</span></div>
+      <div class="staal"><i style="background:var(--brand-geel)"></i><span>Geel huisstijl<br>alleen in het logo</span></div>
+      <div class="staal"><i style="background:var(--ink)"></i><span>Tekst</span></div>
+      <div class="staal"><i style="background:var(--ink-2)"></i><span>Tekst zacht</span></div>
+      <div class="staal"><i style="background:var(--ink-3)"></i><span>Bijschrift</span></div>
+      <div class="staal"><i style="background:var(--bg)"></i><span>Achtergrond</span></div>
+      <div class="staal"><i style="background:var(--surface-2)"></i><span>Vlak zacht</span></div>
+      <div class="staal"><i style="background:var(--line)"></i><span>Lijn</span></div>
+      <div class="staal"><i style="background:var(--ok)"></i><span>Goed</span></div>
+      <div class="staal"><i style="background:var(--warn)"></i><span>Let op</span></div>
+      <div class="staal"><i style="background:var(--danger)"></i><span>Fout, haast</span></div>
+    </div>
+    <div class="rij"><div class="midden" style="white-space:normal"><b>Regel</b><span style="white-space:normal">Kleur betekent iets. Blauw is klikbaar. Groen, oranje en rood zijn alleen voor status. Een status is een stip met een woord, geen gekleurd blok.</span></div></div>
+  </section>
+
+  <section class="vlak schaal">
+    <header><h2>Letters</h2><span class="klein">nu: 21 groottes en 7 diktes · voorstel: 6 en 3</span></header>
+    <div><span>26 · dikte 600</span><b style="font-size:var(--t-2xl);font-weight:600">Paginatitel</b></div>
+    <div><span>20 · dikte 600</span><b style="font-size:var(--t-xl);font-weight:600">Groot getal of tijd</b></div>
+    <div><span>16 · dikte 600</span><b style="font-size:var(--t-lg);font-weight:600">Kop van een vlak</b></div>
+    <div><span>14 · dikte 400</span><span style="font-size:var(--t-md);color:var(--ink);width:auto">Gewone tekst. Naam van een klant of opdracht in dikte 500.</span></div>
+    <div><span>13 · dikte 400</span><span style="font-size:var(--t-sm);color:var(--ink-2);width:auto">Tweede regel, toelichting</span></div>
+    <div><span>12 · dikte 500</span><span class="kop-klein" style="width:auto">Kopje boven een groep</span></div>
+  </section>
+
+  <section class="vlak">
+    <header><h2>Ruimte en hoeken</h2><span class="klein">nu: 13 hoekmaten · voorstel: 2</span></header>
+    <div class="voorbeeld ruimte">
+      <span class="klein">4</span><i style="width:4px"></i><span class="klein">8</span><i style="width:8px"></i><span class="klein">12</span><i style="width:12px"></i><span class="klein">16</span><i style="width:16px"></i><span class="klein">24</span><i style="width:24px"></i><span class="klein">32</span><i style="width:32px"></i>
+    </div>
+    <div class="rij"><div class="midden" style="white-space:normal"><b>Regel</b><span style="white-space:normal">Knoppen en velden: hoek 8. Vlakken: hoek 12. Geen schaduw, wel een dunne lijn. Wat bij elkaar hoort staat in één vlak met lijnen ertussen, niet in losse blokken onder elkaar.</span></div></div>
+  </section>
+
+  <section class="vlak">
+    <header><h2>Bouwstenen</h2></header>
+    <div class="voorbeeld"><button class="btn btn-hoofd">Hoofdactie</button><button class="btn">Tweede actie</button><button class="btn btn-stil">Stille actie</button><span class="klein">Eén blauwe knop per scherm. Elke knop minstens 40 hoog, op de telefoon 44.</span></div>
+    <div class="voorbeeld"><span class="status"><i class="stip ok"></i>werkt</span><span class="status"><i class="stip let"></i>let op</span><span class="status"><i class="stip fout"></i>haast</span><span class="status"><i class="stip blauw"></i>nieuw</span><span class="merkje">DRS</span><span class="merkje">gecontroleerd</span></div>
+    <div class="voorbeeld"><label class="veld" for="o-veld" style="min-width:220px">Veld met een naam erboven<input id="o-veld" value="Lindelaan 12, 1234 AB Testdorp"></label></div>
+    <a class="rij" href="opdrachten.html"><i class="stip fout"></i><div class="midden"><b>Een rij in een lijst</b><span>tweede regel met de toelichting</span></div><span class="rechts">rechts: tijd of bedrag</span></a>
+    <div class="voorbeeld"><div class="kiezers"><button aria-pressed="true">Bewaard filter aan</button><button aria-pressed="false">Bewaard filter uit</button></div></div>
+  </section>
+
+  <section class="vlak">
+    <header><h2>Vaste afspraken</h2></header>
+    <div class="rij"><div class="midden" style="white-space:normal"><b>Woorden</b><span style="white-space:normal">Eén woord per ding: aanvraag (nog niet beoordeeld), opdracht (goedgekeurd), klant, monteur. Niet door elkaar kaart, klus, lead, bericht.</span></div></div>
+    <div class="rij"><div class="midden" style="white-space:normal"><b>Geen emoji, geen vet over hele regels</b><span style="white-space:normal">Rust komt van witruimte en van weinig kleur.</span></div></div>
+    <div class="rij"><div class="midden" style="white-space:normal"><b>Eerst wat moet, dan wat kan</b><span style="white-space:normal">Bovenaan staat wat aandacht vraagt. Instellingen en uitleg staan achter een klik.</span></div></div>
+    <div class="rij"><div class="midden" style="white-space:normal"><b>Tijd is altijd Nederlandse tijd</b><span style="white-space:normal">Ook als de assistente in een ander land werkt. Bij elk tijdveld staat dat erbij.</span></div></div>
+  </section>
+  <p><a href="index.html">Terug naar het overzicht</a></p>
+</div>
+<script src="prototype.js"></script>
+</body>
+</html>

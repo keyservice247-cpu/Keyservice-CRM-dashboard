@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vandaag — voorstel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="prototype.css">
+</head>
+<body data-pagina="vandaag">
+<div data-schil data-tabgroep>
+  <div class="paginakop">
+    <div><h1>Vandaag</h1><p>vrijdag 20 november · Nederlandse tijd 09:12</p></div>
+    <div class="tabs" data-tabs role="tablist" aria-label="Weergave per rol">
+      <button data-tab="assistente" aria-selected="true">Assistente</button>
+      <button data-tab="eigenaar">Eigenaar</button>
+    </div>
+  </div>
+
+  <!-- ASSISTENTE: één werklijst, belangrijkste bovenaan -->
+  <div data-vlak="assistente" class="twee">
+    <section class="vlak">
+      <header><h2>Eerst doen</h2><span class="klein num">6 punten</span></header>
+      <a class="rij" href="inbox.html"><i class="stip fout"></i><div class="midden"><b>3 nieuwe aanvragen beoordelen</b><span>Oudste wacht 42 minuten · 2 van DRS, 1 van de website</span></div><span class="btn btn-hoofd">Naar inbox</span></a>
+      <a class="rij" href="opdrachten.html"><i class="stip fout"></i><div class="midden"><b>Familie Bakker wacht op antwoord</b><span>WhatsApp, 08:31: akkoord met de offerte, wanneer kunnen jullie komen?</span></div><span class="btn">Antwoorden</span></a>
+      <a class="rij" href="opdrachten.html"><i class="stip let"></i><div class="midden"><b>Vraag van Sam over Demoveen — meerpuntssluiting</b><span>Onderdeel is binnen. Kun jij een nieuwe afspraak maken?</span></div><span class="btn">Bekijken</span></a>
+      <a class="rij" href="opdrachten.html"><i class="stip let"></i><div class="midden"><b>Offerte Voorbeeldstad ligt 4 dagen stil</b><span>€ 640 excl. btw · nog geen reactie · herinnering staat klaar</span></div><span class="btn">Herinneren</span></a>
+      <a class="rij" href="opdrachten.html"><i class="stip let"></i><div class="midden"><b>2 afgeronde opdrachten zonder factuur</b><span>Samen ongeveer € 885</span></div><span class="btn">Factureren</span></a>
+      <a class="rij" href="opdrachten.html"><i class="stip"></i><div class="midden"><b>DRS-rapport van vandaag</b><span>7 opdrachten staan klaar om te melden · herinnering om 21:00</span></div><span class="btn">Openen</span></a>
+    </section>
+
+    <div style="display:flex;flex-direction:column;gap:24px;min-width:0">
+      <section class="vlak tijdlijn">
+        <header><h2>Afspraken vandaag</h2><a class="klein" href="later.html#planning">Planning</a></header>
+        <div class="rij"><span class="tijd num">10:00</span><div class="midden"><b>Testdorp — voordeurslot vervangen</b><span>Sam · bevestigd door klant</span></div><span class="status"><i class="stip ok"></i>onderweg</span></div>
+        <div class="rij"><span class="tijd num">14:30</span><div class="midden"><b>Voorbeeldstad — schuifpui loopwagens</b><span>Sam · nog niet bevestigd</span></div><span class="status"><i class="stip let"></i>bevestigen</span></div>
+        <div class="rij"><span class="tijd num">16:00</span><div class="midden"><b>Proefwijk — winkeldeur afstellen</b><span>Daan · bevestigd door klant</span></div><span class="status"><i class="stip"></i>gepland</span></div>
+      </section>
+      <section class="vlak">
+        <header><h2>Wacht op een ander</h2></header>
+        <div class="rij"><div class="midden"><b>Klant Proefwijk belt terug over datum</b><span>Jij belde gisteren 16:10</span></div><span class="rechts">1 dag</span></div>
+        <div class="rij"><div class="midden"><b>Daan: foto's van de raamsluiting</b><span>Gevraagd door jou</span></div><span class="rechts">3 uur</span></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- EIGENAAR: in 30 seconden zien hoe het gaat -->
+  <div data-vlak="eigenaar" hidden style="display:flex;flex-direction:column;gap:24px">
+    <div class="cijfers">
+      <div><b class="num">€ 3.855</b><span>omzet deze maand, excl. btw</span></div>
+      <div><b class="num">19</b><span>aanvragen deze week (+4)</span></div>
+      <div><b class="num">80%</b><span>van beslist werd opdracht</span></div>
+      <div><b class="num">€ 1.240</b><span>staat nog open bij klanten</span></div>
+    </div>
+    <div class="twee">
+      <section class="vlak">
+        <header><h2>Vraagt jouw beslissing</h2><span class="klein num">2</span></header>
+        <a class="rij" href="opdrachten.html"><i class="stip fout"></i><div class="midden"><b>Factuur Demoveen 9 weken open</b><span>€ 285 · 2 herinneringen verstuurd · afschrijven of bellen?</span></div><span class="btn">Bekijken</span></a>
+        <a class="rij" href="opdrachten.html"><i class="stip let"></i><div class="midden"><b>VvE Parkzicht vraagt prijs voor 40 deuren</b><span>Project, geen gewone opdracht</span></div><span class="btn">Bekijken</span></a>
+      </section>
+      <section class="vlak">
+        <header><h2>Loopt alles?</h2><a class="klein" href="koppelingen.html">Koppelingen</a></header>
+        <div class="rij"><i class="stip ok"></i><div class="midden"><b>Alle koppelingen werken</b><span>Laatste aanvraag binnen: 08:47</span></div></div>
+        <div class="rij"><i class="stip ok"></i><div class="midden"><b>Inbox is bij</b><span>Gemiddeld 14 minuten tot eerste reactie</span></div></div>
+        <div class="rij"><i class="stip let"></i><div class="midden"><b>3 opdrachten liggen langer dan 14 dagen stil</b><span>2 bij Sam, 1 zonder monteur</span></div></div>
+      </section>
+    </div>
+    <section class="vlak">
+      <header><h2>Per monteur, deze week</h2></header>
+      <div class="schuif"><table class="tabel">
+        <tr><th>Monteur</th><th>Afgerond</th><th>Omzet excl. btw</th><th>Afspraken</th><th>Open vragen</th></tr>
+        <tr><td>Sam</td><td class="num">6</td><td class="num">€ 2.310</td><td class="num">4</td><td class="num">1</td></tr>
+        <tr><td>Daan</td><td class="num">3</td><td class="num">€ 1.095</td><td class="num">2</td><td class="num">0</td></tr>
+        <tr><td>Onderaannemers</td><td class="num">2</td><td class="num">€ 1.160</td><td class="num">1</td><td class="num">0</td></tr>
+      </table></div>
+    </section>
+  </div>
+</div>
+<script src="prototype.js"></script>
+</body>
+</html>
