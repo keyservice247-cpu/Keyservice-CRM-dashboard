@@ -2,6 +2,7 @@
 // zodat je het dashboard meteen kunt proberen.
 import { db, id, now, save, load } from './db.js';
 import { hashPassword } from './auth.js';
+import { TEST, demoLoginToegestaan } from './omgeving.js';
 
 const DEMO = [
   { type: 'user', name: 'Beheerder', email: 'admin@keyservice.nl', password: 'admin123', role: 'admin' },
@@ -12,9 +13,14 @@ const DEMO = [
 export function ensureSeed() {
   const data = db();
   if (data._seeded) return;
+  // Testomgeving: geen voorbeelddata van hier — die komt uit testdata.js, de beheerder
+  // uit ADMIN_EMAIL/ADMIN_PASSWORD (beheerder.js).
+  if (TEST) { data._seeded = true; save(); return; }
 
-  // Gebruikers
-  for (const u of DEMO) {
+  // Gebruikers — de voorbeeldaccounts hebben bekende wachtwoorden en horen dus alleen in
+  // de lokale testrunner thuis (audit F2, 23 nov 2026). Een echte nieuwe installatie
+  // krijgt haar eerste beheerder uit ADMIN_EMAIL/ADMIN_PASSWORD.
+  for (const u of (demoLoginToegestaan() ? DEMO : [])) {
     if (!data.users.some((x) => x.email === u.email)) {
       data.users.push({
         id: id('user'), name: u.name, email: u.email.toLowerCase(),
@@ -50,7 +56,7 @@ export function ensureSeed() {
 
   data._seeded = true;
   save();
-  console.log('Database gevuld met voorbeelddata. Login: admin@keyservice.nl / admin123');
+  console.log(demoLoginToegestaan() ? 'Database gevuld met voorbeelddata (voorbeeldaccounts actief: alleen voor lokaal testen).' : 'Database gevuld met voorbeelddata. Zet ADMIN_EMAIL en ADMIN_PASSWORD voor de eerste beheerder.');
 }
 
 // Mogelijkheid om handmatig te seeden via: npm run seed

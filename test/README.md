@@ -65,3 +65,5 @@ script; pas aan als de omgeving een andere build heeft).
 ## Regel
 - Een gefaalde assertie door VEROUDERDE testdata → corrigeer de test, niet de regel.
 - Nieuwe functie → voeg er een assertie voor toe, zodat de regressie meegroeit.
+
+- `test/testomgeving-test.mjs` — testomgeving (OMGEVING=test) en eerste beheerder uit de omgeving; start zelf servers op poort 3147: `node test/testomgeving-test.mjs`.

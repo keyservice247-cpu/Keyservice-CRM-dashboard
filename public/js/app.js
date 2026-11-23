@@ -310,6 +310,7 @@ function hasPerm(key) {
   const me = await api('/api/me');
   if (!me || !me.user) { window.location.href = '/'; return; }
   state.me = me.user; state.meta = me.meta;
+  toonTestBalk();
   $('#userName').textContent = `${me.user.name} · ${me.user.role}`;
   $('#avatar').textContent = (me.user.name || '?').trim().charAt(0).toUpperCase();
   $('#aiMode').textContent = me.meta.aiMode === 'ai' ? 'AI actief' : 'AI: demo';
@@ -6802,6 +6803,18 @@ function pushUitlegVoorRol() {
 }
 // Meldingen nog niet aan op dit toestel? Toon één rustige balk boven Start/het bord
 // (alle rollen — de assistente en de monteur komen anders nooit in Instellingen).
+// TESTOMGEVING (23 nov 2026): een vaste balk bovenaan, zodat niemand denkt dat dit de
+// echte CRM is. De server zet dan alle koppelingen uit (zie server/omgeving.js).
+function toonTestBalk() {
+  if (!state.meta || state.meta.omgeving !== 'test' || document.getElementById('testBalk')) return;
+  const el = document.createElement('div');
+  el.id = 'testBalk'; el.className = 'test-balk';
+  el.innerHTML = '<strong>Testomgeving</strong> — verzonnen klanten. Er wordt niets verstuurd: geen mail, geen WhatsApp.';
+  const anker = document.getElementById('pushHint');
+  if (anker && anker.parentNode) anker.parentNode.insertBefore(el, anker); else document.body.prepend(el);
+  document.title = 'TEST — ' + document.title;
+}
+
 async function checkPushHint() {
   try {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;

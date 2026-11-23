@@ -18,6 +18,7 @@
     <img src="/img/logo.svg" alt="Keyservice — Service is key" class="login-logo" />
     <h1>CRM Dashboard</h1>
     <p class="muted">Log in om verder te gaan</p>
+    <p id="testNoot" class="muted" hidden style="background:#f8f2e9;border:1px solid #c08a3e;border-radius:8px;padding:8px 10px;font-size:13px"><strong>Testomgeving.</strong> Verzonnen klanten; er wordt niets verstuurd. Log in met het account dat je bij Render hebt ingesteld.</p>
     <label>E-mailadres
       <input type="email" name="email" autocomplete="username" required placeholder="naam@keyservice.nl" />
     </label>
@@ -29,6 +30,8 @@
   </form>
 
   <script>
+    // Testomgeving herkenbaar maken (de server meldt dat zonder inlog).
+    fetch('/api/me').then((r) => r.json()).then((j) => { if (j && j.meta && j.meta.omgeving === 'test') document.getElementById('testNoot').hidden = false; }).catch(() => {});
     const form = document.getElementById('loginForm');
     const errEl = document.getElementById('loginError');
     const knop = form.querySelector('button[type=submit]');

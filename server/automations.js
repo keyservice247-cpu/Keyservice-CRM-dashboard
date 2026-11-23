@@ -2,6 +2,7 @@
 // afspraakbevestiging + herinnering naar de klant, review-verzoek na afronding,
 // snooze-herinneringen, uitval-alarm (bridge/e-mail/AI) en de nachtelijke statusscan.
 import { db, id, now, save, saveSoon, logActivity, diskFreeMB, noodOpruimronde, saveFailure } from './db.js';
+import { TEST } from './omgeving.js';
 import { isDrsOrder } from './drs-rapport.js';
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
@@ -372,6 +373,8 @@ export function bridgeAlarmGrens(s = db().settings) {
   return r < BRIDGE_UPDATE_MS ? BRIDGE_UPDATE_MS : BRIDGE_DOWN_MS;
 }
 async function alertAdmins(title, body) {
+  // Testomgeving: nooit een alarm naar een telefoon of mailbox — alleen in het logboek.
+  if (TEST) { logActivity('systeem', 'alarm (testomgeving, niet verstuurd)', `${title}: ${body}`); return; }
   sendPush({ title, body, url: '/' }).catch(() => {});
   const to = getBackupMail().email; // zelfde adres als de back-up-mail (indien ingesteld)
   // Faalt de alarm-mail zelf, dan is de push al weg én registreert sendMail de fout

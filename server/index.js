@@ -1,3 +1,6 @@
+// MOET de eerste import blijven: zet in de testomgeving alle koppelingen uit vóórdat
+// een andere module de sleutels kan lezen (zie omgeving.js).
+import { TEST, demoLoginToegestaan, DEMO_WACHTWOORDEN } from './omgeving.js';
 import express from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -47,6 +50,8 @@ import {
 } from './auth.js';
 import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen, MODELLEN } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
+import { ensureBeheerderUitOmgeving } from './beheerder.js';
+import { vulTestdata } from './testdata.js';
 import { amsterdamParts, amsMidnightMs, weekBounds } from './week.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
@@ -95,6 +100,8 @@ const PORT = process.env.PORT || 3000;
 
 load();
 ensureSeed();
+// Eerste beheerder uit ADMIN_EMAIL/ADMIN_PASSWORD (nieuwe installatie, herstel, testomgeving).
+ensureBeheerderUitOmgeving();
 ensureSettings();
 
 const app = express();
@@ -192,8 +199,9 @@ app.post('/api/login', (req, res) => {
   // DEMO-WACHTWOORD UIT (16 sep 2026, keuze eigenaar): het standaardwachtwoord uit de
   // voorbeelddata mag op een échte installatie nooit meer werken. Alleen in de
   // testomgeving (SESSION_SECRET=test of DEMO_LOGIN=1) blijft het bruikbaar.
-  const demoToegestaan = process.env.SESSION_SECRET === 'test' || process.env.DEMO_LOGIN === '1';
-  if (!demoToegestaan && password === 'admin123') {
+  // 23 nov 2026 (audit F2): geldt nu voor ALLE drie de voorbeeldwachtwoorden uit seed.js,
+  // niet alleen dat van de beheerder.
+  if (!demoLoginToegestaan() && DEMO_WACHTWOORDEN.includes(password)) {
     logActivity(user.name, 'inlogpoging met standaardwachtwoord geweigerd');
     return res.status(403).json({ error: 'Het standaardwachtwoord is uitgeschakeld. Laat een beheerder een nieuw wachtwoord instellen via Gebruikers.' });
   }
@@ -228,6 +236,8 @@ app.get('/api/me', (req, res) => {
       trustpilot: { aan: getTrustpilot().aan, standaardAan: getTrustpilot().standaardAan },
       // DRS-rapport (16 okt): welke kopjes bijgehouden worden (voor de "DRS gemeld"-chip).
       drsRapport: req.user && req.user.role !== 'monteur' ? { kopjes: getDrsRapportInstellingen().kopjes } : null,
+      // Testomgeving (23 nov): het scherm toont dan een duidelijke balk.
+      omgeving: TEST ? 'test' : '',
     },
   });
 });
@@ -6907,6 +6917,8 @@ app.listen(PORT, () => {
   // klopt weer, ook op bestaande kaarten), dan mislukte groeps-berichten opnieuw in de
   // wachtrij, dan gemiste opdrachten alsnog automatisch naar de monteur.
   healGroupIdNames();
+  // De starttaken zijn de eigen lijst van de eigenaar — nooit op de testomgeving.
+  if (TEST) db().settings._takenSeedV1 = db().settings._takenSeedV1 || now();
   try { seedTaken(); } catch (e) { console.error('[taken] starttaken:', e.message); }
   requeueRecentFailedGroupItems();
   maybeCatchUpDispatch();
@@ -6939,5 +6951,9 @@ app.listen(PORT, () => {
       .catch((e) => console.error('[wa-cloud] zelftest bij start mislukt:', e.message));
   }
   if (cloudConfigured()) console.log(`  Officiële WhatsApp (Meta): ingesteld — versturen staat ${db().settings.whatsappCloudSend ? 'AAN' : 'UIT'}`);
+  if (TEST) {
+    console.log('  TESTOMGEVING: alle koppelingen staan uit (mail, WhatsApp, Google, AI). Alleen verzonnen gegevens.');
+    vulTestdata(PORT).catch((e) => console.error('[testdata]', e.message));
+  }
   console.log('');
 });

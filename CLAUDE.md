@@ -28,6 +28,38 @@ draaien): `test/scenarios.mjs` (50 backend-assertions), `test/factuur-test.mjs`,
 `test/browser-test.mjs` (headless Chromium). Nieuwe functie = assertie erbij, zodat
 de regressie meegroeit.
 
+## TESTOMGEVING + WERKWIJZE NA DE AUDIT (23 nov 2026 — bindend)
+Audit 20 nov 2026 (rapport bij de eigenaar; NIET in de repo zolang die openbaar is). Besluit
+eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pas na zijn "ja".
+- **Terugvalpunt:** branch `terugvalpunt-2026-11-23` = exact de live versie van vóór de
+  roadmap (commit 5ecac94). Gegevenswijzigingen zijn alleen TOEVOEGEND, zodat terugvallen
+  op die versie altijd kan.
+- **Testomgeving:** aparte Render-dienst `keyservice-crm-test` uit `render.test.yaml`
+  (gratis plan, geen schijf, volgt branch `test`). `OMGEVING=test` → `server/omgeving.js`
+  (MOET de eerste import van index.js blijven) haalt ALLE koppel-sleutels uit de omgeving
+  (SMTP_/IMAP_/WHATSAPP_/GOOGLE_/ANTHROPIC_): een testomgeving praat nooit met een klant.
+  Inloggen: `ADMIN_EMAIL`/`ADMIN_PASSWORD` (server/beheerder.js; min. 10 tekens) + de
+  proefaccounts `assistente@keyservice.test` en `monteur@keyservice.test` met hetzelfde
+  wachtwoord. Verzonnen gegevens: `server/testdata.js` (via de gewone routes, 1x per
+  database). Balk "Testomgeving" in het scherm (`toonTestBalk`) en op de inlogpagina.
+  Alarmen gaan in de testomgeving alleen het logboek in; de starttaken worden er niet
+  gezet. Iets op de testomgeving zetten = `git push origin HEAD:test`.
+- **Voorbeeldaccounts (audit F2):** worden alleen nog aangemaakt als
+  `demoLoginToegestaan()` (SESSION_SECRET=test of DEMO_LOGIN=1); alle drie de
+  voorbeeldwachtwoorden zijn anders geblokkeerd. Een nieuwe echte installatie krijgt haar
+  eerste beheerder uit ADMIN_EMAIL/ADMIN_PASSWORD (bestaand wachtwoord wordt nooit
+  overschreven). Test: `test/testomgeving-test.mjs` (32, start zelf servers op 3147).
+- **Uitzonderingen van de eigenaar (NIET bouwen tot hij erom vraagt):** repo privé maken,
+  adrescontrole (PDOK; als het ooit komt liever Google Maps), onderaannemer-accounts,
+  betaalwijzen, VoIP (Unite Phone), export boekhouding, vaste update-momenten, en ALLES
+  rond tijdzones (staat goed, niet aankomen).
+- **Wensen voor het herontwerp:** kleuren op de kaarten blijven; iedereen moet alles
+  terugvinden zoals gewend, alleen geordender; Instellingen opnieuw sorteren zonder één
+  optie te verliezen; assistente ziet conversie maar NOOIT omzet/winst; omzet = verstuurde
+  facturen, met daarnaast betaalde facturen; factuur corrigeren binnen hetzelfde nummer;
+  reparatielocatie invulbaar in de factuur; annuleringsredenen door de AI uit oude
+  opdrachten laten afleiden; aparte reviewpagina per merk.
+
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,
   better-sqlite3) sinds 28 jul. Alles blijft in het geheugen — `db()` geeft gewoon een

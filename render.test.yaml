@@ -1,0 +1,36 @@
+# Render Blueprint voor de TESTOMGEVING van het Keyservice CRM.
+# Staat volledig los van de echte dienst (render.yaml): eigen dienst, eigen sleutels,
+# geen schijf, geen koppelingen. De server zet in deze stand zelf alle verbindingen
+# naar buiten uit (OMGEVING=test, zie server/omgeving.js) en vult zich met verzonnen
+# klanten. Volgt de branch "test": daar komt alleen op wat bekeken moet worden.
+#
+# Aanmaken (eenmalig): Render -> New -> Blueprint -> deze repo -> branch "test" ->
+# Blueprint Path "render.test.yaml" -> bij ADMIN_EMAIL en ADMIN_PASSWORD je eigen
+# testinlog invullen (wachtwoord minstens 10 tekens) -> Deploy Blueprint.
+services:
+  - type: web
+    name: keyservice-crm-test
+    runtime: node
+    plan: free               # gratis: start traag op na 15 min stilstand; gegevens beginnen dan opnieuw
+    region: frankfurt
+    branch: test
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: TZ
+        value: Europe/Amsterdam
+      - key: OMGEVING
+        value: test
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: INGEST_TOKEN
+        generateValue: true
+      # Zelf invullen bij het aanmaken (worden niet in de repo bewaard):
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
