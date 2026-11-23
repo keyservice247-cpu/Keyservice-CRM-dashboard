@@ -5945,43 +5945,110 @@ async function loadSettingsHtml(s) {
     </div>
     <div data-sg="werk" class="settings-grid"> <div class="info-card"> <h3>Kolommen (statussen)</h3> <p class="muted small">Sleep niet — gebruik de volgorde van boven naar beneden. Wijzig naam of kleur, voeg toe of verwijder.</p> <div id="statusRows"></div> <button class="btn btn-sm" id="addStatus">+ Kolom toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveStatuses">Kolommen opslaan</button></div> </div> <div class="info-card"> <h3>Herkomst-bronnen</h3> <p class="muted small">De plekken waar opdrachten vandaan komen (bv. Keyservice e-mail, DRS WhatsApp groep).</p> <div id="sourceRows"></div> <button class="btn btn-sm" id="addSource">+ Bron toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveSources">Bronnen opslaan</button></div> </div> </div> <div data-sg="werk" class="info-card" style="margin-top:18px"> <h3>Snelle standaardantwoorden</h3> <p class="muted small">Vaste teksten (offertes, info-verzoeken, opvolging) die je team met één klik gebruikt bij een bericht.</p> <div id="tmplRows"></div> <button class="btn btn-sm" id="addTmpl">+ Sjabloon toevoegen</button> <div style="margin-top:14px"><button class="btn btn-primary" id="saveTmpls">Sjablonen opslaan</button></div> </div>`;
 
-  // OVERZICHT: kaarten fysiek groeperen in dezelfde volgorde als de pillen, met een
-  // groepskopje erboven. Zo staat álles logisch bij elkaar — ook in het "Alles"-
-  // overzicht springt de lijst niet meer heen en weer tussen onderwerpen.
+  // INSTELLINGEN OPNIEUW GEORDEND (23 nov 2026, wens eigenaar: "een lange lijst opties,
+  // in pil-knoppen verdeeld maar toch ongeorganiseerd"). Nu: links een vaste lijst met
+  // acht onderwerpen (met een regel uitleg) en een zoekveld; rechts alleen de instellingen
+  // van dat onderwerp, in een vaste, logische volgorde. ER VERDWIJNT GEEN ENKELE OPTIE:
+  // elke kaart wordt alleen verplaatst. Een kaart die hieronder niet genoemd wordt houdt
+  // haar oude groep en komt achteraan — zo kan er nooit iets zoekraken.
   {
-    const GROUP_ORDER = ['bericht', 'facturen', 'werk', 'koppel', 'ai', 'systeem'];
-    const GROUP_LABELS = { bericht: 'Automatische berichten', facturen: 'Facturen', werk: 'Werkwijze & bord', koppel: 'Koppelingen', ai: 'AI', systeem: 'Systeem & back-ups' };
-    const cards = $$('#settingsPanel [data-sg]');
-    const parent = cards[0]?.parentElement;
-    if (parent) {
-      // Alleen directe kinderen sorteren (geneste kaarten in een wrapper blijven staan).
-      const top = cards.filter((el) => el.parentElement === parent);
-      for (const g of GROUP_ORDER) {
-        const head = document.createElement('div');
-        head.className = 'form-sec';
-        head.dataset.sg = g;
-        head.style.margin = '18px 0 10px';
-        head.textContent = GROUP_LABELS[g];
-        parent.appendChild(head);
-        top.filter((el) => el.dataset.sg === g).forEach((el) => parent.appendChild(el));
+    const GROEPEN = [
+      ['werk', 'Opdrachten & bord', 'Kolommen, doorsturen naar de monteur, samenvoegen, standaardantwoorden, DRS-rapport'],
+      ['inbox', 'Aanvragen & inbox', 'Wat een aanvraag wordt: WhatsApp-groepen, e-mailfilter, websiteformulieren'],
+      ['bericht', 'Berichten aan klanten', 'Bevestigingen, herinneringen, opvolging, reviews en de handtekening'],
+      ['facturen', 'Facturen & prijzen', 'Gegevens op de factuur, prijslijst, pakketten, betaalherinnering'],
+      ['team', 'Meldingen voor het team', 'Meldingen op de telefoon, WhatsApp-melding, ochtendbriefing, weekcontrole'],
+      ['ai', 'AI', 'Wat de AI over het bedrijf weet, verkeer analyseren, dagoverzicht'],
+      ['koppel', 'Koppelingen', 'WhatsApp en Google Agenda'],
+      ['systeem', 'Systeem & back-ups', 'Back-ups, foto\'s opruimen, hoe alles verbonden is'],
+    ];
+    // Welke kaart hoort waar en in welke volgorde — herkend aan een stuk van de titel
+    // (of aan het id, met een # ervoor).
+    const INDELING = {
+      werk: ['Kolommen (statussen)', 'Opdrachten naar monteur', 'Zelfde-moment-aanvragen', 'Wacht op antwoord', 'Snelle standaardantwoorden', 'DRS-rapport'],
+      inbox: ['uit welke groep', 'E-mailfilter', 'Website-formulieren'],
+      bericht: ['ontvangstbevestiging', 'Afspraakbevestiging', 'Monteur onderweg', 'follow-up op offertes', 'Review-verzoek', 'Trustpilot', 'E-mail handtekening', 'Testmail'],
+      facturen: ['Factuurgegevens', 'Prijslijst', 'Pakketten'],
+      team: ['Meldingen op je telefoon', 'WhatsApp-melding bij nieuwe aanvragen', 'ochtendbriefing', 'Wekelijkse AI-controle'],
+      ai: ['Bedrijfsprofiel', 'Verkeer analyseren', 'AI laten leren filteren', 'AI-dagoverzicht'],
+      koppel: ['Officiële WhatsApp', 'Wegwerpnummer pauzeren', '#wa-pair-card', 'WhatsApp-verbinding testen', 'WhatsApp-groepen koppelen', 'Google Agenda', 'abonnementslink'],
+      systeem: ['Back-ups', 'automatisch opruimen', 'Hoe alles werkt'],
+    };
+    const paneel = $('#settingsPanel');
+    const kaarten = $$('#settingsPanel [data-sg]').filter((el) => el.parentElement === paneel);
+    const titelVan = (el) => ((el.querySelector('h3') || {}).textContent || '').replace(/\s+/g, ' ').trim();
+    const plek = (el) => {
+      const titel = titelVan(el).toLowerCase();
+      for (const [g] of GROEPEN) {
+        const lijst = INDELING[g];
+        for (let n = 0; n < lijst.length; n++) {
+          const zoek = lijst[n];
+          if (zoek[0] === '#' ? el.id === zoek.slice(1) : (titel && titel.includes(zoek.toLowerCase()))) return { g, n };
+        }
       }
+      return { g: GROEPEN.some(([k]) => k === el.dataset.sg) ? el.dataset.sg : 'systeem', n: 999 };
+    };
+    const metPlek = kaarten.map((el, i) => ({ el, i, ...plek(el) }));
+    const oudeNav = $('#settingsPanel .sg-nav'); if (oudeNav) oudeNav.remove();
+    const wrap = document.createElement('div'); wrap.className = 'inst';
+    const nav = document.createElement('aside'); nav.className = 'inst-nav';
+    nav.innerHTML = `<input id="instZoek" type="search" placeholder="Zoek een instelling…" autocomplete="off" aria-label="Zoek een instelling">
+      ${GROEPEN.map(([k, naam, uitleg]) => `<button type="button" class="sg-chip inst-item" data-g="${k}"><strong>${esc(naam)}</strong><span>${esc(uitleg)}</span></button>`).join('')}
+      <button type="button" class="sg-chip inst-item inst-alles" data-g="alles"><strong>Alles onder elkaar</strong><span>Elke instelling op één lange pagina</span></button>`;
+    const inhoud = document.createElement('div'); inhoud.className = 'inst-inhoud';
+    inhoud.innerHTML = '<button type="button" class="btn btn-sm inst-terug" id="instTerug">← Alle instellingen</button><div class="inst-kop"><h3 id="instKop"></h3><div id="instUitleg" class="muted small"></div></div><div id="instLeeg" class="muted" hidden>Geen instelling gevonden. Probeer een ander woord.</div>';
+    for (const [k, naam] of GROEPEN) {
+      const head = document.createElement('div');
+      head.className = 'form-sec inst-groepkop'; head.dataset.sgkop = k; head.textContent = naam; head.hidden = true;
+      inhoud.appendChild(head);
+      metPlek.filter((x) => x.g === k).sort((a, b) => a.n - b.n || a.i - b.i).forEach((x) => { x.el.dataset.sg = k; inhoud.appendChild(x.el); });
     }
+    wrap.appendChild(nav); wrap.appendChild(inhoud); paneel.appendChild(wrap);
   }
-  // Sectie-chips werken als TABBLADEN: je ziet één onderwerp tegelijk i.p.v. de hele
-  // lange lijst. "Alles" toont alles, netjes gegroepeerd met kopjes.
+  // Eén onderwerp tegelijk. "Alles onder elkaar" toont alles, met kopjes per onderwerp.
   const applySGroup = (g, scroll) => {
+    const wrap = $('#settingsPanel .inst');
+    const bekend = $$('#settingsPanel .sg-chip').some((c) => c.dataset.g === g);
+    if (!bekend) g = 'werk';
     $$('#settingsPanel [data-sg]').forEach((el) => { el.style.display = (g === 'alles' || el.dataset.sg === g) ? '' : 'none'; });
+    $$('#settingsPanel .inst-groepkop').forEach((el) => { el.hidden = g !== 'alles'; });
     $$('#settingsPanel .sg-chip').forEach((c) => c.classList.toggle('on', c.dataset.g === g));
+    const knop = $(`#settingsPanel .sg-chip[data-g="${g}"]`);
+    if ($('#instKop')) $('#instKop').textContent = knop ? knop.querySelector('strong').textContent : '';
+    if ($('#instUitleg')) $('#instUitleg').textContent = knop ? knop.querySelector('span').textContent : '';
+    if ($('#instLeeg')) $('#instLeeg').hidden = true;
     state._sgroup = g;
     try { localStorage.setItem('ksInstellingenGroep', g); } catch { /* privémodus */ }
-    if (scroll) { const p = $('#settingsPanel'); if (p) p.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+    if (scroll) {
+      if (wrap) wrap.classList.add('inst-open'); // telefoon: van de lijst naar het onderwerp
+      state._instOpen = true;
+      const p = $('#settingsPanel'); if (p) p.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
   };
-  $$('#settingsPanel .sg-chip').forEach((c) => c.onclick = () => applySGroup(c.dataset.g, true));
-  // Standaard "Alles" (gegroepeerd mét kopjes): dan mist niemand een instelling die
-  // toevallig onder een ander tabblad staat. Het laatst gekozen tabblad blijft leidend.
-  // Opent op de laatst gekozen groep (keuze eigenaar 16 sep: "Alles" is 23 schermen lang).
+  $$('#settingsPanel .sg-chip').forEach((c) => c.onclick = () => { const z = $('#instZoek'); if (z) z.value = ''; applySGroup(c.dataset.g, true); });
+  if ($('#instTerug')) $('#instTerug').onclick = () => { const w = $('#settingsPanel .inst'); if (w) w.classList.remove('inst-open'); state._instOpen = false; const z = $('#instZoek'); if (z && z.value) { z.value = ''; applySGroup(localStorage.getItem('ksInstellingenGroep') || 'werk', false); if (w) w.classList.remove('inst-open'); state._instOpen = false; } window.scrollTo(0, 0); };
+  // Zoeken door ALLE instellingen: toont de kaarten waar het woord in voorkomt.
+  if ($('#instZoek')) $('#instZoek').oninput = () => {
+    const q = $('#instZoek').value.trim().toLowerCase();
+    const wrap = $('#settingsPanel .inst');
+    if (q.length < 2) { applySGroup(state._sgroup || 'werk'); return; }
+    let n = 0; const groepenMet = new Set();
+    $$('#settingsPanel [data-sg]').forEach((el) => {
+      const raak = (el.textContent || '').toLowerCase().includes(q) || [...el.querySelectorAll('input[placeholder], textarea[placeholder]')].some((v) => (v.placeholder || '').toLowerCase().includes(q));
+      el.style.display = raak ? '' : 'none'; if (raak) { n++; groepenMet.add(el.dataset.sg); }
+    });
+    $$('#settingsPanel .inst-groepkop').forEach((el) => { el.hidden = !groepenMet.has(el.dataset.sgkop); });
+    $$('#settingsPanel .sg-chip').forEach((c) => c.classList.remove('on'));
+    $('#instKop').textContent = `Gevonden: ${n}`; $('#instUitleg').textContent = `Instellingen waarin "${$('#instZoek').value.trim()}" voorkomt`;
+    $('#instLeeg').hidden = n > 0;
+    if (wrap) wrap.classList.add('inst-open');
+  };
+  // Opent op het laatst gekozen onderwerp; de eerste keer op "Opdrachten & bord".
   let bewaard = ''; try { bewaard = localStorage.getItem('ksInstellingenGroep') || ''; } catch { /* stil */ }
-  applySGroup(state._sgroup || bewaard || 'alles');
+  applySGroup(state._sgroup || bewaard || 'werk');
+  // Na Opslaan wordt dit scherm opnieuw opgebouwd: op de telefoon blijf je dan in het
+  // onderwerp waar je was, in plaats van terug te vallen op de lijst.
+  if (state._instOpen) { const w = $('#settingsPanel .inst'); if (w) w.classList.add('inst-open'); }
 
   $('#saveApptMsg').onclick = async () => {
     const appointmentMsg = {

@@ -16,6 +16,9 @@ const jsErrors = [];
 page.on('pageerror', (e) => jsErrors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error') jsErrors.push(m.text()); });
 const clear = () => { jsErrors.length = 0; };
+// Instellingen (23 nov 2026): een onderwerp kiezen. Op de telefoon staat de lijst met
+// onderwerpen achter '← Alle instellingen' zodra je er één hebt geopend.
+const instKies = async (pg, g) => { await pg.evaluate(() => { const t = document.querySelector('#instTerug'); if (t && t.offsetParent) t.click(); }); return pg.click(`#settingsPanel .sg-chip[data-g="${g}"]`); };
 const noErr = (label) => { const r = jsErrors.filter((e) => !/favicon|manifest|ServiceWorker|the server responded with a status of 4/i.test(e)); ok(`${label}: geen JS-fout in de browser`, r.length === 0, r.join(' | ')); };
 
 // 1) Login
@@ -547,7 +550,7 @@ await page.setViewportSize({ width: 390, height: 844 }); // iPhone-formaat
 await page.evaluate(() => showView('settings'));
 await page.waitForTimeout(1200);
 // Instellingen onthoudt de laatst gekozen groep (keuze eigenaar 16 sep).
-await page.click('#settingsPanel .sg-chip[data-g="facturen"]');
+await instKies(page, 'facturen');
 await page.waitForTimeout(200);
 await page.evaluate(() => { state._sgroup = null; });
 await page.evaluate(() => loadSettings());
@@ -555,12 +558,12 @@ await page.waitForTimeout(1200);
 ok('instellingen openen op de laatst gekozen groep (Facturen)', await page.evaluate(() => document.querySelector('#settingsPanel .sg-chip.on')?.dataset.g === 'facturen'));
 await page.waitForTimeout(1800);
 // HANDTEKENING PER MEDEWERKER (23 sep): blok gevuld met een rij per account + testmail-knop.
-await page.click('#settingsPanel .sg-chip[data-g="bericht"]');
+await instKies(page, 'bericht');
 await page.waitForFunction(() => document.querySelectorAll('#sigPerUser .sig-user').length > 0, null, { timeout: 8000 });
 const sigRij = await page.evaluate(() => ({ rijen: document.querySelectorAll('#sigPerUser .sig-user').length, test: document.querySelectorAll('#sigPerUser .su-test').length, voorbeeld: [...document.querySelectorAll('#sigPerUser .sig-user-tekst')].some((e) => /Met vriendelijke groet/.test(e.textContent)) }));
 ok('Instellingen → AI: knop "Test AI-modellen" aanwezig', await page.locator('#testAiModellen').count() === 1);
 ok('handtekening per medewerker: rij per account, testmail-knop, voorbeeldtekst', sigRij.rijen >= 2 && sigRij.test === sigRij.rijen && sigRij.voorbeeld, JSON.stringify(sigRij));
-await page.click('#settingsPanel .sg-chip[data-g="facturen"]'); // terug naar de groep van de volgende asserties
+await instKies(page, 'facturen'); // terug naar de groep van de volgende asserties
 await page.evaluate(() => loadSettings()); // opnieuw opbouwen → koppelkaartje wordt weer geladen
 await page.waitForTimeout(2000);
 ok('koppel-kaartje zichtbaar op telefoonformaat', await page.locator('#wa-pair-card').isVisible());
@@ -1045,10 +1048,26 @@ await page.setViewportSize({ width: 390, height: 844 });
 {
   await page.evaluate(() => goView('settings'));
   await page.waitForTimeout(1500);
-  await page.evaluate(() => window.scrollTo(0, 1500));
-  await page.waitForTimeout(300);
-  const sg = await page.evaluate(() => { const n = document.querySelector('.sg-nav'); return n && { top: Math.round(n.getBoundingClientRect().top), y: Math.round(scrollY) }; });
-  ok('mobiel: Instellingen-tabbladen plakken onder de kopbalk (.content is geen scroll-container meer)', !!sg && (sg.y < 100 || (sg.top >= 40 && sg.top <= 60)), JSON.stringify(sg));
+  // INSTELLINGEN OPNIEUW GEORDEND (23 nov 2026): de pillenbalk is vervangen door een lijst
+  // met onderwerpen; op de telefoon open je er één en ga je terug met "Alle instellingen".
+  await page.evaluate(() => { const t = document.querySelector('#instTerug'); if (t && t.offsetParent) t.click(); });
+  await page.waitForTimeout(200);
+  const inst0 = await page.evaluate(() => ({ lijst: !!document.querySelector('.inst-nav')?.offsetParent, onderwerpen: document.querySelectorAll('.inst-nav .sg-chip').length, kaartenInBeeld: [...document.querySelectorAll('#settingsPanel .inst-inhoud > [data-sg]')].filter((e) => e.offsetParent).length, totaal: document.querySelectorAll('#settingsPanel .inst-inhoud > [data-sg]').length, zoek: !!document.querySelector('#instZoek')?.offsetParent }));
+  ok('mobiel: Instellingen begint met de lijst van 8 onderwerpen (+ "alles") en een zoekveld', inst0.lijst && inst0.onderwerpen === 9 && inst0.kaartenInBeeld === 0 && inst0.zoek, JSON.stringify(inst0));
+  const instG = await page.evaluate(() => { const goed = ['werk', 'inbox', 'bericht', 'facturen', 'team', 'ai', 'koppel', 'systeem']; const k = [...document.querySelectorAll('#settingsPanel .inst-inhoud > [data-sg]')]; return { zonder: k.filter((e) => !goed.includes(e.dataset.sg)).map((e) => (e.querySelector('h3')?.textContent || '').trim().slice(0, 30)), buiten: [...document.querySelectorAll('#settingsPanel .card')].filter((e) => !e.closest('.inst-inhoud')).length }; });
+  ok('Instellingen: geen enkel blok is verdwenen (minstens 37) en elk blok hoort bij één van de 8 onderwerpen', inst0.totaal >= 37 && instG.zonder.length === 0 && instG.buiten === 0, JSON.stringify({ totaal: inst0.totaal, ...instG }));
+  await page.click('#settingsPanel .sg-chip[data-g="bericht"]'); await page.waitForTimeout(400);
+  const inst1 = await page.evaluate(() => ({ lijst: !!document.querySelector('.inst-nav')?.offsetParent, terug: !!document.querySelector('#instTerug')?.offsetParent, kop: document.querySelector('#instKop')?.textContent, titels: [...document.querySelectorAll('#settingsPanel .inst-inhoud > [data-sg]')].filter((e) => e.offsetParent).map((e) => (e.querySelector('h3')?.textContent || '').trim().slice(0, 22)) }));
+  ok('mobiel: een onderwerp openen toont alleen dat onderwerp, met een terugknop', !inst1.lijst && inst1.terug && inst1.kop === 'Berichten aan klanten' && inst1.titels.length === 8 && /ontvangst/i.test(inst1.titels[0]), JSON.stringify(inst1));
+  await page.evaluate(() => loadSettings()); await page.waitForTimeout(1200);
+  ok('mobiel: na opnieuw opbouwen (zoals na Opslaan) blijf je in het onderwerp', await page.evaluate(() => !document.querySelector('.inst-nav')?.offsetParent && document.querySelector('#instKop')?.textContent === 'Berichten aan klanten'));
+  await page.click('#instTerug'); await page.waitForTimeout(300);
+  await page.fill('#instZoek', 'prijslijst'); await page.waitForTimeout(400);
+  const instZ = await page.evaluate(() => [...document.querySelectorAll('#settingsPanel .inst-inhoud > [data-sg]')].filter((e) => e.offsetParent).map((e) => (e.querySelector('h3')?.textContent || '').trim()));
+  ok('Instellingen: zoeken op "prijslijst" vindt het blok Prijslijst, uit welk onderwerp ook', instZ.length >= 1 && instZ.some((t) => /Prijslijst/.test(t)) && instZ.length < 12, instZ.join(' | ').slice(0, 200));
+  // Op de telefoon staat het zoekveld in de lijst; de resultaten vullen het scherm. Terug = zoekveld leeg.
+  await page.click('#instTerug'); await page.waitForTimeout(300);
+  ok('mobiel: terug vanuit de zoekresultaten toont de lijst weer, met een leeg zoekveld', await page.evaluate(() => !!document.querySelector('.inst-nav')?.offsetParent && document.querySelector('#instZoek').value === ''));
   ok('mobiel: geen horizontale paginascroll door overflow-x: clip', await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
   await page.evaluate(() => goView('inbox'));
   await page.waitForTimeout(1500);
@@ -1682,7 +1701,7 @@ ok('instellingen: kaart "DRS-rapport" (beheerder)', await page.locator('#saveDrs
 ok('instellingen: alle vier kopjes staan standaard aan (ook Offerte + Afspraken)', await page.locator('#dr-kopjes input:checked').count() === 4);
 // Opgeslagen waarden komen terug na opnieuw openen (toonde altijd de standaard → een tweede
 // keer opslaan wiste het e-mailadres van DRS).
-await page.click('.sg-chip[data-g="werk"]');
+await instKies(page, 'werk');
 await page.fill('#dr-email', 'planning@drs-test.nl');
 await page.click('#saveDrsRapport');
 await page.waitForFunction(() => /DRS-rapport-instellingen opgeslagen/.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
@@ -1694,7 +1713,7 @@ await page.click('#saveDrsRapport');
 await page.waitForTimeout(300);
 // KOLOMMEN OPSLAAN (30 okt 2026): wiste het vinkje "afgehandeld" van Afgerond/Geannuleerd →
 // die klapten na zondag niet meer in. Nu blijft het staan.
-await page.click('.sg-chip[data-g="werk"]').catch(() => {});
+await instKies(page, 'werk').catch(() => {});
 await page.click('#saveStatuses');
 await page.waitForFunction(() => /Kolommen opgeslagen/.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
 const kolNa = await page.evaluate(() => fetch('/api/settings').then((r) => r.json()).then((s) => (s.statuses || []).filter((x) => ['afgerond', 'geannuleerd'].includes(x.key)).map((x) => x.secondary)));

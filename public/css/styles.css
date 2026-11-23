@@ -1551,6 +1551,32 @@ input:not([type=checkbox]):not([type=radio]):not([type=range]):focus, select:foc
 #view-board #digestBtn, #view-board #collapseBtn, #view-board #phoneOrderBtn, #view-board #pasteOrderBtn, #view-board #drsReportBtn { background: transparent; border-color: transparent; color: var(--ink-soft); padding-left: 10px; padding-right: 10px; }
 #view-board #digestBtn:hover, #view-board #collapseBtn:hover, #view-board #phoneOrderBtn:hover, #view-board #pasteOrderBtn:hover, #view-board #drsReportBtn:hover { background: var(--line-soft); color: var(--ink); }
 
+/* ---- Instellingen: links de onderwerpen, rechts de instellingen van dat onderwerp ---- */
+.inst { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 28px; align-items: start; }
+.inst-nav { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 2px; }
+.inst-nav #instZoek { margin-bottom: 10px; width: 100%; }
+.inst-nav .sg-chip.inst-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; border: 0; border-radius: 8px; background: transparent; padding: 9px 12px; color: var(--ink); font-size: 14px; font-weight: 400; cursor: pointer; white-space: normal; }
+.inst-nav .sg-chip.inst-item strong { font-weight: 500; }
+.inst-nav .sg-chip.inst-item span { font-size: 12px; line-height: 1.35; color: var(--muted); }
+.inst-nav .sg-chip.inst-item:hover { background: var(--line-soft); color: var(--ink); border: 0; }
+.inst-nav .sg-chip.inst-item.on { background: var(--accent-soft); color: var(--accent); }
+.inst-nav .sg-chip.inst-item.on strong { color: var(--accent); }
+.inst-nav .sg-chip.inst-item.on span { color: var(--ink-soft); }
+.inst-nav .inst-alles { margin-top: 8px; border-top: 1px solid var(--line) !important; border-radius: 0 0 8px 8px !important; padding-top: 12px !important; }
+.inst-inhoud { min-width: 0; max-width: 860px; }
+.inst-kop { margin-bottom: 16px; }
+.inst-kop h3 { font-size: 18px; font-weight: 600; margin-bottom: 2px; }
+.inst-terug { display: none; margin-bottom: 12px; }
+.inst-inhoud .settings-grid { margin-bottom: 18px; }
+@media (max-width: 820px) {
+  .inst { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .inst-nav { position: static; }
+  .inst-nav .sg-chip.inst-item { padding: 12px; border-bottom: 1px solid var(--line-soft); border-radius: 0; min-height: 56px; }
+  .inst:not(.inst-open) .inst-inhoud { display: none; }
+  .inst.inst-open .inst-nav { display: none; }
+  .inst-terug { display: inline-flex; }
+}
+
 /* ---- tabellen ---- */
 table th { font-weight: 500; }
 
