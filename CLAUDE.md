@@ -60,6 +60,55 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   reparatielocatie invulbaar in de factuur; annuleringsredenen door de AI uit oude
   opdrachten laten afleiden; aparte reviewpagina per merk.
 
+## ROADMAP NA DE AUDIT — wat er al staat (23 nov 2026; alles eerst op branch `test`)
+- **Rechten en invoer (pakket 1a):** afspraak-/sluimerdatum accepteert alleen een echte datum
+  (`datumVeldFout`, 400) en `fmtDate` toont onleesbare invoer altijd ge-escaped; GET
+  /api/reviews eist het recht `inbox`; /api/stats, weekrapport, dagoverzicht, AI-assistent en
+  overzicht geven ZONDER het recht `finance` geen bedragen mee (`geldMag`,
+  `dagoverzichtZonderGeld`, `conversieZonderGeld`). Nieuw recht **`conversie`** (beheerder +
+  assistente standaard aan): Cijfers toont dan alleen de conversie, zonder omzet/winst
+  (`#view-finance.zonder-geld`, `.cv-geld` verborgen). Menu: `data-need="finance|conversie"`.
+- **Instroom (pakket 1a):** 1-op-1 WhatsApp telt alleen als dubbel bij DEZELFDE afzender;
+  reacties zijn nooit een dubbel; postcode-letters via `isPostcodeLetters` (drs-rapport.js);
+  valt de AI uit (`engine` bevat `ai-fallback`), dan wordt er NIETS automatisch goedgekeurd
+  (`review.autoOvergeslagen`). Tests: pakket1-test (47, PORT=3149), ai-uitval-test (9).
+- **Naam en adres uitlezen (D4):** `pickNaamLabel` — aanhef/titel is nooit een naam; "Adres:" +
+  "Woonplaats:" worden samengevoegd; het AI-vangnet vult naam/adres alleen aan als de regels
+  ze uit een LABEL haalden (`naamBron`/`adresBron` = 'label').
+- **Bewaking (pakket 1b):** health.js onthoudt welke koppelingen ooit werkten
+  (`settings._koppelGezien`): "niet ingesteld" ná gewerkt te hebben = rood; `runLichteCheck`
+  elke 10 min; openbare `GET /status` (alleen ja/nee + leeftijden, 503 als opslaan faalt) voor
+  een externe bewaker. Tests draaien nooit meer tegen de echte DATA_DIR of met echte sleutels
+  (mail/formulieren/herstart/betaald-keuze). Test: status-test (9).
+- **Ontwerp, basislaag:** lettertype Inter wordt MEEGELEVERD (`public/fonts`, geen Google
+  Fonts), tokens in het blok "ONTWERP NOVEMBER 2026" onderaan styles.css (`--accent`,
+  gewichten ≤ 600, radius 8/12). Menu in vier groepen (dagelijks werk | Klanten & geld | Team
+  & hulp | Beheer); de aparte menu-items E-mail en WhatsApp zijn knoppen bovenaan het bord
+  geworden (`#boardKanaal`, `zetBoardKanaal`). Kleuren op de kaarten zijn gebleven.
+- **Instellingen opnieuw geordend:** geen pillen meer maar een vaste lijst van 8 onderwerpen
+  links (`GROEPEN` + `INDELING` in loadSettingsHtml: Opdrachten & bord, Aanvragen & inbox,
+  Berichten aan klanten, Facturen & prijzen, Meldingen voor het team, AI, Koppelingen, Systeem
+  & back-ups) + zoekveld `#instZoek`. Telefoon: eerst de lijst, dan het onderwerp, terug met
+  `#instTerug` (`state._instOpen` overleeft opnieuw opbouwen). EEN NIEUW BLOK MOET IN
+  `INDELING` — de browser-test faalt als een blok zonder onderwerp of buiten `.inst-inhoud`
+  staat, of als het totaal onder de 37 zakt.
+- **Factuurwensen (server/invoices.js, finance.js):** (1) REPARATIELOCATIE invulbaar in de
+  editor (`#inv-rep`, `inv.reparatieAdres`, max 200); `reparatieLocatieVan(inv, order,
+  customer)` = ingevuld → adres van DIE opdracht (order.intake.address) → klantadres; gelijk
+  aan de standaard wordt niet bewaard. (2) CORRIGEREN BINNEN HETZELFDE NUMMER: een verstuurde
+  én betaalde factuur blijft vergrendeld, maar kantoor mag hem met een reden corrigeren
+  (`correctie: {reden}` op PATCH /api/invoices/:id en POST /api/orders/:id/invoice →
+  `inv.correcties[]`, `inv.gecorrigeerdAt`, PDF-regel "Gecorrigeerde versie van …"; monteur
+  403; goedgekeurde offerte blijft dicht; zonder inhoudelijke wijziging wordt niets
+  vastgelegd). (3) "FACTUREN DEZE MAAND" op Cijfers (`GET /api/finance/facturen-omzet
+  ?maand=`, recht finance): tabbladen Verstuurd (standaard, op sentAt) en Betaald; de
+  boekingen eronder zijn ongewijzigd.
+- **Klantadres verbeterd → lopende opdracht volgt:** PATCH /api/customers/:id zet het nieuwe
+  adres ook op LOPENDE opdrachten waarvan het opdrachtadres letterlijk het oude klantadres
+  was (een afwijkend werkadres en afgehandelde opdrachten blijven; updatedAt blijft staan).
+  Reden: de monteur verbetert het klantrecord, en het opdrachtadres gaat naar de monteur en
+  op de factuur.
+
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,
   better-sqlite3) sinds 28 jul. Alles blijft in het geheugen — `db()` geeft gewoon een
@@ -250,8 +299,9 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   KORTING per factuur/offerte (percentage óf vast bedrag EXCL btw; van subtotaal af,
   btw over het verlaagde bedrag; aparte subtotaal+kortingsregel op de PDF; kopie neemt
   korting mee). Verzonden document wijzigen = eerst expliciete waarschuwing in het
-  scherm + logboek-registratie (editedAfterSendAt); betaald/goedgekeurd blijft hard
-  vergrendeld. AUTOMATISCHE betaalherinnering (standaard UIT; aan te zetten in
+  scherm + logboek-registratie (editedAfterSendAt); betaald/goedgekeurd blijft
+  vergrendeld (sinds 23 nov 2026 mag kantoor een betaalde, verstuurde factuur wél
+  CORRIGEREN met een reden — zie "Factuurwensen"). AUTOMATISCHE betaalherinnering (standaard UIT; aan te zetten in
   Instellingen → Facturen): X dagen na vervaldatum, herhaald, met maximum; deelt de
   mail+PDF met de handmatige knop (sendInvoiceReminder in invoices.js); vangrails:
   nooit >120 dagen oud, max 10/ronde. Facturen-overzicht "verlopen" volgt de échte

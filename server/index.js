@@ -1228,11 +1228,27 @@ app.patch('/api/customers/:id', requireAuth, (req, res) => {
   }
   const c = db().customers.find((x) => x.id === req.params.id);
   if (!c) return res.status(404).json({ error: 'Niet gevonden' });
+  const oudAdres = String(c.address || '').trim();
   for (const k of ['name', 'phone', 'email', 'address', 'type', 'notes']) {
     if (k in (req.body || {})) c[k] = req.body[k];
   }
   if ('campaignOptOut' in (req.body || {})) c.campaignOptOut = !!req.body.campaignOptOut;
-  logActivity(req.user.name, 'klantgegevens bijgewerkt', `${c.name || c.id}`);
+  // ADRES VAN DE LOPENDE OPDRACHT VOLGT EEN VERBETERING (23 nov 2026). Elke opdracht draagt
+  // zijn eigen adres (order.intake.address): dat gaat naar de monteur en staat als
+  // reparatielocatie op de factuur. Verbetert iemand het klantadres — de monteur doet dat
+  // op zijn kaart — en was het adres van een LOPENDE opdracht letterlijk het oude
+  // klantadres, dan was het geen apart werkadres en gaat het mee. Een afwijkend werkadres
+  // en afgehandelde opdrachten blijven zoals ze waren. updatedAt blijft staan (het
+  // zelfde-moment-venster meet daarop).
+  const nieuwAdres = String(c.address || '').trim();
+  let adresMee = 0;
+  if (oudAdres && nieuwAdres && nieuwAdres !== oudAdres) {
+    for (const o of db().orders) {
+      if (o.customerId !== c.id || o.deletedAt || o.archivedWeek || ['afgerond', 'geannuleerd'].includes(o.status)) continue;
+      if (o.intake && String(o.intake.address || '').trim().toLowerCase() === oudAdres.toLowerCase()) { o.intake.address = nieuwAdres; adresMee++; }
+    }
+  }
+  logActivity(req.user.name, 'klantgegevens bijgewerkt', `${c.name || c.id}${adresMee ? ` — adres ook op ${adresMee} lopende opdracht${adresMee === 1 ? '' : 'en'}` : ''}`);
   saveSoon();
   res.json(c);
 });

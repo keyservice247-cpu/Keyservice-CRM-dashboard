@@ -263,6 +263,32 @@ console.log('\n== Monteur: nieuwe offerte/factuur voor een bestaande, afgeronde 
   ok('Cijfers: betaalde losse factuur van de monteur staat bij die monteur', boeking?.monteurId === montRec.json?.id, JSON.stringify(boeking));
 }
 
+console.log('\n== Klantadres verbeterd: het adres van de lopende opdracht volgt (23 nov 2026) ==');
+{
+  // De monteur verbetert op zijn kaart het klantadres. Het adres van de opdracht (dat naar de
+  // monteur gaat en als reparatielocatie op de factuur staat) was een kopie van het oude
+  // klantadres en gaat dus mee. Een afwijkend werkadres en een afgeronde opdracht niet.
+  cookie = adminCookie;
+  const mk = async (naam, tel, adres, extra = {}) => (await api('POST', '/api/orders', { customerName: naam, customerPhone: tel, customerAddress: adres, title: 'Ede — adresproef', monteurId: montRec.json?.id, ...extra })).json;
+  const oA = await mk('Adres Volgt Klant', '0612777071', 'Oudeweg 1, 6711 AA Ede');
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  const pA = await api('PATCH', `/api/customers/${oA.customerId}`, { address: 'Oudeweg 11, 6711 AA Ede' });
+  const edA = await api('GET', `/api/orders/${oA.id}/invoice`);
+  ok('monteur verbetert het klantadres → de reparatielocatie van zijn lopende opdracht volgt', pA.status === 200 && edA.json?.reparatieAdresStandaard === 'Oudeweg 11, 6711 AA Ede', JSON.stringify([pA.status, edA.json?.reparatieAdresStandaard]));
+  cookie = adminCookie;
+  ok('…en het adres dat naar de monteur gaat ook (order.intake)', (await api('GET', `/api/orders/${oA.id}`)).json?.intake?.address === 'Oudeweg 11, 6711 AA Ede');
+  // Afwijkend werkadres op de opdracht: blijft staan.
+  const oB = await mk('Adres Werk Klant', '0612777072', 'Thuisweg 2, 6711 AB Ede');
+  await api('PATCH', `/api/orders/${oB.id}`, { intake: { address: 'Loods 9, Havenweg 3, 6712 AC Ede' } });
+  await api('PATCH', `/api/customers/${oB.customerId}`, { address: 'Thuisweg 22, 6711 AB Ede' });
+  ok('een afwijkend werkadres op de opdracht blijft staan als het klantadres wijzigt', (await api('GET', `/api/orders/${oB.id}`)).json?.intake?.address === 'Loods 9, Havenweg 3, 6712 AC Ede');
+  // Afgeronde opdracht: het adres waar het werk is gedaan verandert niet meer.
+  const oC = await mk('Adres Klaar Klant', '0612777073', 'Klaarweg 3, 6711 AC Ede');
+  await api('PATCH', `/api/orders/${oC.id}`, { status: 'afgerond', note: 'klaar' });
+  await api('PATCH', `/api/customers/${oC.customerId}`, { address: 'Klaarweg 33, 6711 AC Ede' });
+  ok('een afgeronde opdracht houdt het adres waar het werk is gedaan', (await api('GET', `/api/orders/${oC.id}`)).json?.intake?.address === 'Klaarweg 3, 6711 AC Ede');
+}
+
 console.log('\n== Reparatielocatie + factuur corrigeren: wie mag wat (23 nov 2026) ==');
 {
   cookie = adminCookie;
