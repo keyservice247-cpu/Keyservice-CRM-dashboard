@@ -70,7 +70,7 @@ import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVas
 import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions, removeAutoFeeForOrder, herkoppelDrsFee } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
-import { conversieData, maakConversieBriefing, omzetVan, factuurPerOpdracht } from './conversie.js';
+import { conversieData, maakConversieBriefing, omzetVan, factuurPerOpdracht, conversieZonderGeld } from './conversie.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
 import { saveBuffer, saveBufferAsync, saveStream, deleteFile, UPLOAD_DIR, dedupeAttachments, dedupeListEntries, registerAttachmentFiles, ontdubbelOpSchijf, weesBestanden, fileExists, mergeAttachments } from './storage.js';
 import { alleBijlageVerwijzingen, beschermdeBijlageIds, verwijderBestandenAlsOngebruikt } from './bijlagen.js';
@@ -1811,8 +1811,24 @@ const requireKaartMaken = (req, res, next) => {
 };
 const monteurZelf = (req) => (req.user.role === 'monteur' ? db().monteurs.find((m) => m.id === req.user.monteurId) || null : null);
 
+// DATUMVELDEN ALLEEN ALS DATUM (audit F3, 23 nov 2026): afspraak- en opvolgvelden namen elke
+// tekst aan. Stond daar opmaakcode in, dan werd die uitgevoerd in de browser van iedereen
+// die het bord opende — ook van de beheerder. Nu: leeg, of een echte datum(tijd).
+// Aan de BETEKENIS van de tijd verandert niets (een afspraak blijft "2026-11-24T14:00").
+const DATUM_TEKST_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+function datumVeldFout(b) {
+  for (const veld of ['appointmentAt', 'appointmentEndAt', 'snoozeAt']) {
+    if (!(veld in (b || {}))) continue;
+    const v = b[veld];
+    if (v === null || v === undefined || v === '') continue;
+    if (typeof v !== 'string' || v.length > 40 || !DATUM_TEKST_RE.test(v) || isNaN(new Date(v).getTime())) return 'Ongeldige datum — kies een datum en tijd.';
+  }
+  return '';
+}
+
 app.post('/api/orders', requireAuth, requireKaartMaken, (req, res) => {
   const b = req.body || {};
+  { const df = datumVeldFout(b); if (df) return res.status(400).json({ error: df }); }
   const zelf = monteurZelf(req);
   let customerId = b.customerId;
   if (!customerId && (b.customerName || b.customerPhone || b.customerEmail)) {
@@ -1957,6 +1973,7 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
   }
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const b = req.body || {};
+  { const df = datumVeldFout(b); if (df) return res.status(400).json({ error: df }); }
 
   // Monteurs mogen alleen status, afspraak en notities aanpassen.
   const allowed = req.user.role === 'monteur'
@@ -2384,7 +2401,9 @@ app.delete('/api/orders/:id/attachments/:attId', requireAuth, (req, res) => {
 });
 
 // ---------- Inbox / AI-controlewachtrij ----------
-app.get('/api/reviews', requireAuth, (req, res) => {
+// Alleen met het inbox-recht (audit F4, 23 nov 2026): de lijst bevat naam, telefoon, adres
+// en tekst van ELKE nieuwe aanvraag. Voorheen kon elke ingelogde monteur hem uitlezen.
+app.get('/api/reviews', requirePerm('inbox'), (req, res) => {
   const status = req.query.status || 'pending';
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 150));
   const offset = Math.max(0, Number(req.query.offset) || 0);
@@ -2775,6 +2794,29 @@ app.post('/api/whatsapp/groups', checkIngestToken, (req, res) => {
 // draait op Render in UTC, waardoor 's nachts (00:00-02:00 NL) en op de
 // zondag/maandag-grens de tellingen anders verschoven.
 // Overzicht/Home: kerncijfers (KPI's) + lijstjes die aandacht vragen + activiteit.
+// ---------- Omzet, kosten en winst alleen met het recht "cijfers" (23 nov 2026) ----------
+// Besluit eigenaar: de assistente mag conversie zien maar niets van omzet of winst. Dat
+// geldt overal waar bedrijfscijfers langskomen, niet alleen op de pagina Cijfers.
+// Bedragen van één factuur of offerte vallen hier NIET onder: daar werkt zij mee.
+const geldMag = (req) => can(req.user, 'finance');
+const GELD_ACTIE_RE = /geboekt|bijgeboekt|omzet-suggest|vaste kosten|cijfers automatisch/i;
+const GELD_TEKST_RE = /\b(omzet|winst|marge|verlies|opbrengst)\b/i;
+function dagoverzichtZonderGeld(payload) {
+  if (!payload) return payload;
+  const uit = { ...payload, zonderGeld: true };
+  if (uit.facts) { const { week: _w, ...rest } = uit.facts; uit.facts = rest; }
+  if (uit.data) {
+    const d = { ...uit.data };
+    const schoon = (t) => !GELD_TEKST_RE.test(String(t || ''));
+    if (Array.isArray(d.acties)) d.acties = d.acties.filter((a) => schoon(`${a.titel} ${a.waarom}`));
+    if (Array.isArray(d.beantwoorden)) d.beantwoorden = d.beantwoorden.filter((b) => schoon(`${b.wie} ${b.waarover}`));
+    for (const k of ['kansen', 'risicos']) if (Array.isArray(d[k])) d[k] = d[k].filter(schoon);
+    if (!schoon(d.kop)) d.kop = '';
+    uit.data = d;
+  }
+  return uit;
+}
+
 app.get('/api/overview', requireAuth, (req, res) => {
   // MONTEUR ziet alleen zijn eigen werk (browser-audit 16 sep): voorheen kreeg hij
   // bedrijfsbrede KPI's, "te controleren" van een inbox waar hij niet in mag en het
@@ -2815,7 +2857,7 @@ app.get('/api/overview', requireAuth, (req, res) => {
     whatsapp: { online: ageSec != null && ageSec < 180, configured: !!last, lastSeen: last },
     apptToday, repliedList, staleQuotes,
     byStatus: getStatusKeys().map((k) => ({ key: k, label: labels[k], count: active.filter((o) => o.status === k).length })),
-    activity: monteur ? [] : (db().activity || []).slice(0, 8).map((a) => ({ actor: a.actorName, action: a.action, detail: a.detail, at: a.at })),
+    activity: monteur ? [] : (db().activity || []).filter((a) => geldMag(req) || !GELD_ACTIE_RE.test(`${a.action} ${a.detail}`)).slice(0, 8).map((a) => ({ actor: a.actorName, action: a.action, detail: a.detail, at: a.at })),
   });
 });
 
@@ -5762,8 +5804,14 @@ app.get('/api/finance', requirePerm('finance'), (req, res) => {
 });
 // CONVERSIE (20 sep 2026): hoeveel binnengekomen aanvragen worden écht uitgevoerd?
 // Zelfde recht als Cijfers. ?dagen=30|90|365 (7..730).
-app.get('/api/conversie', requirePerm('finance'), (req, res) => {
-  res.json(conversieData({ dagen: Number(req.query.dagen) || 90, ...cijferFilter(req) }));
+// Conversie: met het recht "cijfers" alles; met alleen het recht "conversie" dezelfde
+// aantallen en percentages maar ZONDER omzet (23 nov 2026: de assistente mag conversie
+// zien, geen omzet of winst).
+app.get('/api/conversie', requireAuth, (req, res) => {
+  const geld = can(req.user, 'finance');
+  if (!geld && !can(req.user, 'conversie')) return res.status(403).json({ error: 'Geen rechten voor deze functie — vraag de beheerder' });
+  const d = conversieData({ dagen: Number(req.query.dagen) || 90, ...cijferFilter(req) });
+  res.json(geld ? d : conversieZonderGeld(d));
 });
 // Wekelijkse AI-briefing nu opnieuw maken (admin). Zonder API-sleutel: feiten-tekst.
 app.post('/api/conversie/briefing', requireRole('admin'), async (req, res) => {
@@ -5812,7 +5860,7 @@ app.get('/api/day-overview', requireRole('admin', 'assistent'), async (req, res)
   const refresh = req.query.refresh === '1';
   const payload = await haalDagoverzicht({ refresh });
   if (refresh) logActivity(req.user.name, 'AI-dagoverzicht ververst', payload.engine || payload.error || '');
-  res.json(payload);
+  res.json(geldMag(req) ? payload : dagoverzichtZonderGeld(payload));
 });
 
 // Automatische boekingen (betaalde facturen + DRS-fee) direct draaien — dezelfde
@@ -6239,7 +6287,7 @@ app.post('/api/assistant/ask', requireRole('admin', 'assistent'), async (req, re
   // de assistent ook vragen als "welke offertes staan open?" of "vergelijk juni met
   // juli" kan beantwoorden — en die kan kruisen met wat er in de groepen is gezegd.
   const includeDash = req.body?.scope !== 'messages';
-  const dashboard = includeDash ? buildDashboardContext() : '';
+  const dashboard = includeDash ? buildDashboardContext({ metCijfers: geldMag(req) }) : '';
   const modelPref = req.body?.model === 'opus' ? 'claude-opus-5'
     : req.body?.model === 'sonnet' ? MODELLEN.analyse : '';
   // Gespreksgeheugen: de browser stuurt de vorige vragen+antwoorden van dit gesprek mee.
@@ -6256,7 +6304,7 @@ app.post('/api/assistant/ask', requireRole('admin', 'assistent'), async (req, re
 // Compacte tekstweergave van het hele dashboard voor de AI-assistent. Bewust
 // compact (alleen wat nodig is om vragen te beantwoorden) zodat er ruimte
 // overblijft voor het berichtenverkeer.
-function buildDashboardContext() {
+function buildDashboardContext({ metCijfers = true } = {}) {
   const maps = buildMaps();
   const labels = getStatusLabels();
   const eur = (n) => '€' + Number(n || 0).toFixed(2);
@@ -6299,7 +6347,7 @@ function buildDashboardContext() {
   return [
     `OPDRACHTKAARTEN (${orders.length} van ${(db().orders || []).length}):\n${kaarten || '(geen)'}`,
     `\nFACTUREN & OFFERTES (${(db().invoices || []).length}):\n${invs || '(geen)'}`,
-    `\nCIJFERS:\n${rap(nu)}\n${rap(vorige)}`,
+    ...(metCijfers ? [`\nCIJFERS:\n${rap(nu)}\n${rap(vorige)}`] : []),
     `\nKLANTEN (${(db().customers || []).length} totaal, laatste ${Math.min(250, (db().customers || []).length)}):\n${klanten || '(geen)'}`,
   ].join('\n').slice(0, 120000);
 }
@@ -6576,6 +6624,14 @@ app.get('/api/agenda', requireAuth, (req, res) => {
 });
 
 app.get('/api/stats', requireAuth, (req, res) => {
+  // Monteur: alleen tellers over zijn EIGEN opdrachten, niets over de inbox of het
+  // klantenbestand van het bedrijf (audit 20 nov 2026).
+  if (req.user.role === 'monteur') {
+    const eigen = (db().orders || []).filter((o) => canTouchOrder(req, o));
+    const perStatus = {};
+    getStatusKeys().forEach((k) => { perStatus[k] = eigen.filter((o) => o.status === k).length; });
+    return res.json({ byStatus: perStatus, totalOrders: eigen.length, leads: 0, customers: 0, pendingReviews: 0, ai: { mode: aiMode(), handled: 0, approved: 0, corrected: 0, accuracy: null } });
+  }
   const orders = db().orders;
   const byStatus = {};
   getStatusKeys().forEach((s) => { byStatus[s] = orders.filter((o) => o.status === s).length; });
@@ -6711,10 +6767,11 @@ app.get('/api/report/week', requireRole('admin', 'assistent'), (req, res) => {
     .sort((a, b) => b.omzet - a.omzet || b.afgerond - a.afgerond);
   res.json({
     weekStart: new Date(wk.start).toISOString(), weekEnd: new Date(wk.end).toISOString(),
-    aanvragen, newOrders, apptCount, doneCount, cancelCount, zonderBedrag,
-    omzet: Math.round(omzet * 100) / 100,
+    aanvragen, newOrders, apptCount, doneCount, cancelCount,
+    // Omzet alleen met het recht "cijfers" (23 nov 2026): anders gaan de bedragen niet mee.
+    ...(geldMag(req) ? { zonderBedrag, omzet: Math.round(omzet * 100) / 100, perMonteur }
+      : { zonderGeld: true, perMonteur: perMonteur.map(({ omzet: _o, zonderBedrag: _z, ...rest }) => rest) }),
     conversie: newOrders ? Math.round((doneCount / newOrders) * 100) : null,
-    perMonteur,
   });
 });
 

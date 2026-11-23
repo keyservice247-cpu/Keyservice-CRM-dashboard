@@ -1,7 +1,7 @@
 // Gedeelde verwerkingslogica voor inkomende berichten.
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
-import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport, isDrsEmailAfzender, afzenderVanOns } from './drs-rapport.js';
+import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport, isDrsEmailAfzender, afzenderVanOns, isPostcodeLetters } from './drs-rapport.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours } from './settings.js';
 import { mergeAttachments, dedupeAttachments } from './storage.js';
@@ -607,11 +607,21 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
       return { message: twin, review: db().reviews.find((r) => r.messageId === twin.id) || null, duplicate: true };
     }
   }
-  if (normBody.length >= 20) {
+  // TWEE KLANTEN, ZELFDE TEKST (audit D5, 23 nov 2026): een 1-op-1 bericht is alleen dubbel
+  // als het van HETZELFDE nummer komt. Via de officiële route staat er geen "Telefoon:"-regel
+  // in de tekst, waardoor de tweede klant met dezelfde zin stil verdween — geen bericht,
+  // geen melding. Een reactie (duimpje) is nooit dubbel. Groepsberichten: ongewijzigd.
+  const eigenAfzender = !group ? matchPhone(fromPhone || senderPhoneFromText(body) || '') : '';
+  const isReactie = /\(reactie op een eerder bericht\)\s*$/.test(String(body || ''));
+  if (normBody.length >= 20 && !isReactie) {
     const dayAgo = Date.now() - 24 * 3600 * 1000;
     const twin = db().messages.find((m) => {
       if (m.channel !== 'whatsapp' || new Date(m.receivedAt).getTime() < dayAgo) return false;
       if (normalizeForDedup(m.body) !== normBody) return false;
+      if (!group && !m.group) {
+        const andere = matchPhone(m.fromPhone || senderPhoneFromText(m.body) || '');
+        if (eigenAfzender && andere && eigenAfzender !== andere) return false;
+      }
       const tp = phoneOf(m.body);
       return !myPhone || !tp || tp === myPhone; // alleen dubbel bij gelijk/ontbrekend nummer
     });
@@ -816,7 +826,7 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
   // en geen gewoon Nederlands woordje.
   const POSTCODE_STOP = new Set(['al', 'om', 'en', 'is', 'op', 'in', 'te', 'of', 'er', 'de', 'je', 'we', 'ik', 'na', 'nu', 'ca', 'uw', 'zo', 'ja', 'ok', 'km', 'kg', 'cm', 'mm', 'eu', 'uu', 'sa', 'sd', 'ss', 'pm', 'am', 'st', 'nr']);
   const echtePostcode = [...String(body || '').replace(/[*_~]/g, '').matchAll(/\b([1-9]\d{3})\s?([a-z]{2})\b/gi)]
-    .some((m) => !POSTCODE_STOP.has(m[2].toLowerCase()));
+    .some((m) => isPostcodeLetters(m[2])); // zelfde regel als het DRS-rapport (audit D9)
   const groepIntakeCompleet = telInTekst && (echtePostcode || adresMetNummer);
   // EEN-REGEL-RAPPORT in de opdracht-groep (zie boven) — maar een COMPLETE opdracht van iemand
   // anders (bv. DRS: "Offerte: Jan de Vries, Hoofdstraat 12, 4879 NB …, 06…") mag NOOIT als ons
@@ -1104,7 +1114,13 @@ async function ingestMessageKern({ channel, sender, subject, body, group, groupI
       review.mogelijkDubbel = { orderId: groepRecentAfgesloten.orderId, titel: groepRecentAfgesloten.titel, status: groepRecentAfgesloten.status, datum: groepRecentAfgesloten.datum };
     }
   }
-  if ((isOrderGroupMsg || formAutoOk || losAutoOk) && !isEigenRapport && !groepsGesprek && !groepKlantOpen && !groepRecentAfgesloten && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold) {
+  // AI UITGEVALLEN (audit G1, 23 nov 2026): dan delen vaste trefwoorden het bericht in, met
+  // een vaste "zekerheid" van 55-80%. Dat getal mag NOOIT tellen voor automatisch
+  // goedkeuren — in de proef werd zo een reclamemail een opdracht. Het bericht blijft in de
+  // inbox voor een mens. (Zonder AI-sleutel, de bewuste demo-stand, verandert er niets.)
+  const aiUitgevallen = /ai-fallback/.test(String(suggestion.engine || ''));
+  if (aiUitgevallen && review) review.autoOvergeslagen = review.autoOvergeslagen || 'AI niet beschikbaar — op trefwoorden ingedeeld';
+  if ((isOrderGroupMsg || formAutoOk || losAutoOk) && !isEigenRapport && !groepsGesprek && !groepKlantOpen && !groepRecentAfgesloten && suggestion.relevant && !suggestion.aiNotOrder && threshold > 0 && suggestion.confidence >= threshold && !aiUitgevallen) {
     applyReview(review, { actorName: 'AI (automatisch)', auto: true });
   }
 

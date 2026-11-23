@@ -238,6 +238,23 @@ export function conversieData({ dagen = 90, weken = 12, monteur = '', bron = '',
   };
 }
 
+// ZONDER GELD (23 nov 2026, besluit eigenaar): wie wel het recht "conversie" heeft maar
+// niet "cijfers", ziet aantallen en percentages — nooit omzet. Alle geldvelden gaan eruit,
+// en de AI-briefing ook (die tekst kan bedragen noemen).
+const GELDVELDEN = new Set(['omzet', 'omzetAfgerond', 'perAfgerond', 'perAanvraag']);
+export function conversieZonderGeld(data) {
+  const strip = (v) => {
+    if (Array.isArray(v)) return v.map(strip);
+    if (v && typeof v === 'object') { const o = {}; for (const [k, w] of Object.entries(v)) if (!GELDVELDEN.has(k)) o[k] = strip(w); return o; }
+    return v;
+  };
+  const uit = strip(data);
+  uit.briefing = null;
+  uit.patronen = (uit.patronen || []).filter((r) => !/€|omzet/i.test(String(r)));
+  uit.zonderGeld = true;
+  return uit;
+}
+
 // Deterministische patroonherkenning — werkt altijd, ook zonder AI. De AI krijgt
 // deze regels als vertrekpunt en mag er duiding aan geven.
 export function herkenPatronen(d) {

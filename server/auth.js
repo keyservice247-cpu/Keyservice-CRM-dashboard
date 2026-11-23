@@ -92,14 +92,15 @@ export const PERM_KEYS = [
   'customers',    // Klanten & monteurs beheren (bewerken/samenvoegen)
   'invoicesAll',  // Alle facturen & offertes zien (uit = alleen eigen)
   'finance',      // Cijfers (omzet/kosten/winst) bekijken & boeken
+  'conversie',    // Conversie (aanvraag → opdracht) bekijken — ZONDER omzet, kosten of winst
   'system',       // AI-controle & Abonnementen (systeembewaking) bekijken
   'settings',     // Instellingen wijzigen
   'hardDelete',   // Definitief verwijderen (prullenbak/afgewezen legen)
 ];
 export const ROLE_PERM_DEFAULTS = {
-  admin:     { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: true,  system: true,  settings: true,  hardDelete: true },
-  assistent: { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: false, system: false, settings: false, hardDelete: false },
-  monteur:   { inbox: false, orders: false, deleteOrders: false, customers: false, invoicesAll: false, finance: false, system: false, settings: false, hardDelete: false },
+  admin:     { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: true,  conversie: true, system: true,  settings: true,  hardDelete: true },
+  assistent: { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: false, conversie: true, system: false, settings: false, hardDelete: false },
+  monteur:   { inbox: false, orders: false, deleteOrders: false, customers: false, invoicesAll: false, finance: false, conversie: false, system: false, settings: false, hardDelete: false },
 };
 export function can(user, key) {
   if (!user) return false;

@@ -103,9 +103,23 @@ export function isDrsOrder(order) {
 // ("2025 al" is geen postcode — zelfde stoplijst als de groepsintake).
 const PC_STOP = new Set(['al', 'om', 'en', 'is', 'op', 'in', 'te', 'of', 'er', 'de', 'je', 'we', 'ik', 'na', 'nu', 'ca', 'uw', 'zo', 'ja', 'ok', 'km', 'kg', 'cm', 'mm', 'eu', 'uu', 'sa', 'sd', 'ss', 'pm', 'am', 'st', 'nr']);
 const PC_RE = /(?<![\d])([1-9]\d{3})\s?([a-z]{2})(?![a-z])/gi;
+// POSTCODES ALS "4567 DE" (audit D9, 23 nov 2026): de stoplijst gold ook voor netjes in
+// hoofdletters geschreven postcodes, waardoor adressen op …DE, …EN, …AL, …OP niet herkend
+// werden (DRS-rapport: "geen postcode bekend", geen bewaking tegen dubbel melden). Nu:
+//  - SA/SD/SS bestaan niet als postcode-letters → nooit;
+//  - maten en afkortingen (KM, KG, NR …) → nooit, ook niet in hoofdletters;
+//  - gewone woordjes (de, en, al, op …) → alleen geen postcode als ze NIET volledig in
+//    hoofdletters staan ("2025 al" blijft een jaartal, "4567 AL" is een postcode).
+const PC_NOOIT = new Set(['sa', 'sd', 'ss', 'km', 'kg', 'cm', 'mm', 'eu', 'uu', 'pm', 'am', 'nr', 'st']);
+export function isPostcodeLetters(letters) {
+  const l = String(letters || ''); const klein = l.toLowerCase();
+  if (l.length !== 2 || PC_NOOIT.has(klein)) return false;
+  if (PC_STOP.has(klein) && l !== l.toUpperCase()) return false;
+  return true;
+}
 export function vindPostcode(tekst) {
   for (const m of String(tekst || '').replace(/[*_~]/g, '').matchAll(PC_RE)) {
-    if (!PC_STOP.has(m[2].toLowerCase())) return `${m[1]}${m[2].toUpperCase()}`;
+    if (isPostcodeLetters(m[2])) return `${m[1]}${m[2].toUpperCase()}`;
   }
   return '';
 }

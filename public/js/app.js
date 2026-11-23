@@ -293,9 +293,9 @@ const statusColor = (key) => {
 // ---------- Rechten (spiegel van server/auth.js) ----------
 // Rol = basisprofiel; de beheerder kan per gebruiker functies aan/uit zetten.
 const ROLE_PERM_DEFAULTS = {
-  admin:     { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: true,  system: true,  settings: true,  hardDelete: true },
-  assistent: { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: false, system: false, settings: false, hardDelete: false },
-  monteur:   { inbox: false, orders: false, deleteOrders: false, customers: false, invoicesAll: false, finance: false, system: false, settings: false, hardDelete: false },
+  admin:     { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: true,  conversie: true, system: true,  settings: true,  hardDelete: true },
+  assistent: { inbox: true,  orders: true,  deleteOrders: true,  customers: true,  invoicesAll: true,  finance: false, conversie: true, system: false, settings: false, hardDelete: false },
+  monteur:   { inbox: false, orders: false, deleteOrders: false, customers: false, invoicesAll: false, finance: false, conversie: false, system: false, settings: false, hardDelete: false },
 };
 function hasPerm(key) {
   if (!state.me) return false;
@@ -317,7 +317,7 @@ function hasPerm(key) {
 
   // Admin-onderdelen: weg voor wie het recht niet heeft. Een element met
   // data-need="finance" (enz.) blijft staan als dat recht per gebruiker aanstaat.
-  if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => { const need = el.dataset.need; if (!need || !hasPerm(need)) el.remove(); });
+  if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => { const need = el.dataset.need; if (!need || !need.split('|').some(hasPerm)) el.remove(); });
   // Zijbalk volgt dezelfde rechten als het mobiele menu (navItems): geen menu-item
   // dat op een 403 uitkomt (audit 16 sep).
   if (me.user.role !== 'admin') {
@@ -1655,12 +1655,12 @@ async function laadWeekrapport(stil = false) {
           <div class="wr-kpi"><span class="wr-num">${r.newOrders}</span><span>nieuwe opdrachten</span></div>
           <div class="wr-kpi"><span class="wr-num">${r.apptCount}</span><span>afspraken</span></div>
           <div class="wr-kpi"><span class="wr-num">${r.doneCount}</span><span>afgerond</span></div>
-          <div class="wr-kpi"><span class="wr-num">${euro(r.omzet)}</span><span>omzet (excl. btw)</span></div>
+          ${r.zonderGeld ? '' : `<div class="wr-kpi"><span class="wr-num">${euro(r.omzet)}</span><span>omzet (excl. btw)</span></div>`}
           <div class="wr-kpi" title="Afgeronde opdrachten deze week gedeeld door nieuwe opdrachten deze week. Geen echte conversie (kan boven 100% komen) — die staat op Cijfers."><span class="wr-num">${r.conversie === null ? '—' : r.conversie + '%'}</span><span>afgerond t.o.v. nieuw</span></div>
         </div>
-        <div class="wr-tabel"><table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th><th>Omzet</th><th>Afspraken</th><th>Nu actief</th></tr></thead>
-        <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td><td>${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td><td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table></div>
-        <p class="muted small" style="margin-top:8px">Omzet = de <strong>factuur</strong> van de afgeronde opdracht (excl. btw); zonder factuur telt het <strong>prijsveld</strong> zoals het is ingevuld (dat kan incl. btw zijn).${r.zonderBedrag ? ` <strong>${r.zonderBedrag} afgeronde opdracht(en) hebben nog geen factuur en geen prijs</strong> — die tellen als € 0. Maak de factuur of vul de prijs in.` : ''}</p>`;
+        <div class="wr-tabel"><table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th>${r.zonderGeld ? '' : '<th>Omzet</th>'}<th>Afspraken</th><th>Nu actief</th></tr></thead>
+        <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td>${r.zonderGeld ? '' : `<td>${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td>`}<td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table></div>
+        ${r.zonderGeld ? '' : `<p class="muted small" style="margin-top:8px">Omzet = de <strong>factuur</strong> van de afgeronde opdracht (excl. btw); zonder factuur telt het <strong>prijsveld</strong> zoals het is ingevuld (dat kan incl. btw zijn).${r.zonderBedrag ? ` <strong>${r.zonderBedrag} afgeronde opdracht(en) hebben nog geen factuur en geen prijs</strong> — die tellen als € 0. Maak de factuur of vul de prijs in.` : ''}</p>`}`;
     box.classList.remove('wr-laden');
     if (html === window._lastWeekHtml && box.childNodes.length) return;
     window._lastWeekHtml = html;
@@ -2392,7 +2392,9 @@ function cardHTML(o) {
 function fmtDate(s) {
   if (!s) return '';
   const d = new Date(s);
-  if (isNaN(d)) return s;
+  // Nooit de ruwe invoer teruggeven: deze tekst gaat op tientallen plekken het scherm in
+  // (audit F3, 23 nov 2026). De server weigert zulke waarden nu ook.
+  if (isNaN(d)) return esc(String(s).slice(0, 40));
   return d.toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
@@ -2468,7 +2470,7 @@ function attachmentsHTML(atts) {
 function fmtDateShort(s) {
   if (!s) return '—';
   const d = new Date(s);
-  if (isNaN(d)) return s;
+  if (isNaN(d)) return esc(String(s).slice(0, 40));
   return d.toLocaleString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
@@ -4957,7 +4959,7 @@ function renderInvoices() {
   const overdueCount = openRecent.filter(isOverdue).length;
   const aantalVast = all.filter((i) => i.vastgepind).length;
   const afgeschreven = all.filter((i) => i.type !== 'offerte' && i.status === 'oninbaar');
-  let html = `<div class="muted small inv-teller" style="margin-bottom:12px">Openstaand <span title="Alleen openstaande facturen van de laatste 2 maanden">(laatste 2 mnd)</span>: <strong>${eur(open)}</strong>${openRecent.length ? ` <span class="muted">(${openRecent.length})</span>` : ''}${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''} · Betaald: <strong>${eur(paid)}</strong> · Totaal: ${all.length}${aantalVast ? ` · <button type="button" class="linkbtn inv-teller-vast">${icon('punaise', 12)} ${aantalVast} vastgepind</button>` : ''}
+  let html = `<div class="muted small inv-teller" style="margin-bottom:12px">Openstaand <span title="Alleen openstaande facturen van de laatste 2 maanden">(laatste 2 mnd)</span>: <strong>${eur(open)}</strong>${openRecent.length ? ` <span class="muted">(${openRecent.length})</span>` : ''}${overdueCount ? ` · <span style="color:var(--danger);font-weight:600">${overdueCount} verlopen</span>` : ''}${hasPerm('finance') ? ` · Betaald: <strong>${eur(paid)}</strong>` : ''} · Totaal: ${all.length}${aantalVast ? ` · <button type="button" class="linkbtn inv-teller-vast">${icon('punaise', 12)} ${aantalVast} vastgepind</button>` : ''}
       ${oudOpen.length || afgeschreven.length ? `<div class="inv-teller-oud">Niet meegeteld: ${oudOpen.length ? `<button type="button" class="linkbtn inv-teller-oud-knop">${oudOpen.length} open ${oudOpen.length === 1 ? 'factuur' : 'facturen'} ouder dan 2 maanden (${eur(som(oudOpen))})</button>` : ''}${oudOpen.length && afgeschreven.length ? ' · ' : ''}${afgeschreven.length ? `<button type="button" class="linkbtn inv-teller-af-knop">${afgeschreven.length} afgeschreven (${eur(som(afgeschreven))})</button>` : ''}</div>` : ''}</div>
     <div id="invTodoWrap">${invTodoHTML(state._invTodo)}</div>`;
   // Filter "ouder dan 2 mnd": in één keer afschrijven (kantoor).
@@ -5135,14 +5137,23 @@ function renderCijfersFilter() {
 async function loadFinance() {
   if (!$('#finMonth').value) $('#finMonth').value = lokaleDag().slice(0, 7);
   const qs = cijfersFilterQs();
+  // Zonder het recht "cijfers" (23 nov 2026): alleen de conversie, zonder omzet. De server
+  // stuurt de bedragen dan ook niet mee; hier verdwijnen de knoppen en kolommen.
+  const geld = hasPerm('finance');
   const [fin, cv] = await Promise.all([
-    api(`/api/finance?month=${$('#finMonth').value}${qs}`),
+    geld ? api(`/api/finance?month=${$('#finMonth').value}${qs}`) : Promise.resolve(null),
     api(`/api/conversie?dagen=${conversieDagen()}${qs}`).catch((e) => ({ _error: e.message })),
   ]);
   state._finance = fin; state._conversie = cv;
+  const view = $('#view-finance');
+  if (view) {
+    view.classList.toggle('zonder-geld', !geld);
+    const uitleg = view.querySelector('.view-head .muted');
+    if (uitleg && !geld) uitleg.textContent = 'Conversie: hoeveel aanvragen een opdracht worden. Filter hieronder op monteur, bron of website.';
+  }
   renderCijfersFilter();
   renderConversie();
-  renderFinance();
+  if (geld) renderFinance(); else { const fp = $('#financePanel'); if (fp) fp.innerHTML = ''; }
 }
 function renderFinance() {
   const d = state._finance; if (!d) return;
@@ -5226,11 +5237,11 @@ function renderConversie() {
   const balk = (aantal, totaal, kleur) => `<div class="cv-balk"><div class="cv-balk-vul" style="width:${totaal ? Math.max(2, Math.round((aantal / totaal) * 100)) : 0}%;background:${kleur}"></div></div>`;
   const kleurStatus = (k) => (k === 'afgerond' ? 'var(--ok)' : k === 'geannuleerd' ? 'var(--danger)' : k === 'nieuw' ? 'var(--warn)' : 'var(--accent)');
   const rijen = (lijst, kop) => lijst.length ? `
-    <table class="cv-tabel"><thead><tr><th>${esc(kop)}</th><th>Binnen</th><th title="Afgerond of afspraak ingepland">Gewonnen</th><th title="Geannuleerd">Verloren</th><th>Open</th><th class="cv-th-conv">Conversie</th><th title="Omzet van de afgeronde opdrachten (factuur, anders prijsveld)">Omzet <span class="fin-btw">excl. btw</span></th></tr></thead><tbody>
+    <table class="cv-tabel"><thead><tr><th>${esc(kop)}</th><th>Binnen</th><th title="Afgerond of afspraak ingepland">Gewonnen</th><th title="Geannuleerd">Verloren</th><th>Open</th><th class="cv-th-conv">Conversie</th><th class="cv-geld" title="Omzet van de afgeronde opdrachten (factuur, anders prijsveld)">Omzet <span class="fin-btw">excl. btw</span></th></tr></thead><tbody>
     ${lijst.map((b) => `<tr>
       <td><strong>${esc(b.naam)}</strong></td><td>${b.binnen}</td><td class="cv-ok">${b.gewonnen}${b.afspraak ? `<span class="muted small"> (${b.afspraak} afspr.)</span>` : ''}</td><td class="cv-danger">${b.verloren}</td><td class="muted">${b.open}</td>
       <td><div class="cv-conv"><span class="cv-conv-pct">${pctF(b.conversie)}</span>${balk(b.conversie || 0, 100, b.conversie === null ? 'var(--line)' : b.conversie >= 60 ? 'var(--ok)' : b.conversie >= 35 ? 'var(--warn)' : 'var(--danger)')}</div>${b.gewonnen + b.verloren < 5 && b.conversie !== null ? '<div class="muted small">weinig beslist</div>' : ''}</td>
-      <td>${eurF(b.omzet)}</td>
+      <td class="cv-geld">${eurF(b.omzet)}</td>
     </tr>`).join('')}
     </tbody></table>` : '<div class="muted small">Nog geen gegevens.</div>';
   const maxWeek = Math.max(1, ...c.perWeek.map((w) => w.binnen));
@@ -5263,7 +5274,7 @@ function renderConversie() {
         <li><strong>Nog open</strong> = nieuw, in behandeling of offerte verzonden: de klant heeft nog niet beslist.</li>
         <li><strong>Conversie (van beslist)</strong> = gewonnen gedeeld door (gewonnen + verloren). Voorbeeld: 8 gewonnen en 2 verloren = 80%. Dit is het eerlijkste getal, want open aanvragen tellen niet mee.</li>
         <li><strong>Conversie van alles</strong> = gewonnen gedeeld door binnengekomen. Voorbeeld: 8 gewonnen van 12 binnengekomen = 67%. Dit getal stijgt vanzelf als open aanvragen later alsnog worden gewonnen.</li>
-        <li><strong>Omzet</strong> telt alleen op écht afgeronde opdrachten (factuur excl. btw, anders het prijsveld).</li>
+        <li class="cv-geld"><strong>Omzet</strong> telt alleen op écht afgeronde opdrachten (factuur excl. btw, anders het prijsveld).</li>
       </ul>
     </details>
     <div class="stat-grid cv-stats">
@@ -5281,10 +5292,10 @@ function renderConversie() {
         <div class="cv-feit"><span class="muted small">Aanvraag → afgerond (mediaan)</span><strong>${c.doorlooptijd.afgerondMediaan === null ? '–' : `${String(c.doorlooptijd.afgerondMediaan).replace('.', ',')} d`}</strong></div>
         <div class="cv-feit"><span class="muted small">Aanvraag → afgerond (gemiddeld)</span><strong>${c.doorlooptijd.afgerondGem === null ? '–' : `${String(c.doorlooptijd.afgerondGem).replace('.', ',')} d`}</strong></div>
         <div class="cv-feit"><span class="muted small">Aanvraag → geannuleerd (gemiddeld)</span><strong>${c.doorlooptijd.geannuleerdGem === null ? '–' : `${String(c.doorlooptijd.geannuleerdGem).replace('.', ',')} d`}</strong></div>
-        <div class="cv-feit"><span class="muted small">Omzet uit afgeronde opdrachten (excl. btw)</span><strong>${eurF(c.waarde.omzetAfgerond)}</strong></div>
-        <div class="cv-feit"><span class="muted small">Per afgeronde opdracht</span><strong>${c.waarde.perAfgerond === null ? '–' : eurF(c.waarde.perAfgerond)}</strong></div>
-        <div class="cv-feit"><span class="muted small">Per binnengekomen aanvraag</span><strong>${c.waarde.perAanvraag === null ? '–' : eurF(c.waarde.perAanvraag)}</strong></div>
-        ${c.waarde.afgerondZonderFactuur ? `<div class="muted small" style="margin-top:6px">${c.waarde.afgerondZonderFactuur} afgeronde opdracht(en) zonder factuur in het CRM — omzet is daardoor onvolledig.</div>` : ''}
+        <div class="cv-feit cv-geld"><span class="muted small">Omzet uit afgeronde opdrachten (excl. btw)</span><strong>${eurF(c.waarde.omzetAfgerond)}</strong></div>
+        <div class="cv-feit cv-geld"><span class="muted small">Per afgeronde opdracht</span><strong>${c.waarde.perAfgerond === null ? '–' : eurF(c.waarde.perAfgerond)}</strong></div>
+        <div class="cv-feit cv-geld"><span class="muted small">Per binnengekomen aanvraag</span><strong>${c.waarde.perAanvraag === null ? '–' : eurF(c.waarde.perAanvraag)}</strong></div>
+        ${c.waarde.afgerondZonderFactuur ? `<div class="muted small" style="margin-top:6px">${c.waarde.afgerondZonderFactuur} afgeronde opdracht(en) zonder factuur in het CRM<span class="cv-geld"> — omzet is daardoor onvolledig</span>.</div>` : ''}
       </div>
     </div>
     <div class="settings-grid cv-grid">
@@ -6901,6 +6912,7 @@ const PERM_LABELS = [
   ['customers', 'Klanten & monteurs beheren', 'Gegevens bewerken, samenvoegen, toevoegen'],
   ['invoicesAll', 'Alle facturen & offertes zien', 'Uit = alleen eigen facturen (monteur-stand)'],
   ['finance', 'Cijfers bekijken & boeken', 'Omzet, kosten en winst — gevoelige informatie'],
+  ['conversie', 'Conversie bekijken', 'Aanvraag → opdracht, in aantallen en procenten. Zonder omzet of winst.'],
   ['system', 'AI-controle & Abonnementen', 'Systeembewaking en kosten-overzicht'],
   ['settings', 'Instellingen wijzigen', 'Automatische berichten, factuurgegevens, AI, enz.'],
   ['hardDelete', 'Definitief verwijderen', 'Prullenbak legen — onomkeerbaar'],
@@ -7806,7 +7818,7 @@ function navItems() {
   if (!monteur) nav.push({ label: 'AI Assistent', view: 'assistant', ic: 'sparkles' });
   if (hasPerm('deleteOrders')) nav.push({ label: 'Prullenbak', view: 'trash', ic: 'trash' });
   if (hasPerm('system')) nav.push({ label: 'AI-controle', view: 'control', ic: 'shield' }, { label: 'Abonnementen', view: 'subs', ic: 'refresh' });
-  if (hasPerm('finance')) nav.push({ label: 'Cijfers', view: 'finance', ic: 'activity' });
+  if (hasPerm('finance') || hasPerm('conversie')) nav.push({ label: 'Cijfers', view: 'finance', ic: 'activity' });
   if (hasPerm('settings')) nav.push({ label: 'Instellingen', view: 'settings', ic: 'wrench' });
   if (state.me.role === 'admin') nav.push({ label: 'Gebruikers', view: 'users', ic: 'user' });
   return nav;
