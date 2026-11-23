@@ -9,6 +9,7 @@
 //   D9  postcodes als "4567 DE" worden herkend, "2025 al" niet
 import { vindPostcode, isPostcodeLetters } from '../server/drs-rapport.js';
 import { conversieZonderGeld } from '../server/conversie.js';
+import { extractDetails } from '../server/ai/categorizer.js';
 
 const BASE = 'http://localhost:3149';
 const TOKEN = 'test123';
@@ -128,6 +129,19 @@ ok('"1200 KG", "3000 km" en SA/SD/SS nooit', vindPostcode('weegt 1200 KG') === '
 ok('gewone postcode ongewijzigd', vindPostcode('Teststraat 1, 1234 ab Testdorp') === '1234AB' && vindPostcode('1234AB') === '1234AB');
 const gd = await api('POST', '/api/ingest/whatsapp', { group: 'Opdrachtgever testgroep', name: 'Kim', externalId: 'p1-g3', body: 'Hallo. We sturen je de volgende klant:\nNaam: Karel Groep\nAdres: Groepsweg 8\nWoonplaats: 4567 DE - Groepstad\nTelefoon: 0611000031\nOpmerkingen: cilinder vervangen' }, { token: true });
 ok('complete groepsopdracht met postcode "4567 DE" komt als aanvraag binnen', gd.status === 200 && ['pending', 'auto_approved', 'approved'].includes(gd.json?.status), JSON.stringify(gd.json));
+
+// ---------- D4: naam en adres uitlezen ----------
+console.log('\n== D4 — naam en adres uit een bericht ==');
+const dx = extractDetails('Hallo. We sturen je de volgende klant:\nNaam: Dhr. Smits\nAdres: Eikenlaan 14\nWoonplaats: 1234 EF - Testdorp\nTelefoon: 0611000021\nOpmerkingen: voordeur klemt');
+ok('"Naam: Dhr. Smits" blijft "Dhr. Smits" (was "Dhr")', dx.customerName === 'Dhr. Smits' && dx.naamBron === 'label', dx.customerName);
+ok('Adres + Woonplaats worden één adres met postcode en plaats', dx.customerAddress === 'Eikenlaan 14, 1234 EF Testdorp' && dx.adresBron === 'label', dx.customerAddress);
+const dy = extractDetails('Naam: Mevr. A. de Boer\nAdres: Kerkstraat 12, 5056 AC Berkel-Enschot\nTelefoon: 0611000022');
+ok('titel + voorletter blijven heel; compleet adres ongewijzigd', dy.customerName === 'Mevr. A. de Boer' && dy.customerAddress === 'Kerkstraat 12, 5056 AC Berkel-Enschot');
+ok('"naam is Jan. Tel 06…" stopt bij de zinspunt', extractDetails('naam is Jan. Tel 0611000023').customerName === 'Jan');
+const dz = extractDetails('Goedemiddag,\n\nOnze schuifpui klemt. Kunt u langskomen?');
+ok('een begroeting wordt nooit een klantnaam', dz.customerName === null && dz.naamBron === '');
+const rvn = await api('GET', '/api/reviews?status=pending&limit=50', null, { cookie: admin });
+ok('inbox: de groepsopdracht staat er met de volledige naam', (rvn.json.items || []).some((r) => r.suggestion?.customerName === 'Karel Groep'), (rvn.json.items || []).map((r) => r.suggestion?.customerName).join(' | '));
 
 // ---------- E1: openbaar statusadres ----------
 console.log('\n== E1 — statusadres voor bewaking van buiten ==');

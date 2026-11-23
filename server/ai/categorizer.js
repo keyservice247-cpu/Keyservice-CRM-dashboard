@@ -137,6 +137,26 @@ function pickLabeledPattern(text, labels, re) {
 // Naam: 1–4 woorden met hoofdletter, evt. met tussenvoegsels (de, van, der).
 // Belangrijk: blijft binnen één regel (geen \n), zodat de naam niet doorloopt
 // in het eerste woord van de volgende zin.
+// NAAM NA EEN LABEL (audit D4, 23 nov 2026). De gewone label-lezer stopt op een punt en
+// maakte van "Naam: Dhr. Smits" de klant "Dhr". Een punt hoort bij de naam als hij achter
+// een titel of een voorletter staat; anders eindigt de naam daar.
+const TITEL_RE = /^(dhr|mevr|mw|mej|hr|fam|drs|dr|ir|ing|mr|prof)$/i;
+const GROET_RE = /^(hallo|hoi|hey|hi|dag|goede\s?(morgen|middag|avond|navond|ndag)|goedenavond|goedendag|beste|geachte|l\.?s\.?|mevrouw|meneer|mijnheer)$/i;
+function pickNaamLabel(text) {
+  const m = (text || '').match(/\b(?:naam|voornaam|achternaam)\b\s*(?:is|:|=|-)?\s*([^\n,;]{2,80})/i);
+  if (!m) return null;
+  let v = m[1].replace(/^is\s+/i, '').trim();
+  v = v.split(new RegExp(`\\b(?:${STOP_WORDS})\\b`, 'i'))[0].trim();
+  const delen = v.split(/\.\s+/);
+  let uit = delen[0];
+  for (let i = 1; i < delen.length; i++) {
+    const vorige = delen[i - 1].trim().split(/\s+/).pop() || '';
+    if (TITEL_RE.test(vorige) || /^[A-Za-z]$/.test(vorige)) uit += `. ${delen[i]}`; else break;
+  }
+  uit = uit.replace(/[.\s]+$/, '').trim();
+  return uit ? uit.slice(0, 80) : null;
+}
+
 function pickName(text) {
   const m = (text || '').match(/(?:naam[ \t]*(?:is|:)?[ \t]*)?([A-Z][a-zà-ÿ]+(?:[ \t]+(?:de|van|der|den|ten|te|het|el|al|bin)?[ \t]?[A-Z][a-zà-ÿ]+){0,3})/);
   return m ? m[1].trim() : null;
@@ -166,17 +186,31 @@ export function extractDetails(text) {
   let email = pickLabeledPattern(t, ['e-mailadres', 'emailadres', 'e-mail', 'email', 'mail'], EMAIL_RE);
   if (!email) email = pick(t, EMAIL_RE);
 
-  // Naam: eerst via label, anders patroon.
-  let name = pickLabeled(t, ['naam', 'voornaam', 'achternaam']);
-  if (name) name = name.replace(/^is\s+/i, '').trim();
-  if (!name) name = pickName(t);
+  // Naam: eerst via label, anders patroon. `naamBron` zegt waar hij vandaan komt:
+  // 'label' (er stond letterlijk "Naam: …") is betrouwbaar, 'patroon' is een gok.
+  let naamBron = '';
+  let name = pickNaamLabel(t);
+  if (name) naamBron = 'label';
+  if (!name) { name = pickName(t); if (name) naamBron = 'patroon'; }
+  // Een begroeting is geen naam ("Goedemiddag", "Hallo") — audit D4.
+  if (name && GROET_RE.test(name.trim())) { name = null; naamBron = ''; }
 
   // Adres: eerst gelabeld, anders straat + huisnummer / postcode + plaats.
+  let adresBron = '';
   let address = pickLabeled(t, ['adres', 'woonplaats', 'volledig adres'], { keepComma: true });
-  if (!address) {
+  if (address) {
+    adresBron = 'label';
+    // Opdracht-formaat van de opdrachtgever: straat op de regel "Adres:", postcode en plaats
+    // op de regel "Woonplaats:". Voorheen bleef alleen de straat over (audit D4).
+    if (/\badres\b/i.test(t) && !/\b\d{4}\s?[A-Za-z]{2}\b/.test(address)) {
+      const wp = pickLabeled(t, ['woonplaats', 'postcode en plaats', 'postcode', 'plaats'], { keepComma: true });
+      if (wp && wp !== address && !address.includes(wp)) address = `${address}, ${wp.replace(/\s+-\s+/, ' ')}`.slice(0, 120);
+    }
+  } else {
     const street = pick(t, ADDRESS_RE);
     const pc = t.match(POSTCODE_RE);
     address = [street, pc ? pc[0].trim() : null].filter(Boolean).join(', ') || null;
+    if (address) adresBron = 'patroon';
   }
 
   // Probleemomschrijving: zin met een probleem-werkwoord, anders eerste lange zin
@@ -201,6 +235,7 @@ export function extractDetails(text) {
     customerName: name,
     customerAddress: address,
     problem: problem ? problem.slice(0, 200) : null,
+    naamBron, adresBron,
   };
 }
 
@@ -394,10 +429,14 @@ Geef JSON met exact deze velden:
   // Veiligheidsnet: vul ontbrekende velden aan met de regel-extractie, die heel
   // betrouwbaar gelabelde gegevens en het juiste telefoonnummer pakt.
   const det = extractDetails(`${message.sender || ''}\n${message.body || ''}`);
-  parsed.customerName = parsed.customerName || det.customerName;
+  // NAAM EN ADRES alleen aanvullen als ze LETTERLIJK gelabeld in het bericht staan
+  // ("Naam: …", "Adres: …"). Zegt de AI eerlijk "weet ik niet", dan vulde een gok het gat
+  // en stond er "AI" bij: zo werd "Goedemiddag" een klantnaam en een halve zin een adres
+  // (audit D4, 23 nov 2026). Een leeg veld is beter dan een fout veld.
+  parsed.customerName = parsed.customerName || (det.naamBron === 'label' ? det.customerName : null);
   parsed.customerPhone = parsed.customerPhone || det.customerPhone;
   parsed.customerEmail = parsed.customerEmail || det.customerEmail;
-  parsed.customerAddress = parsed.customerAddress || det.customerAddress;
+  parsed.customerAddress = parsed.customerAddress || (det.adresBron === 'label' ? det.customerAddress : null);
   parsed.problem = parsed.problem || det.problem;
   return parsed;
 }
