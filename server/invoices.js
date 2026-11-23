@@ -79,6 +79,26 @@ export function betaalTermijnStart(inv) {
 export function isVergrendeld(inv) {
   return (inv.status === 'betaald' && !!inv.sentAt) || inv.status === 'goedgekeurd';
 }
+// REPARATIELOCATIE (23 nov 2026, wens eigenaar): de regel "Reparatielocatie: …" op de PDF
+// was altijd het adres uit het klantrecord. Nu, in deze volgorde: wat er op de
+// factuur/offerte zelf is ingevuld (inv.reparatieAdres) → het adres van DIE opdracht
+// (order.intake.address, WET 3) → het klantadres. Leeg = geen regel op de PDF.
+// Zonder inv (of met een leeg veld) geeft dit dus de STANDAARD voor het invulveld.
+const adresTekst = (v) => String(v ?? '').trim();
+// Het ingevulde veld: één regel (de PDF-regel is één regel), bijgeknipt, max. 200 tekens.
+const schoonReparatieAdres = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200).trim();
+export function reparatieLocatieVan(inv, order, customer) {
+  return adresTekst(inv && inv.reparatieAdres) || adresTekst(order && order.intake && order.intake.address) || adresTekst(customer && customer.address);
+}
+// CORRIGEREN BINNEN HETZELFDE NUMMER (23 nov 2026, wens eigenaar): een verstuurde én
+// betaalde FACTUUR is vergrendeld. Zat er een fout in, dan mag kantoor hem met een reden
+// corrigeren; nummer, status, betaaldatum en verzenddatum blijven staan. Een goedgekeurde
+// offerte blijft dicht (daar hoort een kopie of een factuur bij).
+export const CORRECTIE_REDEN_MIN = 3;
+export const CORRECTIE_REDEN_MAX = 200;
+export function isCorrigeerbaar(inv) {
+  return !!inv && inv.type !== 'offerte' && inv.status === 'betaald' && !!inv.sentAt;
+}
 // Startstatus van een nieuwe factuur volgens de instelling (offertes altijd concept).
 function startStatus(type, { alsConcept = false } = {}) {
   if (type === 'factuur' && !alsConcept && getInvoiceSettings().standaardBetaald !== false) return { status: 'betaald', paidAt: now(), standaardBetaald: true };
@@ -143,13 +163,30 @@ function sanitizeLines(lines, btwPct) {
 
 // ---------- Aanmaken / bijwerken (concept) ----------
 // Gedeeld: regels/btw/notitie op een bestaand record zetten (met vergrendel-check).
-export function saveInvoiceFields(inv, body) {
+// `correctie` = { reden, door }: alleen de route geeft die mee, ná de controle op rol en
+// reden (correctieVoor in index.js). Zonder correctie blijft een vergrendeld document dicht.
+export function saveInvoiceFields(inv, body, { correctie = null } = {}) {
   if (inv.status === 'goedgekeurd') return { error: 'Deze offerte is al goedgekeurd. Kopieer of zet om naar factuur.' };
-  if (isVergrendeld(inv)) return { error: 'Deze factuur is verstuurd én betaald en kan niet meer worden gewijzigd. Zet hem desnoods eerst op "Nog niet betaald".' };
+  const corrigeren = !!(correctie && correctie.reden) && isCorrigeerbaar(inv);
+  if (isVergrendeld(inv) && !corrigeren) return { error: 'Deze factuur is verstuurd én betaald en kan niet meer worden gewijzigd. Zet hem desnoods eerst op "Nog niet betaald".' };
+  const vanTotaal = r2(Number(inv.totalIncl) || 0); // totaal incl. btw vóór deze wijziging
+  // Wat op de PDF staat, vóór en ná: een "correctie" waarbij niets verandert is geen correctie.
+  const inhoud = () => JSON.stringify([inv.lines || [], inv.btwPct, inv.note || '', inv.discount || null, inv.reparatieAdres || '', inv.signature || '']);
+  const inhoudVoor = corrigeren ? inhoud() : '';
   const btwPct = Math.max(0, Math.min(21, Number(body.btwPct ?? inv.btwPct ?? getInvoiceSettings().btwPct)));
   inv.lines = sanitizeLines(body.lines, btwPct);
   inv.btwPct = btwPct;
   inv.note = String(body.note || '').slice(0, 500);
+  // Reparatielocatie op de PDF. Leeg — of gelijk aan wat er zonder invullen al zou staan
+  // (adres van de opdracht, anders van de klant) — betekent: de standaard volgen. Zo
+  // bevriest een voorgevuld veld het adres niet als dat later bij de klant wordt verbeterd.
+  if ('reparatieAdres' in body) {
+    const adres = typeof body.reparatieAdres === 'string' ? schoonReparatieAdres(body.reparatieAdres) : '';
+    const order = inv.orderId ? ((db().orders || []).find((o) => o.id === inv.orderId) || null) : null;
+    const customer = (db().customers || []).find((c) => c.id === inv.customerId) || null;
+    if (adres && adres !== reparatieLocatieVan(null, order, customer)) inv.reparatieAdres = adres;
+    else delete inv.reparatieAdres;
+  }
   // Handtekening rechtstreeks op de factuur/offerte (data-URL PNG), los van een werkbon.
   // Zo kan er ook op een LOSSE factuur (zonder kaart/werkbon) getekend worden.
   if ('signature' in body) {
@@ -174,11 +211,24 @@ export function saveInvoiceFields(inv, body) {
   if (inv.status === 'verzonden') inv.editedAfterSendAt = now();
   Object.assign(inv, computeTotals(inv.lines, btwPct, inv.discount));
   inv.updatedAt = now();
+  // Correctie vastleggen: wie, wanneer, waarom en wat het met het totaal (incl. btw) deed.
+  // Nummer, status, paidAt en sentAt blijven onaangeroerd; de PDF krijgt de regel
+  // "Gecorrigeerde versie van …" (gecorrigeerdAt). Is er niets veranderd, dan wordt er ook
+  // niets vastgelegd — anders stond er "gecorrigeerd" op een factuur die gelijk is gebleven.
+  const gecorrigeerd = corrigeren && inhoud() !== inhoudVoor;
+  if (gecorrigeerd) {
+    const t = now();
+    const reden = String(correctie.reden).trim().slice(0, CORRECTIE_REDEN_MAX);
+    const door = String(correctie.door || '').slice(0, 120);
+    inv.correcties = [...(Array.isArray(inv.correcties) ? inv.correcties : []), { at: t, door, reden, vanTotaal, naarTotaal: inv.totalIncl }].slice(-50);
+    inv.gecorrigeerdAt = t;
+    logActivity(door || 'systeem', 'factuur gecorrigeerd (zelfde nummer)', `${inv.number} — ${reden} (${eur(vanTotaal)} → ${eur(inv.totalIncl)})`);
+  }
   // Staat de factuur al op betaald (standaard) en is de omzet al automatisch geboekt
   // in Cijfers? Dan loopt die boeking mee met het nieuwe totaal.
   if (inv.status === 'betaald') syncAutoIncomeForInvoice(inv);
   saveSoon();
-  return { invoice: inv };
+  return { invoice: inv, gecorrigeerd };
 }
 
 // Eén definitie van "ziet eruit als een e-mailadres": de KEUZE van de ontvanger en de
@@ -434,7 +484,7 @@ export async function sendQuoteFollowup(inv, { by = 'systeem', handmatig = false
   return { error: 'Geen geldig e-mailadres én geen telefoonnummer bekend bij deze klant.' };
 }
 
-export function upsertInvoice(order, body, actorName) {
+export function upsertInvoice(order, body, actorName, opts = {}) {
   db().invoices = db().invoices || [];
   let inv = db().invoices.find((i) => i.id === order.invoiceId);
   if (!inv) {
@@ -446,7 +496,7 @@ export function upsertInvoice(order, body, actorName) {
     db().invoices.unshift(inv);
     order.invoiceId = inv.id;
   }
-  return saveInvoiceFields(inv, body);
+  return saveInvoiceFields(inv, body, opts);
 }
 
 // Losse factuur of offerte, direct aan een klant gekoppeld (niet via een kaart).
@@ -475,6 +525,8 @@ export function copyInvoice(src, { actorName = '', createdById = '', copyType } 
     // versturen kies je via de betaald-vraag alsnog "is betaald".
     ...startStatus(t, { alsConcept: true }), lines: (src.lines || []).map((l) => ({ ...l })), btwPct: src.btwPct,
     discount: src.discount ? { ...src.discount } : undefined,
+    // Een afwijkende reparatielocatie hoort bij het werk en gaat dus mee (ook offerte → factuur).
+    reparatieAdres: src.reparatieAdres || undefined,
     note: src.note || '', ...computeTotals(src.lines || [], src.btwPct, src.discount),
     createdAt: now(), createdBy: actorName, createdById, copiedFrom: src.number,
   };
@@ -563,13 +615,26 @@ export function buildInvoicePdf(inv, order, customer) {
     doc.font('Helvetica').fontSize(10).fillColor(muted)
       .text(`${isQuote ? 'Offertedatum' : 'Factuurdatum'}: ${nlDate(invDate)}`, 330, y - 12, { width: 215, align: 'right' })
       .text(!isQuote && inv.status === 'betaald' ? `Betaald op: ${nlDate(inv.paidAt || invDate)}` : `Vervaldatum: ${nlDate(isQuote ? validUntil : dueDate)}`, 330, y + 2, { width: 215, align: 'right' });
+    // Gecorrigeerd binnen hetzelfde nummer (23 nov 2026): één kleine grijze regel onder het
+    // nummer, zodat klant en boekhouder zien dat dit de verbeterde versie is.
+    if (!isQuote && inv.gecorrigeerdAt) {
+      doc.font('Helvetica').fontSize(8.5).fillColor(muted).text(`Gecorrigeerde versie van ${nlDate(inv.gecorrigeerdAt)}`, 50, y + 16, { width: 270 });
+      y += 12;
+    }
 
     // Reparatielocatie. De regel "Betreft: <opdrachttitel>" is weg (12 okt 2026, wens
     // eigenaar): de titel is een interne werknaam ("Zaandijk — hefschuifpui slot kapot en
     // deur gezakt") en hoort niet op een document voor de klant.
+    // Welk adres: zie reparatieLocatieVan (ingevuld op het document → opdracht → klant).
     y += 26;
-    doc.fillColor(ink).fontSize(10);
-    if (customer.address) { doc.text(`Reparatielocatie: ${customer.address}`, 50, y); y += 14; }
+    doc.font('Helvetica').fillColor(ink).fontSize(10);
+    const reparatieLocatie = reparatieLocatieVan(inv, order, customer);
+    if (reparatieLocatie) {
+      // Een lang (zelf ingevuld) adres loopt door op een tweede regel: de tabel schuift mee.
+      const regel = `Reparatielocatie: ${reparatieLocatie}`;
+      doc.text(regel, 50, y, { width: 495 });
+      y += Math.max(14, Math.ceil(doc.heightOfString(regel, { width: 495 })) + 2);
+    }
 
     // Tabel: Aantal | Beschrijving | excl | incl (per regel klein het btw-tarief).
     y += 8;

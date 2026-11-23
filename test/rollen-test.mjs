@@ -263,6 +263,56 @@ console.log('\n== Monteur: nieuwe offerte/factuur voor een bestaande, afgeronde 
   ok('Cijfers: betaalde losse factuur van de monteur staat bij die monteur', boeking?.monteurId === montRec.json?.id, JSON.stringify(boeking));
 }
 
+console.log('\n== Reparatielocatie + factuur corrigeren: wie mag wat (23 nov 2026) ==');
+{
+  cookie = adminCookie;
+  // Opdracht van de gekoppelde monteur, met een eigen adres; factuur erop (betaald, nog niet verstuurd).
+  const oR = await api('POST', '/api/orders', { customerName: 'Locatie Rol Klant', customerPhone: '0612777066', customerEmail: 'locrol@example.nl', customerAddress: 'Klantweg 1, 6711 AA Ede', title: 'Ede — cilinder', monteurId: montRec.json?.id });
+  const oRid = oR.json?.id;
+  const regels = [{ description: 'Cilinder', qty: 1, priceExcl: 60 }];
+  const fR = await api('POST', `/api/orders/${oRid}/invoice`, { lines: regels, btwPct: 21, type: 'factuur' });
+  const fRid = fR.json?.id;
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  const edR = await api('GET', `/api/orders/${oRid}/invoice`);
+  ok('monteur: editor van zijn eigen opdracht geeft de standaard-reparatielocatie mee', edR.status === 200 && edR.json?.reparatieAdresStandaard === 'Klantweg 1, 6711 AA Ede', JSON.stringify(edR.json?.reparatieAdresStandaard));
+  const zet = await api('PATCH', `/api/invoices/${fRid}`, { lines: regels, btwPct: 21, reparatieAdres: 'Schuur achter nr. 3, Klantweg 1a, 6711 AA Ede' });
+  ok('monteur vult de reparatielocatie in op de factuur van zijn eigen opdracht', zet.status === 200 && zet.json?.reparatieAdres === 'Schuur achter nr. 3, Klantweg 1a, 6711 AA Ede', JSON.stringify([zet.status, zet.json?.reparatieAdres, zet.json?.error]));
+  const zet2 = await api('POST', `/api/orders/${oRid}/invoice`, { lines: regels, btwPct: 21, type: 'factuur', reparatieAdres: '' });
+  ok('…en maakt hem via de opdracht weer leeg (terug naar de standaard)', zet2.status === 200 && !zet2.json?.reparatieAdres);
+  await login('monteurlos@keyservice.nl', 'monteur123');
+  ok('andere monteur: geen toegang tot die factuur (403)', (await api('PATCH', `/api/invoices/${fRid}`, { lines: regels, btwPct: 21, reparatieAdres: 'Elders 1' })).status === 403);
+  // Verstuurd + betaald = vergrendeld. Corrigeren binnen hetzelfde nummer is kantoorwerk.
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  const stuur = await api('POST', `/api/invoices/${fRid}/send-whatsapp`, { betaald: true });
+  ok('monteur verstuurt zijn factuur als betaald (daarna vergrendeld)', stuur.status === 200 && stuur.json?.status === 'betaald', JSON.stringify(stuur.json));
+  const meer = [{ description: 'Cilinder', qty: 2, priceExcl: 60 }];
+  const mCorr = await api('PATCH', `/api/invoices/${fRid}`, { lines: meer, btwPct: 21, correctie: { reden: 'Verkeerd aantal' } });
+  ok('monteur mag een vergrendelde factuur NIET corrigeren (403, ook op zijn eigen opdracht)', mCorr.status === 403 && /kantoor/.test(mCorr.json?.error || ''), JSON.stringify([mCorr.status, mCorr.json?.error]));
+  ok('monteur zonder correctie: geweigerd zoals altijd (400)', (await api('PATCH', `/api/invoices/${fRid}`, { lines: meer, btwPct: 21 })).status === 400);
+  ok('monteur via de opdracht-route: ook 403', (await api('POST', `/api/orders/${oRid}/invoice`, { lines: meer, btwPct: 21, type: 'factuur', correctie: { reden: 'Verkeerd aantal' } })).status === 403);
+  cookie = adminCookie;
+  const onaangeroerd = (await api('GET', `/api/invoices/${fRid}`)).json?.invoice || {};
+  ok('na de pogingen van de monteur is de factuur ongewijzigd', onaangeroerd.totalExcl === 60 && !onaangeroerd.correcties, JSON.stringify([onaangeroerd.totalExcl, onaangeroerd.correcties]));
+  await login('assistente@keyservice.nl', 'assist123');
+  ok('assistente: te korte reden → 400', (await api('PATCH', `/api/invoices/${fRid}`, { lines: meer, btwPct: 21, correctie: { reden: 'x' } })).status === 400);
+  const aCorr = await api('PATCH', `/api/invoices/${fRid}`, { lines: meer, btwPct: 21, correctie: { reden: 'Verkeerd aantal' } });
+  ok('assistente corrigeert binnen hetzelfde nummer (200, status/betaald/verzonden blijven)', aCorr.status === 200 && aCorr.json?.number === onaangeroerd.number && aCorr.json?.status === 'betaald' && aCorr.json?.paidAt === onaangeroerd.paidAt && aCorr.json?.sentAt === onaangeroerd.sentAt && aCorr.json?.totalExcl === 120, JSON.stringify([aCorr.status, aCorr.json?.error, aCorr.json?.totalExcl]));
+  ok('correctie staat op naam van de assistente, met totaal van → naar', (aCorr.json?.correcties || []).length === 1 && aCorr.json.correcties[0].door === 'Assistente Test' && aCorr.json.correcties[0].vanTotaal === 72.6 && aCorr.json.correcties[0].naarTotaal === 145.2, JSON.stringify(aCorr.json?.correcties));
+  cookie = adminCookie;
+  const bCorr = await api('PATCH', `/api/invoices/${fRid}`, { lines: regels, btwPct: 21, correctie: { reden: 'Toch één cilinder' } });
+  ok('beheerder corrigeert ook (tweede correctie erbij)', bCorr.status === 200 && (bCorr.json?.correcties || []).length === 2 && bCorr.json?.totalExcl === 60);
+  // Goedgekeurde offerte: blijft dicht, ook voor kantoor met een reden.
+  await login('assistente@keyservice.nl', 'assist123');
+  const qR = await api('POST', '/api/invoices', { customerId: oR.json?.customerId, type: 'offerte' });
+  const qRid = qR.json?.invoice?.id;
+  await api('PATCH', `/api/invoices/${qRid}`, { lines: regels, btwPct: 21 });
+  await api('POST', `/api/invoices/${qRid}/status`, { status: 'verzonden' });
+  await api('POST', `/api/invoices/${qRid}/status`, { status: 'goedgekeurd' });
+  const qCorr = await api('PATCH', `/api/invoices/${qRid}`, { lines: meer, btwPct: 21, correctie: { reden: 'Aantal aanpassen' } });
+  ok('goedgekeurde offerte blijft vergrendeld, ook met correctie (400)', qCorr.status === 400 && /goedgekeurd/.test(qCorr.json?.error || ''), JSON.stringify([qCorr.status, qCorr.json?.error]));
+  cookie = adminCookie;
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

@@ -640,6 +640,56 @@ export function monthReport(month, monteurs = [], filter = {}) {
   };
 }
 
+// FACTUREN DEZE MAAND (23 nov 2026, besluit eigenaar: "omzet moet zijn verstuurde facturen …
+// met daarnaast welke facturen zijn betaald"). Een KIJK op de facturen zelf, naast de
+// boekingen hierboven — aan het boeken verandert niets.
+//   verstuurd  = facturen waarvan de (eerste) verzenddatum in de maand valt
+//   betaald    = facturen op 'betaald' waarvan de betaaldatum in de maand valt
+//   openstaand = van de in die maand verstuurde facturen: wat nog niet betaald is
+// Tellen niet mee: offertes, concepten, afgeschreven (oninbaar) facturen en een lege
+// factuur (geen regels en nooit verstuurd — bv. "Maak factuur" geopend en weer gesloten;
+// door standaard-betaald staat die op betaald en zou hij het aantal opblazen).
+// Maandgrens = Nederlandse kalenderdag (nlDatum), dezelfde als bij de boekingen.
+// Bewust ZUIVER (geen database): de route geeft de facturen, de klantnaam en de
+// totalenfunctie van de facturen (computeTotals) mee; zo is hij los te testen.
+const FACTUREN_OMZET_MAX = 200;
+export function facturenOmzet(maand, { invoices = [], klantNaam = () => '', totalen = (i) => ({ totalExcl: i.totalExcl, totalIncl: i.totalIncl }) } = {}) {
+  const m = /^\d{4}-\d{2}$/.test(String(maand || '')) ? String(maand) : thisMonth();
+  const inMaand = (iso) => !!iso && nlDatum(iso).slice(0, 7) === m;
+  const verstuurd = []; const betaald = [];
+  for (const inv of invoices || []) {
+    if (!inv || inv.type === 'offerte' || inv.status === 'concept' || inv.status === 'oninbaar') continue;
+    if (!(inv.lines || []).length && !inv.sentAt) continue;
+    const isVerstuurd = inMaand(inv.sentAt);
+    const isBetaald = inv.status === 'betaald' && inMaand(inv.paidAt);
+    if (!isVerstuurd && !isBetaald) continue;
+    const t = totalen(inv) || {};
+    const rij = {
+      id: inv.id, number: inv.number || '', klant: klantNaam(inv) || '',
+      sentAt: inv.sentAt || null, paidAt: (inv.status === 'betaald' && inv.paidAt) || null,
+      status: inv.status, exclBtw: r2(t.totalExcl), inclBtw: r2(t.totalIncl),
+    };
+    if (isVerstuurd) verstuurd.push(rij);
+    if (isBetaald) betaald.push(rij);
+  }
+  const blok = (rijen, datum) => {
+    const gesorteerd = rijen.slice().sort((a, b) => String(b[datum] || '').localeCompare(String(a[datum] || '')));
+    return {
+      aantal: rijen.length,
+      exclBtw: r2(rijen.reduce((s, x) => s + x.exclBtw, 0)),
+      inclBtw: r2(rijen.reduce((s, x) => s + x.inclBtw, 0)),
+      facturen: gesorteerd.slice(0, FACTUREN_OMZET_MAX),
+    };
+  };
+  const open = verstuurd.filter((x) => x.status !== 'betaald');
+  return {
+    maand: m,
+    verstuurd: blok(verstuurd, 'sentAt'),
+    betaald: blok(betaald, 'paidAt'),
+    openstaand: { aantal: open.length, inclBtw: r2(open.reduce((s, x) => s + x.inclBtw, 0)) },
+  };
+}
+
 // Trend: laatste N maanden (omzet/kosten/winst per maand) voor grafiek/CEO-rapport.
 export function trend(months = 6, endMonth, filter = {}) {
   const pastFilter = maakBoekingFilter(filter, herkomstContext());

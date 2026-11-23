@@ -131,6 +131,97 @@ noErr('Statusknop bewaart eerst');
 await page.click('#inv-cancel').catch(() => {});
 await page.waitForTimeout(400);
 
+// 4b) REPARATIELOCATIE + CORRIGEREN BINNEN HETZELFDE NUMMER (23 nov 2026, wensen eigenaar).
+// Losse factuur (geen opdracht → de standaard is het klantadres; de volgorde opdracht → klant
+// zit in factuur-test). Typen + opslaan + opnieuw openen; daarna vergrendelen en corrigeren.
+clear();
+const corrSetup = await page.evaluate(async () => {
+  const stuur = (m, p, b) => fetch(p, { method: m, headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+  const c = await stuur('POST', '/api/customers', { name: 'Locatie Browser Klant', email: 'locatie-bt@example.nl', phone: '0611770041', address: 'Klantlaan 1, 3911 AA Rhenen' });
+  const i = (await stuur('POST', '/api/invoices', { customerId: c.id, type: 'factuur' })).invoice;
+  await stuur('PATCH', '/api/invoices/' + i.id, { lines: [{ description: 'Cilinder vervangen', qty: 1, priceExcl: 90 }], btwPct: 21, note: '' });
+  return { invId: i.id, nummer: i.number };
+});
+const invVan = (id) => page.evaluate((x) => fetch('/api/invoices/' + x).then((r) => r.json()).then((d) => d.invoice), id);
+const openFactuur = async (id, wachtOp) => { await page.evaluate((x) => { if (typeof closeModal === 'function') closeModal(); window.openStandaloneInvoice(x); }, id); await page.waitForSelector(wachtOp, { timeout: 6000 }).catch(() => {}); };
+const bewaarEnWacht = async () => { await page.click('#inv-save'); await page.waitForFunction(() => !document.querySelector('#inv-save'), null, { timeout: 8000 }).catch(() => {}); };
+await openFactuur(corrSetup.invId, '#inv-rep');
+const repVeld = await page.evaluate(() => {
+  const el = document.querySelector('#inv-rep'); const klant = document.querySelector('#modal details'); const regels = document.querySelector('#inv-lines');
+  const na = (a, b) => !!a && !!b && !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  return { er: !!el, waarde: el ? el.value : '', zichtbaar: !!el && el.offsetParent !== null && !el.closest('details'), aan: !!el && !el.disabled,
+    label: /Reparatielocatie/.test((el && el.closest('label') || {}).textContent || ''),
+    hint: /Staat zo op de PDF\. Leeg laten = adres van de opdracht of de klant\./.test(document.querySelector('#modal').textContent),
+    onderKlant: na(klant, el), bovenRegels: na(el, regels) };
+});
+ok('factuur-editor: zichtbaar veld "Reparatielocatie" (onder de klantgegevens, boven de regels) met uitleg, voorgevuld met de standaard', repVeld.er && repVeld.zichtbaar && repVeld.aan && repVeld.label && repVeld.hint && repVeld.onderKlant && repVeld.bovenRegels && repVeld.waarde === 'Klantlaan 1, 3911 AA Rhenen', JSON.stringify(repVeld));
+// Onaangeroerd opslaan bevriest het adres niet (de factuur blijft de standaard volgen).
+await bewaarEnWacht();
+ok('reparatielocatie: onaangeroerd opslaan bewaart niets aparts (blijft de standaard volgen)', !(await invVan(corrSetup.invId)).reparatieAdres);
+await openFactuur(corrSetup.invId, '#inv-rep');
+await page.fill('#inv-rep', 'Loods 3, Havenweg 12, 4811 XX Breda');
+await bewaarEnWacht();
+const repBewaard = (await invVan(corrSetup.invId)).reparatieAdres;
+await openFactuur(corrSetup.invId, '#inv-rep');
+ok('reparatielocatie: typen + opslaan blijft bewaard (opnieuw openen toont de waarde)', repBewaard === 'Loods 3, Havenweg 12, 4811 XX Breda' && await page.inputValue('#inv-rep') === 'Loods 3, Havenweg 12, 4811 XX Breda', JSON.stringify(repBewaard));
+await page.fill('#inv-rep', '');
+await bewaarEnWacht();
+await openFactuur(corrSetup.invId, '#inv-rep');
+ok('reparatielocatie: leegmaken → terug naar de standaard (veld toont weer het klantadres)', !(await invVan(corrSetup.invId)).reparatieAdres && await page.inputValue('#inv-rep') === 'Klantlaan 1, 3911 AA Rhenen');
+// Klantadres wijzigen in hetzelfde venster: een onaangeroerde reparatielocatie volgt mee;
+// staat er een eigen adres, dan blijft dat staan en zegt de melding dat erbij.
+await page.evaluate(() => { document.querySelector('#modal details').open = true; });
+await page.fill('#cust-address', 'Klantlaan 2, 3911 AA Rhenen');
+await page.click('#cust-save');
+await page.waitForFunction(() => (document.querySelector('#inv-rep') || {}).value === 'Klantlaan 2, 3911 AA Rhenen', null, { timeout: 6000 }).catch(() => {});
+ok('klantadres gewijzigd in de editor: een onaangeroerde reparatielocatie volgt het nieuwe adres', await page.inputValue('#inv-rep') === 'Klantlaan 2, 3911 AA Rhenen');
+await page.fill('#inv-rep', 'Loods 3, Havenweg 12, 4811 XX Breda');
+await page.fill('#cust-address', 'Klantlaan 1, 3911 AA Rhenen');
+await page.click('#cust-save');
+await page.waitForFunction(() => /niet meegewijzigd/.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+ok('klantadres gewijzigd terwijl er een eigen reparatielocatie staat: die blijft staan, met een melding', await page.inputValue('#inv-rep') === 'Loods 3, Havenweg 12, 4811 XX Breda' && /reparatielocatie hieronder is niet meegewijzigd/.test(await page.evaluate(() => (document.querySelector('#toast') || {}).textContent || '')));
+// Vergrendelen: als betaald verstuurd (WhatsApp-wachtrij) → verstuurd + betaald.
+await page.evaluate((id) => fetch('/api/invoices/' + id + '/send-whatsapp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ betaald: true }) }).then((r) => r.json()), corrSetup.invId);
+await openFactuur(corrSetup.invId, '#inv-corr');
+const slot = await page.evaluate(() => ({ corr: !!document.querySelector('#inv-corr'), save: !!document.querySelector('#inv-save'), repDicht: (document.querySelector('#inv-rep') || {}).disabled === true, uitleg: /Dit document is vergrendeld/.test(document.querySelector('#modal').textContent), focus: (document.activeElement || {}).id || '' }));
+ok('vergrendelde factuur (beheerder): knop "Corrigeren" bij de uitleg; velden dicht, geen Opslaan', slot.corr && !slot.save && slot.repDicht && slot.uitleg && slot.focus !== 'inv-corr', JSON.stringify(slot));
+await page.fill('#inv-lines .il-desc', 'Cilinder vervangen (SKG3)');
+await page.click('#inv-corr');
+await page.waitForSelector('#md-input', { timeout: 4000 }).catch(() => {});
+ok('Corrigeren vraagt de reden in het eigen venster (geen prompt), de factuur blijft erachter staan', await page.locator('#md-input').count() === 1 && /corrigeren/.test(await page.locator('#md-titel').textContent()) && await page.locator('#inv-corr').count() === 1);
+await page.fill('#md-input', 'ab');
+await page.click('#md-ok');
+ok('te korte reden: het venster blijft staan met uitleg', await page.locator('#md-input').count() === 1 && await page.evaluate(() => { const f = document.querySelector('#md-fout'); return !!f && !f.hidden && /minimaal 3/.test(f.textContent); }));
+await page.fill('#md-input', 'Verkeerd aantal cilinders');
+await page.click('#md-ok');
+await page.waitForSelector('#inv-corr-melding', { timeout: 6000 }).catch(() => {});
+const corrStand = await page.evaluate(() => ({
+  melding: (document.querySelector('#inv-corr-melding') || {}).textContent || '', knop: (document.querySelector('#inv-save') || {}).textContent || '',
+  open: ['#inv-rep', '#inv-btw', '#inv-note', '#inv-disc-type'].every((q) => document.querySelector(q) && !document.querySelector(q).disabled) && !!document.querySelector('#il-add'),
+  geenAndereActies: !document.querySelector('#inv-send') && !document.querySelector('#inv-send-wa') && !document.querySelector('#inv-unpaid') && !document.querySelector('#inv-del') && !document.querySelector('#inv-corr'),
+}));
+ok('correctie-stand: melding "Je corrigeert deze factuur. Het nummer blijft <nr>.", velden open, alleen "Correctie opslaan"', corrStand.melding.includes(`Je corrigeert deze factuur. Het nummer blijft ${corrSetup.nummer}.`) && /Correctie opslaan/.test(corrStand.knop) && corrStand.open && corrStand.geenAndereActies, JSON.stringify(corrStand));
+ok('correctie-stand: wat al in de regel was getypt vóór "Corrigeren" is meegenomen', await page.inputValue('#inv-lines .il-desc') === 'Cilinder vervangen (SKG3)');
+await page.fill('#inv-lines .il-qty', '2');
+await page.fill('#inv-rep', 'Goedstraat 7, 3911 AC Rhenen');
+await page.click('#inv-save');
+await page.waitForSelector('#inv-gecorr', { timeout: 8000 }).catch(() => {});
+const naCorr = await invVan(corrSetup.invId);
+ok('correctie opgeslagen: zelfde nummer, nog steeds betaald + verstuurd, nieuw totaal, reden vastgelegd', naCorr.number === corrSetup.nummer && naCorr.status === 'betaald' && !!naCorr.sentAt && !!naCorr.paidAt && naCorr.totalExcl === 180 && naCorr.reparatieAdres === 'Goedstraat 7, 3911 AC Rhenen' && (naCorr.correcties || []).length === 1 && naCorr.correcties[0].reden === 'Verkeerd aantal cilinders' && naCorr.correcties[0].vanTotaal === 108.9 && naCorr.correcties[0].naarTotaal === 217.8 && naCorr.lines[0].description === 'Cilinder vervangen (SKG3)', JSON.stringify({ n: naCorr.number, s: naCorr.status, t: naCorr.totalExcl, c: naCorr.correcties }));
+ok('melding na het opslaan: "Correctie opgeslagen — het nummer blijft <nr>"', await page.evaluate((nr) => ((document.querySelector('#toast') || {}).textContent || '').includes(`Correctie opgeslagen — het nummer blijft ${nr}`), corrSetup.nummer));
+const naCorrScherm = await page.evaluate(() => ({ regel: (document.querySelector('#inv-gecorr') || {}).textContent || '', dicht: !document.querySelector('#inv-save') && (document.querySelector('#inv-rep') || {}).disabled === true, opnieuw: !!document.querySelector('#inv-resend'), corr: !!document.querySelector('#inv-corr') }));
+ok('daarna weer vergrendeld: het venster toont "Gecorrigeerd op …" met de reden, en "Verstuur opnieuw"', /Gecorrigeerd op/.test(naCorrScherm.regel) && /Verkeerd aantal cilinders/.test(naCorrScherm.regel) && naCorrScherm.dicht && naCorrScherm.opnieuw && naCorrScherm.corr, JSON.stringify(naCorrScherm));
+// Opnieuw versturen werkt zoals altijd: e-mailadres → de betaald-vraag (hier geannuleerd).
+await page.click('#inv-resend');
+await page.waitForSelector('#md-input', { timeout: 4000 }).catch(() => {});
+await page.click('#md-ok').catch(() => {});
+await page.waitForSelector('#bk-ja', { timeout: 4000 }).catch(() => {});
+ok('gecorrigeerde factuur: "Verstuur opnieuw" → e-mailadres → de betaald-vraag (ongewijzigd)', await page.locator('#bk-ja').count() === 1 && await page.locator('#bk-nee').count() === 1);
+await page.click('#bk-cancel').catch(() => {});
+await page.waitForTimeout(200);
+await page.evaluate(() => closeModal());
+noErr('Reparatielocatie + corrigeren');
+
 // 5) OFFERTE-editor openen
 clear();
 await page.evaluate((id) => window.openStandaloneInvoice(id), setup.offId);
@@ -450,6 +541,60 @@ const cvMob = await page.evaluate(() => {
 ok('conversie: mobiel binnen het scherm, kaarten onder elkaar', cvMob.breedteOk && cvMob.onderElkaar, JSON.stringify(cvMob));
 await page.setViewportSize({ width: 1280, height: 800 });
 noErr('Cijfers (conversie)');
+
+// 9d) FACTUREN DEZE MAAND (23 nov 2026, besluit eigenaar): blok boven "Omzet en kosten" met
+// de tabbladen Verstuurd (standaard) en Betaald; volgt de maandkiezer; klik opent de factuur.
+clear();
+await page.evaluate(() => goView('finance'));
+await page.waitForSelector('#facturenOmzetPanel .fo-tab', { timeout: 8000 }).catch(() => {});
+const eurBt = (n) => '€ ' + Number(n || 0).toFixed(2).replace('.', ',');
+const foLees = () => page.evaluate(async () => {
+  const p = document.querySelector('#facturenOmzetPanel'); const fin = document.querySelector('#financePanel');
+  const api = await fetch('/api/finance/facturen-omzet?maand=' + document.querySelector('#finMonth').value).then((r) => r.json());
+  return {
+    api: { v: api.verstuurd.aantal, vEx: api.verstuurd.exclBtw, b: api.betaald.aantal, bEx: api.betaald.exclBtw, open: api.openstaand.aantal, vRijen: api.verstuurd.facturen.length, bRijen: api.betaald.facturen.length },
+    titel: (p.querySelector('h3') || {}).textContent || '', tabs: [...p.querySelectorAll('.fo-tab')].map((b) => b.textContent.replace(/\s+/g, ' ').trim()),
+    actief: (p.querySelector('.fo-tab.on') || {}).dataset?.tab || '', aantal: (p.querySelector('#foAantal') || {}).textContent || '', omzet: (p.querySelector('#foOmzet') || {}).textContent || '',
+    open: (p.querySelector('#foOpen') || {}).textContent || '', rijen: p.querySelectorAll('.fo-rij').length, tekst: p.textContent.replace(/\s+/g, ' '),
+    bovenOmzet: !!(p.compareDocumentPosition(fin) & Node.DOCUMENT_POSITION_FOLLOWING) && p.nextElementSibling === fin,
+    tegels: fin.querySelectorAll('.stat-grid .stat').length, finKop: /Omzet en kosten/.test((fin.querySelector('.fin-kop') || {}).textContent || ''),
+  };
+});
+const foV = await foLees();
+ok('cijfers: blok "Facturen deze maand" direct boven "Omzet en kosten", tabbladen Verstuurd (standaard) en Betaald', /Facturen deze maand/.test(foV.titel) && foV.tabs.length === 2 && /^Verstuurd/.test(foV.tabs[0]) && /^Betaald/.test(foV.tabs[1]) && foV.actief === 'verstuurd' && foV.bovenOmzet, JSON.stringify({ t: foV.titel, tabs: foV.tabs, a: foV.actief, b: foV.bovenOmzet }));
+ok('cijfers: tab Verstuurd toont aantal + omzet excl. btw + lijst, gelijk aan de server', foV.api.v >= 2 && foV.aantal === String(foV.api.v) && foV.omzet === eurBt(foV.api.vEx) && foV.rijen === foV.api.vRijen && foV.open === String(foV.api.open) && /Omzet verstuurde facturen excl\. btw/.test(foV.tekst), JSON.stringify({ api: foV.api, aantal: foV.aantal, omzet: foV.omzet, rijen: foV.rijen }));
+ok('cijfers: uitlegregel Verstuurd/Betaald staat erbij; bestaande tegels ongemoeid (4 tegels, kop "Omzet en kosten")', /Verstuurd = facturen die in deze maand naar de klant zijn gegaan\. Betaald = facturen die in deze maand op betaald zijn gezet\./.test(foV.tekst) && foV.tegels === 4 && foV.finKop, JSON.stringify({ tegels: foV.tegels, kop: foV.finKop }));
+await page.click('.fo-tab[data-tab="betaald"]');
+await page.waitForFunction(() => (document.querySelector('#facturenOmzetPanel .fo-tab.on') || {}).dataset?.tab === 'betaald', null, { timeout: 4000 }).catch(() => {});
+const foB = await foLees();
+ok('cijfers: wisselen naar tab Betaald toont de betaalde facturen van de maand', foB.actief === 'betaald' && foB.api.b >= 1 && foB.aantal === String(foB.api.b) && foB.omzet === eurBt(foB.api.bEx) && foB.rijen === foB.api.bRijen && /Omzet betaalde facturen excl\. btw/.test(foB.tekst) && !foB.open, JSON.stringify({ api: foB.api, aantal: foB.aantal, omzet: foB.omzet, rijen: foB.rijen }));
+// De gecorrigeerde factuur van 4b is verstuurd én betaald: hij staat in deze lijst met het NIEUWE bedrag.
+const foRij = await page.evaluate((id) => { const r = document.querySelector(`#facturenOmzetPanel .fo-rij[data-inv="${id}"]`); return r ? r.textContent.replace(/\s+/g, ' ').trim() : ''; }, corrSetup.invId);
+ok('cijfers: regel = nummer, klant, datum en bedrag excl. btw (na de correctie € 180,00)', foRij.includes(corrSetup.nummer) && /Locatie Browser Klant/.test(foRij) && /\d{2}-\d{2}/.test(foRij) && /€ 180,00/.test(foRij), foRij);
+await page.click(`#facturenOmzetPanel .fo-rij[data-inv="${corrSetup.invId}"]`);
+await page.waitForSelector('#inv-cancel', { timeout: 6000 }).catch(() => {});
+ok('cijfers: klik op een regel opent die factuur', await page.evaluate((nr) => /Factuur — Locatie Browser Klant/.test((document.querySelector('#modal h2') || {}).textContent || '') && document.querySelector('#modal').textContent.includes(nr), corrSetup.nummer));
+await page.evaluate(() => closeModal());
+// Maandkiezer: een maand zonder facturen → nul + nette lege regel; daarna terug.
+const foMaand = await page.inputValue('#finMonth');
+await page.evaluate(() => { const m = document.querySelector('#finMonth'); m.value = '2020-01'; m.dispatchEvent(new Event('change', { bubbles: true })); });
+await page.waitForFunction(() => /2020-01/.test((document.querySelector('#facturenOmzetPanel h3') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+ok('cijfers: het blok volgt de maandkiezer (2020-01 → 0 facturen, "nog geen facturen")', await page.evaluate(() => document.querySelector('#foAantal').textContent === '0' && !document.querySelector('#facturenOmzetPanel .fo-rij') && /nog geen facturen/.test(document.querySelector('#facturenOmzetPanel .fo-leeg').textContent)));
+await page.evaluate((m) => { const el = document.querySelector('#finMonth'); el.value = m; el.dispatchEvent(new Event('change', { bubbles: true })); }, foMaand);
+await page.waitForFunction((m) => (document.querySelector('#facturenOmzetPanel h3') || {}).textContent.includes(m) && !!document.querySelector('#facturenOmzetPanel .fo-rij'), foMaand, { timeout: 6000 }).catch(() => {});
+ok('cijfers: terug naar de lopende maand, gekozen tabblad blijft staan', await page.evaluate(() => (document.querySelector('#facturenOmzetPanel .fo-tab.on') || {}).dataset?.tab === 'betaald' && document.querySelectorAll('#facturenOmzetPanel .fo-rij').length >= 1));
+// Filter actief: het blok zegt eerlijk dat het filter er niet voor geldt.
+await page.selectOption('#cfBron', 'eigen');
+await page.waitForFunction(() => /filter hierboven geldt niet/.test((document.querySelector('#facturenOmzetPanel .fo-uitleg') || {}).textContent || ''), null, { timeout: 8000 }).catch(() => {});
+ok('cijfers: bij een actief filter meldt het blok dat het alle facturen toont', await page.evaluate(() => /Het filter hierboven geldt niet voor dit blok/.test(document.querySelector('#facturenOmzetPanel .fo-uitleg').textContent)));
+await page.click('#cfWis');
+await page.waitForFunction(() => !document.querySelector('.cf-actief') && !/filter hierboven/.test((document.querySelector('#facturenOmzetPanel .fo-uitleg') || {}).textContent || ''), null, { timeout: 8000 }).catch(() => {});
+await page.click('.fo-tab[data-tab="verstuurd"]');
+await page.setViewportSize({ width: 390, height: 844 });
+await page.waitForTimeout(400);
+ok('cijfers: "Facturen deze maand" past op de telefoon (390 px, geen paginabrede overflow)', await page.evaluate(() => { const r = document.querySelector('#facturenOmzetPanel').getBoundingClientRect(); return r.right <= window.innerWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1 && [...document.querySelectorAll('#facturenOmzetPanel .fo-rij')].every((x) => x.getBoundingClientRect().right <= window.innerWidth + 1); }));
+await page.setViewportSize({ width: 1280, height: 800 });
+noErr('Cijfers (facturen deze maand)');
 
 // 10) Start-pagina: AI-dagoverzicht rendert (feiten-fallback zonder AI-sleutel)
 clear();
@@ -1362,6 +1507,20 @@ noErr('Mobiel plakkende balken');
   const mBk = await mp.evaluate(() => ({ ja: !!document.querySelector('#bk-ja'), nee: !!document.querySelector('#bk-nee'), tekst: (document.querySelector('.bk-dialog') || {}).textContent || '' }));
   ok('monteur: bij versturen van een factuur óók de vraag "Kan deze factuur als betaald worden verstuurd?"', mBk.ja && mBk.nee && /betaald/i.test(mBk.tekst), JSON.stringify({ ...mBk, tekst: mBk.tekst.slice(0, 80), inv: mInvId }));
   await mp.click('#bk-cancel').catch(() => {});
+  // REPARATIELOCATIE + CORRIGEREN (23 nov 2026): de monteur vult de reparatielocatie zelf in op
+  // de factuur van zijn eigen opdracht; een vergrendelde factuur corrigeren is kantoorwerk.
+  await mp.waitForSelector('#inv-rep', { timeout: 6000 }).catch(() => {});
+  ok('monteur: veld "Reparatielocatie" staat in zijn factuur-editor en is in te vullen', await mp.evaluate(() => { const el = document.querySelector('#inv-rep'); return !!el && !el.disabled && el.offsetParent !== null; }));
+  await mp.fill('#inv-rep', 'Achterom via de steeg, Dorpsstraat 2, Rhenen').catch(() => {});
+  await mp.click('#inv-save').catch(() => {});
+  await mp.waitForFunction(() => !document.querySelector('#inv-save'), null, { timeout: 8000 }).catch(() => {});
+  ok('monteur: ingevulde reparatielocatie is opgeslagen', await mp.evaluate((id) => fetch('/api/invoices/' + id).then((r) => r.json()).then((d) => d.invoice.reparatieAdres), mInvId) === 'Achterom via de steeg, Dorpsstraat 2, Rhenen');
+  await mp.evaluate((id) => fetch('/api/invoices/' + id + '/send-whatsapp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ betaald: true }) }).then((r) => r.json()), mInvId);
+  await mp.evaluate((id) => { if (typeof closeModal === 'function') closeModal(); window.openStandaloneInvoice(id); }, mInvId);
+  await mp.waitForSelector('#inv-resend', { timeout: 6000 }).catch(() => {});
+  const mSlot = await mp.evaluate(() => ({ vergrendeld: /Dit document is vergrendeld/.test((document.querySelector('#modal') || {}).textContent || ''), corr: !!document.querySelector('#inv-corr'), save: !!document.querySelector('#inv-save'), rep: (document.querySelector('#inv-rep') || {}).value || '' }));
+  ok('monteur: vergrendelde factuur ZONDER knop "Corrigeren" (kantoorwerk); reparatielocatie blijft zichtbaar', mSlot.vergrendeld && !mSlot.corr && !mSlot.save && mSlot.rep === 'Achterom via de steeg, Dorpsstraat 2, Rhenen', JSON.stringify(mSlot));
+  await mp.evaluate(() => closeModal());
   ok('monteur-scherm zonder JS-fouten', !mErr.filter((e) => !/favicon|manifest|ServiceWorker/i.test(e)).length, mErr.join(' | '));
   // NIEUWE OFFERTE/FACTUUR BIJ EEN BESTAANDE, AFGERONDE KLANT (26 okt 2026, wens eigenaar): de
   // knoppen op de opdracht openden altijd de oude (betaalde) factuur. Nu eerst kiezen.
@@ -1500,6 +1659,8 @@ const pinNieuw = await page.evaluate(async (custFrom) => {
 }, tpSetup.invId);
 await page.evaluate(() => goView('invoices'));
 await page.waitForSelector(`.inv-pin[data-id="${tpSetup.invId}"]`, { timeout: 8000 }).catch(() => {});
+// Gecorrigeerde factuur (23 nov 2026, zie 4b): klein label "gecorrigeerd" in de lijst, alleen daar.
+ok('Facturen-lijst: label "gecorrigeerd" op de gecorrigeerde factuur (en alleen daar)', await page.evaluate((id) => { const alle = [...document.querySelectorAll('#invoiceList .inv-gecorr')]; return alle.length === 1 && alle[0].textContent.trim() === 'gecorrigeerd' && !!alle[0].closest(`.inv-rij[data-inv="${id}"]`); }, corrSetup.invId), await page.evaluate(() => String(document.querySelectorAll('#invoiceList .inv-gecorr').length)));
 const pinVooraf = await page.evaluate(() => (document.querySelector('#invoiceList .inv-rij') || {}).dataset?.inv || '');
 ok('vooraf: de te pinnen factuur staat niet bovenaan', !!pinNieuw && pinVooraf !== tpSetup.invId, JSON.stringify({ pinVooraf }));
 await page.click(`.inv-pin[data-id="${tpSetup.invId}"]`);
