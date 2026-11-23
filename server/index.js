@@ -6864,6 +6864,33 @@ app.get('/', (req, res) => {
   if (!wilGzip(req) || req.headers.range) return res.sendFile(f);
   stuurGzipBestand(req, res, f).then((klaar) => { if (!klaar) res.sendFile(f); }).catch(() => { if (!res.headersSent) res.sendFile(f); });
 });
+// OPENBAAR STATUSADRES (audit E1, 23 nov 2026). Alle bewaking draaide ín het CRM: lag het
+// CRM zelf plat, dan lag de bewaking ook plat en merkte niemand het. Dit adres is bedoeld
+// voor een bewakingsdienst van buiten, die elke minuut kijkt en de eigenaar waarschuwt.
+// Het geeft ALLEEN ja/nee en leeftijden terug — geen namen, geen aantallen, geen tekst.
+// 200 zolang de server leeft en de database schrijft; 503 als opslaan mislukt. Het woord
+// "aandacht" in het antwoord betekent: een koppeling werkt niet (voor een trefwoord-alarm).
+app.get('/status', (req, res) => {
+  const h = lastHealth();
+  const minSinds = (iso) => (iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)) : null);
+  const brugMin = minSinds(db().settings.whatsappLastSeen);
+  const onderdelen = {
+    database: h ? !!(h.database && h.database.ok) : null,
+    mailOntvangen: h ? !!(h.imap && h.imap.ok) : null,
+    mailVersturen: h ? !!(h.smtp && h.smtp.ok) : null,
+    ai: h ? !!(h.ai && h.ai.ok) : null,
+    whatsappBrug: TEST || brugMin === null ? null : brugMin <= 3,
+  };
+  const aandacht = Object.values(onderdelen).some((v) => v === false);
+  res.set('Cache-Control', 'no-store');
+  res.status(onderdelen.database === false ? 503 : 200).json({
+    status: aandacht ? 'aandacht' : 'goed', omgeving: TEST ? 'test' : 'productie',
+    gestartMinutenGeleden: Math.round(process.uptime() / 60),
+    laatsteControleMinutenGeleden: h ? minSinds(h.at) : null,
+    brugMinutenStil: TEST ? null : brugMin, onderdelen,
+  });
+});
+
 // Tekstbestanden (app.js 517 KB, styles.css 94 KB…) gecomprimeerd uit een cache
 // (28 sep 2026, audit pc-browser#14); al het andere via express.static zoals altijd.
 app.use(statischeCompressie(PUBLIC_DIR));

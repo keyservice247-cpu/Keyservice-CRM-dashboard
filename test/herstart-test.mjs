@@ -10,6 +10,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// De testserver krijgt NOOIT sleutels van echte koppelingen mee (audit H8, 23 nov 2026).
+const schoneOmgeving = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(SMTP_|IMAP_|SENT_IMAP_|WHATSAPP_|GOOGLE_|ANTHROPIC_|DATA_DIR$|OMGEVING$)/.test(k)));
+
 const PORT = 3135;
 const BASE = `http://localhost:${PORT}`;
 const TOKEN = 'test123';
@@ -35,7 +38,7 @@ const slaap = (ms) => new Promise((r) => setTimeout(r, ms));
 let proc = null;
 async function startServer() {
   proc = spawn(process.execPath, ['server/index.js'], {
-    env: { ...process.env, DATA_DIR: DIR, INGEST_TOKEN: TOKEN, SESSION_SECRET: 'test', PORT: String(PORT) },
+    env: { ...schoneOmgeving(), DATA_DIR: DIR, INGEST_TOKEN: TOKEN, SESSION_SECRET: 'test', PORT: String(PORT) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';

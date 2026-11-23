@@ -10,6 +10,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// De testserver krijgt NOOIT sleutels van echte koppelingen mee (audit H8, 23 nov 2026).
+const schoneOmgeving = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(SMTP_|IMAP_|SENT_IMAP_|WHATSAPP_|GOOGLE_|ANTHROPIC_|DATA_DIR$|OMGEVING$)/.test(k)));
+
 const PORT = 3143;
 const SMTP_PORT = 2643;
 const BASE = `http://localhost:${PORT}`;
@@ -68,7 +71,7 @@ async function api(method, path, body) {
 }
 
 const proc = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATA_DIR: DIR, INGEST_TOKEN: TOKEN, SESSION_SECRET: 'test', PORT: String(PORT), SMTP_HOST: '127.0.0.1', SMTP_PORT: String(SMTP_PORT), SMTP_USER: 'test@keyservice247.nl', SMTP_PASSWORD: 'x', SMTP_FROM: 'test@keyservice247.nl' },
+  env: { ...schoneOmgeving(), DATA_DIR: DIR, INGEST_TOKEN: TOKEN, SESSION_SECRET: 'test', PORT: String(PORT), SMTP_HOST: '127.0.0.1', SMTP_PORT: String(SMTP_PORT), SMTP_USER: 'test@keyservice247.nl', SMTP_PASSWORD: 'x', SMTP_FROM: 'test@keyservice247.nl' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });

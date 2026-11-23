@@ -129,5 +129,12 @@ ok('gewone postcode ongewijzigd', vindPostcode('Teststraat 1, 1234 ab Testdorp')
 const gd = await api('POST', '/api/ingest/whatsapp', { group: 'Opdrachtgever testgroep', name: 'Kim', externalId: 'p1-g3', body: 'Hallo. We sturen je de volgende klant:\nNaam: Karel Groep\nAdres: Groepsweg 8\nWoonplaats: 4567 DE - Groepstad\nTelefoon: 0611000031\nOpmerkingen: cilinder vervangen' }, { token: true });
 ok('complete groepsopdracht met postcode "4567 DE" komt als aanvraag binnen', gd.status === 200 && ['pending', 'auto_approved', 'approved'].includes(gd.json?.status), JSON.stringify(gd.json));
 
+// ---------- E1: openbaar statusadres ----------
+console.log('\n== E1 — statusadres voor bewaking van buiten ==');
+const st = await fetch(BASE + '/status'); const stj = await st.json();
+ok('GET /status werkt zonder inlog (200) en zegt "goed"', st.status === 200 && stj.status === 'goed', JSON.stringify(stj).slice(0, 200));
+ok('alleen ja/nee en leeftijden — geen namen, nummers of tekst', Object.keys(stj).sort().join(',') === 'brugMinutenStil,gestartMinutenGeleden,laatsteControleMinutenGeleden,omgeving,onderdelen,status' && !/0611|Proef|@/.test(JSON.stringify(stj)) && Object.values(stj.onderdelen).every((v) => v === null || typeof v === 'boolean'));
+ok('wordt niet bewaard door de browser of een tussenstation', st.headers.get('cache-control') === 'no-store');
+
 console.log(`\n========== PAKKET 1: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (failed) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

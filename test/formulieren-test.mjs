@@ -9,7 +9,10 @@ import { join } from 'node:path';
 
 import { createServer } from 'node:net';
 
-process.env.DATA_DIR = process.env.DATA_DIR || mkdtempSync(join(tmpdir(), 'crm-formtest-'));
+// ALTIJD een eigen, lege map en geen enkele koppeling (audit H8, 23 nov 2026): deze test
+// leegt de wachtrij en draait opvolgrondes — dat mag nooit op bestaande gegevens gebeuren.
+process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'crm-formtest-'));
+for (const k of Object.keys(process.env)) if (/^(SMTP_|IMAP_|SENT_IMAP_|WHATSAPP_|GOOGLE_|ANTHROPIC_)/.test(k)) delete process.env[k];
 delete process.env.ANTHROPIC_API_KEY;
 // Nep-mailserver: telt de ontvangstbevestigingen (nooit dubbel naar dezelfde klant).
 const SMTP_PORT = 2645;

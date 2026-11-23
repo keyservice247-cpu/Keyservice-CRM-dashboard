@@ -6,7 +6,10 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-process.env.DATA_DIR = process.env.DATA_DIR || mkdtempSync(join(tmpdir(), 'crm-mailtest-'));
+// ALTIJD een eigen, lege map en geen enkele koppeling (audit H8, 23 nov 2026): deze test
+// leegt de wachtrij en draait opvolgrondes — dat mag nooit op bestaande gegevens gebeuren.
+process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'crm-mailtest-'));
+for (const k of Object.keys(process.env)) if (/^(SMTP_|IMAP_|SENT_IMAP_|WHATSAPP_|GOOGLE_|ANTHROPIC_)/.test(k)) delete process.env[k];
 const { looksLikeBounce, handleBounce } = await import('../server/connectors/email-imap.js');
 const { db } = await import('../server/db.js');
 
