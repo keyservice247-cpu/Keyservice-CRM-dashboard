@@ -343,6 +343,7 @@ function hasPerm(key) {
     const bnInv = $('#bnInvoices'); if (bnInv) bnInv.hidden = false;
   }
 
+  ruimMenuGroepenOp();
   bindNav();
   bindButtons();
   document.body.dataset.view = state.view; // CSS per scherm klopt ook vóór de eerste menuklik
@@ -465,6 +466,7 @@ async function herstelPlekNaHerlaad() {
   const tab = (plek.channel && $(`.nav-item[data-view="${plek.view}"][data-channel="${plek.channel}"]`)) || $(`.nav-item[data-view="${plek.view}"]`);
   try {
     if (plek.view !== state.view || (plek.channel || 'all') !== (state.channel || 'all')) await showView(plek.view, tab);
+    if (plek.view === 'board' && ['email', 'whatsapp'].includes(plek.channel) && state.channel !== plek.channel) await zetBoardKanaal(plek.channel);
     else await window._viewLaad;
   } catch { return; }
   // Pas ná het laden scrollen, anders klemt de browser de positie op een nog lege pagina.
@@ -1333,6 +1335,7 @@ function showView(view, tab) {
   if (view !== 'settings' && window._pairTimer) { clearInterval(window._pairTimer); window._pairTimer = null; }
   // De drie board-menu's (Opdrachten/E-mail/WhatsApp) delen dezelfde weergave maar filteren op kanaal.
   state.channel = (tab && tab.dataset.channel) || 'all';
+  syncBoardKanaal();
   $$('.nav-item').forEach((t) => t.classList.remove('active'));
   if (tab && tab.classList.contains('nav-item')) tab.classList.add('active');
   else $(`.nav-item[data-view="${view}"]`)?.classList.add('active');
@@ -3775,7 +3778,7 @@ async function openMonteurOrders(mId, mName, filter) {
 function openPhoneIntakeModal() {
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
   modal(`
-    <h2>📞 Telefonische aanvraag</h2>
+    <h2>Telefonische aanvraag</h2>
     <p class="muted small">Noteer snel de essentie tijdens het gesprek. Aanvullen kan later op de opdracht.</p>
     <div class="row"><label>Naam klant <input id="pi-name" placeholder="naam"></label><label>Telefoon <input id="pi-phone" placeholder="06-…"></label></div>
     <label>Plaats of adres <input id="pi-address" placeholder="bv. Breda, of straat + postcode"></label>
@@ -5826,7 +5829,7 @@ async function loadSettingsHtml(s) {
       <label>WhatsApp-bericht <textarea id="ow-wabody" rows="3">${esc(s.onderwegMsg?.whatsappBody || '')}</textarea></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveOnderweg">Opslaan</button></div>
     </div>
-    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>⭐ Review-verzoek na afronding (automatisch)</h3>
+    <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Review-verzoek na afronding (automatisch)</h3>
       <p class="muted small">Zodra een opdracht op <strong>Afgerond</strong> staat, krijgt de klant na het ingestelde aantal uren automatisch een vriendelijk mailtje met jullie review-link (bv. Google). Goede reviews = meer klanten. Gebruik <code>{naam}</code> en <code>{link}</code> in de tekst.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="rr-enabled" style="width:auto" ${s.reviewRequest?.enabled ? 'checked' : ''}> Review-verzoek aanzetten</label>
       <div class="row">
@@ -7804,23 +7807,51 @@ document.addEventListener('input', (e) => {
 // Eén lijst met alle pagina's — gebruikt door het zoekvenster ("Ga naar") én het
 // menu rechtsboven, zodat ze nooit uit elkaar lopen. Rechten-gestuurd: een
 // assistente met het recht "Cijfers" krijgt die pagina hier vanzelf bij.
+// KANAAL OP HET BORD (23 nov 2026): "E-mail" en "WhatsApp" waren aparte menu-items voor
+// hetzelfde bord. Nu drie knoppen boven het bord; het menu is daardoor twee regels korter
+// en op de telefoon is de keuze er voor het eerst ook.
+// Een groepskopje in de zijbalk zonder zichtbare menu-items eronder verdwijnt (bijvoorbeeld
+// "Team & hulp" bij een monteur).
+function ruimMenuGroepenOp() {
+  $$('.sidebar .nav-sep').forEach((sep) => {
+    let el = sep.nextElementSibling; let zichtbaar = false;
+    while (el && !el.classList.contains('nav-sep')) { if (el.classList.contains('nav-item') && !el.hidden) { zichtbaar = true; break; } el = el.nextElementSibling; }
+    sep.hidden = !zichtbaar;
+  });
+}
+function syncBoardKanaal() {
+  $$('#boardKanaal .seg-knop').forEach((b) => b.classList.toggle('on', (b.dataset.kanaal || 'all') === (state.channel || 'all')));
+}
+async function zetBoardKanaal(kanaal) {
+  state.channel = ['email', 'whatsapp'].includes(kanaal) ? kanaal : 'all';
+  syncBoardKanaal();
+  try { await loadBoard(); } catch (e) { toast(e.message, true); }
+}
+document.addEventListener('click', (ev) => {
+  const b = ev.target.closest && ev.target.closest('#boardKanaal .seg-knop');
+  if (b) zetBoardKanaal(b.dataset.kanaal);
+});
+
 function navItems() {
   const monteur = state.me.role === 'monteur';
   const nav = [];
+  // Zelfde volgorde als de zijbalk op de pc (23 nov 2026): dagelijks werk, klanten & geld,
+  // team & hulp, beheer.
   if (!monteur) nav.push({ label: 'Overzicht', view: 'overview', ic: 'activity' });
-  nav.push({ label: 'Opdrachten', view: 'board', ic: 'list' });
   if (hasPerm('inbox')) nav.push({ label: 'Inbox / AI', view: 'inbox', ic: 'mail' });
+  nav.push({ label: 'Opdrachten', view: 'board', ic: 'list' });
   nav.push({ label: 'Berichten', view: 'chats', ic: 'whatsapp' }); // ook monteur (meelezen, eigen klanten)
   nav.push({ label: 'Agenda', view: 'agenda', ic: 'calendar' });
   if (!monteur) nav.push({ label: 'Taken', view: 'taken', ic: 'list' });
-  if (hasPerm('customers')) nav.push({ label: 'Klanten', view: 'customers', ic: 'users' }, { label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
+  if (hasPerm('customers')) nav.push({ label: 'Klanten', view: 'customers', ic: 'users' });
   nav.push({ label: 'Facturen', view: 'invoices', ic: 'file' });
+  if (hasPerm('finance') || hasPerm('conversie')) nav.push({ label: 'Cijfers', view: 'finance', ic: 'activity' });
+  if (hasPerm('customers')) nav.push({ label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
   if (!monteur) nav.push({ label: 'AI Assistent', view: 'assistant', ic: 'sparkles' });
   if (hasPerm('deleteOrders')) nav.push({ label: 'Prullenbak', view: 'trash', ic: 'trash' });
-  if (hasPerm('system')) nav.push({ label: 'AI-controle', view: 'control', ic: 'shield' }, { label: 'Abonnementen', view: 'subs', ic: 'refresh' });
-  if (hasPerm('finance') || hasPerm('conversie')) nav.push({ label: 'Cijfers', view: 'finance', ic: 'activity' });
   if (hasPerm('settings')) nav.push({ label: 'Instellingen', view: 'settings', ic: 'wrench' });
   if (state.me.role === 'admin') nav.push({ label: 'Gebruikers', view: 'users', ic: 'user' });
+  if (hasPerm('system')) nav.push({ label: 'AI-controle', view: 'control', ic: 'shield' }, { label: 'Abonnementen', view: 'subs', ic: 'refresh' });
   return nav;
 }
 

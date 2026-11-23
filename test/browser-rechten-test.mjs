@@ -69,6 +69,20 @@ console.log('\n== Beheerder ==');
   await page.evaluate(() => document.querySelector('.nav-item[data-view="users"]').click()); await page.waitForTimeout(1200);
   ok('Gebruikers: het recht "Conversie bekijken" bestaat in de app', await page.evaluate(() => typeof PERM_LABELS !== 'undefined' && PERM_LABELS.some((p) => p[0] === 'conversie')));
   ok('een rare datumtekst wordt nooit opmaak', await page.evaluate(() => { const t = fmtDate('<img src=x onerror="window.__proef=true">'); const d = document.createElement('div'); d.innerHTML = t; return !d.querySelector('img') && fmtDateShort('<b>x</b>').indexOf('<b>') < 0; }));
+  // ---- ontwerp november 2026: menu, kanaalknoppen, lettertype ----
+  await page.evaluate(() => showView('board', document.querySelector('.nav-item[data-view="board"]'))); await page.waitForTimeout(1200);
+  const menu = await page.evaluate(() => { const g = document.querySelector('.sidebar-foot').getBoundingClientRect().top; const items = [...document.querySelectorAll('.sidebar .nav-item')].filter((e) => !e.hidden && e.offsetParent); return { aantal: items.length, buiten: items.filter((e) => e.getBoundingClientRect().bottom > g + 1).map((e) => e.textContent.trim()), groepen: [...document.querySelectorAll('.sidebar .nav-sep')].filter((e) => !e.hidden).map((e) => e.textContent.trim()) }; });
+  ok('menu: 16 onderdelen, allemaal in beeld op een scherm van 900 hoog', menu.aantal === 16 && menu.buiten.length === 0, JSON.stringify(menu));
+  ok('menu: vier duidelijke groepen', menu.groepen.join('|') === 'Klanten & geld|Team & hulp|Beheer', menu.groepen.join('|'));
+  ok('menu: "E-mail" en "WhatsApp" zijn geen losse menu-items meer', await page.evaluate(() => !document.querySelector('.nav-item[data-channel="email"]') && !document.querySelector('.nav-item[data-channel="whatsapp"]')));
+  const alle = await page.evaluate(() => document.querySelectorAll('#board .card').length);
+  await page.click('#boardKanaal .seg-knop[data-kanaal="whatsapp"]'); await page.waitForTimeout(900);
+  const wa = await page.evaluate(() => ({ n: document.querySelectorAll('#board .card').length, aan: document.querySelector('#boardKanaal .seg-knop.on')?.dataset.kanaal, kop: document.querySelector('#view-board h2').textContent }));
+  await page.click('#boardKanaal .seg-knop[data-kanaal="all"]'); await page.waitForTimeout(900);
+  const terug = await page.evaluate(() => document.querySelectorAll('#board .card').length);
+  ok('bord: knop "WhatsApp" filtert het bord en "Alle" zet het terug', wa.aan === 'whatsapp' && /WhatsApp/.test(wa.kop) && wa.n <= alle && terug === alle, JSON.stringify({ alle, wa, terug }));
+  ok('geen emoji in de knoppen boven het bord', await page.evaluate(() => !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(document.querySelector('#view-board .view-head').innerText)));
+  ok('lettertype Inter wordt echt geladen', await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check('14px Inter') && [...document.fonts].some((f) => /Inter/.test(f.family) && f.status === 'loaded'); }));
   ok('beheerder: geen fouten in de console', fouten.length === 0, fouten.slice(0, 3).join(' | '));
   await ctx.close();
 }
