@@ -3898,11 +3898,13 @@ function openWerkbonModal(o) {
 // type = 'factuur' of 'offerte' — telt alleen bij het AANMAKEN; bestaat er al een
 // gekoppeld document, dan opent gewoon dat document (type wijzigt nooit stiekem).
 function openInvoiceModal(o, type = 'factuur') {
-  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [], bundles = [], documenten = [] }) => {
+  api(`/api/orders/${o.id}/invoice`).then(({ invoice, settings, priceList = [], bundles = [], documenten = [], reparatieAdresStandaard = '' }) => {
     if (documentKiezen(o, type, invoice)) return kiesDocument(o, type, { invoice, documenten });
     renderInvoiceEditor({
       inv: invoice || { lines: [], btwPct: settings.btwPct, note: '', status: 'concept', type },
       customer: o.customer || {}, order: o, contextTitle: o.title, werkbon: o.werkbon || null, priceList, bundles,
+      reparatieAdresStandaard,
+      haalRepStandaard: () => api(`/api/orders/${o.id}/invoice`).then((d) => d.reparatieAdresStandaard || ''),
       save: (body) => api(`/api/orders/${o.id}/invoice`, 'POST', { ...body, type }),
       after: () => loadBoard(),
     });
@@ -3943,7 +3945,7 @@ function kiesDocument(o, type, { invoice, documenten = [] }) {
     <div class="doc-keuze-lijst" id="dk-lijst">${documenten.map((d) => `
       <button type="button" class="doc-keuze-rij" data-inv="${esc(d.id)}">
         <span class="doc-keuze-kop"><strong>${naam(d.type)} ${esc(d.number)}</strong> <span class="inv-st ${esc(d.status)}">${esc(stTekst(d))}</span></span>
-        <span class="muted small">${esc(fmtDateShort(d.sentAt || d.createdAt))} · ${eurD(d.totalIncl)} · ${d.bijDezeOpdracht ? 'bij deze opdracht' : d.orderTitle ? esc(d.orderTitle.slice(0, 40)) : 'los'}${d.vergrendeld ? ' · vergrendeld (wijzigen via Kopieer)' : ''}</span>
+        <span class="muted small">${esc(fmtDateShort(d.sentAt || d.createdAt))} · ${eurD(d.totalIncl)} · ${d.bijDezeOpdracht ? 'bij deze opdracht' : d.orderTitle ? esc(d.orderTitle.slice(0, 40)) : 'los'}${d.vergrendeld ? ` · vergrendeld (wijzigen via Kopieer${d.type !== 'offerte' && pinKnopMag() ? ' of Corrigeren' : ''})` : ''}</span>
       </button>`).join('')}</div>
     <div class="modal-actions"><span></span><div class="right"><button class="btn" id="dk-sluit">Sluiten</button></div></div>`);
   $('#dk-sluit').onclick = closeModal;
@@ -4029,11 +4031,14 @@ async function stuurTrustpilotFactuur(invId, alDatum, btn, klaar) {
   } catch (err) { toast(err.message, true); if (btn) { btn.disabled = false; btn.innerHTML = oud; } }
 }
 function openStandaloneInvoice(invId) {
-  api(`/api/invoices/${invId}`).then(({ invoice, customer, order, priceList = [], bundles = [] }) => {
+  api(`/api/invoices/${invId}`).then(({ invoice, customer, order, priceList = [], bundles = [], reparatieAdresStandaard = '' }) => {
     renderInvoiceEditor({
       inv: invoice, customer: customer || {}, order: order || null, contextTitle: order?.title || (customer?.name || ''), werkbon: order?.werkbon || null, priceList, bundles,
+      reparatieAdresStandaard,
+      haalRepStandaard: () => api(`/api/invoices/${invoice.id}`).then((d) => d.reparatieAdresStandaard || ''),
       save: (body) => api(`/api/invoices/${invoice.id}`, 'PATCH', body),
-      after: () => { if (state._invoices) loadInvoices(); },
+      // Ook Cijfers bijwerken als de factuur vanaf daar is geopend ("Facturen deze maand").
+      after: () => { if (state._invoices) loadInvoices(); if (state.view === 'finance') loadFinance().catch(() => {}); },
     });
   }).catch((err) => toast(err.message, true));
 }
@@ -4088,7 +4093,18 @@ function renderInvoiceEditor(ctx) {
   const woord = isQuote ? 'Offerte' : 'Factuur';
   // Vergrendeld = verstuurd én betaald, of goedgekeurde offerte. Een betaalde factuur
   // die nog niet is verstuurd (standaard betaald, 20 sep 2026) blijft gewoon bewerkbaar.
-  const locked = (inv.status === 'betaald' && !!inv.sentAt) || inv.status === 'goedgekeurd';
+  const vast = (inv.status === 'betaald' && !!inv.sentAt) || inv.status === 'goedgekeurd';
+  // CORRIGEREN BINNEN HETZELFDE NUMMER (23 nov 2026, wens eigenaar): kantoor mag een
+  // vergrendelde FACTUUR met een reden corrigeren. ctx.correctie = { reden } zet de velden
+  // voor deze ene bewerking open; de eerste keer opslaan stuurt de reden mee en daarna is
+  // de factuur weer vergrendeld. Een goedgekeurde offerte blijft dicht.
+  const magCorrigeren = vast && !isQuote && inv.status === 'betaald' && pinKnopMag();
+  const corr = magCorrigeren && ctx.correctie && ctx.correctie.reden ? ctx.correctie : null;
+  const locked = vast && !corr;
+  // Reparatielocatie (23 nov 2026): staat op de PDF; standaard het adres van de opdracht,
+  // anders van de klant. Alleen een AFWIJKEND adres wordt op de factuur zelf bewaard.
+  let repStandaard = String(ctx.reparatieAdresStandaard || '');
+  const laatsteCorr = (inv.correcties || []).slice(-1)[0] || null;
   const betaaldOngestuurd = inv.status === 'betaald' && !inv.sentAt;
   const toExcl = (l) => l.priceExcl !== undefined ? l.priceExcl : Math.round(((l.priceIncl || 0) / (1 + (Number(inv.btwPct) || 21) / 100)) * 100) / 100;
   inv.lines = (inv.lines || []).map((l) => ({ ...l, priceExcl: toExcl(l) }));
@@ -4105,11 +4121,18 @@ function renderInvoiceEditor(ctx) {
   modal(`
     <h2>${icon('mail', 16)} ${woord} — ${esc(customer.name || ctx.contextTitle || '')}</h2>
     <p class="muted small">${inv.number ? `Nummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(stLabel)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : `Nieuw${isQuote ? ' concept' : ''} — het ${woord.toLowerCase()}nummer wordt bij opslaan toegekend.`} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.${locked ? ' <strong>Dit document is vergrendeld.</strong>' : ''}</p>
+    ${locked && magCorrigeren ? `<div class="inv-corr-rij"><span class="muted small">Zit er een fout in? Je kunt deze factuur corrigeren; het nummer blijft hetzelfde.</span><button type="button" class="btn btn-sm" id="inv-corr" data-geen-focus>${icon('edit', 13)} Corrigeren</button></div>` : ''}
+    ${corr ? `<div class="inv-corr-melding" id="inv-corr-melding"><strong>Je corrigeert deze factuur. Het nummer blijft ${esc(inv.number || '')}.</strong><span class="muted small">Reden: ${esc(corr.reden)}. Status, betaaldatum en verzenddatum blijven staan; op de PDF komt "Gecorrigeerde versie". Stuur de factuur na het opslaan opnieuw naar de klant.</span></div>` : ''}
+    ${!corr && inv.gecorrigeerdAt ? `<div class="inv-gecorr-regel muted small" id="inv-gecorr">Gecorrigeerd op ${esc(fmtDateShort(inv.gecorrigeerdAt))}${laatsteCorr ? `${laatsteCorr.door ? ' door ' + esc(laatsteCorr.door) : ''}${laatsteCorr.reden ? ' — ' + esc(laatsteCorr.reden) : ''}` : ''}${(inv.correcties || []).length > 1 ? ` (${inv.correcties.length} correcties)` : ''}</div>` : ''}
     ${customer.id ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('user', 13)} Klantgegevens${customer.name ? ' — ' + esc(customer.name) : ''} (klik om te wijzigen)</summary>
       <div class="row" style="margin-top:8px"><label>Naam <input id="cust-name" value="${esc(customer.name || '')}"></label><label>Telefoon <input id="cust-phone" value="${esc(customer.phone || '')}"></label></div>
       <div class="row"><label>E-mail <input id="cust-email" value="${esc(customer.email || '')}"></label><label>Adres (straat, postcode, plaats) <input id="cust-address" value="${esc(customer.address || '')}"></label></div>
       <button type="button" class="btn btn-sm" id="cust-save">Klantgegevens opslaan</button><span class="muted small" style="margin-left:8px">Wijzigingen gelden voor deze klant overal in het CRM.</span>
     </details>` : ''}
+    <div class="inv-rep">
+      <label>Reparatielocatie <input id="inv-rep" value="${esc(inv.reparatieAdres || repStandaard)}" maxlength="200" placeholder="Straat en huisnummer, postcode, plaats" autocomplete="off" ${locked ? 'disabled' : ''}></label>
+      <div class="muted small">Staat zo op de PDF. Leeg laten = adres van de opdracht of de klant.</div>
+    </div>
     ${bundles.length && !locked ? `<details class="pl-collapse" open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('tag', 13)} Pakketten — één klik voegt meerdere regels toe</summary><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${bundles.map((bn, bi) => { const tot = (bn.lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.priceExcl) || 0), 0); return `<button type="button" class="chip bn-add" data-bi="${bi}" title="${esc((bn.lines || []).map((l) => l.description).join(' · '))}" style="cursor:pointer;border-color:var(--brand,#2563eb)">${icon('tag', 12)} ${esc(bn.name.slice(0, 40))} · ${bn.lines.length} regels · ${eur(tot)}</button>`; }).join('')}</div></details>` : ''}
     ${priceList.length && !locked ? `<details class="pl-collapse" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('tag', 13)} Prijzenlijst — klik om te openen en snel toe te voegen</summary><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${priceList.map((p, pi) => `<button type="button" class="chip pl-add" data-pi="${pi}" title="€ ${Number(p.priceExcl).toFixed(2)} excl. btw" style="cursor:pointer">${esc(p.description.slice(0, 44))} · ${eur(p.priceExcl)}</button>`).join('')}</div></details>` : ''}
     <div id="inv-lines">${inv.lines.map(lineRow).join('')}</div>
@@ -4122,7 +4145,7 @@ function renderInvoiceEditor(ctx) {
       <label>Opmerking op de ${esc(woord.toLowerCase())} <input id="inv-note" value="${esc(inv.note || '')}" placeholder="optioneel" ${locked ? 'disabled' : ''}></label> </div>
     <div class="row"> <label>Korting <select id="inv-disc-type" ${locked ? 'disabled' : ''}><option value="" ${!inv.discount ? 'selected' : ''}>Geen korting</option><option value="pct" ${inv.discount?.type === 'pct' ? 'selected' : ''}>Percentage (%)</option><option value="bedrag" ${inv.discount?.type === 'bedrag' ? 'selected' : ''}>Vast bedrag (excl. btw)</option></select></label>
       <label>Kortingswaarde <input id="inv-disc-val" type="number" min="0" step="0.01" value="${esc(String(inv.discount?.value ?? ''))}" placeholder="bv. 10" ${locked ? 'disabled' : ''}></label> </div>
-    ${locked ? (inv.signature ? `<div style="margin:10px 0"><div class="muted small">Handtekening voor akkoord:</div><img src="${esc(inv.signature)}" alt="handtekening" style="max-width:200px;border:1px solid var(--line-soft, #e5e7eb);border-radius:6px;background:#fff"></div>` : '') : `
+    ${locked || corr ? (inv.signature ? `<div style="margin:10px 0"><div class="muted small">Handtekening voor akkoord:</div><img src="${esc(inv.signature)}" alt="handtekening" style="max-width:200px;border:1px solid var(--line-soft, #e5e7eb);border-radius:6px;background:#fff"></div>` : '') : `
     <details class="pl-collapse" style="margin:12px 0" ${state.me?.role === 'monteur' ? 'open' : ''}><summary style="cursor:pointer;font-weight:600;padding:8px 0">${icon('edit', 13)} Handtekening voor akkoord${inv.signature ? ' — gezet ✓' : ' (optioneel)'}</summary>
       <p class="muted small" style="margin:6px 0">Laat de klant hier tekenen; de handtekening komt op de PDF als bewijs van akkoord. Werkt ook zonder werkbon.</p>
       <canvas id="inv-sig" width="360" height="120" style="border:1px solid var(--line-soft, #cbd5e1);border-radius:8px;background:#fff;touch-action:none;max-width:100%;cursor:crosshair"></canvas>
@@ -4131,6 +4154,7 @@ function renderInvoiceEditor(ctx) {
     <div id="inv-totals" class="muted small" style="margin:8px 0;font-size:14px"></div>
     <div class="modal-actions">
       <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${corr ? '<span class="muted small" style="align-self:center">Sla de correctie op, of sluit het venster om niets te wijzigen.</span>' : `
         ${inv.id && !isQuote && inv.status === 'verzonden' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button><button class="btn" id="inv-remind">${icon('bell', 13)} Herinnering</button>` : ''}
         ${inv.id && !isQuote && inv.status === 'concept' ? `<button class="btn btn-success" id="inv-paid">✓ Betaald</button>` : ''}
         ${inv.id && !isQuote && inv.status === 'verzonden' && pinKnopMag() ? `<button class="btn" id="inv-afschrijf" title="Verwacht je dit geld niet meer? Telt daarna niet meer als openstaand en krijgt geen herinneringen">Afschrijven</button>` : ''}
@@ -4141,15 +4165,15 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">${inv.convertedInvoiceId ? '→ Open factuur' : '→ Maak factuur'}</button>` : ''}
         ${inv.id ? `<button class="btn" id="inv-copy">${icon('merge', 13)} Kopieer</button>` : ''}
         ${inv.id && pinKnopMag() ? `<button class="btn${inv.vastgepind ? ' inv-pin-aan' : ''}" id="inv-pin" title="${inv.vastgepind ? 'Vastgepind — staat bovenaan bij Facturen. Klik om los te maken.' : 'Bovenaan zetten bij Facturen (voor jou en je collega)'}">${icon('punaise', 13)} ${inv.vastgepind ? 'Losmaken' : 'Vastpinnen'}</button>` : ''}
-        ${inv.id && !locked ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}
+        ${inv.id && !locked ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}`}
       </div>
       <div class="right">
         ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('eye', 14)} PDF openen</a>` : ''}
         ${inv.id ? `<button class="btn" id="inv-share">${icon('paperclip', 14)} Delen / opslaan</button>` : ''}
         ${inv.id && locked ? `<button class="btn" id="inv-resend">${icon('mail', 14)} Verstuur opnieuw</button>` : ''}
         <button class="btn" id="inv-cancel">Sluiten</button>
-        ${locked ? '' : `<button class="btn" id="inv-save">${inv.id && inv.status === 'concept' ? 'Concept opslaan' : 'Opslaan'}</button>
-        ${inv.status === 'oninbaar' ? '' : `<button class="btn btn-primary" id="inv-send">${inv.sentAt ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
+        ${locked ? '' : `<button class="btn${corr ? ' btn-primary' : ''}" id="inv-save">${corr ? 'Correctie opslaan' : inv.id && inv.status === 'concept' ? 'Concept opslaan' : 'Opslaan'}</button>
+        ${inv.status === 'oninbaar' || corr ? '' : `<button class="btn btn-primary" id="inv-send">${inv.sentAt ? 'Opnieuw versturen' : 'Versturen naar klant'}</button>
         <button class="btn" id="inv-send-wa" title="Stuur de PDF als WhatsApp-bericht naar de klant">${icon('whatsapp', 14)} Via WhatsApp</button>`}`}
       </div>
     </div>`);
@@ -4251,16 +4275,22 @@ function renderInvoiceEditor(ctx) {
     if (sigCleared) return '';
     return undefined; // niet aangeraakt = bestaande handtekening behouden
   };
+  // Reparatielocatie: staat het veld (nog) op de standaard, dan sturen we LEEG mee — de
+  // factuur blijft dan het adres van de opdracht/klant volgen in plaats van het te bevriezen.
+  const readRep = () => { const el = $('#inv-rep'); if (!el) return undefined; const v = el.value.trim(); return v === repStandaard ? '' : v; };
   const saveConcept = async () => {
     const body = { lines: readLines(), btwPct: Number($('#inv-btw').value), note: $('#inv-note').value, discount: readDiscount() || {} };
+    const rep = readRep();
+    if (rep !== undefined) body.reparatieAdres = rep;
     const sig = readSignature();
     if (sig !== undefined) body.signature = sig;
+    if (corr) body.correctie = { reden: corr.reden };
     return ctx.save(body);
   };
   // WAARSCHUWING (op verzoek Abdel): een al VERZONDEN factuur/offerte wijzig je niet
   // zomaar — de klant heeft al een andere versie ontvangen. Wijzigen mag, maar pas
   // na deze bewuste bevestiging (en het wordt in het logboek vastgelegd).
-  const confirmEditIfSent = () => !inv.sentAt
+  const confirmEditIfSent = () => !!corr || !inv.sentAt
     || confirm(`LET OP: deze ${woord.toLowerCase()} is al verstuurd naar de klant. Wijzigen kan tot verwarring leiden — netter is een kopie (of bij een fout een creditregel). Toch wijzigen?`);
   const done = (msg) => { toast(msg); closeModal(); if (ctx.after) ctx.after(); };
   // NIET-OPGESLAGEN REGELS NOOIT STIL KWIJT (audit 3 okt 2026): "✓ Betaald", "Nog niet
@@ -4268,7 +4298,7 @@ function renderInvoiceEditor(ctx) {
   // versie en sloten het venster — nieuwe regels/prijzen waren weg (of de klant kreeg de
   // oude PDF). Nu: is er iets gewijzigd, dan eerst opslaan (met de bekende waarschuwing
   // bij een al verstuurd document). Geeft false als de gebruiker annuleert.
-  const standNu = () => JSON.stringify({ l: readLines(), b: $('#inv-btw') && $('#inv-btw').value, n: $('#inv-note') && $('#inv-note').value, d: readDiscount(), s: readSignature() !== undefined });
+  const standNu = () => JSON.stringify({ l: readLines(), b: $('#inv-btw') && $('#inv-btw').value, n: $('#inv-note') && $('#inv-note').value, d: readDiscount(), s: readSignature() !== undefined, r: readRep() || '' });
   const beginStand = standNu();
   const bewaarEerst = async () => {
     if (locked || !inv.id || standNu() === beginStand) return true;
@@ -4280,21 +4310,62 @@ function renderInvoiceEditor(ctx) {
     const cp = { name: $('#cust-name').value, phone: $('#cust-phone').value, email: $('#cust-email').value, address: $('#cust-address').value };
     if (!cp.name.trim()) { toast('Naam mag niet leeg zijn', true); return; }
     try {
+      const oudAdres = String(customer.address || '').trim();
       const updated = await api(`/api/customers/${customer.id}`, 'PATCH', cp);
       Object.assign(customer, { name: updated.name, phone: updated.phone, email: updated.email, address: updated.address });
       const sum = $('#modal details summary'); if (sum) sum.innerHTML = `${icon('user', 13)} Klantgegevens — ${esc(customer.name)} (klik om te wijzigen)`;
       const h = $('#modal h2'); if (h) h.innerHTML = `${icon('mail', 16)} ${woord} — ${esc(customer.name)}`;
-      toast('Klantgegevens opgeslagen');
+      let melding = 'Klantgegevens opgeslagen';
+      // Het klantadres kan de standaard voor de reparatielocatie zijn. Stond het veld nog op
+      // de oude standaard, dan gaat het mee; een zelf ingevuld adres blijft staan. Is het
+      // klantadres gewijzigd maar staat er een ander adres als reparatielocatie (dat van de
+      // opdracht, of zelf ingevuld), dan zeggen we dat erbij — anders verwacht je het nieuwe
+      // adres op de PDF.
+      if (ctx.haalRepStandaard && $('#inv-rep')) {
+        try {
+          const nieuw = String(await ctx.haalRepStandaard() || '');
+          const el = $('#inv-rep');
+          if (el && el.value.trim() === repStandaard) { el.value = nieuw; el.defaultValue = nieuw; }
+          repStandaard = nieuw;
+          const nieuwAdres = String(updated.address || '').trim();
+          if (el && nieuwAdres !== oudAdres && el.value.trim() && el.value.trim() !== nieuwAdres) melding = 'Klantgegevens opgeslagen. Let op: de reparatielocatie hieronder is niet meegewijzigd.';
+        } catch { /* veld blijft zoals het was */ }
+      }
+      toast(melding);
     } catch (err) { toast(err.message, true); }
   };
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
   if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); }, { factuur: !isQuote, nummer: inv.number, bedrag: inv.totalIncl, status: inv.status, trustpilotAl: inv.trustpilotAt || customer.trustpilotUitgenodigdAt || '' });
+  // Corrigeren: eerst de reden vragen (eigen venster, geen prompt), dan dezelfde editor
+  // opnieuw tekenen met de velden open. Annuleren laat alles zoals het was.
+  if ($('#inv-corr')) $('#inv-corr').onclick = async () => {
+    const reden = await vraagTekst({
+      titel: `Factuur ${inv.number || ''} corrigeren`,
+      uitleg: 'Deze factuur is al verstuurd en staat op betaald. Je past hem aan onder hetzelfde nummer; op de PDF komt "Gecorrigeerde versie". Stuur hem daarna opnieuw naar de klant.',
+      label: 'Wat was er fout?', placeholder: 'bv. verkeerd aantal cilinders', knop: 'Corrigeren',
+      valideer: (v) => (v.length < 3 ? 'Geef kort aan wat er fout was (minimaal 3 tekens).' : v.length > 200 ? 'Houd het kort (maximaal 200 tekens).' : ''),
+    });
+    if (reden === null) return;
+    // Wat er al in de regels is getypt (die velden staan ook vergrendeld open) gaat mee.
+    const regelsNu = readLines();
+    renderInvoiceEditor({ ...ctx, inv: { ...inv, lines: regelsNu.length ? regelsNu : inv.lines }, correctie: { reden } });
+  };
   if ($('#inv-save')) $('#inv-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => { if (!confirmEditIfSent()) return; try {
     // Melding op het ANTWOORD van de server (28 sep 2026, audit): een nieuwe factuur
     // krijgt bij standaardBetaald meteen 'betaald', terwijl hier "Concept opgeslagen"
     // stond (de knop heette bij een nieuwe factuur ook "Concept opslaan").
     const saved = await saveConcept();
+    // Correctie opgeslagen: de factuur is weer vergrendeld. Het venster blijft open en
+    // toont de verse stand ("Gecorrigeerd op …") met de knop "Verstuur opnieuw".
+    if (corr) {
+      // De server legt alleen een correctie vast als er echt iets is veranderd.
+      const gewijzigd = !!(saved && saved.gecorrigeerdAt && saved.gecorrigeerdAt !== inv.gecorrigeerdAt);
+      toast(gewijzigd ? `Correctie opgeslagen — het nummer blijft ${inv.number || ''}` : 'Er is niets gewijzigd — de factuur is gebleven zoals hij was');
+      if (ctx.after) ctx.after();
+      openStandaloneInvoice(inv.id);
+      return;
+    }
     const st = (saved && saved.status) || inv.status;
     done(inv.sentAt ? 'Gewijzigd opgeslagen (vastgelegd in het logboek)' : st === 'betaald' ? `${woord} opgeslagen (staat op betaald)` : st === 'concept' ? 'Concept opgeslagen' : `${woord} opgeslagen`); } catch (err) { toast(err.message, true); } });
   // Totaal incl. btw zoals het NU in het scherm staat (voor de betaald-vraag).
@@ -4976,7 +5047,7 @@ function renderInvoices() {
       <div>
         ${vast ? `<div class="inv-vast-kop">${icon('punaise', 12)} Vastgepind${vast.notitie ? `: <span class="inv-vast-notitie">${esc(vast.notitie)}</span>` : ''} <span class="muted small">— ${esc(vast.door || '')}${vast.at ? ', ' + esc(fmtDateShort(vast.at)) : ''}</span></div>` : ''}
         <div>${quote ? `<span class="chip" style="font-size:11px">OFFERTE</span> ` : ''}<strong>${esc(i.number)}</strong> · ${esc(i.customerName || 'klant')} <span class="muted small">${i.orderTitle ? '— ' + esc(i.orderTitle) : '(losstaand)'}</span></div>
-        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span class="inv-st ${overdue ? 'verlopen' : esc(i.status)}">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}${i.bounce ? ` · <span class="inv-bounce" title="${esc(i.bounce.reden || '')}">mail NIET aangekomen — adres controleren</span>` : ''}${i.oninbaar ? ` · <span class="muted">afgeschreven ${esc(fmtDateShort(i.oninbaar.at))}${i.oninbaar.door ? ' door ' + esc(i.oninbaar.door) : ''}${i.oninbaar.reden ? ' — ' + esc(i.oninbaar.reden) : ''}</span>` : ''}</div>
+        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span class="inv-st ${overdue ? 'verlopen' : esc(i.status)}">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}${i.gecorrigeerdAt ? ` · <span class="inv-gecorr" title="Gecorrigeerd op ${esc(fmtDateShort(i.gecorrigeerdAt))}${(i.correcties || []).length ? ' — ' + esc(i.correcties[i.correcties.length - 1].reden || '') : ''}. Het factuurnummer is hetzelfde gebleven.">gecorrigeerd</span>` : ''}${i.bounce ? ` · <span class="inv-bounce" title="${esc(i.bounce.reden || '')}">mail NIET aangekomen — adres controleren</span>` : ''}${i.oninbaar ? ` · <span class="muted">afgeschreven ${esc(fmtDateShort(i.oninbaar.at))}${i.oninbaar.door ? ' door ' + esc(i.oninbaar.door) : ''}${i.oninbaar.reden ? ' — ' + esc(i.oninbaar.reden) : ''}</span>` : ''}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <strong style="font-size:15px">${eur(i.totalIncl)}</strong>
@@ -5135,14 +5206,60 @@ function renderCijfersFilter() {
 async function loadFinance() {
   if (!$('#finMonth').value) $('#finMonth').value = lokaleDag().slice(0, 7);
   const qs = cijfersFilterQs();
-  const [fin, cv] = await Promise.all([
+  const [fin, cv, fo] = await Promise.all([
     api(`/api/finance?month=${$('#finMonth').value}${qs}`),
     api(`/api/conversie?dagen=${conversieDagen()}${qs}`).catch((e) => ({ _error: e.message })),
+    api(`/api/finance/facturen-omzet?maand=${$('#finMonth').value}`).catch((e) => ({ _error: e.message })),
   ]);
-  state._finance = fin; state._conversie = cv;
+  state._finance = fin; state._conversie = cv; state._factOmzet = fo;
   renderCijfersFilter();
   renderConversie();
+  renderFacturenOmzet();
   renderFinance();
+}
+// ---------- FACTUREN DEZE MAAND (23 nov 2026, besluit eigenaar) ----------
+// "Omzet moet zijn verstuurde facturen, met daarnaast welke facturen zijn betaald." Een blok
+// boven "Omzet en kosten" met twee tabbladen: Verstuurd (standaard) en Betaald. Het volgt de
+// maandkiezer van de pagina; de boekingen eronder blijven zoals ze zijn. Klik op een regel
+// opent de factuur.
+function renderFacturenOmzet() {
+  const el = $('#facturenOmzetPanel'); if (!el) return;
+  const d = state._factOmzet;
+  if (!d || d._error) {
+    el.innerHTML = `<div class="info-card fo-card"><h3>Facturen deze maand</h3><div class="muted small">${esc((d && d._error) || 'Kon de facturen van deze maand niet laden.')}</div></div>`;
+    return;
+  }
+  const tab = state._foTab === 'betaald' ? 'betaald' : 'verstuurd';
+  const blok = d[tab] || { aantal: 0, exclBtw: 0, inclBtw: 0, facturen: [] };
+  const open = d.openstaand || { aantal: 0, inclBtw: 0 };
+  const dag = (iso) => { const t = new Date(iso); return isNaN(t) ? '' : t.toLocaleDateString('nl-NL', { day: '2-digit', month: '2-digit' }); };
+  const f = cijfersFilter();
+  const filterActief = !!(f.monteur || f.bron || f.website);
+  const tabKnop = (naam, label, n) => `<button type="button" role="tab" class="fo-tab${tab === naam ? ' on' : ''}" data-tab="${naam}" aria-selected="${tab === naam}">${label} <span class="fo-tab-n">${n}</span></button>`;
+  const rijen = (blok.facturen || []).map((x) => `
+        <button type="button" class="fo-rij" data-inv="${esc(x.id)}" title="Factuur openen">
+          <span class="fo-nr">${esc(x.number)}</span>
+          <span class="fo-klant">${esc(x.klant || 'klant')}${tab === 'verstuurd' && x.status !== 'betaald' ? ' <span class="inv-st verzonden">nog niet betaald</span>' : ''}</span>
+          <span class="fo-datum muted small">${esc(dag(tab === 'betaald' ? x.paidAt : x.sentAt))}</span>
+          <strong class="fo-bedrag">${eurF(x.exclBtw)}</strong>
+        </button>`).join('');
+  el.innerHTML = `
+    <div class="info-card fo-card">
+      <div class="fo-kop">
+        <h3>Facturen deze maand <span class="muted small">— ${esc(d.maand)}</span></h3>
+        <div class="fo-tabs" role="tablist">${tabKnop('verstuurd', 'Verstuurd', (d.verstuurd || {}).aantal || 0)}${tabKnop('betaald', 'Betaald', (d.betaald || {}).aantal || 0)}</div>
+      </div>
+      <div class="muted small fo-uitleg">Verstuurd = facturen die in deze maand naar de klant zijn gegaan. Betaald = facturen die in deze maand op betaald zijn gezet.${filterActief ? ' Het filter hierboven geldt niet voor dit blok: je ziet alle facturen.' : ''}</div>
+      <div class="fo-cijfers">
+        <div class="fo-getal"><div class="num" id="foAantal">${blok.aantal}</div><div class="lbl">${tab === 'betaald' ? 'Betaalde facturen' : 'Verstuurde facturen'}</div></div>
+        <div class="fo-getal"><div class="num" id="foOmzet">${eurF(blok.exclBtw)}</div><div class="lbl">${tab === 'betaald' ? 'Omzet betaalde facturen' : 'Omzet verstuurde facturen'} <span class="fin-btw">excl. btw</span></div><div class="muted small">${eurF(blok.inclBtw)} incl. btw</div></div>
+        ${tab === 'verstuurd' ? `<div class="fo-getal"><div class="num" id="foOpen">${open.aantal}</div><div class="lbl">Daarvan nog niet betaald</div><div class="muted small">${eurF(open.inclBtw)} incl. btw</div></div>` : ''}
+      </div>
+      ${rijen ? `<div class="fo-lijst" id="foLijst">${rijen}</div>${blok.aantal > (blok.facturen || []).length ? `<div class="muted small" style="margin-top:6px">De nieuwste ${(blok.facturen || []).length} van ${blok.aantal} staan in de lijst; de totalen tellen ze allemaal mee.</div>` : ''}`
+    : `<div class="muted small fo-leeg">${tab === 'betaald' ? 'In deze maand zijn nog geen facturen op betaald gezet.' : 'In deze maand zijn nog geen facturen verstuurd.'}</div>`}
+    </div>`;
+  $$('.fo-tab', el).forEach((b) => { b.onclick = () => { state._foTab = b.dataset.tab; renderFacturenOmzet(); }; });
+  $$('.fo-rij', el).forEach((b) => { b.onclick = () => openStandaloneInvoice(b.dataset.inv); });
 }
 function renderFinance() {
   const d = state._finance; if (!d) return;
@@ -7630,7 +7747,9 @@ function modal(html) {
   // bij sluiten terug naar de knop die het venster opende.
   const m = $('#modal'); m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true');
   if (!document.body.classList.contains('modal-focus-bewaard')) { modal._opener = document.activeElement; document.body.classList.add('modal-focus-bewaard'); }
-  const eerste = m.querySelector('input:not([type=hidden]):not([type=checkbox]):not([type=file]), textarea, select, button.btn-primary, button');
+  // [data-geen-focus]: een knop die niet vanzelf de focus mag krijgen (bv. "Corrigeren" op een
+  // vergrendelde factuur — een losse Enter moet daar niets in gang zetten).
+  const eerste = m.querySelector('input:not([type=hidden]):not([type=checkbox]):not([type=file]), textarea, select, button.btn-primary, button:not([data-geen-focus])');
   if (eerste && !window.matchMedia('(max-width: 820px)').matches) setTimeout(() => eerste.focus({ preventScroll: true }), 30);
 }
 function closeModal() {

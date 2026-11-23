@@ -42,21 +42,24 @@ const pdf = await fetch(`${BASE}/api/invoices/${ID}/pdf`, { headers: { cookie } 
 ok('PDF 200 + juiste content-type', pdf.status === 200 && /application\/pdf/.test(pdf.headers.get('content-type') || ''));
 ok('PDF heeft inhoud', (await pdf.arrayBuffer()).byteLength > 5000);
 
+// Tekst uit een pdfkit-PDF halen: streams uitpakken en de hex-/haakjes-tekst decoderen.
+// (Gedeeld door de PDF-controles hieronder: opdrachttitel, reparatielocatie, correctie.)
+const zlib = await import('node:zlib');
+const pdfTekst = (buf) => {
+  const s = Buffer.from(buf).toString('latin1'); let uit = '';
+  for (const m of s.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+    let data = Buffer.from(m[1], 'latin1');
+    try { data = zlib.inflateSync(data); } catch { /* niet gecomprimeerd */ }
+    const t = data.toString('latin1');
+    for (const h of t.matchAll(/<([0-9a-fA-F]+)>/g)) uit += Buffer.from(h[1], 'hex').toString('latin1');
+    for (const q of t.matchAll(/\(((?:\\.|[^\\)])*)\)\s*Tj/g)) uit += q[1];
+  }
+  return uit;
+};
+const pdfVan = async (invId) => pdfTekst(await (await fetch(`${BASE}/api/invoices/${invId}/pdf`, { headers: { cookie } })).arrayBuffer());
+
 console.log('\n== Geen interne opdrachttitel op de factuur (12 okt 2026) ==');
 {
-  const zlib = await import('node:zlib');
-  // Tekst uit een pdfkit-PDF halen: streams uitpakken en de hex-/haakjes-tekst decoderen.
-  const pdfTekst = (buf) => {
-    const s = Buffer.from(buf).toString('latin1'); let uit = '';
-    for (const m of s.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
-      let data = Buffer.from(m[1], 'latin1');
-      try { data = zlib.inflateSync(data); } catch { /* niet gecomprimeerd */ }
-      const t = data.toString('latin1');
-      for (const h of t.matchAll(/<([0-9a-fA-F]+)>/g)) uit += Buffer.from(h[1], 'hex').toString('latin1');
-      for (const q of t.matchAll(/\(((?:\\.|[^\\)])*)\)\s*Tj/g)) uit += q[1];
-    }
-    return uit;
-  };
   const k2 = await api('POST', '/api/customers', { name: 'Titel Klant', phone: '0699999988', email: 'titel@example.nl', address: 'Ravelstraat 1, Zaandijk' });
   const o2 = await api('POST', '/api/orders', { customerId: k2.json.id, title: 'Zaandijk — hefschuifpui slot kapot en deur gezakt', status: 'afgerond' });
   const f2r = await api('POST', '/api/invoices', { customerId: k2.json.id, orderId: o2.json.id, type: 'factuur' });
@@ -294,6 +297,139 @@ console.log('\n== Eén offerte = hooguit één factuur (audit 3 okt 2026) ==');
   ok('daarna goedkeuren maakt GEEN extra factuur-concept', !st.json.autoInvoice || st.json.autoInvoice.id === f1.json.id, JSON.stringify(st.json.autoInvoice));
   const alle = (await api('GET', '/api/invoices')).json.filter((i) => i.copiedFrom === (offQ.invoice || offQ).number && i.type === 'factuur');
   ok('in totaal precies één factuur uit deze offerte', alle.length === 1, String(alle.length));
+}
+
+console.log('\n== Reparatielocatie invulbaar in de factuur/offerte (23 nov 2026) ==');
+// Wens eigenaar: de PDF-regel "Reparatielocatie" was altijd het klantadres. Nu: wat er op de
+// factuur is ingevuld → het adres van DIE opdracht → het klantadres. Leeg = terug naar standaard.
+{
+  const KLANT = 'Klantlaan 1, 3911 AA Rhenen'; const WERK = 'Werkstraat 9, 3901 BB Veenendaal'; const LOODS = 'Loods 3, Havenweg 12, 4811 XX Breda';
+  const regels = [{ description: 'Cilinder vervangen', qty: 1, priceExcl: 90 }];
+  const kL = (await api('POST', '/api/customers', { name: 'Locatie Klant', phone: '0612340011', email: 'locatie@example.nl', address: KLANT })).json;
+  const oL = (await api('POST', '/api/orders', { customerId: kL.id, customerAddress: WERK, title: 'Veenendaal — slot achterdeur', status: 'afgerond' })).json;
+  ok('opdracht draagt een eigen adres dat afwijkt van het klantrecord', oL.intake?.address === WERK, JSON.stringify(oL.intake));
+  const ed0 = await api('GET', `/api/orders/${oL.id}/invoice`);
+  ok('editor via de opdracht krijgt de standaard mee (adres van de opdracht)', ed0.json.reparatieAdresStandaard === WERK, JSON.stringify(ed0.json.reparatieAdresStandaard));
+  const fL = (await api('POST', '/api/invoices', { customerId: kL.id, orderId: oL.id, type: 'factuur' })).json.invoice;
+  await api('PATCH', `/api/invoices/${fL.id}`, { lines: regels, btwPct: 21, note: '' });
+  const ed1 = await api('GET', `/api/invoices/${fL.id}`);
+  ok('editor van de factuur: standaard = adres van de opdracht, zelf nog niets ingevuld', ed1.json.reparatieAdresStandaard === WERK && !ed1.json.invoice.reparatieAdres, JSON.stringify([ed1.json.reparatieAdresStandaard, ed1.json.invoice.reparatieAdres]));
+  const t1 = await pdfVan(fL.id);
+  ok('PDF: standaard staat het adres van de opdracht er (niet het klantadres)', t1.includes(`Reparatielocatie: ${WERK}`) && !t1.includes(`Reparatielocatie: ${KLANT}`), t1.slice(300, 520));
+  ok('PDF: het klantblok bovenaan houdt gewoon het klantadres', t1.includes(`Locatie Klant${KLANT}`), t1.slice(250, 420));
+  // Zelf invullen wint.
+  const p1 = await api('PATCH', `/api/invoices/${fL.id}`, { lines: regels, btwPct: 21, note: '', reparatieAdres: `  ${LOODS}  ` });
+  ok('ingevulde reparatielocatie wordt bewaard (bijgeknipt)', p1.status === 200 && p1.json.reparatieAdres === LOODS, JSON.stringify(p1.json.reparatieAdres));
+  const t2 = await pdfVan(fL.id);
+  ok('PDF: de ingevulde reparatielocatie wint van opdracht en klant', t2.includes(`Reparatielocatie: ${LOODS}`) && !t2.includes(`Reparatielocatie: ${WERK}`), t2.slice(300, 520));
+  ok('editor geeft de bewaarde waarde én de standaard terug', (await api('GET', `/api/invoices/${fL.id}`)).json.invoice.reparatieAdres === LOODS && (await api('GET', `/api/invoices/${fL.id}`)).json.reparatieAdresStandaard === WERK);
+  // Opslaan ZONDER het veld (oud scherm) laat de ingevulde waarde staan.
+  const p1b = await api('PATCH', `/api/invoices/${fL.id}`, { lines: regels, btwPct: 21, note: '' });
+  ok('opslaan zonder het veld (oud scherm) laat de reparatielocatie staan', p1b.json.reparatieAdres === LOODS);
+  // Kopie neemt hem mee.
+  const kopL = (await api('POST', `/api/invoices/${fL.id}/copy`, {})).json;
+  ok('kopie neemt de reparatielocatie mee', kopL.reparatieAdres === LOODS && kopL.id !== fL.id, JSON.stringify(kopL.reparatieAdres));
+  // Leegmaken = terug naar de standaard.
+  const p2 = await api('PATCH', `/api/invoices/${fL.id}`, { lines: regels, btwPct: 21, note: '', reparatieAdres: '' });
+  ok('leegmaken → niets meer bewaard op de factuur', p2.status === 200 && !('reparatieAdres' in p2.json), JSON.stringify(p2.json.reparatieAdres));
+  ok('PDF: na leegmaken weer het adres van de opdracht', (await pdfVan(fL.id)).includes(`Reparatielocatie: ${WERK}`));
+  // Gelijk aan de standaard invullen = de standaard volgen (bevriest het adres niet).
+  const p3 = await api('PATCH', `/api/invoices/${fL.id}`, { lines: regels, btwPct: 21, note: '', reparatieAdres: WERK });
+  ok('zelfde adres als de standaard wordt niet apart bewaard', !('reparatieAdres' in p3.json), JSON.stringify(p3.json.reparatieAdres));
+  const p4 = await api('PATCH', `/api/invoices/${fL.id}`, { lines: regels, btwPct: 21, note: '', reparatieAdres: 'A'.repeat(260) });
+  ok('maximaal 200 tekens', (p4.json.reparatieAdres || '').length === 200, String((p4.json.reparatieAdres || '').length));
+  await api('PATCH', `/api/invoices/${fL.id}`, { lines: regels, btwPct: 21, note: '', reparatieAdres: '' });
+  // Offerte: zelfde veld, en "factuur van offerte" neemt het mee.
+  const qL = (await api('POST', '/api/invoices', { customerId: kL.id, type: 'offerte' })).json.invoice;
+  ok('losse offerte (zonder opdracht): standaard = klantadres', (await api('GET', `/api/invoices/${qL.id}`)).json.reparatieAdresStandaard === KLANT);
+  await api('PATCH', `/api/invoices/${qL.id}`, { lines: regels, btwPct: 21, note: '', reparatieAdres: LOODS });
+  const tq = await pdfVan(qL.id);
+  ok('offerte-PDF: ingevulde reparatielocatie', tq.includes(qL.number) && tq.includes(`Reparatielocatie: ${LOODS}`), tq.slice(300, 520));
+  const fq = (await api('POST', `/api/invoices/${qL.id}/copy`, { type: 'factuur' })).json;
+  ok('factuur van offerte neemt de reparatielocatie mee', fq.type === 'factuur' && fq.reparatieAdres === LOODS, JSON.stringify([fq.type, fq.reparatieAdres]));
+  // Geen enkel adres bekend → geen regel (zoals altijd).
+  const kZ = (await api('POST', '/api/customers', { name: 'Zonder Adres', phone: '0612340012' })).json;
+  const fZ = (await api('POST', '/api/invoices', { customerId: kZ.id, type: 'factuur' })).json.invoice;
+  await api('PATCH', `/api/invoices/${fZ.id}`, { lines: regels, btwPct: 21, note: '' });
+  const tz = await pdfVan(fZ.id);
+  ok('geen adres bekend → geen regel "Reparatielocatie" op de PDF', tz.includes(fZ.number) && !/Reparatielocatie/.test(tz));
+  // Vergrendeld (verstuurd + betaald): het veld volgt dezelfde vergrendeling als de regels.
+  await api('POST', `/api/invoices/${fL.id}/send-whatsapp`, { betaald: true });
+  const pV = await api('PATCH', `/api/invoices/${fL.id}`, { lines: regels, btwPct: 21, note: '', reparatieAdres: LOODS });
+  ok('vergrendelde factuur: reparatielocatie wijzigen wordt geweigerd zoals de andere velden', pV.status === 400 && /verstuurd én betaald/.test(pV.json.error || ''), JSON.stringify(pV.json));
+}
+
+console.log('\n== Factuur corrigeren binnen hetzelfde nummer (23 nov 2026) ==');
+// Wens eigenaar: een verstuurde én betaalde factuur is vergrendeld; zit er een fout in, dan
+// corrigeert kantoor hem onder HETZELFDE nummer (met reden). Nummer/status/betaald/verzonden
+// blijven staan, de correctie wordt vastgelegd, de PDF zegt "Gecorrigeerde versie" en de
+// automatische omzet-boeking in Cijfers volgt het nieuwe bedrag.
+{
+  const admin = cookie;
+  await api('POST', '/api/users', { name: 'Assistente Corr', email: 'asscorr@keyservice.nl', password: 'ass12345', role: 'assistent' });
+  await api('POST', '/api/finance/settings', { autoSync: true, drsFeePerJob: 0 });
+  const kC = (await api('POST', '/api/customers', { name: 'Correctie Klant', phone: '0612340021', email: 'correctie@example.nl', address: 'Foutstraat 2, 3911 AB Rhenen' })).json;
+  const oC = (await api('POST', '/api/orders', { customerId: kC.id, title: 'Rhenen — cilinders vervangen', status: 'afgerond' })).json;
+  const fC = (await api('POST', '/api/invoices', { customerId: kC.id, orderId: oC.id, type: 'factuur' })).json.invoice;
+  await api('PATCH', `/api/invoices/${fC.id}`, { lines: [{ description: 'Cilinder', qty: 1, priceExcl: 100 }], btwPct: 21, note: '' });
+  const verstuur = await api('POST', `/api/invoices/${fC.id}/send-whatsapp`, { betaald: true });
+  await api('POST', '/api/finance/autosync', {});
+  const maand = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }).slice(0, 7);
+  const boeking = () => api('GET', `/api/finance?month=${maand}`).then((r) => (r.json.report.entries || []).find((e) => e.sourceRef === `inv:${fC.id}`));
+  const voor = (await api('GET', `/api/invoices/${fC.id}`)).json.invoice;
+  ok('uitgangspunt: verstuurd + betaald (vergrendeld), omzet 100 geboekt', verstuur.status === 200 && voor.status === 'betaald' && !!voor.sentAt && !!voor.paidAt && (await boeking())?.amount === 100, JSON.stringify([verstuur.status, voor.status, voor.sentAt]));
+  const nieuweRegels = [{ description: 'Cilinder', qty: 2, priceExcl: 100 }];
+  // Zonder correctie: geweigerd, precies zoals altijd.
+  const zonder = await api('PATCH', `/api/invoices/${fC.id}`, { lines: nieuweRegels, btwPct: 21, note: '' });
+  ok('zonder correctie: vergrendelde factuur wordt geweigerd zoals altijd', zonder.status === 400 && /verstuurd én betaald/.test(zonder.json.error || ''), JSON.stringify(zonder.json));
+  // Reden ontbreekt / te kort / te lang → 400, er verandert niets.
+  const kort = await api('PATCH', `/api/invoices/${fC.id}`, { lines: nieuweRegels, btwPct: 21, note: '', correctie: { reden: 'ab' } });
+  const leeg = await api('PATCH', `/api/invoices/${fC.id}`, { lines: nieuweRegels, btwPct: 21, note: '', correctie: {} });
+  const lang = await api('PATCH', `/api/invoices/${fC.id}`, { lines: nieuweRegels, btwPct: 21, note: '', correctie: { reden: 'x'.repeat(201) } });
+  ok('reden te kort, leeg of te lang → 400 met uitleg', kort.status === 400 && leeg.status === 400 && lang.status === 400 && /3 tot 200/.test(kort.json.error || ''), JSON.stringify([kort.status, leeg.status, lang.status, kort.json.error]));
+  ok('na de geweigerde pogingen is de factuur ongewijzigd', (await api('GET', `/api/invoices/${fC.id}`)).json.invoice.totalExcl === 100 && !(await api('GET', `/api/invoices/${fC.id}`)).json.invoice.correcties);
+  // Assistente corrigeert.
+  cookie = '';
+  await api('POST', '/api/login', { email: 'asscorr@keyservice.nl', password: 'ass12345' });
+  const corr = await api('PATCH', `/api/invoices/${fC.id}`, { lines: nieuweRegels, btwPct: 21, note: '', correctie: { reden: '  Verkeerd aantal cilinders  ' } });
+  cookie = admin;
+  const na = corr.json || {};
+  ok('assistente corrigeert met reden → 200, nieuw totaal', corr.status === 200 && na.totalExcl === 200 && na.totalIncl === 242, JSON.stringify([corr.status, na.totalExcl, na.totalIncl, na.error]));
+  ok('nummer, status, betaaldatum en verzenddatum zijn onaangeroerd', na.number === voor.number && na.status === 'betaald' && na.paidAt === voor.paidAt && na.sentAt === voor.sentAt, JSON.stringify([na.number, na.status, na.paidAt, na.sentAt]));
+  const c0 = (na.correcties || [])[0] || {};
+  ok('correctie vastgelegd: wie, wanneer, reden en totaal incl. btw van → naar', (na.correcties || []).length === 1 && c0.door === 'Assistente Corr' && c0.reden === 'Verkeerd aantal cilinders' && c0.vanTotaal === 121 && c0.naarTotaal === 242 && !!c0.at && na.gecorrigeerdAt === c0.at, JSON.stringify(na.correcties));
+  ok('Cijfers: de automatische omzet-boeking volgt het nieuwe bedrag (200 excl.)', (await boeking())?.amount === 200, JSON.stringify(await boeking()));
+  const tC = await pdfVan(fC.id);
+  ok('PDF: zelfde nummer + regel "Gecorrigeerde versie van dd-mm-jjjj"', tC.includes(`Factuur: ${voor.number}`) && /Gecorrigeerde versie van \d{2}-\d{2}-\d{4}/.test(tC), tC.slice(300, 480));
+  ok('daarna is de factuur weer vergrendeld (zonder correctie geweigerd)', (await api('PATCH', `/api/invoices/${fC.id}`, { lines: nieuweRegels, btwPct: 21, note: '' })).status === 400);
+  const logC = (await api('GET', '/api/activity')).json;
+  ok('logboek: "factuur gecorrigeerd" met nummer en reden', (Array.isArray(logC) ? logC : logC?.items || []).some((a) => /factuur gecorrigeerd/.test(JSON.stringify(a)) && JSON.stringify(a).includes(voor.number) && /Verkeerd aantal cilinders/.test(JSON.stringify(a))));
+  ok('lijst geeft gecorrigeerdAt mee (label "gecorrigeerd")', !!((await api('GET', '/api/invoices')).json || []).find((i) => i.id === fC.id)?.gecorrigeerdAt);
+  // "Correctie" waarbij niets verandert: er wordt niets vastgelegd (geen stempel op een gelijke factuur).
+  const niets = await api('PATCH', `/api/invoices/${fC.id}`, { lines: nieuweRegels, btwPct: 21, note: '', correctie: { reden: 'Toch niets aangepast' } });
+  ok('correctie zonder inhoudelijke wijziging: 200, maar geen nieuwe correctie vastgelegd', niets.status === 200 && (niets.json.correcties || []).length === 1 && niets.json.gecorrigeerdAt === na.gecorrigeerdAt, JSON.stringify([niets.status, niets.json.correcties]));
+  // Tweede correctie (via de opdracht-route) komt erbij; ook de reparatielocatie kan zo gecorrigeerd worden.
+  const corr2 = await api('POST', `/api/orders/${oC.id}/invoice`, { lines: nieuweRegels, btwPct: 21, note: '', reparatieAdres: 'Goedstraat 7, 3911 AC Rhenen', correctie: { reden: 'Verkeerde reparatielocatie' } });
+  ok('tweede correctie (via de opdracht) komt erbij; reparatielocatie mee gecorrigeerd', corr2.status === 200 && (corr2.json.correcties || []).length === 2 && corr2.json.reparatieAdres === 'Goedstraat 7, 3911 AC Rhenen' && corr2.json.number === voor.number && corr2.json.correcties[1].vanTotaal === 242 && corr2.json.correcties[1].naarTotaal === 242, JSON.stringify([corr2.status, corr2.json.correcties, corr2.json.error]));
+  // Opnieuw versturen kan gewoon; de factuurdatum (betaaltermijn) verschuift niet.
+  const opnieuw = await api('POST', `/api/invoices/${fC.id}/send-whatsapp`, { betaald: true });
+  const naOpnieuw = (await api('GET', `/api/invoices/${fC.id}`)).json.invoice;
+  ok('gecorrigeerde factuur opnieuw versturen kan; status en factuurdatum blijven', opnieuw.status === 200 && naOpnieuw.status === 'betaald' && naOpnieuw.sentAt === voor.sentAt, JSON.stringify([opnieuw.status, naOpnieuw.status]));
+  // Kopie = nieuw document: neemt de correctie-geschiedenis niet mee.
+  const kopC = (await api('POST', `/api/invoices/${fC.id}/copy`, {})).json;
+  ok('kopie neemt de correctie-geschiedenis niet mee', !!kopC.id && !kopC.correcties && !kopC.gecorrigeerdAt);
+  // Goedgekeurde offerte blijft dicht, ook met correctie.
+  const qC = (await api('POST', '/api/invoices', { customerId: kC.id, type: 'offerte' })).json.invoice;
+  await api('PATCH', `/api/invoices/${qC.id}`, { lines: [{ description: 'Slot', qty: 1, priceExcl: 80 }], btwPct: 21, note: '' });
+  await api('POST', `/api/invoices/${qC.id}/status`, { status: 'verzonden' });
+  await api('POST', `/api/invoices/${qC.id}/status`, { status: 'goedgekeurd' });
+  const qCorr = await api('PATCH', `/api/invoices/${qC.id}`, { lines: [{ description: 'Slot', qty: 2, priceExcl: 80 }], btwPct: 21, note: '', correctie: { reden: 'Aantal aanpassen' } });
+  const qNa = (await api('GET', `/api/invoices/${qC.id}`)).json.invoice;
+  ok('goedgekeurde offerte blijft vergrendeld, ook mét correctie', qCorr.status === 400 && /goedgekeurd/.test(qCorr.json.error || '') && qNa.totalExcl === 80 && !qNa.correcties, JSON.stringify([qCorr.status, qCorr.json.error, qNa.totalExcl]));
+  // Een NIET-vergrendelde factuur: `correctie` doet niets (gewoon opslaan, geen correctie-regel).
+  const fN = (await api('POST', '/api/invoices', { customerId: kC.id, type: 'factuur' })).json.invoice;
+  const nCorr = await api('PATCH', `/api/invoices/${fN.id}`, { lines: [{ description: 'Sleutel', qty: 1, priceExcl: 10 }], btwPct: 21, note: '', correctie: { reden: 'Niet nodig' } });
+  ok('niet-vergrendelde factuur: gewoon opgeslagen, geen correctie vastgelegd', nCorr.status === 200 && nCorr.json.totalExcl === 10 && !nCorr.json.correcties && !nCorr.json.gecorrigeerdAt, JSON.stringify([nCorr.status, nCorr.json.correcties]));
 }
 
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);

@@ -964,6 +964,43 @@ table tbody tr:hover { background: var(--panel-2); }
 .inv-st.betaald, .inv-st.goedgekeurd { background: var(--ok-soft); color: var(--ok); }
 .inv-st.afgekeurd, .inv-st.verlopen { background: var(--danger-soft); color: var(--danger); }
 .inv-st.oninbaar { background: var(--line-soft); color: var(--ink-soft); }
+/* Gecorrigeerde factuur (23 nov 2026): rustig label in de lijst + regels in de editor. */
+.inv-gecorr { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 11.5px; background: var(--accent-soft); color: var(--accent-ink); }
+.inv-corr-rij { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 10px; }
+.inv-corr-rij > span { flex: 1 1 auto; min-width: 0; }
+.inv-corr-rij > .btn { flex: 0 0 auto; }
+.inv-corr-melding { display: flex; flex-direction: column; gap: 3px; background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; }
+.inv-gecorr-regel { margin: -2px 0 10px; }
+/* Reparatielocatie in de factuur/offerte-editor: zichtbaar veld onder de klantgegevens. */
+.inv-rep { margin: 0 0 12px; }
+.inv-rep label { margin-bottom: 3px; }
+/* Cijfers — "Facturen deze maand": tabbladen Verstuurd / Betaald. */
+.fo-card { margin-bottom: 16px; }
+.fo-kop { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fo-kop h3 { margin: 0; }
+.fo-tabs { display: inline-flex; gap: 6px; }
+.fo-tab { border: 1px solid var(--line); background: var(--panel); color: var(--ink-soft); border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; min-height: 34px; }
+.fo-tab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.fo-tab-n { font-weight: 500; opacity: .8; margin-left: 2px; }
+.fo-uitleg { margin: 8px 0 12px; }
+.fo-cijfers { display: flex; flex-wrap: wrap; gap: 10px 36px; margin-bottom: 12px; }
+.fo-getal .num { font-size: 26px; font-weight: 750; letter-spacing: -.5px; }
+.fo-getal .lbl { color: var(--ink-soft); font-size: 13px; margin-top: 2px; }
+.fo-lijst { max-height: 264px; overflow-y: auto; border-top: 1px solid var(--line-soft); }
+.fo-rij { display: grid; grid-template-columns: 110px minmax(0, 1fr) 54px 96px; align-items: center; gap: 10px; width: 100%; padding: 8px 4px; border: 0; border-bottom: 1px solid var(--line-soft); background: none; color: var(--ink); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.fo-rij:last-child { border-bottom: 0; }
+@media (hover: hover) { .fo-rij:hover { background: var(--accent-soft); } }
+.fo-nr { font-weight: 600; white-space: nowrap; }
+.fo-klant { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fo-bedrag { text-align: right; white-space: nowrap; }
+.fo-leeg { padding: 6px 0 2px; }
+@media (max-width: 720px) {
+  .fo-tab { min-height: 40px; }
+  .fo-rij { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; min-height: 48px; }
+  .fo-rij .fo-klant { grid-column: 1 / -1; grid-row: 2; }
+  .fo-rij .fo-datum { grid-column: 1; grid-row: 3; }
+  .fo-rij .fo-bedrag { grid-column: 2; grid-row: 1; }
+}
 /* Kiezen op een opdracht: bestaande factuur/offerte openen of een nieuwe maken (26 okt 2026). */
 .doc-keuze-acties { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 14px; }
 .doc-keuze-lijst { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }

@@ -67,8 +67,8 @@ import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMo
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { formulierStatus, markeerActivatieAfgehandeld } from './formulieren.js';
 import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, drsKopjesMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel, alAfgerondGemeldOpAdres, nlDatum as drsVandaag } from './drs-rapport.js';
-import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn } from './invoices.js';
-import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions, removeAutoFeeForOrder, herkoppelDrsFee } from './finance.js';
+import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn, reparatieLocatieVan, isCorrigeerbaar, CORRECTIE_REDEN_MIN, CORRECTIE_REDEN_MAX } from './invoices.js';
+import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions, removeAutoFeeForOrder, herkoppelDrsFee, facturenOmzet } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { conversieData, maakConversieBriefing, omzetVan, factuurPerOpdracht } from './conversie.js';
 import { startWeeklyArchiver, runWeeklyArchive } from './archive.js';
@@ -4938,6 +4938,20 @@ function canTouchInvoice(req, inv) {
 }
 const findInv = (invId) => (db().invoices || []).find((i) => i.id === invId);
 const OPNIEUW_OPEN_EERST = 'Deze factuur is afgeschreven (oninbaar). Zet hem eerst terug naar open voordat je hem opnieuw verstuurt.';
+// CORRIGEREN BINNEN HETZELFDE NUMMER (23 nov 2026, wens eigenaar): een verstuurde én betaalde
+// factuur is vergrendeld; zit er een fout in, dan mag KANTOOR (beheerder + assistente) hem
+// corrigeren met `correctie: { reden }` bij het opslaan. Geeft { correctie } terug (null =
+// gewoon opslaan volgens de bestaande regels) of { status, error }. Zonder `correctie`, of bij
+// een document dat niet vergrendeld is, verandert er niets aan het bestaande gedrag; een
+// goedgekeurde offerte blijft dicht (saveInvoiceFields weigert die altijd).
+function correctieVoor(req, inv) {
+  const c = req.body && req.body.correctie;
+  if (!c || typeof c !== 'object' || !inv || !isCorrigeerbaar(inv)) return { correctie: null };
+  if (!['admin', 'assistent'].includes(req.user.role)) return { status: 403, error: 'Een verstuurde, betaalde factuur corrigeren doet kantoor.' };
+  const reden = String(c.reden ?? '').trim();
+  if (reden.length < CORRECTIE_REDEN_MIN || reden.length > CORRECTIE_REDEN_MAX) return { status: 400, error: `Geef kort aan waarom je deze factuur corrigeert (${CORRECTIE_REDEN_MIN} tot ${CORRECTIE_REDEN_MAX} tekens).` };
+  return { correctie: { reden, door: req.user.name } };
+}
 
 // Factuur ophalen (of leeg concept-voorstel op basis van de kaart).
 app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
@@ -4945,7 +4959,10 @@ app.get('/api/orders/:id/invoice', requireAuth, (req, res) => {
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const inv = (db().invoices || []).find((i) => i.id === order.invoiceId) || null;
-  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: getPriceList(), bundles: getPriceBundles(), documenten: documentenVanKlant(req, order) });
+  const customer = db().customers.find((c) => c.id === order.customerId) || {};
+  // reparatieAdresStandaard: wat er op de PDF komt als het veld Reparatielocatie leeg blijft
+  // (adres van deze opdracht, anders van de klant) — het scherm vult het veld daarmee voor.
+  res.json({ invoice: inv, settings: getInvoiceSettings(), priceList: getPriceList(), bundles: getPriceBundles(), documenten: documentenVanKlant(req, order), reparatieAdresStandaard: reparatieLocatieVan(null, order, customer) });
 });
 // Alle facturen/offertes van de klant van deze opdracht die deze gebruiker mag zien (26 okt
 // 2026, wens eigenaar: ook monteurs maken bij een bestaande, afgeronde klant een NIEUWE
@@ -4971,11 +4988,16 @@ app.post('/api/orders/:id/invoice', requireAuth, (req, res) => {
   if (!order) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchOrder(req, order)) return res.status(403).json({ error: 'Alleen je eigen opdrachten' });
   const wasSent = !!(order.invoiceId && (db().invoices || []).find((i) => i.id === order.invoiceId && i.status === 'verzonden'));
-  const out = upsertInvoice(order, req.body || {}, req.user.name);
+  const corr = correctieVoor(req, order.invoiceId ? findInv(order.invoiceId) : null);
+  if (corr.error) return res.status(corr.status).json({ error: corr.error });
+  const out = upsertInvoice(order, req.body || {}, req.user.name, { correctie: corr.correctie });
   if (out.error) return res.status(400).json({ error: out.error });
   // Verzonden document gewijzigd (na de waarschuwing in het scherm): zichtbaar vastleggen.
-  if (wasSent) logActivity(req.user.name, `verzonden ${out.invoice.type} gewijzigd`, out.invoice.number);
-  else logActivity(req.user.name, `factuur opgeslagen (${out.invoice.status})`, `${out.invoice.number} — ${order.title}`);
+  // Een correctie staat al in het logboek (saveInvoiceFields).
+  if (!out.gecorrigeerd) {
+    if (wasSent) logActivity(req.user.name, `verzonden ${out.invoice.type} gewijzigd`, out.invoice.number);
+    else logActivity(req.user.name, `factuur opgeslagen (${out.invoice.status})`, `${out.invoice.number} — ${order.title}`);
+  }
   res.json(out.invoice);
 });
 
@@ -5120,7 +5142,7 @@ app.get('/api/invoices/:id', requireAuth, (req, res) => {
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
   const customer = db().customers.find((c) => c.id === inv.customerId) || {};
   const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || null) : null;
-  res.json({ invoice: inv, customer, order: order ? { id: order.id, title: order.title, werkbon: order.werkbon || null } : null, settings: getInvoiceSettings(), priceList: getPriceList(), bundles: getPriceBundles() });
+  res.json({ invoice: inv, customer, order: order ? { id: order.id, title: order.title, werkbon: order.werkbon || null } : null, settings: getInvoiceSettings(), priceList: getPriceList(), bundles: getPriceBundles(), reparatieAdresStandaard: reparatieLocatieVan(null, order, customer) });
 });
 
 // Regels/btw/notitie bijwerken. Betaald/geaccepteerd = vergrendeld.
@@ -5129,7 +5151,9 @@ app.patch('/api/invoices/:id', requireAuth, (req, res) => {
   if (!inv) return res.status(404).json({ error: 'Niet gevonden' });
   if (!canTouchInvoice(req, inv)) return res.status(403).json({ error: 'Geen toegang tot deze factuur' });
   const wasSent = inv.status === 'verzonden';
-  const out = saveInvoiceFields(inv, req.body || {});
+  const corr = correctieVoor(req, inv);
+  if (corr.error) return res.status(corr.status).json({ error: corr.error });
+  const out = saveInvoiceFields(inv, req.body || {}, { correctie: corr.correctie });
   if (out.error) return res.status(400).json({ error: out.error });
   // Verzonden document gewijzigd (na de waarschuwing in het scherm): zichtbaar vastleggen.
   if (wasSent) logActivity(req.user.name, `verzonden ${inv.type} gewijzigd`, inv.number);
@@ -5759,6 +5783,17 @@ app.get('/api/finance', requirePerm('finance'), (req, res) => {
     quickExpenses: QUICK_EXPENSES.filter((q) => !(q.category === 'Fee per opdracht' && getFinanceSettings().autoSync && getFinanceSettings().drsFeePerJob > 0)),
     settings: getFinanceSettings(),
   });
+});
+// FACTUREN DEZE MAAND (23 nov 2026, besluit eigenaar): omzet uit VERSTUURDE facturen, met
+// daarnaast de BETAALDE facturen — per maand, naast de bestaande boekingen (die blijven
+// ongewijzigd). ?maand=YYYY-MM (leeg = deze maand). Zie facturenOmzet in finance.js.
+app.get('/api/finance/facturen-omzet', requirePerm('finance'), (req, res) => {
+  const klanten = new Map((db().customers || []).map((c) => [c.id, c.name || '']));
+  res.json(facturenOmzet(String(req.query.maand || '').slice(0, 7), {
+    invoices: db().invoices || [],
+    klantNaam: (i) => klanten.get(i.customerId) || '',
+    totalen: (i) => computeTotals(i.lines, i.btwPct, i.discount),
+  }));
 });
 // CONVERSIE (20 sep 2026): hoeveel binnengekomen aanvragen worden écht uitgevoerd?
 // Zelfde recht als Cijfers. ?dagen=30|90|365 (7..730).

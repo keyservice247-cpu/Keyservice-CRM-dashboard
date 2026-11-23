@@ -124,6 +124,96 @@ await api('PATCH', `/api/orders/${plakId}`, { status: 'afgerond' });
 const prev3 = await api('GET', '/api/finance/autosync/preview?since=2000-01-01');
 ok('afgeronde geplakte DRS-opdracht krijgt een DRS-fee', (prev3.json.items || []).some((x) => x.sourceRef === `drsfee:${plakId}`), JSON.stringify((prev3.json.items || []).map((x) => x.sourceRef)));
 
+console.log('\n== Facturen deze maand: omzet verstuurd / betaald / openstaand (23 nov 2026) ==');
+// Besluit eigenaar: "omzet moet zijn verstuurde facturen, met daarnaast welke facturen zijn
+// betaald". Een kijk op de facturen zelf, naast de boekingen (die blijven zoals ze zijn).
+{
+  const bijna = (a, b) => Math.abs((Number(a) || 0) - b) < 0.005;
+  // 1) De rekenregel zelf, zonder server: maandgrens in NEDERLANDSE tijd en wat wel/niet telt.
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  process.env.DATA_DIR = process.env.DATA_DIR || mkdtempSync(join(tmpdir(), 'crm-cijfers-'));
+  const { facturenOmzet } = await import('../server/finance.js');
+  const f = (o) => ({ type: 'factuur', status: 'betaald', lines: [{ description: 'x', qty: 1, priceExcl: 100 }], totalExcl: 100, totalIncl: 121, ...o });
+  const lijst = [
+    f({ id: 'a', number: 'A', sentAt: '2026-10-05T10:00:00.000Z', paidAt: '2026-10-05T10:00:00.000Z' }),                 // verstuurd + betaald in oktober
+    f({ id: 'b', number: 'B', status: 'verzonden', sentAt: '2026-10-20T10:00:00.000Z', totalExcl: 200, totalIncl: 242 }), // verstuurd in oktober, nog open
+    f({ id: 'c', number: 'C', sentAt: '2026-09-28T10:00:00.000Z', paidAt: '2026-10-02T10:00:00.000Z', totalExcl: 50, totalIncl: 60.5 }), // verstuurd sept, betaald okt
+    f({ id: 'd', number: 'D', paidAt: '2026-10-10T10:00:00.000Z', totalExcl: 30, totalIncl: 36.3 }),                     // betaald in oktober, nooit verstuurd
+    f({ id: 'e', number: 'E', sentAt: '2026-10-31T23:30:00.000Z', paidAt: '2026-10-31T23:30:00.000Z' }),                 // 1 nov 00:30 NL → november
+    f({ id: 'g', number: 'G', sentAt: '2026-09-30T22:30:00.000Z', paidAt: '2026-09-30T22:30:00.000Z', totalExcl: 10, totalIncl: 12.1 }), // 1 okt 00:30 NL → oktober
+    f({ id: 'h', number: 'OFF', type: 'offerte', status: 'verzonden', sentAt: '2026-10-06T10:00:00.000Z' }),             // offerte: telt nooit
+    f({ id: 'i', number: 'CON', status: 'concept', paidAt: '2026-10-06T10:00:00.000Z' }),                                // concept: telt nooit
+    f({ id: 'j', number: 'AF', status: 'oninbaar', sentAt: '2026-10-07T10:00:00.000Z' }),                                // afgeschreven: telt nooit
+    f({ id: 'k', number: 'LEEG', lines: [], totalExcl: 0, totalIncl: 0, paidAt: '2026-10-08T10:00:00.000Z' }),           // lege factuur (nooit verstuurd): telt niet
+  ];
+  const okt = facturenOmzet('2026-10', { invoices: lijst, klantNaam: (i) => `Klant ${i.number}` });
+  ok('verstuurd in oktober: 3 facturen, € 310 excl. / € 375,10 incl.', okt.verstuurd.aantal === 3 && bijna(okt.verstuurd.exclBtw, 310) && bijna(okt.verstuurd.inclBtw, 375.1), JSON.stringify(okt.verstuurd));
+  ok('betaald in oktober: 4 facturen, € 190 excl. / € 229,90 incl.', okt.betaald.aantal === 4 && bijna(okt.betaald.exclBtw, 190) && bijna(okt.betaald.inclBtw, 229.9), JSON.stringify(okt.betaald));
+  ok('openstaand = in oktober verstuurd en nog niet betaald: 1 factuur, € 242 incl.', okt.openstaand.aantal === 1 && bijna(okt.openstaand.inclBtw, 242), JSON.stringify(okt.openstaand));
+  ok('lijsten: nieuwste eerst (verstuurd op verzenddatum, betaald op betaaldatum)', okt.verstuurd.facturen.map((x) => x.id).join() === 'b,a,g' && okt.betaald.facturen.map((x) => x.id).join() === 'd,a,c,g', JSON.stringify([okt.verstuurd.facturen.map((x) => x.id), okt.betaald.facturen.map((x) => x.id)]));
+  const rijB = okt.verstuurd.facturen[0];
+  ok('regel draagt nummer, klant, datum, status en bedragen', rijB.number === 'B' && rijB.klant === 'Klant B' && rijB.sentAt === '2026-10-20T10:00:00.000Z' && rijB.status === 'verzonden' && rijB.exclBtw === 200 && rijB.inclBtw === 242, JSON.stringify(rijB));
+  ok('offerte, concept, afgeschreven en lege factuur staan nergens', !JSON.stringify(okt).match(/"(OFF|CON|AF|LEEG)"/));
+  const nov = facturenOmzet('2026-11', { invoices: lijst });
+  ok('maandgrens in Nederlandse tijd: 31 okt 23:30 UTC telt in november', nov.verstuurd.aantal === 1 && nov.betaald.aantal === 1 && nov.verstuurd.facturen[0].id === 'e', JSON.stringify([nov.verstuurd.aantal, nov.betaald.aantal]));
+  const veel = Array.from({ length: 250 }, (_, n) => f({ id: `v${n}`, number: `V${n}`, sentAt: `2026-08-${String(1 + (n % 28)).padStart(2, '0')}T10:00:00.000Z`, paidAt: null, status: 'verzonden' }));
+  const aug = facturenOmzet('2026-08', { invoices: veel });
+  ok('lijst hooguit 200 regels, de totalen tellen alles', aug.verstuurd.aantal === 250 && aug.verstuurd.facturen.length === 200 && bijna(aug.verstuurd.exclBtw, 25000) && aug.openstaand.aantal === 250, JSON.stringify([aug.verstuurd.aantal, aug.verstuurd.facturen.length, aug.verstuurd.exclBtw]));
+  const nlMaand = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }).slice(0, 7);
+  ok('zonder (geldige) maand: de lopende maand', facturenOmzet('', { invoices: [] }).maand === nlMaand && facturenOmzet('onzin', { invoices: [] }).maand === nlMaand);
+
+  // 2) Via de server: echte facturen in elke stand; we meten het VERSCHIL met vooraf.
+  const haal = async (m = nlMaand) => (await api('GET', `/api/finance/facturen-omzet?maand=${m}`)).json;
+  const voor = await haal();
+  ok('route geeft de drie blokken voor deze maand', voor.maand === nlMaand && Array.isArray(voor.verstuurd?.facturen) && Array.isArray(voor.betaald?.facturen) && typeof voor.openstaand?.aantal === 'number', JSON.stringify(voor).slice(0, 200));
+  const kF = (await api('POST', '/api/customers', { name: 'Omzet Klant', phone: '0612349001' })).json;
+  const maak = async (type, excl) => {
+    const i = (await api('POST', '/api/invoices', { customerId: kF.id, type })).json.invoice;
+    if (excl) await api('PATCH', `/api/invoices/${i.id}`, { lines: [{ description: 'Werk', qty: 1, priceExcl: excl }], btwPct: 21, note: '' });
+    return i;
+  };
+  const A = await maak('factuur', 100); await api('POST', `/api/invoices/${A.id}/send-whatsapp`, { betaald: true });  // verstuurd + betaald
+  const B = await maak('factuur', 200); await api('POST', `/api/invoices/${B.id}/send-whatsapp`, { betaald: false }); // verstuurd, nog open
+  const C = await maak('factuur', 50);                                                                                // betaald (standaard), niet verstuurd
+  const D = await maak('factuur', 999); await api('POST', `/api/invoices/${D.id}/status`, { status: 'concept' });     // concept
+  const E = await maak('offerte', 300); await api('POST', `/api/invoices/${E.id}/send-whatsapp`, {});                 // verstuurde offerte
+  const F = await maak('factuur', 400); await api('POST', `/api/invoices/${F.id}/send-whatsapp`, { betaald: false });
+  await api('POST', `/api/invoices/${F.id}/status`, { status: 'oninbaar', reden: 'test' });                           // afgeschreven
+  const G = await maak('factuur', 0);                                                                                 // lege factuur (staat op betaald, geen regels)
+  const na = await haal();
+  const d = (blok, veld) => (na[blok][veld] || 0) - (voor[blok][veld] || 0);
+  ok('verstuurd: +2 facturen, +€ 300 excl. btw (+€ 363 incl.)', d('verstuurd', 'aantal') === 2 && bijna(d('verstuurd', 'exclBtw'), 300) && bijna(d('verstuurd', 'inclBtw'), 363), JSON.stringify([d('verstuurd', 'aantal'), d('verstuurd', 'exclBtw'), d('verstuurd', 'inclBtw')]));
+  ok('betaald: +2 facturen, +€ 150 excl. btw (+€ 181,50 incl.)', d('betaald', 'aantal') === 2 && bijna(d('betaald', 'exclBtw'), 150) && bijna(d('betaald', 'inclBtw'), 181.5), JSON.stringify([d('betaald', 'aantal'), d('betaald', 'exclBtw'), d('betaald', 'inclBtw')]));
+  ok('openstaand: +1 factuur, +€ 242 incl. btw', d('openstaand', 'aantal') === 1 && bijna(d('openstaand', 'inclBtw'), 242), JSON.stringify(na.openstaand));
+  const vIds = na.verstuurd.facturen.map((x) => x.id); const bIds = na.betaald.facturen.map((x) => x.id);
+  ok('lijst Verstuurd: A en B (nieuwste eerst), met klantnaam en bedrag excl. btw', vIds.includes(A.id) && vIds.includes(B.id) && vIds.indexOf(B.id) < vIds.indexOf(A.id) && na.verstuurd.facturen.find((x) => x.id === B.id)?.klant === 'Omzet Klant' && na.verstuurd.facturen.find((x) => x.id === B.id)?.exclBtw === 200 && na.verstuurd.facturen.find((x) => x.id === B.id)?.status === 'verzonden', JSON.stringify(na.verstuurd.facturen.slice(0, 3)));
+  ok('lijst Betaald: A en C, niet de nog open B', bIds.includes(A.id) && bIds.includes(C.id) && !bIds.includes(B.id) && !!na.betaald.facturen.find((x) => x.id === C.id)?.paidAt);
+  ok('offerte, concept, afgeschreven en lege factuur tellen nergens mee', ![...vIds, ...bIds].some((x) => [D.id, E.id, F.id, G.id].includes(x)));
+  const oud = await haal('2020-01');
+  ok('andere maand (2020-01): niets', oud.maand === '2020-01' && oud.verstuurd.aantal === 0 && oud.betaald.aantal === 0 && oud.openstaand.aantal === 0 && oud.verstuurd.exclBtw === 0, JSON.stringify(oud));
+  // B wordt betaald → schuift naar "betaald", staat niet meer open.
+  await api('POST', `/api/invoices/${B.id}/status`, { status: 'betaald' });
+  const na2 = await haal();
+  ok('factuur alsnog betaald: telt bij Betaald, niet meer bij openstaand', na2.betaald.aantal - voor.betaald.aantal === 3 && na2.openstaand.aantal === voor.openstaand.aantal && na2.verstuurd.aantal === na.verstuurd.aantal, JSON.stringify([na2.betaald.aantal, na2.openstaand.aantal]));
+  // De boekingen (de bestaande cijfers) zijn hier niet door veranderd.
+  const fin3 = (await api('GET', `/api/finance?month=${nlMaand}`)).json;
+  ok('de bestaande maandcijfers (boekingen) werken ongewijzigd door', typeof fin3.report?.income === 'number' && Array.isArray(fin3.report?.entries));
+  // Rechten: alleen wie Cijfers mag zien.
+  const admin = cookie;
+  await api('POST', '/api/users', { name: 'Assistente Cijfers', email: 'asscijfers@keyservice.nl', password: 'ass12345', role: 'assistent' });
+  await api('POST', '/api/users', { name: 'Monteur Cijfers', email: 'montcijfers@keyservice.nl', password: 'monteur123', role: 'monteur' });
+  cookie = '';
+  ok('niet ingelogd → 401', (await api('GET', '/api/finance/facturen-omzet')).status === 401);
+  await api('POST', '/api/login', { email: 'asscijfers@keyservice.nl', password: 'ass12345' });
+  ok('assistente (geen recht op Cijfers) → 403', (await api('GET', `/api/finance/facturen-omzet?maand=${nlMaand}`)).status === 403);
+  cookie = '';
+  await api('POST', '/api/login', { email: 'montcijfers@keyservice.nl', password: 'monteur123' });
+  ok('monteur → 403', (await api('GET', `/api/finance/facturen-omzet?maand=${nlMaand}`)).status === 403);
+  cookie = admin;
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);
