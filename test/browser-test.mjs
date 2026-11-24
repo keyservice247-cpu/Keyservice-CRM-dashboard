@@ -520,28 +520,65 @@ ok('Esc zonder wijzigingen sluit meteen, zonder vraag', await page.locator('#mod
 page.off('dialog', telDlg);
 await page.evaluate((id) => openOrderModal(id), ikId);
 await page.waitForTimeout(900);
+// WIJZIGINGEN OPSLAAN? (24 nov 2026, klacht eigenaar): elke manier van sluiten vraagt eerst —
+// Esc, klik ernaast, het kruisje én de knop Sluiten — met Opslaan / Niet opslaan / Terug.
+const svStand = () => page.evaluate(() => { const w = document.querySelector('#sluitVraag'); return { vraag: w ? w.querySelector('h3').textContent : '', knoppen: w ? [...w.querySelectorAll('button')].map((b) => b.id).join() : '', open: !document.querySelector('#modalRoot').hidden }; });
+const notitieOpServer = () => page.evaluate((id) => fetch(`/api/orders/${id}`).then((r) => r.json()).then((o) => o.notes || ''), ikId);
 await page.click('#f-notes');
 await page.keyboard.type('Klant belt terug om 14:00');
-let escVraag = '';
-page.once('dialog', (d) => { escVraag = d.message(); d.dismiss(); });
-await page.keyboard.press('Escape');
-await page.waitForTimeout(400);
-ok('Esc met getypte notitie vraagt eerst "Niet opgeslagen wijzigingen"', /Niet opgeslagen wijzigingen/.test(escVraag) && !(await page.locator('#modalRoot').isHidden()), escVraag);
-ok('na "blijven" staat de getypte notitie er nog', /14:00/.test(await page.inputValue('#f-notes')));
-let klikVraag = '';
-page.once('dialog', (d) => { klikVraag = d.message(); d.dismiss(); });
-await page.mouse.click(8, 450); // naast het venster (achtergrond)
-await page.waitForTimeout(400);
-ok('klik naast het venster met getypte notitie vraagt ook eerst', /Niet opgeslagen/.test(klikVraag) && !(await page.locator('#modalRoot').isHidden()), klikVraag);
+await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+let sv = await svStand();
+ok('Esc met getypte notitie vraagt eerst "Wijzigingen opslaan?" (Opslaan / Niet opslaan / Terug)', sv.vraag === 'Wijzigingen opslaan?' && sv.knoppen === 'sv-opslaan,sv-weg,sv-terug' && sv.open, JSON.stringify(sv));
+await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+sv = await svStand();
+ok('Esc in de vraag = terug: venster open, notitie staat er nog, niets weggegooid', !sv.vraag && sv.open && /14:00/.test(await page.inputValue('#f-notes')), JSON.stringify(sv));
+await page.mouse.click(8, 450); await page.waitForTimeout(300); // naast het venster (achtergrond)
+sv = await svStand();
+ok('klik naast het venster met getypte notitie vraagt ook eerst', sv.vraag === 'Wijzigingen opslaan?' && sv.open, JSON.stringify(sv));
+await page.click('#sv-terug'); await page.waitForTimeout(200);
+await page.click('.ov-sluit'); await page.waitForTimeout(300);
+sv = await svStand();
+ok('het KRUISJE met getypte notitie vraagt eerst (was: sloot zonder iets te zeggen)', sv.vraag === 'Wijzigingen opslaan?' && sv.open, JSON.stringify(sv));
+await page.click('#sv-terug'); await page.waitForTimeout(200);
+ok('"Terug": venster open en de notitie staat er nog', (await svStand()).open && /14:00/.test(await page.inputValue('#f-notes')));
+await page.click('#f-cancel'); await page.waitForTimeout(300);
+sv = await svStand();
+ok('de knop SLUITEN met getypte notitie vraagt eerst', sv.vraag === 'Wijzigingen opslaan?' && sv.open, JSON.stringify(sv));
+await page.click('#sv-weg'); await page.waitForTimeout(500);
+ok('"Niet opslaan": venster dicht en er is niets bewaard', !(await svStand()).open && !/14:00/.test(await notitieOpServer()), await notitieOpServer());
+await page.evaluate((id) => openOrderModal(id), ikId); await page.waitForTimeout(900);
+await page.click('#f-notes'); await page.keyboard.type('Bewaren via de vraag');
+await page.click('.ov-sluit'); await page.waitForTimeout(300);
+await page.click('#sv-opslaan'); await page.waitForTimeout(1200);
+ok('"Opslaan" in de vraag bewaart en sluit het venster', !(await svStand()).open && /Bewaren via de vraag/.test(await notitieOpServer()), await notitieOpServer());
+await page.evaluate((id) => openOrderModal(id), ikId); await page.waitForTimeout(900);
+await page.click('.ov-sluit'); await page.waitForTimeout(300);
+sv = await svStand();
+ok('niets gewijzigd: kruisje sluit meteen, zonder vraag', !sv.vraag && !sv.open, JSON.stringify(sv));
+await page.evaluate((id) => openOrderModal(id), ikId); await page.waitForTimeout(900);
+await page.click('#f-urgent'); await page.click('#f-cancel'); await page.waitForTimeout(300);
+sv = await svStand();
+ok('alleen het vinkje Spoed gewijzigd telt ook als wijziging', sv.vraag === 'Wijzigingen opslaan?' && sv.open, JSON.stringify(sv));
+await page.click('#sv-weg'); await page.waitForTimeout(400);
+// Vervolgvenster: werkbon → Annuleren gooit getypt werk niet meer zomaar weg.
+await page.evaluate((id) => openOrderModal(id), ikId); await page.waitForTimeout(900);
+await page.click('#f-werkbon'); await page.waitForSelector('#wb-work');
+await page.fill('#wb-work', 'Cilinder vervangen en afgesteld');
+await page.click('#wb-cancel'); await page.waitForTimeout(300);
+sv = await svStand();
+ok('werkbon: Annuleren met getypt werk vraagt eerst', sv.vraag === 'Wijzigingen opslaan?' && await page.inputValue('#wb-work') === 'Cilinder vervangen en afgesteld', JSON.stringify(sv));
+await page.click('#sv-weg'); await page.waitForSelector('.ov-tabs'); await page.waitForTimeout(300);
+ok('"Niet opslaan" in de werkbon brengt je terug naar de opdracht', await page.locator('#f-title').count() === 1 && await page.locator('#wb-work').count() === 0);
 // Eigen invoervenster (vraagTekst) annuleren → daarna werkt Esc nog steeds.
+await page.click('#f-notes'); await page.keyboard.type('nog iets');
 await page.evaluate(() => { vraagTekst({ titel: 'Test' }); });
 await page.waitForTimeout(200);
 await page.click('#md-cancel');
 await page.waitForTimeout(200);
-page.once('dialog', (d) => d.accept());
-await page.keyboard.press('Escape');
-await page.waitForTimeout(400);
-ok('na een eigen invoervenster sluit Esc het venster nog (bevestigd)', await page.locator('#modalRoot').isHidden());
+await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+ok('na een eigen invoervenster werkt Esc nog: de vraag komt', (await svStand()).vraag === 'Wijzigingen opslaan?');
+await page.click('#sv-weg'); await page.waitForTimeout(400);
+ok('…en "Niet opslaan" sluit het venster', await page.locator('#modalRoot').isHidden());
 // Intake blijft na een gewone Opslaan (alleen de prijs gewijzigd); collega-notitie blijft ook.
 await page.evaluate((id) => openOrderModal(id), ikId);
 await page.waitForTimeout(900);

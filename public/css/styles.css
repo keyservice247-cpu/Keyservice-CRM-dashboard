@@ -1773,3 +1773,13 @@ html[data-theme="dark"] input:not([type=checkbox]):not([type=radio]):not([type=r
 .ko-rij.ko-fout .ko-woord { color: var(--danger); } .ko-rij.ko-let .ko-woord { color: var(--warn); } .ko-rij.ko-goed .ko-woord { color: var(--ok); }
 .ko-rij.ko-uit strong, .ko-rij.ko-uit .ko-uitleg { color: var(--muted); }
 .ko-voet { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+
+/* ---- Vraag "Wijzigingen opslaan?" bij sluiten (24 nov 2026) ---- */
+#sluitVraag .mini-dialog { width: 400px; }
+#sluitVraag p { margin: 0 0 14px; font-size: 14px; }
+.sv-knoppen { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.sv-knoppen .btn { min-height: 40px; }
+@media (max-width: 820px) {
+  .sv-knoppen { flex-direction: column; }
+  .sv-knoppen .btn { width: 100%; min-height: 48px; }
+}

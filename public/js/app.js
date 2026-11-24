@@ -2955,7 +2955,7 @@ function openOrderModal(id, pool) {
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(kv.name)}"></label> <label>Telefoon <input id="f-ccphone" value="${esc(kv.phone)}" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(kv.email)}" placeholder="e-mailadres klant (nodig voor de factuur)"></label> <label>Adres <input id="f-ccaddress" value="${esc(kv.address)}"></label> </div>${kvWijkt ? `<div class="muted small" style="margin:-4px 0 8px">Deze velden tonen de gegevens van <strong>déze aanvraag</strong> (die gebruikt de monteur). Wat je hier wijzigt, geldt voor deze opdracht én het klantrecord.</div>` : ''}${o.customer?.phone ? `<div class="muted small" style="margin:-4px 0 10px"><a href="tel:${esc(String(o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 12)} Bel ${esc(o.customer.phone)}</a></div>` : ''}`}
     <div class="form-sec">${icon('calendar', 13)} Planning &amp; status</div> <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div>${o ? annuleerRijHTML(o) : ''} <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''}${o && o.googleSyncError ? `<div class="muted small" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--danger);background:var(--danger-soft, rgba(220,53,69,.08))"><strong>Niet in Google Agenda.</strong> ${esc(o.googleSyncError)} — ga naar Instellingen → Koppelingen en klik "Controleer &amp; herstel nu".</div>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? (o ? `<div class="row"><label>Herkomst (bron) ${sourceSelect(o.source || 'Handmatig')}</label>${merkVeldHTML(o)}</div>` : `<label>Herkomst (bron) ${sourceSelect('Handmatig')}</label>`) : ''}
-    <div class="form-sec">${icon('message', 13)} Intern</div> <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
+    <div class="form-sec">${icon('message', 13)} Intern</div> <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" data-bewaak style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     </div>
     ${o ? '<div class="ov-paneel" data-ovp="fotos" hidden>' : ''}
     ${o ? `
@@ -8253,6 +8253,8 @@ function veldGewijzigd(el) {
   }
   if (el.tagName === 'TEXTAREA') return el.value !== el.defaultValue;
   if (el.tagName === 'INPUT') {
+    // Een vinkje dat bij de gegevens hoort (bv. Spoed) draagt data-bewaak; keuzevinkjes niet.
+    if (el.type === 'checkbox' && el.hasAttribute('data-bewaak')) return el.checked !== el.defaultChecked;
     if (['search', 'file', 'hidden', 'checkbox', 'radio', 'range', 'button', 'submit'].includes(el.type)) return false;
     return el.value !== el.defaultValue;
   }
@@ -8271,9 +8273,74 @@ function modalHeeftWijzigingen() {
 // het venster dicht is, false als de gebruiker koos om te blijven.
 function sluitDoorGebruiker() {
   if ($('#modalRoot').hidden) return true;
-  if (modalHeeftWijzigingen() && !confirm('Niet opgeslagen wijzigingen — toch sluiten?')) return false;
-  closeModal();
-  return true;
+  if (!modalHeeftWijzigingen()) { closeModal(); return true; }
+  // Er is iets gewijzigd: het venster blijft open tot de gebruiker gekozen heeft.
+  vraagSluiten().then((keuze) => {
+    if (keuze === 'weg') { modalSchoon(); closeModal(); }
+    else if (keuze === 'opslaan') { const b = modalBewaarKnop(); if (b) b.click(); }
+  });
+  return false;
+}
+
+// WIJZIGINGEN OPSLAAN? (24 nov 2026, klacht eigenaar: "als ik iets wijzig en op het kruisje
+// of op Sluiten klik krijg ik geen vraag of ik wil opslaan"). Tot nu toe vroegen alleen Esc,
+// klik ernaast en omlaag vegen iets; ruim dertig Sluiten-/Annuleren-knoppen sloten direct.
+// Nu geldt overal hetzelfde: is er iets gewijzigd, dan eerst kiezen — Opslaan, Niet opslaan
+// of Terug. Eén vangst op het venster zelf, zodat ook een knop die later wordt toegevoegd
+// meedoet zolang zijn id eindigt op -cancel / -close / -sluit (of hij data-sluit draagt).
+function modalBewaarKnop() {
+  const knoppen = $$('#modal .modal-actions .btn-primary').filter((k) => !k.disabled && k.offsetParent !== null);
+  const k = knoppen[knoppen.length - 1];
+  return k && /opslaan|bewaren/i.test(k.textContent || '') ? k : null;
+}
+function isSluitKnop(el) {
+  if (!el) return false;
+  const id = el.id || '';
+  return /(^|-)(cancel|close|sluit)$/i.test(id) || /Sluit$/.test(id) || id === 'ca-terug' || el.classList.contains('ov-sluit') || el.hasAttribute('data-sluit');
+}
+let _sluitVraagOpen = null;
+function vraagSluiten() {
+  if (_sluitVraagOpen) return _sluitVraagOpen;
+  _sluitVraagOpen = new Promise((resolve) => {
+    const kanOpslaan = !!modalBewaarKnop();
+    const wrap = document.createElement('div');
+    wrap.className = 'mini-dialog-root'; wrap.id = 'sluitVraag';
+    wrap.innerHTML = `<div class="mini-dialog" role="alertdialog" aria-modal="true" aria-labelledby="sv-titel">
+      <h3 id="sv-titel">${kanOpslaan ? 'Wijzigingen opslaan?' : 'Sluiten zonder op te slaan?'}</h3>
+      <p class="muted small">${kanOpslaan ? 'Je hebt iets gewijzigd dat nog niet is opgeslagen.' : 'Wat je hebt ingevuld gaat dan verloren.'}</p>
+      <div class="sv-knoppen">
+        ${kanOpslaan ? '<button type="button" class="btn btn-primary" id="sv-opslaan">Opslaan</button>' : ''}
+        <button type="button" class="btn${kanOpslaan ? '' : ' btn-danger'}" id="sv-weg">${kanOpslaan ? 'Niet opslaan' : 'Ja, sluiten'}</button>
+        <button type="button" class="btn" id="sv-terug">Terug</button>
+      </div></div>`;
+    document.body.appendChild(wrap);
+    const klaar = (keuze) => { wrap.remove(); document.removeEventListener('keydown', toets, true); _sluitVraagOpen = null; resolve(keuze); };
+    // Esc = terug naar het venster (nooit per ongeluk weggooien). Capture + stop: de
+    // gewone Esc-afhandeling van het venster eronder mag dit niet óók nog zien.
+    const toets = (e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); klaar('blijf'); } };
+    document.addEventListener('keydown', toets, true);
+    wrap.querySelector('#sv-terug').onclick = () => klaar('blijf');
+    wrap.querySelector('#sv-weg').onclick = () => klaar('weg');
+    if (kanOpslaan) wrap.querySelector('#sv-opslaan').onclick = () => klaar('opslaan');
+    wrap.onclick = (e) => { if (e.target === wrap) klaar('blijf'); };
+    setTimeout(() => { const eerste = wrap.querySelector(kanOpslaan ? '#sv-opslaan' : '#sv-terug'); if (eerste) eerste.focus(); }, 30);
+  });
+  return _sluitVraagOpen;
+}
+{
+  const m = document.getElementById('modal');
+  if (m) m.addEventListener('click', (e) => {
+    // Alleen een échte klik van de gebruiker: een klik die code zelf doet (na de keuze, of het
+    // kruisje dat de knop Sluiten aanroept) moet gewoon doorlopen.
+    if (!e.isTrusted) return;
+    const knop = e.target && e.target.closest ? e.target.closest('button, a') : null;
+    if (!knop || !m.contains(knop) || !isSluitKnop(knop) || !modalHeeftWijzigingen()) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    vraagSluiten().then((keuze) => {
+      if (keuze === 'weg') { modalSchoon(); knop.click(); }      // de knop doet nu wat hij altijd deed
+      else if (keuze === 'opslaan') { const b = modalBewaarKnop(); if (b) b.click(); }
+    });
+  }, true);
 }
 
 // Bottom-sheet: op mobiel sluit je een venster door het balkje/de titel bovenaan
@@ -8306,13 +8373,17 @@ function sluitDoorGebruiker() {
     sheet.style.transition = 'transform .18s ease';
     // Niet-opgeslagen invoer? Eerst vragen (ná het loslaten, nooit midden in het
     // gebaar); kiest de gebruiker "blijven", dan veert de sheet terug.
-    if (dy > 110 && (!modalHeeftWijzigingen() || confirm('Niet opgeslagen wijzigingen — toch sluiten?'))) {
+    if (dy > 110 && !modalHeeftWijzigingen()) {
       modalSchoon();
       sheet.style.transform = 'translateY(105%)';
       setTimeout(closeModal, 170); // closeModal ruimt transform/transition op
     } else {
+      // Terugveren; was het een sluit-veeg mét wijzigingen, dan nu de vraag (Opslaan /
+      // Niet opslaan / Terug) — het venster blijft staan tot er gekozen is.
+      const wildeSluiten = dy > 110;
       sheet.style.transform = '';
       setTimeout(() => { sheet.style.transition = ''; }, 200);
+      if (wildeSluiten) sluitDoorGebruiker();
     }
   };
   sheet.addEventListener('touchend', endDrag);
