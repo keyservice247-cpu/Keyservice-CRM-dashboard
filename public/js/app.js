@@ -2082,7 +2082,7 @@ function advanceStatus(id, dir = 1) {
   if (state.me.role === 'monteur' && noteRequiredKeys().includes(next) && !(o.notes || '').trim()) {
     toast('Vul eerst een korte notitie in — de opdracht gaat nu open');
     openOrderModal(id);
-    setTimeout(() => { const s = $('#f-status'); if (s) s.value = next; $('#f-notes')?.focus(); }, 300);
+    setTimeout(() => { const s = $('#f-status'); if (s) s.value = next; ovNaarVeld('#f-notes'); }, 300);
     return;
   }
   const vorige = o.status;   // vóór de wijziging vastleggen — hier zet de undo-knop 'm op terug
@@ -2116,7 +2116,7 @@ async function verplaatsKaart(id, newStatus, { herladen = false } = {}) {
   if (state.me.role === 'monteur' && noteRequiredKeys().includes(newStatus) && !(order.notes || '').trim()) {
     toast('Vul eerst een korte notitie in (wat is er gedaan/afgesproken) — de opdracht gaat nu open');
     openOrderModal(id);
-    setTimeout(() => { const s = $('#f-status'); if (s) s.value = newStatus; $('#f-notes')?.focus(); }, 300);
+    setTimeout(() => { const s = $('#f-status'); if (s) s.value = newStatus; ovNaarVeld('#f-notes'); }, 300);
     return;
   }
   // De kaart METEEN op zijn definitieve plek zetten (28 sep 2026, audit "kaart wordt
@@ -2594,6 +2594,126 @@ async function openMergeModal(primary) {
 // elke klik buiten het bord (zoekbalk, Facturen, dossier, Berichten …) ALLE
 // opdrachten incl. archief op — bij een groot archief 18 MB en ~230 ms waarin de
 // hele server stilstond. Nu één kaart via GET /api/orders/:id (zelfde rechten).
+// ---------- OPDRACHTVENSTER: KOP, VOLGENDE STAP, TABBLADEN (23 nov 2026, herontwerp) ----------
+// Wens eigenaar: geordender en rustiger, maar alles terug te vinden zoals gewend. Daarom:
+//  - bovenaan in één oogopslag wat het is (titel, status, klant, telefoon, adres);
+//  - ÉÉN voorgestelde volgende stap (de knop doet precies wat de bestaande knop doet);
+//  - de inhoud in tabbladen (Details · Gesprek · Foto's · Geschiedenis) — alle velden en
+//    knoppen bestaan nog en heten hetzelfde, Opslaan bewaart alle tabbladen tegelijk;
+//  - de knoppen onderaan staan in vaste groepjes (Klant · Werk · Planning · Meer).
+// De stap wordt met vaste regels bepaald (geen AI): zelfde opdracht = zelfde voorstel.
+function ovVolgendeStap(o, { canWrite, isMonteur }) {
+  if (!o) return null;
+  const st = o.status;
+  const dag = o.appointmentAt ? String(o.appointmentAt).slice(0, 10) : '';
+  const vandaag = lokaleDag();
+  if (canWrite && o.customerIncomplete) return { label: 'Klantgegevens aanvullen', uitleg: 'Er is nog geen echte klantnaam bekend.', veld: '#f-ccname' };
+  if (canWrite && (o.unreadReplies || 0) > 0) return { label: 'Beantwoorden', uitleg: 'De klant heeft gereageerd.', klik: '#f-reply' };
+  if (st === 'geannuleerd') return null;
+  if (st === 'afgerond') return o.invoiceId ? null : { label: 'Factuur maken', uitleg: 'Afgerond, maar er is nog geen factuur.', klik: '#f-invoice' };
+  if (dag) {
+    if (isMonteur && dag === vandaag && !o.onderwegAt) return { label: 'Onderweg melden', uitleg: 'De klant krijgt bericht dat je eraan komt.', klik: '#f-onweg' };
+    if (dag < vandaag || (isMonteur && dag === vandaag)) return { label: 'Afronden', uitleg: dag < vandaag ? 'De afspraak is geweest.' : 'Klaar met de klus?', afronden: true };
+    return null;
+  }
+  if (st === 'nieuw' && canWrite && !o.sentToMonteur && !o.zelfAangemaaktDoorMonteur) return { label: 'Stuur naar monteur', uitleg: 'Nog niet naar een monteur gestuurd.', klik: '#f-send-monteur' };
+  if (['nieuw', 'open', 'offerte_verzonden', 'afspraak_ingepland'].includes(st)) return { label: 'Afspraak plannen', uitleg: st === 'offerte_verzonden' ? 'Zodra de klant akkoord is.' : 'Er staat nog geen datum en tijd.', veld: '#f-appt' };
+  return null;
+}
+function ovKopHTML(o, { canWrite, isMonteur, kv, stap }) {
+  const tel = kv.phone || '';
+  const adres = kv.address || '';
+  const naam = kv.name || 'Onbekende klant';
+  const afspraak = o.appointmentAt ? fmtDateShort(o.appointmentAt) : '';
+  const nFoto = (o.attachments || []).length;
+  const nGesprek = (o.thread || []).length;
+  const nNieuw = o.unreadReplies || 0;
+  const tab = (key, label, n, extra = '') => `<button type="button" class="ov-tab" role="tab" data-ovtab="${key}" aria-selected="false">${label}${n ? ` <span class="ov-tab-n${extra}">${n}</span>` : ''}</button>`;
+  return `
+    <div class="ov-kop">
+      <div class="ov-kop-rij">
+        <h2 class="ov-titel">${esc(o.title || 'Opdracht')}</h2>
+        <button type="button" class="ov-sluit" data-ovklik="f-cancel" aria-label="Sluiten" title="Sluiten">${icon('x', 18)}</button>
+      </div>
+      <div class="ov-chips">
+        <span class="ov-chip" style="--kl:${esc(statusColor(o.status))}"><span class="ov-chip-dot"></span>${esc(statusLabel(o.status))}</span>
+        ${o.urgent ? '<span class="ov-chip ov-chip-spoed">Spoed</span>' : ''}
+        ${o.monteur && o.monteur.name ? `<span class="ov-chip ov-chip-stil">${icon('user', 12)} ${esc(o.monteur.name)}</span>` : ''}
+        ${afspraak ? `<span class="ov-chip ov-chip-stil">${icon('calendar', 12)} ${esc(afspraak)}</span>` : ''}
+      </div>
+      <div class="ov-klant">
+        <strong>${esc(naam)}</strong>
+        ${tel ? `<a href="tel:${esc(String(tel).replace(/\s+/g, ''))}" class="ov-klant-link">${icon('phone', 13)} ${esc(tel)}</a>` : ''}
+        ${adres ? `<a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(adres)}" target="_blank" rel="noopener" class="ov-klant-link">${icon('pin', 13)} ${esc(adres)}</a>` : ''}
+      </div>
+      ${stap ? `<div class="ov-stap"><button type="button" class="btn btn-primary" id="ov-stap">${esc(stap.label)}</button><span class="muted small">Volgende stap — ${esc(stap.uitleg)}</span></div>` : ''}
+    </div>
+    <div class="ov-tabs" role="tablist" aria-label="Onderdelen van de opdracht">
+      ${tab('details', 'Details', 0)}${tab('gesprek', 'Gesprek', nNieuw || nGesprek, nNieuw ? ' nieuw' : '')}${tab('fotos', "Foto's", nFoto)}${tab('historie', 'Geschiedenis', 0)}
+    </div>`;
+}
+// Geschiedenis: wat er met DEZE opdracht is gebeurd, uit de gegevens die er al zijn
+// (tijdstempels op de opdracht + de systeemregels uit het gesprek). Niets nieuws opgeslagen.
+function ovHistorieHTML(o) {
+  const regels = [];
+  const zet = (at, tekst) => { if (at && !isNaN(new Date(at)) && tekst) regels.push({ at, tekst }); };
+  zet(o.createdAt, `Binnengekomen${o.source ? ` — ${o.source}` : ''}`);
+  if (o.sentToMonteur) zet(o.sentToMonteur.at, `Verstuurd naar monteur ${o.sentToMonteur.monteurName || ''}${o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ''}`);
+  zet(o.quoteSentAt, 'Offerte verstuurd');
+  zet(o.onderwegAt, 'Klant gemeld dat de monteur onderweg is');
+  zet(o.completedAt, 'Afgerond');
+  zet(o.cancelledAt, 'Geannuleerd');
+  zet(o.trustpilotAt, 'Trustpilot-uitnodiging verstuurd');
+  if (typeof o.reviewRequested === 'string') zet(o.reviewRequested, 'Review gevraagd');
+  if (o.aiStatusChange && o.aiStatusChange.at) zet(o.aiStatusChange.at, 'Status aangepast op voorstel van de AI-statusscan');
+  for (const [soort, v] of Object.entries(o.drsGemeld || {})) if (v && v.at && v.via !== 'aangenomen') zet(v.at, `Gemeld aan DRS als ${soort}`);
+  (o.thread || []).filter((t) => t.channel === 'systeem' && t.at).forEach((t) => zet(t.at, String(t.body || '').split('\n')[0].slice(0, 220)));
+  regels.sort((a, b) => new Date(a.at) - new Date(b.at));
+  const laatste = o.updatedAt && !isNaN(new Date(o.updatedAt)) ? `<p class="muted small ov-hist-voet">Laatst bijgewerkt: ${esc(fmtDateShort(o.updatedAt))}</p>` : '';
+  if (!regels.length) return `<div class="ov-leeg muted">Nog geen gebeurtenissen vastgelegd.</div>${laatste}`;
+  return `<ol class="ov-hist">${regels.map((r) => `<li><span class="ov-hist-wanneer">${esc(fmtDateShort(r.at))}</span><span class="ov-hist-wat">${esc(r.tekst)}</span></li>`).join('')}</ol>${laatste}`;
+}
+function ovToonTab(tab) {
+  const m = $('#modal'); if (!m) return;
+  const panelen = $$('.ov-paneel', m);
+  if (!panelen.some((p) => p.dataset.ovp === tab)) tab = 'details';
+  panelen.forEach((p) => { p.hidden = p.dataset.ovp !== tab; });
+  $$('.ov-tab', m).forEach((b) => { const aan = b.dataset.ovtab === tab; b.classList.toggle('active', aan); b.setAttribute('aria-selected', aan ? 'true' : 'false'); });
+  m.dataset.ovtab = tab;
+  // Het gesprek begint bij het nieuwste bericht (kan pas als het tabblad zichtbaar is).
+  if (tab === 'gesprek') { const c = $('#f-chat'); if (c && !c.dataset.gescrold) { c.scrollTop = c.scrollHeight; c.dataset.gescrold = '1'; } }
+}
+// Een veld tonen dat op een ander tabblad staat (bv. vanuit een melding of de volgende stap).
+function ovNaarVeld(sel) {
+  const el = $(sel); if (!el) return null;
+  const p = el.closest('.ov-paneel'); if (p && p.hidden) ovToonTab(p.dataset.ovp);
+  el.scrollIntoView({ block: 'center' });
+  try { el.focus({ preventScroll: true }); } catch { /* veld kan uitgeschakeld zijn */ }
+  return el;
+}
+function ovBindTabs(o, { stap, isMonteur, begin }) {
+  const m = $('#modal'); if (!m) return;
+  $$('.ov-tab', m).forEach((b) => { b.onclick = () => ovToonTab(b.dataset.ovtab); });
+  $$('[data-ovklik]', m).forEach((b) => { b.onclick = () => $(`#${b.dataset.ovklik}`)?.click(); });
+  // Een groepje zonder knoppen (bv. geen recht op die acties) laat geen los kopje achter.
+  $$('.ov-actiegroep', m).forEach((g) => { g.hidden = !g.querySelector('.ov-actieknoppen .btn'); });
+  ovToonTab(begin || 'details');
+  const knop = $('#ov-stap');
+  if (knop && stap) knop.onclick = () => {
+    if (stap.klik) { $(stap.klik)?.click(); return; }
+    if (stap.veld) { const el = ovNaarVeld(stap.veld); if (el && stap.veld === '#f-appt' && el.showPicker) { try { el.showPicker(); } catch { /* niet elke browser */ } } return; }
+    if (stap.afronden) ovAfronden(isMonteur);
+  };
+}
+// Afronden vanuit de kop of de snelbalk: status op Afgerond en opslaan. De monteur moet eerst
+// kort opschrijven wat er is gedaan (zelfde regel als bij Opslaan).
+function ovAfronden(isMonteur) {
+  const sel = $('#f-status'); if (!sel) return;
+  if (![...sel.options].some((x) => x.value === 'afgerond')) return toast('Kolom "Afgerond" bestaat niet (meer)', true);
+  sel.value = 'afgerond'; sel.dispatchEvent(new Event('change'));
+  if (isMonteur && !($('#f-notes').value || '').trim()) { toast('Vul eerst een korte notitie in (wat is er gedaan) — dan pas Afgerond'); ovNaarVeld('#f-notes'); return; }
+  $('#f-save')?.click();
+}
 async function openOrderVers(id, { seen = false } = {}) {
   try {
     const o = await api(`/api/orders/${encodeURIComponent(id)}`);
@@ -2636,14 +2756,14 @@ function openOrderModal(id, pool) {
     address: it.address || o?.customer?.address || '',
   };
   const kvWijkt = !!(o && canWrite && o.customer && ['name', 'phone', 'email', 'address'].some((k) => kv[k] !== (o.customer[k] || '')));
+  // Kop van het venster: één voorgestelde volgende stap (zie ovVolgendeStap).
+  const stap = o ? ovVolgendeStap(o, { canWrite, isMonteur }) : null;
 
   modal(`
-    <h2>${o ? 'Opdracht bewerken' : 'Nieuwe opdracht'}</h2> ${o ? `<p class="muted small" style="margin:-8px 0 14px">Binnengekomen: <strong>${esc(fmtDateShort(o.createdAt))}</strong>${o.updatedAt ? ' · laatst bijgewerkt ' + esc(fmtDateShort(o.updatedAt)) : ''}</p>` : ''}
-    ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}${fotoStatusHTML(o.sentToMonteur)}</div>` : ''}
-    ${o && canWrite ? drsKaartRegel(o) : ''}
+    ${o ? ovKopHTML(o, { canWrite, isMonteur, kv, stap }) : '<h2>Nieuwe opdracht</h2>'}
     ${o && isMonteur ? `<div class="snelbalk">
       ${(o.intake?.phone || o.customer?.phone) ? `<a class="btn sb" href="tel:${esc(String(o.intake?.phone || o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 15)} Bellen</a><a class="btn sb" target="_blank" rel="noopener" href="https://wa.me/${esc(String(o.intake?.phone || o.customer.phone).replace(/\D/g, '').replace(/^0/, '31'))}">${icon('whatsapp', 15)} Appen</a>` : ''}
-      ${(o.intake?.address || o.customer?.address) ? `<a class="btn sb" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}">${icon('pin', 15)} Navigeer</a>` : `<button type="button" class="btn sb" onclick="toast('Geen adres bekend — vul het adres in bij de klantgegevens hieronder', true); document.querySelector('#f-ccaddress')?.focus()" title="Geen adres bekend">${icon('pin', 15)} Navigeer <span class="muted small">(geen adres)</span></button>`}
+      ${(o.intake?.address || o.customer?.address) ? `<a class="btn sb" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}">${icon('pin', 15)} Navigeer</a>` : `<button type="button" class="btn sb" onclick="toast('Geen adres bekend — vul het adres in bij de klantgegevens hieronder', true); ovNaarVeld('#f-ccaddress')" title="Geen adres bekend">${icon('pin', 15)} Navigeer <span class="muted small">(geen adres)</span></button>`}
       <button type="button" class="btn sb" data-sb="f-werkbon">${icon('tag', 15)} Werkbon${o.werkbon ? ' ✓' : ''}</button>
       <button type="button" class="btn sb" data-sb="f-invoice">${icon('mail', 15)} Factuur</button>
       <button type="button" class="btn sb" data-sb="f-onweg">${icon('pin', 15)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>
@@ -2652,18 +2772,25 @@ function openOrderModal(id, pool) {
     ${o && o.customerIncomplete ? `<div class="sug-banner sug-warn">${icon('user', 13)} <strong>Klant onbekend — aanvullen.</strong> Er is geen echte klantnaam in het bericht gevonden (de afzender is nooit automatisch de klant). Vul hieronder de klantgegevens aan.</div>` : ''}
     ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open opdracht <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. ${canWrite ? `<span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span>` : ''}</div>` : ''}
     ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de opdracht gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from ?? sg.current ?? '—')}"</span> → <strong>"${esc(sg.to ?? sg.value ?? '')}"</strong>${canWrite && (sg.to ?? sg.value) ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
+    <div class="ov-paneel" data-ovp="details">
+    ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}${fotoStatusHTML(o.sentToMonteur)}</div>` : ''}
+    ${o && canWrite ? drsKaartRegel(o) : ''}
     <label>Titel <input id="f-title" value="${esc(o?.title || '')}" ${isMonteur && o ? 'disabled' : ''} placeholder="bv. Rhenen — cilinderslot vervangen"></label>
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(kv.name)}"></label> <label>Telefoon <input id="f-ccphone" value="${esc(kv.phone)}" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(kv.email)}" placeholder="e-mailadres klant (nodig voor de factuur)"></label> <label>Adres <input id="f-ccaddress" value="${esc(kv.address)}"></label> </div>${kvWijkt ? `<div class="muted small" style="margin:-4px 0 8px">Deze velden tonen de gegevens van <strong>déze aanvraag</strong> (die gebruikt de monteur). Wat je hier wijzigt, geldt voor deze opdracht én het klantrecord.</div>` : ''}${o.customer?.phone ? `<div class="muted small" style="margin:-4px 0 10px"><a href="tel:${esc(String(o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 12)} Bel ${esc(o.customer.phone)}</a></div>` : ''}`}
     <div class="form-sec">${icon('calendar', 13)} Planning &amp; status</div> <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''}${o && o.googleSyncError ? `<div class="muted small" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--danger);background:var(--danger-soft, rgba(220,53,69,.08))"><strong>Niet in Google Agenda.</strong> ${esc(o.googleSyncError)} — ga naar Instellingen → Koppelingen en klik "Controleer &amp; herstel nu".</div>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
     <div class="form-sec">${icon('message', 13)} Intern</div> <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
+    </div>
+    ${o ? '<div class="ov-paneel" data-ovp="fotos" hidden>' : ''}
     ${o ? `
       <div class="attach"> <div class="thread-head">${icon('paperclip', 15)} Foto's &amp; bestanden${o.attachments && o.attachments.length ? ` (${o.attachments.length})` : ''}
           <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button> <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden> </div> <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div> </div>` : ''}
+    ${o ? '</div>' : ''}
+    ${o ? '<div class="ov-paneel" data-ovp="gesprek" hidden>' : ''}
     ${o && o.thread && o.thread.length ? `
       <div class="thread">
-        <div class="thread-head">${icon('message', 16)} Gesprekshistorie <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}<input id="f-chatsearch" type="search" placeholder="Zoeken…" style="margin-left:8px;max-width:120px;padding:4px 9px;font-size:12px" title="Zoek in de berichten hieronder">${o.customerId ? `<button type="button" class="btn btn-sm" id="f-history" style="margin-left:6px" title="Alle WhatsApp- en e-mailberichten van deze klant, over alle opdrachten heen — gewoon terugscrollen">${icon('clock', 12)} Alles van deze klant</button>` : ''}</div>
+        <div class="thread-head"><span class="thread-titel">${icon('message', 16)} Gesprekshistorie</span> <span class="thread-count">${o.thread.length}</span>${o.thread.length ? `<span class="thread-last muted">laatste: ${fmtDate(o.thread[o.thread.length - 1].at)}</span>` : ''}<input id="f-chatsearch" type="search" placeholder="Zoeken…" style="margin-left:8px;max-width:120px;padding:4px 9px;font-size:12px" title="Zoek in de berichten hieronder">${o.customerId ? `<button type="button" class="btn btn-sm" id="f-history" style="margin-left:6px" title="Alle WhatsApp- en e-mailberichten van deze klant, over alle opdrachten heen — gewoon terugscrollen">${icon('clock', 12)} Alles van deze klant</button>` : ''}</div>
         <div class="chat" id="f-chat">
           ${o.thread.map((t) => {
             const q = splitQuoted(t.body || '');
@@ -2677,9 +2804,18 @@ function openOrderModal(id, pool) {
           }).join('')}
         </div>
       </div>` : ''}
+    ${o && !(o.thread && o.thread.length) ? '<div class="ov-leeg muted">Nog geen berichten bij deze opdracht.</div>' : ''}
+    ${o && canWrite ? `<div class="ov-antwoord"><button type="button" class="btn btn-primary" data-ovklik="f-reply">${icon('reply', 14)} Beantwoorden</button><span class="muted small">Per e-mail of WhatsApp — je kiest in het volgende venster.</span></div>` : ''}
+    ${o ? '</div>' : ''}
+    ${o ? `<div class="ov-paneel" data-ovp="historie" hidden>${ovHistorieHTML(o)}</div>` : ''}
+    ${o ? `<div class="ov-acties" aria-label="Acties bij deze opdracht">
+      <div class="ov-actiegroep"><span class="ov-actiekop">Klant</span><div class="ov-actieknoppen">` : ''} ${o && canWrite ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''} ${o ? `<button class="btn" id="f-onweg" title="Stuur de klant een mail + appje dat de monteur nu onderweg is">${icon('pin', 14)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite && o.status === 'afgerond' && state.meta?.trustpilot?.aan ? `<button class="btn" id="f-trustpilot" title="Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC) — jij beslist per klant">${icon('sparkles', 14)} Trustpilot${o.trustpilotAt || o.customer?.trustpilotUitgenodigdAt ? ' ✓' : ''}</button>` : ''} ${o ? `</div></div>
+      <div class="ov-actiegroep"><span class="ov-actiekop">Werk</span><div class="ov-actieknoppen">` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `</div></div>
+      <div class="ov-actiegroep"><span class="ov-actiekop">Planning</span><div class="ov-actieknoppen">` : ''} ${o && (o.intake?.address || o.customer?.address) ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}" title="Navigeer naar het adres van déze aanvraag">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o ? '</div></div>' : ''}
+      ${o && canWrite ? '<div class="ov-actiegroep"><span class="ov-actiekop">Meer</span><div class="ov-actieknoppen">' : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o && canWrite ? '</div></div>' : ''}
+    ${o ? '</div>' : ''}
     <div class="modal-actions"> ${o && canWrite ? '<button class="btn btn-danger" id="f-delete">Verwijderen</button>' : '<span></span>'}
-      <div class="right"> ${o && (o.intake?.address || o.customer?.address) ? `<a class="btn" id="f-nav" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.intake?.address || o.customer.address)}" title="Navigeer naar het adres van déze aanvraag">${icon('pin', 14)} Navigeer</a>` : ''} ${o ? `<a class="btn" id="f-gcal" target="_blank" rel="noopener" title="Afspraak in Google Agenda zetten">${icon('calendar', 14)} Google Agenda</a>` : ''} ${o ? `<button class="btn" id="f-werkbon">${icon('tag', 14)} Werkbon${o.werkbon ? ' ✓' : ''}</button>` : ''} ${o ? `<button class="btn" id="f-invoice">${icon('mail', 14)} Factuur</button>` : ''} ${o ? `<button class="btn" id="f-quote">${icon('file', 14)} Offerte</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-snooze">${icon('clock', 14)} Herinnering</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-send-monteur">${icon('whatsapp', 14)} ${o.sentToMonteur ? 'Opnieuw naar monteur' : 'Stuur naar monteur'}</button>` : ''} ${o ? `<button class="btn" id="f-onweg" title="Stuur de klant een mail + appje dat de monteur nu onderweg is">${icon('pin', 14)} Onderweg${o.onderwegAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite && o.status === 'afgerond' && state.meta?.trustpilot?.aan ? `<button class="btn" id="f-trustpilot" title="Stuur de klant een bedankmailtje met de Trustpilot-uitnodiging (BCC) — jij beslist per klant">${icon('sparkles', 14)} Trustpilot${o.trustpilotAt || o.customer?.trustpilotUitgenodigdAt ? ' ✓' : ''}</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-merge">${icon('merge', 14)} Samenvoegen</button>` : ''} ${o && canWrite ? `<button class="btn" id="f-reply">${icon('reply', 14)} Snel antwoord</button>` : ''}
-        <button class="btn" id="f-cancel">Sluiten</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
+      <div class="right"> <button class="btn" id="f-cancel">Sluiten</button> <button class="btn btn-primary" id="f-save">Opslaan</button> </div> </div> `);
   // De knoppen staan op een VASTE plek onderaan de opdracht (28 sep 2026, wens eigenaar:
   // "als ik scroll gaan die knoppen allemaal mee"). Het plakkende knoppenblok van 16 sep
   // (.modal-actions-vast) schoof op de pc met 13 knoppen over de halve inhoud heen.
@@ -2688,6 +2824,9 @@ function openOrderModal(id, pool) {
     // (28 sep 2026). Een andere/nieuw geopende opdracht begint altijd bovenaan.
     $('#modal').dataset.kaart = o.id;
     const ks = _kaartScroll; _kaartScroll = null;
+    // Tabbladen: een klantreactie die nog niet gelezen is → meteen het gesprek; terug uit een
+    // vervolgvenster → hetzelfde tabblad als waar je was.
+    ovBindTabs(o, { stap, isMonteur, begin: (ks && ks.id === o.id && ks.tab) || ((o.unreadReplies || 0) > 0 ? 'gesprek' : 'details') });
     if (ks && ks.id === o.id) { $('#modalRoot').scrollTop = ks.root; $('#modal').scrollTop = ks.sheet; }
   }
   bindSourceSelect($('#modal [data-source]'));
@@ -2739,7 +2878,7 @@ function openOrderModal(id, pool) {
     });
   }
   // Gesprek meteen naar het nieuwste bericht scrollen.
-  const chat = $('#f-chat'); if (chat) chat.scrollTop = chat.scrollHeight;
+  const chat = $('#f-chat'); if (chat && chat.offsetParent) { chat.scrollTop = chat.scrollHeight; chat.dataset.gescrold = '1'; }
   // Zoeken in de gesprekshistorie: filtert live de berichten (werkt óók in de
   // "Alles van deze klant"-weergave, want het kijkt naar wat er nu in de chat staat).
   {
@@ -2820,16 +2959,10 @@ function openOrderModal(id, pool) {
   // Snelbalk (monteur, punt 1 + 2): de knoppen bovenaan doen hetzelfde als die onderaan.
   $$('.snelbalk [data-sb]').forEach((b) => b.onclick = () => $(`#${b.dataset.sb}`)?.click());
   const sbAf = $('#sb-afgerond');
-  if (sbAf && o) sbAf.onclick = () => {
-    const sel = $('#f-status'); if (!sel) return;
-    if (![...sel.options].some((x) => x.value === 'afgerond')) return toast('Kolom "Afgerond" bestaat niet (meer)', true);
-    sel.value = 'afgerond';
-    if (!($('#f-notes').value || '').trim()) { toast('Vul eerst een korte notitie in (wat is er gedaan) — dan pas Afgerond'); $('#f-notes')?.focus(); return; }
-    $('#f-save')?.click();
-  };
+  if (sbAf && o) sbAf.onclick = () => ovAfronden(true);
   // Notitie-hint bij de statuskeuze zelf (punt 8) — niet pas bij Opslaan.
   if (o && isMonteur && $('#f-status')) $('#f-status').addEventListener('change', () => {
-    if (noteRequiredKeys().includes($('#f-status').value) && !($('#f-notes').value || '').trim()) { toast('Voor deze kolom is een notitie nodig — vul hierboven kort in wat er is gedaan/afgesproken'); $('#f-notes')?.focus(); }
+    if (noteRequiredKeys().includes($('#f-status').value) && !($('#f-notes').value || '').trim()) { toast('Voor deze kolom is een notitie nodig — vul hierboven kort in wat er is gedaan/afgesproken'); ovNaarVeld('#f-notes'); }
   });
   // TRUSTPILOT (5 okt 2026): per afgeronde klant zelf kiezen — bedankmailtje met de
   // Trustpilot-uitnodiging in BCC. Al eerder gedaan → eerst vragen.
@@ -2950,7 +3083,7 @@ function openOrderModal(id, pool) {
     const noteRequired = noteRequiredKeys();
     if (isMonteur && o && $('#f-status').value !== o.status && noteRequired.includes($('#f-status').value) && !($('#f-notes').value || '').trim()) {
       toast('Vul eerst een notitie in (wat is er gedaan/afgesproken) voordat je deze status kiest.', true);
-      $('#f-notes')?.focus();
+      ovNaarVeld('#f-notes');
       return;
     }
     const nu = leesForm();
@@ -7803,8 +7936,8 @@ function modal(html) {
   // afspraak annuleren …)? Dan de scrollstand van die opdracht onthouden, zodat
   // "Terug/Annuleren" weer op dezelfde plek uitkomt (28 sep 2026, audit schermcode).
   const mEl = $('#modal');
-  if (!$('#modalRoot').hidden && mEl.dataset.kaart) _kaartScroll = { id: mEl.dataset.kaart, root: $('#modalRoot').scrollTop, sheet: mEl.scrollTop };
-  delete mEl.dataset.kaart;
+  if (!$('#modalRoot').hidden && mEl.dataset.kaart) _kaartScroll = { id: mEl.dataset.kaart, root: $('#modalRoot').scrollTop, sheet: mEl.scrollTop, tab: mEl.dataset.ovtab || '' };
+  delete mEl.dataset.kaart; delete mEl.dataset.ovtab;
   $('#modal').innerHTML = html;
   $('#modalRoot').hidden = false;
   $('#modalRoot').scrollTop = 0;

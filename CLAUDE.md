@@ -103,6 +103,19 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   vastgelegd). (3) "FACTUREN DEZE MAAND" op Cijfers (`GET /api/finance/facturen-omzet
   ?maand=`, recht finance): tabbladen Verstuurd (standaard, op sentAt) en Betaald; de
   boekingen eronder zijn ongewijzigd.
+- **Opdrachtvenster opnieuw ingedeeld (app.js: ovKopHTML, ovVolgendeStap, ovToonTab, ovBindTabs,
+  ovHistorieHTML, ovAfronden, ovNaarVeld):** kop met titel, statuskleur, monteur, afspraak en
+  klant (telefoon en adres aanklikbaar); ÉÉN voorgestelde VOLGENDE STAP (`#ov-stap`, vaste
+  regels, geen AI — de knop klikt de bestaande knop of brengt je naar het veld); TABBLADEN
+  Details · Gesprek · Foto's · Geschiedenis (`.ov-tab[data-ovtab]`, `.ov-paneel[data-ovp]`;
+  ongelezen klantreactie → opent op Gesprek; terug uit een vervolgvenster → zelfde tabblad via
+  `_kaartScroll.tab`); knoppen onderaan in vaste groepjes Klant · Werk · Planning · Meer
+  (`.ov-acties`). ALLE velden en knoppen bestaan nog met hetzelfde id; Opslaan bewaart alle
+  tabbladen tegelijk. Alleen de tabbalk plakt (klein) — kop en knoppen scrollen mee (wens
+  28 sep). WIE EEN VELD WIL TONEN/FOCUSSEN gebruikt `ovNaarVeld('#f-…')` (wisselt zo nodig
+  van tabblad); een nieuw veld of nieuwe knop hoort in een paneel of in een groepje.
+  Geschiedenis leest alleen bestaande tijdstempels + systeemregels (niets nieuws opgeslagen).
+  "Nieuwe opdracht" is het oude, korte formulier zonder tabbladen. Browser-test +14.
 - **Klantadres verbeterd → lopende opdracht volgt:** PATCH /api/customers/:id zet het nieuwe
   adres ook op LOPENDE opdrachten waarvan het opdrachtadres letterlijk het oude klantadres
   was (een afwijkend werkadres en afgehandelde opdrachten blijven; updatedAt blijft staan).

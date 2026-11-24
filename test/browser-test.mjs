@@ -268,6 +268,87 @@ ok('klanthistorie geladen (knop wisselt naar "Alleen deze kaart")', /Alleen deze
 ok('zoekveld in de gesprekshistorie aanwezig', await page.locator('#f-chatsearch').count() > 0);
 noErr('Kaart + klanthistorie');
 
+// 8a2) OPDRACHTVENSTER, NIEUWE INDELING (23 nov 2026, herontwerp): kop met status en klant,
+// ÉÉN volgende stap, tabbladen, knoppen in vaste groepjes. Niets mag verdwenen zijn.
+clear();
+{
+  // Nieuwe klantreactie → het venster hoort op het gesprek te openen.
+  await page.evaluate(async () => { await fetch('/api/ingest/whatsapp', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ name: 'Browsertest Klant', body: 'nog een vraag over de prijs\nTelefoon: +31611000000', externalId: 'bt-hist-2' }) }); });
+  await page.evaluate((id) => { closeModal(); return openOrderVers(id); }, ordId);
+  await page.waitForSelector('#modalRoot:not([hidden]) .ov-tabs'); await page.waitForTimeout(500);
+  const ov = await page.evaluate(() => {
+    const m = document.querySelector('#modal');
+    const zichtbaar = (sel) => { const e = m.querySelector(sel); return !!e && e.offsetParent !== null; };
+    const ids = ['f-title', 'f-ccname', 'f-ccphone', 'f-ccemail', 'f-ccaddress', 'f-status', 'f-monteur', 'f-appt', 'f-appt-end', 'f-price', 'f-notes', 'f-urgent', 'f-addfile', 'f-attachgrid', 'f-chat', 'f-chatsearch', 'f-history', 'f-delete', 'f-gcal', 'f-werkbon', 'f-invoice', 'f-quote', 'f-snooze', 'f-send-monteur', 'f-onweg', 'f-merge', 'f-reply', 'f-cancel', 'f-save'];
+    return {
+      titel: m.querySelector('.ov-titel')?.textContent.trim(), chip: m.querySelector('.ov-chip')?.textContent.trim(),
+      tel: m.querySelector('.ov-klant a[href^="tel:"]')?.getAttribute('href'),
+      tabs: [...m.querySelectorAll('.ov-tab')].map((t) => t.dataset.ovtab).join(), actief: m.querySelector('.ov-tab.active')?.dataset.ovtab,
+      stap: m.querySelector('#ov-stap')?.textContent.trim(), chat: zichtbaar('#f-chat'), titelveld: zichtbaar('#f-title'),
+      weg: ids.filter((i) => !m.querySelector('#' + i)),
+      groepen: [...m.querySelectorAll('.ov-actiegroep:not([hidden])')].map((g) => g.querySelector('.ov-actiekop').textContent + ':' + g.querySelectorAll('.btn').length).join(' '),
+      knoppenZichtbaar: ['f-reply', 'f-werkbon', 'f-invoice', 'f-quote', 'f-send-monteur', 'f-onweg', 'f-save'].every((i) => zichtbaar('#' + i)),
+    };
+  });
+  ok('opdrachtvenster: kop met titel, status en belbaar nummer', ov.titel === 'Kaart voor historietest' && !!ov.chip && ov.tel === 'tel:0611000000', JSON.stringify(ov));
+  ok('opdrachtvenster: tabbladen Details · Gesprek · Foto\'s · Geschiedenis; bij een ongelezen klantreactie opent het op Gesprek', ov.tabs === 'details,gesprek,fotos,historie' && ov.actief === 'gesprek' && ov.chat && !ov.titelveld, JSON.stringify([ov.tabs, ov.actief, ov.chat, ov.titelveld]));
+  ok('opdrachtvenster: volgende stap bij een klantreactie = Beantwoorden', ov.stap === 'Beantwoorden', String(ov.stap));
+  ok('opdrachtvenster: geen enkel veld en geen enkele knop is verdwenen', ov.weg.length === 0, ov.weg.join());
+  ok('opdrachtvenster: knoppen in vaste groepjes (Klant · Werk · Planning · Meer), op elk tabblad zichtbaar', /^Klant:\d+ Werk:4 Planning:\d+ Meer:1$/.test(ov.groepen) && ov.knoppenZichtbaar, ov.groepen);
+  // Tabblad wisselen: velden blijven staan; Opslaan bewaart ook wat op een ander tabblad staat.
+  await page.click('.ov-tab[data-ovtab="details"]'); await page.waitForTimeout(200);
+  await page.fill('#f-notes', 'tabproef: notitie op Details');
+  await page.click('.ov-tab[data-ovtab="fotos"]'); await page.waitForTimeout(200);
+  ok('tabblad Foto\'s: toevoegknop zichtbaar, Details verborgen, getypte notitie blijft staan', await page.evaluate(() => document.querySelector('#f-addfile').offsetParent !== null && document.querySelector('#f-notes').offsetParent === null && document.querySelector('#f-notes').value === 'tabproef: notitie op Details'));
+  await page.click('.ov-tab[data-ovtab="historie"]'); await page.waitForTimeout(200);
+  ok('tabblad Geschiedenis: toont wanneer de opdracht binnenkwam', await page.evaluate(() => { const p = document.querySelector('.ov-paneel[data-ovp="historie"]'); return !p.hidden && /Binnengekomen/.test(p.textContent); }));
+  // Vervolgvenster en terug: zelfde tabblad.
+  await page.click('.ov-tab[data-ovtab="fotos"]'); await page.waitForTimeout(150);
+  await page.click('#f-save'); await page.waitForTimeout(900);
+  const bewaard = await page.evaluate((id) => fetch('/api/orders/' + id).then((r) => r.json()).then((o) => o.notes), ordId);
+  ok('Opslaan vanaf een ander tabblad bewaart de notitie van Details', bewaard === 'tabproef: notitie op Details', String(bewaard));
+  await page.evaluate((id) => openOrderVers(id), ordId); await page.waitForSelector('#modalRoot:not([hidden]) .ov-tabs'); await page.waitForTimeout(300);
+  await page.click('.ov-tab[data-ovtab="fotos"]'); await page.waitForTimeout(150);
+  await page.click('#f-werkbon'); await page.waitForSelector('#wb-cancel'); await page.click('#wb-cancel'); await page.waitForSelector('.ov-tabs'); await page.waitForTimeout(300);
+  ok('terug uit een vervolgvenster (werkbon): je staat weer op het tabblad waar je was', await page.evaluate(() => document.querySelector('.ov-tab.active')?.dataset.ovtab === 'fotos'));
+  // De volgende stap volgt vaste regels (geen AI): zelfde opdracht = zelfde voorstel.
+  const stappen = await page.evaluate(() => {
+    const k = { canWrite: true, isMonteur: false }, mo = { canWrite: false, isMonteur: true };
+    const dag = (n) => new Date(Date.now() + n * 86400000).toLocaleDateString('sv-SE');
+    const s = (o, r) => (ovVolgendeStap(o, r) || {}).label || '-';
+    return [
+      s({ status: 'nieuw', customerIncomplete: true }, k), s({ status: 'open', unreadReplies: 2 }, k), s({ status: 'nieuw' }, k),
+      s({ status: 'nieuw', sentToMonteur: { at: 'x' } }, k), s({ status: 'open' }, k), s({ status: 'offerte_verzonden' }, k),
+      s({ status: 'afspraak_ingepland', appointmentAt: dag(1) + 'T10:00' }, k), s({ status: 'afspraak_ingepland', appointmentAt: dag(-1) + 'T10:00' }, k),
+      s({ status: 'afspraak_ingepland', appointmentAt: dag(0) + 'T10:00' }, mo), s({ status: 'afspraak_ingepland', appointmentAt: dag(0) + 'T10:00', onderwegAt: 'x' }, mo),
+      s({ status: 'afgerond' }, k), s({ status: 'afgerond', invoiceId: 'i' }, k), s({ status: 'geannuleerd' }, k), s({ status: 'open', unreadReplies: 2 }, mo),
+    ].join(' | ');
+  });
+  ok('volgende stap volgt vaste regels per situatie (kantoor en monteur)', stappen === 'Klantgegevens aanvullen | Beantwoorden | Stuur naar monteur | Afspraak plannen | Afspraak plannen | Afspraak plannen | - | Afronden | Onderweg melden | Afronden | Factuur maken | - | - | Afspraak plannen', stappen);
+  // Volgende stap "Afspraak plannen" brengt je naar het veld, ook vanaf een ander tabblad.
+  await page.click('.ov-tab[data-ovtab="historie"]'); await page.waitForTimeout(150);
+  const stapNu = await page.evaluate(() => document.querySelector('#ov-stap')?.textContent.trim() || '');
+  if (stapNu) await page.click('#ov-stap');
+  await page.waitForTimeout(400);
+  ok('klik op de volgende stap doet iets zichtbaars (veld in beeld of vervolgvenster open)', await page.evaluate(() => !!document.querySelector('#msm-send, #sm-send, [id^="sm-"], [id^="msm-"]') || document.activeElement?.id === 'f-appt' || document.activeElement?.id === 'f-ccname' || !document.querySelector('.ov-tabs')), stapNu);
+  await page.evaluate(() => closeModal());
+  // Telefoon: tabbalk niet platgedrukt, niets steekt buiten het scherm, knoppen twee naast elkaar.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate((id) => openOrderVers(id), ordId); await page.waitForSelector('#modalRoot:not([hidden]) .ov-tabs'); await page.waitForTimeout(400);
+  const ovTel = await page.evaluate(() => {
+    const m = document.querySelector('#modal'); const t = m.querySelector('.ov-tabs').getBoundingClientRect();
+    const knoppen = [...m.querySelectorAll('.ov-actieknoppen .btn')].map((b) => b.getBoundingClientRect());
+    return { tabHoogte: Math.round(t.height), breedte: m.scrollWidth - m.clientWidth, buiten: knoppen.filter((r) => r.right > 391 || r.left < 0).length, tik: Math.min(...knoppen.map((r) => Math.round(r.height))) };
+  });
+  ok('telefoon: tabbalk heeft tikhoogte (≥ 44 px), venster schuift niet opzij, knoppen binnen beeld met tikhoogte ≥ 44 px', ovTel.tabHoogte >= 44 && ovTel.breedte <= 0 && ovTel.buiten === 0 && ovTel.tik >= 44, JSON.stringify(ovTel));
+  await page.evaluate(() => { const m = document.querySelector('#modal'); m.scrollTop = 400; });
+  await page.waitForTimeout(200);
+  ok('telefoon: de tabbladen blijven bovenaan bereikbaar tijdens het scrollen', await page.evaluate(() => { const m = document.querySelector('#modal'); if (m.scrollTop < 50) return true; const t = m.querySelector('.ov-tabs').getBoundingClientRect(); const mr = m.getBoundingClientRect(); return t.top >= mr.top - 1 && t.top <= mr.top + 40; }));
+  await page.evaluate(() => closeModal());
+  await page.setViewportSize({ width: 1280, height: 800 });
+}
+noErr('Opdrachtvenster nieuwe indeling');
+
 // 8b) OPDRACHT-VENSTER & DATA-INTEGRITEIT (audit 28 sep 2026): dubbelklik = één
 // opdracht, Esc/klik-naast met getypte notitie vraagt eerst, Esc werkt weer na een
 // eigen invoervenster, aanvraag-adres (intake) blijft na Opslaan staan, en een
