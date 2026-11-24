@@ -193,6 +193,24 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   Reden: de monteur verbetert het klantrecord, en het opdrachtadres gaat naar de monteur en
   op de factuur.
 
+## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
+Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
+(concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)
+spraken hem NIET aan: hij wil AI die geld oplevert, verlies voorkomt of hem laat sturen op data.
+Altijd: AI stelt voor, een mens beslist (lead-instroom wetten blijven gelden).
+1. FOTO-DIAGNOSE: klantfoto → soort slot/schuifpui + waarschijnlijk onderdeel → "neem mee: …"
+   op de opdracht. Doel: minder tweede ritten.
+2. PRIJSADVIES BIJ OFFERTE: vergelijkbare eerdere opdrachten, gerekende prijzen, welke offertes
+   geaccepteerd/te duur waren. Doel: scherpere prijzen, hogere conversie en marge.
+3. GEMISTE AANVRAGEN TERUGVINDEN: wekelijks Overige + prullenbak opnieuw laten lezen, echte
+   klanten aanwijzen die erdoor glipten.
+4. OUDE KLANTEN OPNIEUW BENADEREN: wie is toe aan onderhoud/vervanging → campagnevoorstel
+   (sluit aan op de bestaande e-mailcampagne).
+5. WEKELIJKS "WAAR VERDIEN IK AAN": per bron/monteur/soort klus kosten vs. opbrengst (bv.
+   Google Ads-klant vs. DRS-klus netto) + één advies.
+6. MONTEUR SPREEKT IN NA DE KLUS: spraak → werkbon + notitie + status afgerond.
+Advies aan eigenaar: eerst 1, 3 en 5.
+
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,
   better-sqlite3) sinds 28 jul. Alles blijft in het geheugen — `db()` geeft gewoon een
