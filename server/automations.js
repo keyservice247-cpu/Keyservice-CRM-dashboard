@@ -4,6 +4,7 @@
 import { db, id, now, save, saveSoon, logActivity, diskFreeMB, noodOpruimronde, saveFailure } from './db.js';
 import { TEST } from './omgeving.js';
 import { isDrsOrder } from './drs-rapport.js';
+import { merkVan, merkVanFactuur, merkNaam, reviewLinkVoor } from './merk.js';
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
@@ -269,9 +270,13 @@ export function reviewAutoAllowed(order) {
 // stuurt zonder → de vaste bedrijfshandtekening.
 export async function sendReviewRequest(order, { actorName = 'systeem', force = false, invoice = null, afzender = null } = {}) {
   const cfg = getReviewRequest();
-  if (!cfg.link) return { error: 'Er staat nog geen review-link ingesteld (Instellingen → Automatische berichten).' };
-  if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
   if (!order && !invoice) return { error: 'Geen opdracht of factuur gevonden.' };
+  // Elk merk zijn eigen reviewpagina (24 nov 2026): de link volgt het merk van de opdracht
+  // (of van de losse factuur). Zonder eigen link voor dat merk geldt de algemene link.
+  const merk = order ? merkVan(order) : merkVanFactuur(invoice);
+  const reviewLink = reviewLinkVoor(merk.key, cfg);
+  if (!reviewLink) return { error: 'Er staat nog geen review-link ingesteld (Instellingen → Berichten aan klanten → Review-verzoek).' };
+  if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
   // Alleen een échte DATUM betekent "al gevraagd" (audit 3 okt): de automatische ronde zet
   // ook markeringen als 'te-oud'/'voor-aanzetten'/'geen-contact' zonder iets te sturen —
   // die blokkeerden de handmatige knop met "al gevraagd op te-oud".
@@ -285,7 +290,7 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   // Het telefoonnummer van DEZE aanvraag gaat voor op het klantrecord (Regel 3).
   const tel = ((order && order.intake && order.intake.phone) || c.phone || '').trim();
   if (!c.email && !tel) return { error: 'Deze klant heeft geen e-mailadres én geen telefoonnummer.' };
-  const vars = { naam: c.name || 'klant', link: cfg.link };
+  const vars = { naam: c.name || 'klant', link: reviewLink, bedrijf: merkNaam(merk.key) };
   const body = fill(cfg.body, vars);
   if (order) order.thread = order.thread || [];
   const via = [];
@@ -313,14 +318,14 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
 
   if (!via.length) return { error: 'Versturen lukte niet — controleer de e-mailinstellingen.' };
   if (order) { order.reviewRequested = now(); order.updatedAt = now(); }
-  logActivity(actorName, 'review-verzoek verstuurd', `${order ? order.title : `factuur ${invoice.number || ''} (${c.name || 'klant'})`} -> ${via.join(' + ')}`);
+  logActivity(actorName, 'review-verzoek verstuurd', `${order ? order.title : `factuur ${invoice.number || ''} (${c.name || 'klant'})`} -> ${via.join(' + ')} · reviewpagina ${merkNaam(merk.key)}`);
   saveSoon();
-  return { ok: true, to: [c.email, tel].filter(Boolean).join(' + '), via };
+  return { ok: true, to: [c.email, tel].filter(Boolean).join(' + '), via, merk: merk.key, merkNaam: merkNaam(merk.key) };
 }
 
 async function runReviewRequests() {
   const cfg = getReviewRequest();
-  if (!cfg.enabled || !cfg.link) return;
+  if (!cfg.enabled || !(cfg.link || cfg.linkSchuifpui)) return;
   if (!klantvriendelijkMoment()) return; // review-verzoek nooit 's nachts (8 okt 2026)
   const cutoff = Date.now() - cfg.delayHours * 3600000;
   // VANGRAIL TEGEN EEN STORTVLOED. Zonder deze grenzen zou het aanzetten van de

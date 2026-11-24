@@ -375,6 +375,42 @@ clear();
 }
 noErr('Start: Eerst doen');
 
+// 8a4) MERK PER OPDRACHT + REDEN VAN ANNULEREN (24 nov 2026).
+clear();
+{
+  const req = (m, p, b) => page.evaluate(([mm, pp, bb]) => fetch(pp, { method: mm, headers: { 'content-type': 'application/json' }, body: bb ? JSON.stringify(bb) : undefined }).then((r) => r.json()), [m, p, b]);
+  const oMerk = await req('POST', '/api/orders', { customerName: 'Merk Browser', customerPhone: '0611000777', title: 'Ede — schuifpui loopt zwaar', notes: 'Klant twijfelt nog' });
+  await page.evaluate((i) => openOrderVers(i), oMerk.id); await page.waitForSelector('#modalRoot:not([hidden]) .ov-tabs'); await page.waitForTimeout(400);
+  const mk = await page.evaluate(() => ({ chip: [...document.querySelectorAll('.ov-chip')].some((c) => /Schuifpuiservice/.test(c.textContent)), keuze: document.querySelector('#f-merk')?.value, auto: document.querySelector('#f-merk option')?.textContent || '', redenVerborgen: document.querySelector('#f-annuleer-rij')?.hidden }));
+  ok('opdracht over een schuifpui: merk staat automatisch op Schuifpuiservice (label in de kop + keuzelijst)', mk.chip && mk.keuze === '' && /Automatisch — Schuifpuiservice/.test(mk.auto), JSON.stringify(mk));
+  ok('lopende opdracht: het veld "Reden van annuleren" is niet in beeld', mk.redenVerborgen === true);
+  await page.selectOption('#f-status', 'geannuleerd'); await page.waitForTimeout(200);
+  const rd = await page.evaluate(() => ({ zichtbaar: document.querySelector('#f-annuleer-rij').offsetParent !== null, opties: document.querySelectorAll('#f-annuleer option').length }));
+  ok('status op Geannuleerd → het veld verschijnt met de 9 vaste redenen', rd.zichtbaar && rd.opties === 10, JSON.stringify(rd));
+  await page.selectOption('#f-annuleer', 'prijs'); await page.selectOption('#f-merk', 'keyservice');
+  await page.click('#f-save'); await page.waitForTimeout(1000);
+  const na = await req('GET', `/api/orders/${oMerk.id}`);
+  ok('Opslaan bewaart status, gekozen reden en gekozen merk', na.status === 'geannuleerd' && na.annulering?.reden === 'prijs' && na.merk === 'keyservice', JSON.stringify([na.status, na.annulering, na.merk]));
+  // Al geannuleerd zonder gekozen reden: het systeem stelt er één voor uit de notitie.
+  const oV = await req('POST', '/api/orders', { customerName: 'Voorstel Browser', customerPhone: '0611000778', title: 'Ede — cilinder', notes: 'Drie keer gebeld, geen gehoor' });
+  await req('PATCH', `/api/orders/${oV.id}`, { status: 'geannuleerd' });
+  await page.evaluate((i) => openOrderVers(i), oV.id); await page.waitForSelector('#modalRoot:not([hidden]) .ov-tabs'); await page.waitForTimeout(400);
+  const vs = await page.evaluate(() => ({ hint: document.querySelector('#f-annuleer-hint')?.textContent || '', knop: !!document.querySelector('#f-annuleer-over'), keuze: document.querySelector('#f-annuleer')?.value }));
+  ok('geannuleerd zonder gekozen reden: voorstel uit de notitie, nog niets ingevuld', /Voorstel uit de notitie: Klant reageert niet meer/.test(vs.hint) && vs.knop && vs.keuze === '', JSON.stringify(vs));
+  await page.click('#f-annuleer-over'); await page.waitForTimeout(150);
+  ok('"Overnemen" zet het voorstel in het veld (pas bewaard na Opslaan)', await page.inputValue('#f-annuleer') === 'geen_reactie' && !(await req('GET', `/api/orders/${oV.id}`)).annulering);
+  await page.click('#f-save'); await page.waitForTimeout(900);
+  ok('…en na Opslaan staat de reden op de opdracht', (await req('GET', `/api/orders/${oV.id}`)).annulering?.reden === 'geen_reactie');
+  // Cijfers → Conversie: waarom haken klanten af?
+  await page.evaluate(() => goView('finance')); await page.waitForTimeout(1800);
+  const ak = await page.evaluate(() => { const k = document.querySelector('#annuleringenKaart'); return { er: !!k, tekst: k ? k.innerText.replace(/\s+/g, ' ') : '' }; });
+  ok('Cijfers toont "Waarom haken klanten af?" met de redenen en aantallen', ak.er && /Te duur/.test(ak.tekst) && /Klant reageert niet meer/.test(ak.tekst) && /geannuleerde opdracht/.test(ak.tekst), ak.tekst.slice(0, 260));
+  // Instellingen: eigen reviewlink en Trustpilot-adres voor Schuifpuiservice.
+  await page.evaluate(() => goView('settings')); await page.waitForTimeout(1500);
+  ok('Instellingen: reviewlink en Trustpilot-adres voor Schuifpuiservice staan erbij (in "Berichten aan klanten")', await page.evaluate(() => { const a = document.querySelector('#rr-link-schuif'), b = document.querySelector('#tp-bcc-schuif'); return !!a && !!b && a.closest('[data-sg]')?.dataset.sg === 'bericht' && b.closest('[data-sg]')?.dataset.sg === 'bericht'; }));
+}
+noErr('Merk + annuleringsreden');
+
 // 8b) OPDRACHT-VENSTER & DATA-INTEGRITEIT (audit 28 sep 2026): dubbelklik = één
 // opdracht, Esc/klik-naast met getypte notitie vraagt eerst, Esc werkt weer na een
 // eigen invoervenster, aanvraag-adres (intake) blijft na Opslaan staan, en een

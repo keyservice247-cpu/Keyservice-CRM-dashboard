@@ -396,13 +396,22 @@ export const TRUSTPILOT_BCC_RE = /^[^@\s]+@invite\.trustpilot\.com$/i;
 export function getTrustpilot() {
   const t = db().settings.trustpilot || {};
   const bcc = TRUSTPILOT_BCC_RE.test(String(t.bcc || '').trim()) ? String(t.bcc).trim() : '';
+  // Schuifpuiservice heeft een eigen Trustpilot-account (24 nov 2026); leeg = het gewone adres.
+  const bccSchuifpui = TRUSTPILOT_BCC_RE.test(String(t.bccSchuifpui || '').trim()) ? String(t.bccSchuifpui).trim() : '';
   return {
-    bcc,
+    bcc, bccSchuifpui,
     aan: !!bcc,
     standaardAan: !!t.standaardAan,
     subject: t.subject || DEFAULT_TRUSTPILOT.subject,
     body: t.body || DEFAULT_TRUSTPILOT.body,
   };
+}
+
+// Welk Trustpilot-adres hoort bij dit merk? Schuifpuiservice zijn eigen adres als dat is
+// ingevuld, anders het gewone (zo verandert er niets zolang er één adres is).
+export function trustpilotBccVoor(merkKey) {
+  const t = getTrustpilot();
+  return merkKey === 'schuifpui' && t.bccSchuifpui ? t.bccSchuifpui : t.bcc;
 }
 
 // Review-verzoek: X uur na "Afgerond" automatisch een mailtje met de review-link.
@@ -426,6 +435,9 @@ export function getReviewRequest() {
     enabled: !!r.enabled,
     delayHours: Math.max(1, Math.min(240, Number(r.delayHours) || DEFAULT_REVIEW_REQUEST.delayHours)),
     link: r.link || '',
+    // Eigen reviewpagina per merk (24 nov 2026): leeg = de algemene link hierboven.
+    linkSchuifpui: r.linkSchuifpui || '',
+    links: { keyservice: '', schuifpui: r.linkSchuifpui || '' },
     subject: r.subject || DEFAULT_REVIEW_REQUEST.subject,
     body: r.body || DEFAULT_REVIEW_REQUEST.body,
   };

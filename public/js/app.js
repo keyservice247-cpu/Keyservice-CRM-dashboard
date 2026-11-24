@@ -2688,6 +2688,29 @@ function ovVolgendeStap(o, { canWrite, isMonteur }) {
   if (['nieuw', 'open', 'offerte_verzonden', 'afspraak_ingepland'].includes(st)) return { label: 'Afspraak plannen', uitleg: st === 'offerte_verzonden' ? 'Zodra de klant akkoord is.' : 'Er staat nog geen datum en tijd.', veld: '#f-appt' };
   return null;
 }
+// MERK en ANNULERINGSREDEN in het opdrachtvenster (24 nov 2026). De keuzelijsten komen van de
+// server (state.meta.merken / annuleerRedenen); het systeem stelt voor, een mens beslist.
+function merkNaamVan(key) { return ((state.meta?.merken || []).find((m) => m.key === key) || {}).naam || key || ''; }
+function merkVeldHTML(o) {
+  const merken = state.meta?.merken || [];
+  if (!merken.length) return '';
+  const auto = o.merkInfo && o.merkInfo.bron !== 'gekozen' ? o.merkInfo.key : (merken[0] || {}).key;
+  return `<label title="Bepaalt naar welke reviewpagina de klant wordt gestuurd">Merk <select id="f-merk">
+    <option value="">Automatisch — ${esc(merkNaamVan(o.merk ? ((merken[0] || {}).key) : auto))}</option>
+    ${merken.map((m) => `<option value="${esc(m.key)}" ${o.merk === m.key ? 'selected' : ''}>${esc(m.naam)}</option>`).join('')}
+  </select></label>`;
+}
+function annuleerRijHTML(o) {
+  const redenen = state.meta?.annuleerRedenen || [];
+  if (!redenen.length) return '';
+  const gekozen = o.annulering && o.annulering.reden ? o.annulering.reden : '';
+  const voorstel = !gekozen && o.annuleerInfo && o.annuleerInfo.bron === 'afgeleid' ? o.annuleerInfo.key : '';
+  const naam = (k) => (redenen.find((r) => r.key === k) || {}).label || k;
+  return `<div id="f-annuleer-rij" class="ov-annuleer" hidden>
+    <label>Reden van annuleren <select id="f-annuleer"><option value="">— kies een reden —</option>${redenen.map((r) => `<option value="${esc(r.key)}" ${gekozen === r.key ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}</select></label>
+    <div class="muted small" id="f-annuleer-hint">${voorstel ? `Voorstel uit de notitie: <strong>${esc(naam(voorstel))}</strong> <button type="button" class="btn btn-sm" id="f-annuleer-over" data-reden="${esc(voorstel)}">Overnemen</button>` : 'Zo zie je op Cijfers waarom klanten afhaken. Overslaan mag.'}</div>
+  </div>`;
+}
 function ovKopHTML(o, { canWrite, isMonteur, kv, stap }) {
   const tel = kv.phone || '';
   const adres = kv.address || '';
@@ -2706,6 +2729,7 @@ function ovKopHTML(o, { canWrite, isMonteur, kv, stap }) {
       <div class="ov-chips">
         <span class="ov-chip" style="--kl:${esc(statusColor(o.status))}"><span class="ov-chip-dot"></span>${esc(statusLabel(o.status))}</span>
         ${o.urgent ? '<span class="ov-chip ov-chip-spoed">Spoed</span>' : ''}
+        ${o.merkInfo && o.merkInfo.key !== 'keyservice' ? `<span class="ov-chip ov-chip-stil" title="Bepaalt naar welke reviewpagina de klant gaat">${esc(merkNaamVan(o.merkInfo.key))}</span>` : ''}
         ${o.monteur && o.monteur.name ? `<span class="ov-chip ov-chip-stil">${icon('user', 12)} ${esc(o.monteur.name)}</span>` : ''}
         ${afspraak ? `<span class="ov-chip ov-chip-stil">${icon('calendar', 12)} ${esc(afspraak)}</span>` : ''}
       </div>
@@ -2765,6 +2789,14 @@ function ovBindTabs(o, { stap, isMonteur, begin }) {
   $$('[data-ovklik]', m).forEach((b) => { b.onclick = () => $(`#${b.dataset.ovklik}`)?.click(); });
   // Een groepje zonder knoppen (bv. geen recht op die acties) laat geen los kopje achter.
   $$('.ov-actiegroep', m).forEach((g) => { g.hidden = !g.querySelector('.ov-actieknoppen .btn'); });
+  // Reden van annuleren: alleen in beeld als de status op Geannuleerd staat.
+  const anRij = $('#f-annuleer-rij', m), stSel = $('#f-status', m);
+  if (anRij && stSel) {
+    const toon = () => { anRij.hidden = stSel.value !== 'geannuleerd'; };
+    toon(); stSel.addEventListener('change', toon);
+    const over = $('#f-annuleer-over', m);
+    if (over) over.onclick = () => { $('#f-annuleer').value = over.dataset.reden; $('#f-annuleer-hint').textContent = 'Overgenomen — klik Opslaan om het te bewaren.'; };
+  }
   ovToonTab(begin || 'details');
   const knop = $('#ov-stap');
   if (knop && stap) knop.onclick = () => {
@@ -2847,7 +2879,7 @@ function openOrderModal(id, pool) {
     <div class="form-sec">${icon('user', 13)} Klantgegevens</div> ${!o ? `
       <div class="row"> <label>Klantnaam <input id="f-cname" placeholder="Naam klant"></label> <label>Telefoon <input id="f-cphone" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail klant <input id="f-cemail" placeholder="optioneel"></label> <label>Adres <input id="f-caddress" placeholder="Straat, postcode, plaats"></label> </div> ` : `
       <div class="row"> <label>Klantnaam <input id="f-ccname" value="${esc(kv.name)}"></label> <label>Telefoon <input id="f-ccphone" value="${esc(kv.phone)}" placeholder="06-…"></label> </div> <div class="row"> <label>E-mail <input id="f-ccemail" value="${esc(kv.email)}" placeholder="e-mailadres klant (nodig voor de factuur)"></label> <label>Adres <input id="f-ccaddress" value="${esc(kv.address)}"></label> </div>${kvWijkt ? `<div class="muted small" style="margin:-4px 0 8px">Deze velden tonen de gegevens van <strong>déze aanvraag</strong> (die gebruikt de monteur). Wat je hier wijzigt, geldt voor deze opdracht én het klantrecord.</div>` : ''}${o.customer?.phone ? `<div class="muted small" style="margin:-4px 0 10px"><a href="tel:${esc(String(o.customer.phone).replace(/\s+/g, ''))}">${icon('phone', 12)} Bel ${esc(o.customer.phone)}</a></div>` : ''}`}
-    <div class="form-sec">${icon('calendar', 13)} Planning &amp; status</div> <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div> <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''}${o && o.googleSyncError ? `<div class="muted small" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--danger);background:var(--danger-soft, rgba(220,53,69,.08))"><strong>Niet in Google Agenda.</strong> ${esc(o.googleSyncError)} — ga naar Instellingen → Koppelingen en klik "Controleer &amp; herstel nu".</div>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? `<label>Herkomst (bron) ${sourceSelect(o?.source || 'Handmatig')}</label>` : ''}
+    <div class="form-sec">${icon('calendar', 13)} Planning &amp; status</div> <div class="row"> <label class="status-field-label">${icon('tag', 13)} Status <select id="f-status" class="status-field">${statusOptionsHTML(o?.status)}</select></label> <label>Monteur <select id="f-monteur" ${isMonteur ? 'disabled' : ''}>${monteurOpts}</select></label> </div>${o ? annuleerRijHTML(o) : ''} <div class="row"> <label>Afspraak begin <input id="f-appt" type="datetime-local" step="1800" value="${o?.appointmentAt ? esc(o.appointmentAt.slice(0,16)) : ''}"></label> <label>Afspraak eind <input id="f-appt-end" type="datetime-local" step="1800" value="${o?.appointmentEndAt ? esc(o.appointmentEndAt.slice(0,16)) : ''}"></label> </div>${o && o.appointmentAt && canWrite ? `<button type="button" class="btn btn-sm" id="f-cancel-appt" style="margin:0 0 8px;color:var(--danger);border-color:var(--danger)">${icon('x', 13)} Afspraak annuleren (uit agenda + Google Agenda)</button>` : ''}${o && o.googleSyncError ? `<div class="muted small" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--danger);background:var(--danger-soft, rgba(220,53,69,.08))"><strong>Niet in Google Agenda.</strong> ${esc(o.googleSyncError)} — ga naar Instellingen → Koppelingen en klik "Controleer &amp; herstel nu".</div>` : ''} <div class="row"> <label>Prijs <input id="f-price" value="${esc(o?.price || '')}" ${isMonteur ? 'disabled' : ''} placeholder="€"></label> <span></span> </div> ${canWrite ? (o ? `<div class="row"><label>Herkomst (bron) ${sourceSelect(o.source || 'Handmatig')}</label>${merkVeldHTML(o)}</div>` : `<label>Herkomst (bron) ${sourceSelect('Handmatig')}</label>`) : ''}
     <div class="form-sec">${icon('message', 13)} Intern</div> <label>Notities <textarea id="f-notes" rows="3" placeholder="Interne notities">${esc(o?.notes || '')}</textarea></label> ${canWrite ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="f-urgent" style="width:auto" ${o?.urgent ? 'checked' : ''}>Spoed</label>` : ''}
     </div>
     ${o ? '<div class="ov-paneel" data-ovp="fotos" hidden>' : ''}
@@ -3165,6 +3197,8 @@ function openOrderModal(id, pool) {
     };
     zet('status', nu.status, begin.status, o?.status);
     zet('notes', nu.notes, begin.notes, o?.notes);
+    if (o && $('#f-merk') && $('#f-merk').value !== (o.merk || '')) payload.merk = $('#f-merk').value;
+    if (o && $('#f-annuleer') && nu.status === 'geannuleerd' && $('#f-annuleer').value !== ((o.annulering && o.annulering.reden) || '')) payload.annuleerReden = $('#f-annuleer').value;
     // Afspraakvelden ALLEEN meesturen als ze echt gewijzigd zijn (audit 18 aug): de
     // server ziet een meegestuurde afspraak als "afspraak gezet" en draaide dan bij
     // elke gewone opslag opnieuw de bevestiging + monteur-dispatch.
@@ -5301,7 +5335,7 @@ function renderInvoices() {
     b.disabled = true; const oud = b.innerHTML; b.textContent = 'Versturen…';
     try {
       const r = await api(`/api/invoices/${b.dataset.id}/review-request`, 'POST', { force: alGedaan });
-      toast(`Review gevraagd via ${(r.via || []).join(' + ') || 'e-mail'} — ${r.to}`);
+      toast(`Review gevraagd via ${(r.via || []).join(' + ') || 'e-mail'} — ${r.to}${r.merkNaam ? ` · reviewpagina ${r.merkNaam}` : ''}`);
       loadInvoices();
     } catch (err) { toast(err.message, true); b.disabled = false; b.innerHTML = oud; }
   });
@@ -5541,6 +5575,19 @@ function conversieDagen() {
   return 30;
 }
 const pctF = (v) => (v === null || v === undefined ? '–' : `${String(v).replace('.', ',')}%`);
+// Waarom haken klanten af? (24 nov 2026) — over dezelfde opdrachten als het getal "verloren".
+// De reden komt van wie annuleerde, anders uit de notitie (vaste trefwoorden, geen AI).
+function annuleringenHTML(a) {
+  if (!a || !a.totaal) return '';
+  const max = Math.max(1, ...a.redenen.map((r) => r.aantal));
+  const rij = (r) => `<div class="cv-status-rij an-rij${r.key === 'onbekend' ? ' an-onbekend' : ''}"><span class="cv-status-lbl">${esc(r.label)}</span><div class="cv-balk"><div class="cv-balk-vul" style="width:${Math.max(2, Math.round((r.aantal / max) * 100))}%;background:${r.key === 'onbekend' ? 'var(--line)' : 'var(--danger)'}"></div></div><span class="cv-status-n"><strong>${r.aantal}</strong> <span class="muted small">${r.pct}%</span></span></div>`;
+  return `<div class="info-card cv-card an-card" id="annuleringenKaart" style="margin-bottom:18px">
+    <h3>Waarom haken klanten af?</h3>
+    <div class="muted small" style="margin:-4px 0 10px">${a.totaal} geannuleerde ${a.totaal === 1 ? 'opdracht' : 'opdrachten'} in deze periode${a.gekozen ? ` · bij ${a.gekozen} is de reden gekozen` : ''}${a.afgeleid ? ` · bij ${a.afgeleid} afgeleid uit de notitie` : ''}.</div>
+    ${a.redenen.map(rij).join('')}
+    ${a.onbekend ? `<div class="muted small" style="margin-top:8px">Bij ${a.onbekend} staat geen reden. Kies bij annuleren een reden in de opdracht (Details → Status), dan wordt dit overzicht compleet.</div>` : ''}
+  </div>`;
+}
 function renderConversie() {
   const el = $('#conversiePanel'); if (!el) return;
   const c = state._conversie;
@@ -5605,6 +5652,7 @@ function renderConversie() {
       <div class="stat"><div class="num" style="color:var(--danger)">${t.verloren}</div><div class="lbl">Verloren (geannuleerd)</div><div class="muted small">${pctF(t.binnen ? Math.round((t.verloren / t.binnen) * 1000) / 10 : null)} van alles</div></div>
       <div class="stat"><div class="num">${t.open}</div><div class="lbl">Nog open</div><div class="muted small">${c.stil ? `${c.stil} al 14+ dagen stil` : 'geen stilliggers'}</div></div>
     </div>
+    ${annuleringenHTML(c.annuleringen)}
     <div class="settings-grid cv-grid">
       <div class="info-card cv-card"><h3>Waar staan ze nu?</h3>
         ${c.perStatus.length ? c.perStatus.map((s) => `<div class="cv-status-rij"><span class="cv-status-lbl">${esc(s.label)}</span>${balk(s.count, t.binnen, kleurStatus(s.key))}<span class="cv-status-n"><strong>${s.count}</strong> <span class="muted small">${pctF(s.pct)}</span></span></div>`).join('') : '<div class="muted small">Geen aanvragen in deze periode.</div>'}
@@ -6151,7 +6199,8 @@ async function loadSettingsHtml(s) {
       <p class="muted small">Zodra een opdracht op <strong>Afgerond</strong> staat, krijgt de klant na het ingestelde aantal uren automatisch een vriendelijk mailtje met jullie review-link (bv. Google). Goede reviews = meer klanten. Gebruik <code>{naam}</code> en <code>{link}</code> in de tekst.</p>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="rr-enabled" style="width:auto" ${s.reviewRequest?.enabled ? 'checked' : ''}> Review-verzoek aanzetten</label>
       <div class="row">
-        <label>Review-link <input id="rr-link" value="${esc(s.reviewRequest?.link || '')}" placeholder="https://g.page/r/… (jullie Google-review-link)"></label>
+        <label>Review-link Key Service 24/7 <input id="rr-link" value="${esc(s.reviewRequest?.link || '')}" placeholder="https://g.page/r/… (jullie Google-review-link)"></label>
+        <label>Review-link Schuifpuiservice <input id="rr-link-schuif" value="${esc(s.reviewRequest?.linkSchuifpui || '')}" placeholder="leeg = dezelfde link als hierboven"></label>
         <label>Na hoeveel uur? <input id="rr-hours" type="number" min="1" max="240" value="${esc(String(s.reviewRequest?.delayHours ?? 24))}" style="max-width:120px"></label>
       </div>
       <label>Onderwerp <input id="rr-subject" value="${esc(s.reviewRequest?.subject || '')}"></label>
@@ -6161,6 +6210,7 @@ async function loadSettingsHtml(s) {
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Trustpilot-uitnodiging (jij kiest per klant)</h3>
       <p class="muted small">Plak hier jullie unieke Trustpilot-adres (Trustpilot → Uitnodigen → <em>Automatic / BCC</em>, eindigt op <code>@invite.trustpilot.com</code>). Het CRM zet dat adres <strong>alleen</strong> in BCC als jij dat kiest: met het vinkje "Trustpilot-uitnodiging meesturen" bij het mailen van een factuur, of met de knop <strong>Trustpilot</strong> op een afgeronde opdracht. Trustpilot stuurt de klant daarna zelf het reviewverzoek. Werkt alleen voor klanten met een e-mailadres.</p>
       <label>Trustpilot BCC-adres <input id="tp-bcc" value="${esc(s.trustpilot?.bcc || '')}" placeholder="naam+code@invite.trustpilot.com" autocomplete="off"></label>
+      <label>Trustpilot BCC-adres Schuifpuiservice <input id="tp-bcc-schuif" value="${esc(s.trustpilot?.bccSchuifpui || '')}" placeholder="leeg = hetzelfde adres als hierboven" autocomplete="off"></label>
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="tp-standaard" style="width:auto" ${s.trustpilot?.standaardAan ? 'checked' : ''}> Vinkje bij de factuurmail standaard aan (klanten die al zijn uitgenodigd nooit)</label>
       <label>Onderwerp bedankmailtje (knop op de opdracht) <input id="tp-subject" value="${esc(s.trustpilot?.subject || '')}"></label>
       <label>Tekst bedankmailtje <textarea id="tp-body" rows="5">${esc(s.trustpilot?.body || '')}</textarea></label>
@@ -6485,12 +6535,12 @@ async function loadSettingsHtml(s) {
     catch (err) { toast(err.message, true); }
   };
   if ($('#saveTrustpilot')) $('#saveTrustpilot').onclick = async () => {
-    const trustpilot = { bcc: $('#tp-bcc').value.trim(), standaardAan: $('#tp-standaard').checked, subject: $('#tp-subject').value, body: $('#tp-body').value };
+    const trustpilot = { bcc: $('#tp-bcc').value.trim(), bccSchuifpui: $('#tp-bcc-schuif') ? $('#tp-bcc-schuif').value.trim() : '', standaardAan: $('#tp-standaard').checked, subject: $('#tp-subject').value, body: $('#tp-body').value };
     if (trustpilot.bcc && !/^[^@\s]+@invite\.trustpilot\.com$/i.test(trustpilot.bcc)) return toast('Dit is geen Trustpilot-adres — het moet eindigen op @invite.trustpilot.com', true);
     try { await api('/api/settings', 'PATCH', { trustpilot }); toast(trustpilot.bcc ? 'Trustpilot opgeslagen' : 'Trustpilot uitgezet (geen adres)'); if (typeof refreshMeta === 'function') refreshMeta(); } catch (err) { toast(err.message, true); }
   };
   $('#saveReview').onclick = async () => {
-    const reviewRequest = { enabled: $('#rr-enabled').checked, link: $('#rr-link').value.trim(), delayHours: Number($('#rr-hours').value) || 24, subject: $('#rr-subject').value, body: $('#rr-body').value };
+    const reviewRequest = { enabled: $('#rr-enabled').checked, link: $('#rr-link').value.trim(), linkSchuifpui: $('#rr-link-schuif') ? $('#rr-link-schuif').value.trim() : '', delayHours: Number($('#rr-hours').value) || 24, subject: $('#rr-subject').value, body: $('#rr-body').value };
     if (reviewRequest.enabled && !reviewRequest.link) return toast('Vul eerst de review-link in', true);
     try { await api('/api/settings', 'PATCH', { reviewRequest }); toast('Review-verzoek opgeslagen'); }
     catch (err) { toast(err.message, true); }

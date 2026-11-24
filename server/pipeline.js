@@ -1,6 +1,8 @@
 // Gedeelde verwerkingslogica voor inkomende berichten.
 // Wordt gebruikt door de API-routes én door de koppelingen (IMAP, WhatsApp).
 import { db, id, now, saveSoon, logActivity } from './db.js';
+import { merkVan } from './merk.js';
+import { redenVan } from './annulering.js';
 import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport, isDrsEmailAfzender, afzenderVanOns, isPostcodeLetters } from './drs-rapport.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
 import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours } from './settings.js';
@@ -211,7 +213,10 @@ export function withRelations(order, maps) {
   // groep", geen herkomstgroep) is DRS — die kreeg wél een DRS-fee maar geen DRS-chip.
   const isDrs = isDrsOrder(order);
   // Bij welk DRS-rapport-kopje hoort de huidige status (voor de chip "DRS gemeld")?
-  return { ...order, customer, monteur, isDrs, drsCat: isDrs ? catVanStatus(order.status) : null };
+  // Merk (Key Service / Schuifpuiservice) en — bij een geannuleerde opdracht — de reden:
+  // gekozen door een mens, anders het voorstel van de vaste regels (24 nov 2026).
+  return { ...order, customer, monteur, isDrs, drsCat: isDrs ? catVanStatus(order.status) : null,
+    merkInfo: merkVan(order), annuleerInfo: order.status === 'geannuleerd' ? redenVan(order) : null };
 }
 
 // Maak van een (goedgekeurde) review een echte opdracht + klant.

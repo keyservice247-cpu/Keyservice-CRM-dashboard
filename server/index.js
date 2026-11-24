@@ -60,6 +60,8 @@ import {
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken, wachtOpAntwoordDagen, voorbeeldTekst } from './gesprekken.js';
 import { eerstDoenLijst } from './eerst-doen.js';
+import { MERKEN, isMerk, merkVan, merkVanFactuur, merkNaam } from './merk.js';
+import { STANDAARD_REDENEN, isReden } from './annulering.js';
 import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, kantoor, gedeeldMetNamen, zetVolgorde } from './taken.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
@@ -89,7 +91,7 @@ import {
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, afzenderProfiel, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
-  getTerugkoppeling, getAppointmentMsg, getReviewRequest, getTrustpilot, TRUSTPILOT_BCC_RE, getCrmAlerts, getPriceList,
+  getTerugkoppeling, getAppointmentMsg, getReviewRequest, getTrustpilot, trustpilotBccVoor, TRUSTPILOT_BCC_RE, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
   getHtmlSignature, getWeeklyAiCheck, syncBundlesToPriceList, getGoogleSync,
@@ -235,6 +237,8 @@ app.get('/api/me', (req, res) => {
       emailSignature: getEmailSignature(afzenderVan(req)),
       // Trustpilot (5 okt): alleen of het aan staat + standaard-vinkje, nooit het adres zelf.
       trustpilot: { aan: getTrustpilot().aan, standaardAan: getTrustpilot().standaardAan },
+      // Vaste keuzelijsten voor het opdrachtvenster (24 nov 2026).
+      merken: MERKEN, annuleerRedenen: STANDAARD_REDENEN,
       // DRS-rapport (16 okt): welke kopjes bijgehouden worden (voor de "DRS gemeld"-chip).
       drsRapport: req.user && req.user.role !== 'monteur' ? { kopjes: getDrsRapportInstellingen().kopjes } : null,
       // Testomgeving (23 nov): het scherm toont dan een duidelijke balk.
@@ -2072,6 +2076,14 @@ app.patch('/api/orders/:id', requireAuth, (req, res) => {
     }
   }
 
+  // MERK (24 nov 2026): kantoor kiest zo nodig zelf bij welk merk de opdracht hoort (bepaalt
+  // de reviewpagina); leeg = weer automatisch (website → soort werk → Key Service).
+  if ('merk' in b && req.user.role !== 'monteur') { if (isMerk(b.merk)) order.merk = b.merk; else delete order.merk; }
+  // ANNULERINGSREDEN: wat een mens kiest wint van het voorstel uit de notitie. Leeg = keuze weg.
+  if ('annuleerReden' in b) {
+    if (isReden(b.annuleerReden)) order.annulering = { reden: b.annuleerReden, at: now(), door: req.user.name };
+    else delete order.annulering;
+  }
   // Een nieuwe herinnering zetten haalt de "opvolgen"-vlag weg.
   if ('snoozeAt' in b) order.snoozeDue = false;
   order.updatedAt = now();
@@ -3876,8 +3888,11 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
     const t = b.trustpilot || {};
     const bcc = String(t.bcc || '').trim();
     if (bcc && !TRUSTPILOT_BCC_RE.test(bcc)) return res.status(400).json({ error: 'Dit is geen Trustpilot-uitnodigingsadres. Het moet eindigen op @invite.trustpilot.com (kopieer het uit Trustpilot → Uitnodigen → Automatisch / BCC).' });
+    // Het tweede adres (Schuifpuiservice) blijft staan als een ouder scherm het niet meestuurt.
+    const bccSchuifpui = 'bccSchuifpui' in t ? String(t.bccSchuifpui || '').trim() : String(db().settings.trustpilot?.bccSchuifpui || '');
+    if (bccSchuifpui && !TRUSTPILOT_BCC_RE.test(bccSchuifpui)) return res.status(400).json({ error: 'Het Trustpilot-adres voor Schuifpuiservice moet eindigen op @invite.trustpilot.com.' });
     db().settings.trustpilot = {
-      bcc,
+      bcc, bccSchuifpui,
       standaardAan: !!t.standaardAan,
       subject: String(t.subject || '').slice(0, 200),
       body: String(t.body || '').slice(0, 2000),
@@ -3895,6 +3910,8 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       enabledAt: r.enabled ? (stondAan && eerderAan ? eerderAan : now()) : eerderAan,
       delayHours: Math.max(1, Math.min(240, Number(r.delayHours) || 24)),
       link: String(r.link || '').slice(0, 500).trim(),
+      // Reviewlink van Schuifpuiservice; blijft staan als een ouder scherm hem niet meestuurt.
+      linkSchuifpui: String('linkSchuifpui' in r ? (r.linkSchuifpui || '') : (db().settings.reviewRequest?.linkSchuifpui || '')).slice(0, 500).trim(),
       subject: String(r.subject || '').slice(0, 200),
       body: String(r.body || '').slice(0, 2000),
     };
@@ -4905,7 +4922,7 @@ app.post('/api/orders/:id/trustpilot', requireRole('admin', 'assistent'), async 
   const body = String(tp.body || '').replace(/\{naam\}/g, naam && !/onbekende klant/i.test(naam) ? naam : 'klant');
   const sig = getEmailSignature(afzenderVan(req));
   try {
-    await sendMail({ afzender: afzenderVan(req), to, subject: tp.subject, text: sig ? `${body}\n\n${sig}` : body, bcc: tp.bcc });
+    await sendMail({ afzender: afzenderVan(req), to, subject: tp.subject, text: sig ? `${body}\n\n${sig}` : body, bcc: trustpilotBccVoor(merkVan(order).key) });
   } catch (e) { return res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
   order.thread = order.thread || [];
   order.thread.push({ id: id('thr'), channel: 'email', outgoing: true, sender: `${req.user.name} (Trustpilot)`, subject: tp.subject, body, at: now() });
@@ -4936,7 +4953,7 @@ app.post('/api/invoices/:id/trustpilot', requireRole('admin', 'assistent'), asyn
   const body = String(tp.body || '').replace(/\{naam\}/g, naam && !/onbekende klant/i.test(naam) ? naam : 'klant');
   const sig = getEmailSignature(afzenderVan(req));
   try {
-    await sendMail({ afzender: afzenderVan(req), to, subject: tp.subject, text: sig ? `${body}\n\n${sig}` : body, bcc: tp.bcc });
+    await sendMail({ afzender: afzenderVan(req), to, subject: tp.subject, text: sig ? `${body}\n\n${sig}` : body, bcc: trustpilotBccVoor((order ? merkVan(order) : merkVanFactuur(inv)).key) });
   } catch (e) { return res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
   if (order) {
     order.thread = order.thread || [];
@@ -5593,7 +5610,7 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
       to, subject: `${isQuote ? 'Offerte' : 'Factuur'} ${inv.number} — ${cfg.companyName}`,
       text: sig ? `${body}\n\n${sig}` : body,
       attachments: [{ filename: `${isQuote ? 'offerte' : 'factuur'}-${inv.number}.pdf`, content: pdf }],
-      bcc: metTrustpilot ? tp.bcc : '',
+      bcc: metTrustpilot ? trustpilotBccVoor((order ? merkVan(order) : merkVanFactuur(inv)).key) : '',
     });
     if (metTrustpilot) markeerTrustpilot({ customer, order, inv, door: req.user.name, to });
     // Opnieuw versturen mag altijd (bv. verkeerd adres, klant wil kopie), maar

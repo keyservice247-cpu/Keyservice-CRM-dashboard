@@ -300,6 +300,53 @@ try {
     ok('tekst: precies één groet, ondertekend door Youssef (Monteur)', (tekstDeel.match(/Met vriendelijke groet/g) || []).length === 1 && /Youssef\s*\r?\nMonteur \|/.test(tekstDeel));
     cookie = adminC;
   }
+  console.log('\n== 13. Merk per opdracht: eigen reviewpagina en eigen Trustpilot-adres (24 nov 2026) ==');
+  {
+    const LINK_KEY = 'https://voorbeeld.test/review-keyservice'; const LINK_SCHUIF = 'https://voorbeeld.test/review-schuifpui';
+    const TP1 = 'schuifpuiservice.com+test123@invite.trustpilot.com'; const TP2 = 'schuif+proef456@invite.trustpilot.com';
+    const rr = (extra = {}) => ({ reviewRequest: { enabled: false, link: LINK_KEY, delayHours: 24, subject: 'Uw mening', body: 'Beste {naam}, laat een review achter voor {bedrijf}: {link}', ...extra } });
+    const regels = [{ description: 'Arbeid', qty: 1, priceExcl: 100 }];
+    const maak = async (naam, mail, titel) => {
+      const k = (await api('POST', '/api/customers', { name: naam, email: mail })).json;
+      const o = (await api('POST', '/api/orders', { customerId: k.id, title: titel, status: 'afgerond' })).json;
+      const f = (await api('POST', `/api/orders/${o.id}/invoice`, { lines: regels, btwPct: 21, type: 'factuur' })).json;
+      return { o, f };
+    };
+    const schuif = await maak('Sanne Schuif', 'sanne.schuif@example.nl', 'Ede — schuifpui loopt zwaar');
+    const slot = await maak('Karel Key', 'karel.key@example.nl', 'Ede — cilinder vervangen');
+    const vraag = async (f, force = false) => { const n0 = mails.length; const r = await api('POST', `/api/invoices/${f.id}/review-request`, force ? { force: true } : {}); return { r, mail: decodeer(mails[n0] || '') }; };
+    // Alleen de algemene link ingevuld: er verandert niets, ook niet voor een schuifpui-opdracht.
+    await api('PATCH', '/api/settings', rr());
+    const a1 = await vraag(schuif.f);
+    ok('alleen de algemene link ingevuld → ook de schuifpui-opdracht krijgt die (er verandert niets)', a1.r.status === 200 && a1.r.json?.merk === 'schuifpui' && a1.mail.includes(LINK_KEY), JSON.stringify(a1.r.json));
+    // Eigen link voor Schuifpuiservice.
+    await api('PATCH', '/api/settings', rr({ linkSchuifpui: LINK_SCHUIF }));
+    const a2 = await vraag(schuif.f, true);
+    ok('schuifpui-opdracht → de reviewpagina van Schuifpuiservice (en de naam in de tekst)', a2.r.status === 200 && a2.r.json?.merkNaam === 'Schuifpuiservice' && a2.mail.includes(LINK_SCHUIF) && !a2.mail.includes(LINK_KEY) && /voor Schuifpuiservice/.test(a2.mail), a2.mail.slice(-300));
+    const a3 = await vraag(slot.f);
+    ok('slotenklus → de reviewpagina van Key Service', a3.r.status === 200 && a3.r.json?.merk === 'keyservice' && a3.mail.includes(LINK_KEY) && !a3.mail.includes(LINK_SCHUIF), JSON.stringify(a3.r.json));
+    // Kantoor kiest zelf het merk op de opdracht.
+    const pm = await api('PATCH', `/api/orders/${schuif.o.id}`, { merk: 'keyservice' });
+    const a4 = await vraag(schuif.f, true);
+    ok('kantoor zet het merk zelf op Key Service → die reviewpagina', pm.status === 200 && pm.json?.merk === 'keyservice' && pm.json?.merkInfo?.bron === 'gekozen' && a4.mail.includes(LINK_KEY) && !a4.mail.includes(LINK_SCHUIF), JSON.stringify(pm.json?.merkInfo));
+    const pm2 = await api('PATCH', `/api/orders/${schuif.o.id}`, { merk: '' });
+    ok('merk leegmaken = weer automatisch (schuifpui uit de titel)', pm2.status === 200 && !pm2.json?.merk && pm2.json?.merkInfo?.key === 'schuifpui' && pm2.json?.merkInfo?.bron === 'werk', JSON.stringify(pm2.json?.merkInfo));
+    // Een ouder scherm dat het nieuwe veld niet meestuurt wist de schuifpui-link niet.
+    await api('PATCH', '/api/settings', rr());
+    ok('opslaan zonder het nieuwe veld laat de Schuifpui-link staan', (await api('GET', '/api/settings')).json?.reviewRequest?.linkSchuifpui === LINK_SCHUIF);
+    // Trustpilot: eigen account per merk.
+    const fout2 = await api('PATCH', '/api/settings', { trustpilot: { bcc: TP1, bccSchuifpui: 'iemand@gmail.com' } });
+    ok('Trustpilot-adres Schuifpuiservice: alleen een echt uitnodigingsadres', fout2.status === 400 && /invite\.trustpilot\.com/.test(fout2.json?.error || ''));
+    await api('PATCH', '/api/settings', { trustpilot: { bcc: TP1, bccSchuifpui: TP2, standaardAan: false } });
+    let n2 = enveloppen.length;
+    const t1 = await api('POST', `/api/orders/${schuif.o.id}/trustpilot`, {});
+    ok('Trustpilot bij een schuifpui-opdracht → het adres van Schuifpuiservice in BCC', t1.status === 200 && enveloppen[n2] && enveloppen[n2].includes(TP2.toLowerCase()) && !enveloppen[n2].includes(TP1.toLowerCase()), JSON.stringify(enveloppen[n2]));
+    n2 = enveloppen.length;
+    const t2 = await api('POST', `/api/orders/${slot.o.id}/trustpilot`, {});
+    ok('Trustpilot bij een slotenklus → het gewone adres in BCC', t2.status === 200 && enveloppen[n2] && enveloppen[n2].includes(TP1.toLowerCase()) && !enveloppen[n2].includes(TP2.toLowerCase()), JSON.stringify(enveloppen[n2]));
+    await api('PATCH', '/api/settings', { trustpilot: { bcc: TP1, standaardAan: false } });
+    ok('een ouder scherm dat het tweede adres niet meestuurt wist het niet', (await api('GET', '/api/settings')).json?.trustpilot?.bccSchuifpui === TP2);
+  }
   void o2;
 } finally {
   proc.kill('SIGTERM');

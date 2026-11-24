@@ -1738,3 +1738,9 @@ html[data-theme="dark"] input:not([type=checkbox]):not([type=radio]):not([type=r
   .md-knoppen { width: 100%; }
   .md-knoppen .btn { flex: 1; min-height: 44px; justify-content: center; }
 }
+
+/* ---- Annuleringsreden in de opdracht + overzicht op Cijfers (24 nov 2026) ---- */
+.ov-annuleer { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); }
+.ov-annuleer[hidden] { display: none; }
+.ov-annuleer label { margin-bottom: 6px; }
+.an-rij.an-onbekend .cv-status-lbl { color: var(--muted); }

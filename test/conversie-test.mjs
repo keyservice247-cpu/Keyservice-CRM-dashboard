@@ -199,6 +199,46 @@ ok('omzet-filter eigen leads: geen DRS-omzet', !fE.byHerkomst['DRS-groep'] && fE
 const fGeen = (await api('GET', `/api/finance?month=${maand}&monteur=geen`)).json.report;
 ok('omzet-filter zonder monteur: geen boeking met monteur', fGeen.entries.every((e) => !e.monteurId), String(fGeen.entries.length));
 
+console.log('\n== Waarom haken klanten af? Annuleringsredenen (24 nov 2026) ==');
+{
+  const voor = (await api('GET', '/api/conversie?dagen=30')).json.annuleringen || { totaal: 0, redenen: [] };
+  const telVoor = (k) => (voor.redenen.find((r) => r.key === k) || {}).aantal || 0;
+  const maakGeannuleerd = async (naam, tel, notitie) => {
+    const o = (await api('POST', '/api/orders', { customerName: naam, customerPhone: tel, title: 'Ede — annuleerproef', notes: notitie })).json;
+    await api('PATCH', `/api/orders/${o.id}`, { status: 'geannuleerd', notes: notitie });
+    return o.id;
+  };
+  const a1 = await maakGeannuleerd('Annuleer Een', '0612888001', 'Klant vindt het te duur');
+  await maakGeannuleerd('Annuleer Twee', '0612888002', 'Offerte te hoog, klant ziet ervan af');
+  await maakGeannuleerd('Annuleer Drie', '0612888003', 'Heeft al een andere slotenmaker laten komen');
+  const a4 = await maakGeannuleerd('Annuleer Vier', '0612888004', 'Geannuleerd');
+  const c1 = (await api('GET', '/api/conversie?dagen=30')).json;
+  const an = c1.annuleringen; const tel = (k) => (an.redenen.find((r) => r.key === k) || {}).aantal || 0;
+  ok('conversie geeft de annuleringsredenen mee, afgeleid uit de notitie', an.totaal === voor.totaal + 4 && tel('prijs') === telVoor('prijs') + 2 && tel('ander') === telVoor('ander') + 1 && tel('onbekend') === telVoor('onbekend') + 1, JSON.stringify(an.redenen));
+  ok('het totaal is hetzelfde getal als "verloren"', an.totaal === c1.totaal.verloren, `${an.totaal} vs ${c1.totaal.verloren}`);
+  ok('"Niet vastgelegd" staat onderaan en niet in de top 5', an.redenen[an.redenen.length - 1].key === 'onbekend' && !an.top5.some((r) => r.key === 'onbekend'));
+  // Een mens kiest een reden: die wint van de notitie.
+  const p1 = await api('PATCH', `/api/orders/${a4}`, { annuleerReden: 'geen_reactie' });
+  ok('reden kiezen op de opdracht wordt bewaard (wie en wanneer)', p1.status === 200 && p1.json?.annulering?.reden === 'geen_reactie' && !!p1.json.annulering.at && !!p1.json.annulering.door && p1.json.annuleerInfo?.bron === 'gekozen', JSON.stringify(p1.json?.annulering));
+  const p2 = await api('PATCH', `/api/orders/${a1}`, { annuleerReden: 'afstand' });
+  const c2 = (await api('GET', '/api/conversie?dagen=30')).json.annuleringen;
+  const tel2 = (k) => (c2.redenen.find((r) => r.key === k) || {}).aantal || 0;
+  ok('gekozen reden wint van het voorstel uit de notitie', p2.status === 200 && tel2('prijs') === telVoor('prijs') + 1 && tel2('afstand') === telVoor('afstand') + 1 && tel2('geen_reactie') === telVoor('geen_reactie') + 1 && c2.gekozen === voor.gekozen + 2, JSON.stringify(c2.redenen));
+  const p3 = await api('PATCH', `/api/orders/${a1}`, { annuleerReden: '' });
+  ok('reden weghalen = weer het voorstel uit de notitie', p3.status === 200 && !p3.json?.annulering && p3.json?.annuleerInfo?.key === 'prijs' && p3.json.annuleerInfo.bron === 'afgeleid', JSON.stringify(p3.json?.annuleerInfo));
+  const p4 = await api('PATCH', `/api/orders/${a1}`, { annuleerReden: 'iets-raars' });
+  ok('een onbekende reden wordt niet opgeslagen', p4.status === 200 && !p4.json?.annulering);
+  const me = (await api('GET', '/api/me')).json;
+  ok('het scherm krijgt de vaste keuzelijsten (redenen en merken)', (me.meta?.annuleerRedenen || []).length === 9 && (me.meta?.merken || []).map((m) => m.key).join() === 'keyservice,schuifpui', JSON.stringify(me.meta?.merken));
+  // Zonder het recht "cijfers": de redenen blijven zichtbaar (aantallen), geen bedragen.
+  await api('POST', '/api/users', { name: 'Assistente Cv', email: 'assistcv@keyservice.nl', password: 'assist12345', role: 'assistent' });
+  const adminC = cookie; cookie = '';
+  await api('POST', '/api/login', { email: 'assistcv@keyservice.nl', password: 'assist12345' });
+  const cA = await api('GET', '/api/conversie?dagen=30');
+  ok('assistente (alleen conversie): ziet de redenen, zonder één bedrag', cA.status === 200 && cA.json?.zonderGeld === true && cA.json.annuleringen?.totaal === c2.totaal && !/omzet/i.test(JSON.stringify(cA.json.annuleringen)), JSON.stringify(cA.json?.annuleringen).slice(0, 200));
+  cookie = adminC;
+}
+
 console.log('\n== Rechten: monteur ziet geen conversie ==');
 await api('POST', '/api/users', { name: 'Monteur Cv', email: 'monteurcv@keyservice.nl', password: 'monteur123', role: 'monteur' });
 cookie = '';

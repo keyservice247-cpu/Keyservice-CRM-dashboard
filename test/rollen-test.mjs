@@ -339,6 +339,24 @@ console.log('\n== Reparatielocatie + factuur corrigeren: wie mag wat (23 nov 202
   cookie = adminCookie;
 }
 
+console.log('\n== Merk en annuleringsreden: wie mag wat (24 nov 2026) ==');
+{
+  cookie = adminCookie;
+  const oM = (await api('POST', '/api/orders', { customerName: 'Merk Rol Klant', customerPhone: '0612777091', title: 'Ede — schuifpui klemt', monteurId: montRec.json?.id })).json;
+  ok('opdracht krijgt automatisch een merk mee (schuifpui uit de titel)', oM?.merkInfo?.key === 'schuifpui' && oM.merkInfo.bron === 'werk', JSON.stringify(oM?.merkInfo));
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  const mm = await api('PATCH', `/api/orders/${oM.id}`, { merk: 'keyservice', notes: 'Klant vond het te duur' });
+  ok('monteur kan het merk niet wijzigen (wordt genegeerd), zijn notitie wel', mm.status === 200 && !mm.json?.merk && mm.json?.notes === 'Klant vond het te duur', JSON.stringify([mm.status, mm.json?.merk]));
+  const ma = await api('PATCH', `/api/orders/${oM.id}`, { status: 'geannuleerd', annuleerReden: 'prijs' });
+  ok('monteur annuleert zijn eigen opdracht en kiest de reden', ma.status === 200 && ma.json?.status === 'geannuleerd' && ma.json?.annulering?.reden === 'prijs', JSON.stringify([ma.status, ma.json?.annulering, ma.json?.error]));
+  await login('monteurlos@keyservice.nl', 'monteur123');
+  ok('andere monteur: geen toegang tot die opdracht', [403, 404].includes((await api('PATCH', `/api/orders/${oM.id}`, { annuleerReden: 'afstand' })).status));
+  await login('assistente@keyservice.nl', 'assist123');
+  const am = await api('PATCH', `/api/orders/${oM.id}`, { merk: 'keyservice' });
+  ok('assistente mag het merk wel kiezen', am.status === 200 && am.json?.merk === 'keyservice' && am.json?.merkInfo?.bron === 'gekozen');
+  cookie = adminCookie;
+}
+
 console.log('\n== Start: werklijst "Eerst doen" per rol (24 nov 2026) ==');
 {
   cookie = adminCookie;

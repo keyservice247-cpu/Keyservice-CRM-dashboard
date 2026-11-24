@@ -129,6 +129,27 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   meer voor de monteur. Tests: start-test (16, zonder server), rollen-test +6, browser +5.
 - **Mijn dag (monteur):** `#mijnDag` boven zijn bord (`renderMijnDag`, uit state.orders):
   afspraken van vandaag op tijd met Bel / Route / tik = opdracht openen; "morgen N".
+- **Reden van annuleren (server/annulering.js, audit D11):** `STANDAARD_REDENEN` (9, incl.
+  Anders); `leidRedenAf(tekst)` = vaste trefwoorden (zelfde tekst = zelfde reden, geen AI) over
+  notitie + laatste 4 berichten; `redenVan(order)` → {key, bron: gekozen|afgeleid|onbekend}.
+  Een mens kiest in de opdracht (Details → Status = Geannuleerd → `#f-annuleer`; voorstel uit
+  de notitie met knop Overnemen) → PATCH /api/orders/:id `annuleerReden` → `order.annulering =
+  {reden, at, door}` (leeg = keuze weg; ook de monteur op zijn eigen opdracht). Order-uitvoer
+  draagt `annuleerInfo`. GET /api/conversie geeft `annuleringen` {totaal, gekozen, afgeleid,
+  onbekend, redenen[], top5} over DEZELFDE opdrachten als "verloren"; kaart "Waarom haken
+  klanten af?" (`#annuleringenKaart`) op Cijfers, ook zichtbaar met alleen het recht conversie.
+  De conversie-briefing leest de redenen mee. Tests: annulering-test (14, zonder server),
+  conversie-test 69 (+9), browser +6.
+- **Merk per opdracht (server/merk.js, audit D12):** Key Service 24/7 of Schuifpuiservice.
+  `merkVan(order)`: gekozen (`order.merk`) → website van de aanvraag (bron + eerste 2
+  berichten) → soort werk in titel/omschrijving → Key Service. `merkVanFactuur` voor een losse
+  factuur (regels). Kantoor kiest in de opdracht (`#f-merk`, leeg = automatisch); monteur niet.
+  Het merk bepaalt de REVIEWPAGINA: `reviewRequest.linkSchuifpui` (leeg = de algemene link —
+  er verandert niets tot hij is ingevuld), `{bedrijf}` als invulveld in de tekst, en het
+  TRUSTPILOT-adres: `trustpilot.bccSchuifpui` via `trustpilotBccVoor(merk)`. Beide nieuwe
+  instellingen blijven staan als een ouder scherm ze niet meestuurt. /api/me meta: `merken`,
+  `annuleerRedenen`. Tests: merk-test (13, zonder server), betaald-keuze-test 62 (+10, echte
+  mails via de nep-SMTP), rollen-test +5, browser +2.
 - **Klantadres verbeterd → lopende opdracht volgt:** PATCH /api/customers/:id zet het nieuwe
   adres ook op LOPENDE opdrachten waarvan het opdrachtadres letterlijk het oude klantadres
   was (een afwijkend werkadres en afgehandelde opdrachten blijven; updatedAt blijft staan).

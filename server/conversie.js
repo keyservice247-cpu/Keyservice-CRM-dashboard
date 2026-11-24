@@ -16,6 +16,7 @@
 import { db, now, save, logActivity } from './db.js';
 import { getStatuses, isWhatsappOrderGroup, getCompanyProfile } from './settings.js';
 import { conversieInsight } from './ai/categorizer.js';
+import { redenenTelling } from './annulering.js';
 
 const DAG = 86400000;
 const pct = (t, n) => (n > 0 ? Math.round((t / n) * 1000) / 10 : null);
@@ -232,6 +233,8 @@ export function conversieData({ dagen = 90, weken = 12, monteur = '', bron = '',
     totaal, vorige,
     delta: { conversie: totaal.conversie !== null && vorige.conversie !== null ? r2(totaal.conversie - vorige.conversie) : null, binnen: totaal.binnen - vorige.binnen },
     perStatus, perBron, perMonteur, perWebsite, zonderDrs, perWeek, doorlooptijd, waarde, stil, patronen,
+    // Waarom haken klanten af? Over dezelfde opdrachten als het getal "verloren" (24 nov 2026).
+    annuleringen: redenenTelling(huidig.filter((o) => VERLOREN.has(o.status))),
     filter, gefilterd, opties: filterOpties(msgById),
     definitie: { gewonnen: [...GEWONNEN], verloren: [...VERLOREN], periodes: PERIODES },
     briefing: db().settings._conversieBriefing || null,
@@ -309,6 +312,7 @@ export function conversieFeiten(d) {
   r.push(`Per week (binnen/gewonnen/verloren): ${d.perWeek.map((w) => `${w.week.slice(5)}: ${w.binnen}/${w.gewonnen}/${w.verloren}`).join(', ')}.`);
   r.push(`Doorlooptijd afgerond: gem. ${d.doorlooptijd.afgerondGem ?? '-'} d, mediaan ${d.doorlooptijd.afgerondMediaan ?? '-'} d; geannuleerd gem. ${d.doorlooptijd.geannuleerdGem ?? '-'} d.`);
   r.push(`Omzet uit afgeronde opdrachten: € ${d.waarde.omzetAfgerond} (per afgeronde ${d.waarde.perAfgerond ?? '-'}, per aanvraag ${d.waarde.perAanvraag ?? '-'}); ${d.waarde.afgerondZonderFactuur} afgerond zonder factuur; ${d.stil} stilliggers.`);
+  if (d.annuleringen && d.annuleringen.totaal) r.push(`Redenen van annuleren (${d.annuleringen.totaal} geannuleerd): ${d.annuleringen.redenen.map((x) => `${x.label} ${x.aantal}`).join(', ')}.`);
   r.push(`Herkende patronen: ${d.patronen.join(' ')}`);
   return r.join('\n');
 }
