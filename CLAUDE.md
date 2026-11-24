@@ -210,6 +210,19 @@ Altijd: AI stelt voor, een mens beslist (lead-instroom wetten blijven gelden).
    Google Ads-klant vs. DRS-klus netto) + één advies.
 6. MONTEUR SPREEKT IN NA DE KLUS: spraak → werkbon + notitie + status afgerond.
 Advies aan eigenaar: eerst 1, 3 en 5.
+Tweede ronde (zelfde dag, eigenaar: "goede ideeën, houd ze allemaal vast"):
+7. DAGPLANNING PER MONTEUR: afspraken van morgen in de slimste volgorde + waar past nog een klus.
+8. CONTROLE VAN DE DRS-FACTUUR: DRS-factuur naast de eigen maandtelling, te veel gerekend aanwijzen.
+9. BONNETJES AUTOMATISCH BOEKEN: foto/mail van een bon → uitgave in Cijfers.
+10. BOZE KLANT EERST: ontevredenheid/klacht herkennen → bovenaan + melding.
+11. ANNULERINGSKANS PER AFSPRAAK: "eerst even bellen".
+12. ZAKELIJKE KLANTEN ZOEKEN: VvE's/vastgoedbeheerders in de regio + eerste mail.
+Advies: 7, 8 en 10.
+VASTE VOLGORDE (besluit eigenaar 24 nov 2026): (1) sluiten-zonder-opslaan-fout + het hele
+systeem nalopen op gebruikersfouten → getest → LIVE; (2) het echte ontwerp (volledige look van
+het prototype) op de testomgeving; (3) pas daarna: E-MAILCAMPAGNESYSTEEM MET AI — de AI kan een
+complete campagne uitvoeren én doet voorstellen op basis van klantenbestand en geschiedenis
+(bouwt voort op de bestaande /api/campaign/send; idee 4 hoort hierbij).
 
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,
