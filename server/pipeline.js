@@ -5,7 +5,7 @@ import { merkVan } from './merk.js';
 import { redenVan } from './annulering.js';
 import { verwerkEigenDrsRapport, isDrsOrder, catVanStatus, zoekMogelijkDubbel, lijktDrsRapport, isDrsEmailAfzender, afzenderVanOns, isPostcodeLetters } from './drs-rapport.js';
 import { classify, scoreRelevance } from './ai/categorizer.js';
-import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours } from './settings.js';
+import { normalizeStatus, firstStatusKey, getCompanyProfile, isWhatsappOrderGroup, getCrmAlerts, resolveGroupAlias, learnGroupAlias, groupIdForName, getEmailFilters, getAutoMergeWindowHours, isTussenpersoonEmail } from './settings.js';
 import { mergeAttachments, dedupeAttachments } from './storage.js';
 import { sendPush, pushNaarMonteur } from './push.js';
 
@@ -94,9 +94,28 @@ export function isGenericName(name) { return !name || GENERIC_NAMES.test(String(
 // z'n kaart hing.
 export const matchPhone = (v) => String(v || '').replace(/[^\d]/g, '').replace(/^0031/, '0').replace(/^31(?=\d{9})/, '0');
 
+// Het adres van een opdrachtgever/tussenpersoon (of van DRS als die mailt) is NOOIT een
+// klantsleutel (audit D1): hij mailt voor meerdere mensen.
+export const nooitKlantMail = (e) => { try { return !!e && (isTussenpersoonEmail(e) || isDrsEmailAfzender(e)); } catch { return false; } };
+
+// Hoort dit bij iemand ANDERS dan klant c? Alleen "ja" als het zeker is: een andere echte
+// naam (geen enkel gedeeld naamwoord) ÉN een ander geldig telefoonnummer. Een terugkerende
+// klant met een nieuw nummer, of "J. de Vries" naast "Jan de Vries", blijft dezelfde klant.
+const NAAM_STOP = new Set(['de', 'het', 'een', 'van', 'der', 'den', 'ter', 'ten', 'familie', 'fam', 'dhr', 'mevr', 'mevrouw', 'meneer', 'heer', 'mw', 'mr', 'bv', 'vof']);
+const naamWoorden = (n) => String(n || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z]+/).filter((w) => w.length >= 3 && !NAAM_STOP.has(w));
+export function anderePersoon({ name, phone }, c) {
+  if (!c) return false;
+  if (!name || isGenericName(name) || !c.name || isGenericName(c.name)) return false;
+  const p1 = matchPhone(phone); const p2 = matchPhone(c.phone);
+  if (p1.length < 9 || p2.length < 9 || p1 === p2) return false;
+  const w1 = naamWoorden(name); const w2 = new Set(naamWoorden(c.name));
+  if (!w1.length || !w2.size) return false;
+  return !w1.some((w) => w2.has(w));
+}
+
 export function findCustomer({ name, phone, email }) {
   const customers = db().customers;
-  if (email) {
+  if (email && !nooitKlantMail(email)) {
     const m = customers.find((c) => c.email && c.email.toLowerCase() === email.toLowerCase());
     if (m) return m;
   }
@@ -122,7 +141,7 @@ export const senderPhoneFromText = (body) =>
 // zwak (en generieke namen als "Key Service" zorgen voor verkeerde samenvoegingen).
 export function findCustomerStrong({ phone, email }) {
   const customers = db().customers;
-  if (email) {
+  if (email && !nooitKlantMail(email)) {
     const m = customers.find((c) => c.email && c.email.toLowerCase() === email.toLowerCase());
     if (m) return m;
   }
@@ -153,7 +172,21 @@ export function addressDiffers(a, b) {
 // Alleen LEGE velden aanvullen mag (dat overschrijft niets). De kaart zelf gebruikt
 // altijd de gegevens uit de aanvraag (order.intake), dus de opdracht klopt sowieso.
 export function upsertCustomer({ name, phone, email, address, source }, opts = {}) {
+  // TUSSENPERSOON (24 nov 2026, audit D1). Twee vangrails, allebei vóór het koppelen:
+  //  1. het adres staat op de lijst "opdrachtgevers en tussenpersonen" (of is van DRS) →
+  //     het is geen klantgegeven: niet op zoeken, niet opslaan;
+  //  2. vangnet zonder lijst: het adres hoort al bij een klant met een ANDERE naam én een
+  //     ANDER nummer → dit is iemand anders; het adres is kennelijk van iemand die voor
+  //     meerdere mensen mailt. Geen koppeling, wél een zichtbare melding op de opdracht.
+  // De aanvraag zelf houdt het adres (order.intake): daar kan de factuur gewoon naartoe.
+  let tussenpersoon = null;
+  if (email && nooitKlantMail(email)) { tussenpersoon = { email, reden: 'lijst' }; email = ''; }
   let c = findCustomer({ name, phone, email });
+  if (c && email && c.email && c.email.toLowerCase() === email.toLowerCase() && anderePersoon({ name, phone }, c)) {
+    tussenpersoon = { email, reden: 'gedeeld', andereKlantId: c.id, andereNaam: c.name };
+    email = '';
+    c = findCustomer({ name, phone, email: '' }); // misschien kennen we deze persoon al op zijn nummer
+  }
   if (c) {
     const suggestions = [];
     if (!c.phone && phone) c.phone = phone;
@@ -172,7 +205,7 @@ export function upsertCustomer({ name, phone, email, address, source }, opts = {
     if (c.type === 'lead') c.type = 'klant';
     // Nog steeds geen echte naam? Dan blijft de kaart "Klant onbekend — aanvullen"
     // vragen (ook als het record al bij binnenkomst was aangemaakt).
-    return { customer: c, created: false, changes: [], suggestions, unknownName: !c.name || isGenericName(c.name) };
+    return { customer: c, created: false, changes: [], suggestions, unknownName: !c.name || isGenericName(c.name), tussenpersoon };
   }
   // WET (Regel 2): een generieke naam ("Key Service", "DRS", afzender-restjes) mag
   // NOOIT als klantnaam worden opgeslagen — dan heet het record "Onbekende klant" en
@@ -190,7 +223,7 @@ export function upsertCustomer({ name, phone, email, address, source }, opts = {
     createdAt: now(),
   };
   db().customers.push(c);
-  return { customer: c, created: true, changes: [], suggestions: [], unknownName };
+  return { customer: c, created: true, changes: [], suggestions: [], unknownName, tussenpersoon };
 }
 
 // Bouw snelle opzoek-maps (id -> klant/monteur). Geef die mee aan withRelations
@@ -232,7 +265,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     email: (overrides.customerEmail ?? s.customerEmail ?? '') || '',
     address: (overrides.customerAddress ?? s.customerAddress ?? '') || '',
   };
-  const { customer, suggestions: custSuggestions = [], unknownName } = upsertCustomer({
+  const { customer, suggestions: custSuggestions = [], unknownName, tussenpersoon } = upsertCustomer({
     ...intake,
     source: review.channel,
   });
@@ -370,6 +403,9 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     mergeSuggestion: openOrder ? { orderId: openOrder.id, title: openOrder.title, at: now() } : undefined,
     // Suggesties: aanvraag wijkt af van het klantrecord (mens beslist over bijwerken).
     dataSuggestions: custSuggestions.length ? custSuggestions : undefined,
+    // Het e-mailadres van deze aanvraag is van een tussenpersoon (of gedeeld met een andere
+    // klant) en is daarom NIET als klantgegeven opgeslagen — het scherm legt dat uit.
+    tussenpersoonHint: tussenpersoon ? { email: tussenpersoon.email, reden: tussenpersoon.reden, andereKlantId: tussenpersoon.andereKlantId || undefined, andereNaam: tussenpersoon.andereNaam || undefined, at: now() } : undefined,
     thread: [],
     attachments: [],
     createdAt: now(),

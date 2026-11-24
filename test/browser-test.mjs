@@ -459,6 +459,33 @@ clear();
 }
 noErr('Koppelingen-overzicht');
 
+// 8a7) TUSSENPERSOON WORDT NOOIT DE KLANT (24 nov 2026, audit D1).
+clear();
+{
+  const tp = await page.evaluate(async () => {
+    const J = { 'content-type': 'application/json' };
+    const stuur = (id, naam, tel) => fetch('/api/ingest/email', { method: 'POST', headers: { ...J, 'x-ingest-token': 'test123' }, body: JSON.stringify({ from: 'Beheer Proef <beheer@vastgoed-proef.test>', subject: 'Slot kapot bij huurder', externalId: id, body: `Graag een monteur.\nNaam: ${naam}\nTelefoon: ${tel}\nAdres: Proefweg 1, 3911 AA Rhenen\nProbleem: slot voordeur kapot` }) }).then((r) => r.json());
+    const keur = (rid, naam, tel) => fetch(`/api/reviews/${rid}/approve`, { method: 'POST', headers: J, body: JSON.stringify({ customerName: naam, customerPhone: tel, customerEmail: 'beheer@vastgoed-proef.test' }) }).then((r) => r.json());
+    const a = await stuur('bt-tp-1', 'Huurder Alfa', '0611000811'); const oa = await keur(a.reviewId, 'Huurder Alfa', '0611000811');
+    const b = await stuur('bt-tp-2', 'Bewoner Beta', '0611000822'); const ob = await keur(b.reviewId, 'Bewoner Beta', '0611000822');
+    return { a: oa.order, b: ob.order };
+  });
+  ok('twee huurders via één beheerder-adres: twee aparte klanten', !!tp.a && !!tp.b && tp.a.customerId !== tp.b.customerId, JSON.stringify([tp.a?.customerId, tp.b?.customerId]));
+  await page.evaluate((i) => openOrderVers(i), tp.b.id); await page.waitForSelector('#modalRoot:not([hidden]) .ov-tabs'); await page.waitForTimeout(400);
+  const bn = await page.evaluate(() => { const b = document.querySelector('#tp-banner'); return { er: !!b && b.offsetParent !== null, tekst: b ? b.innerText : '', knoppen: [...(b ? b.querySelectorAll('[data-tp]') : [])].map((k) => k.dataset.tp).join() }; });
+  ok('de opdracht legt uit dat het adres niet als klantgegeven is opgeslagen en noemt de andere klant', bn.er && /beheer@vastgoed-proef\.test/.test(bn.tekst) && /Huurder Alfa/.test(bn.tekst) && /niet als klantgegeven/.test(bn.tekst) && bn.knoppen === 'toevoegen,negeren', JSON.stringify(bn));
+  await page.click('#tp-banner [data-tp="toevoegen"]'); await page.waitForTimeout(700);
+  ok('"Altijd zo behandelen": melding weg, adres staat op de lijst', await page.evaluate(async () => !document.querySelector('#tp-banner') && ((await fetch('/api/settings').then((r) => r.json())).tussenpersonen || []).includes('beheer@vastgoed-proef.test')));
+  await page.evaluate(() => closeModal());
+  await page.evaluate(() => goView('settings')); await page.waitForTimeout(1500);
+  await instKies(page, 'inbox'); await page.waitForTimeout(600);
+  ok('Instellingen → Aanvragen & inbox: lijst "Opdrachtgevers en tussenpersonen" met het adres erin', await page.evaluate(() => { const k = document.querySelector('#tussenpersonenKaart'); return !!k && k.offsetParent !== null && k.dataset.sg === 'inbox' && /beheer@vastgoed-proef\.test/.test(document.querySelector('#tussenpersonen').value); }));
+  await page.fill('#tussenpersonen', 'gmail.com'); await page.click('#saveTussenpersonen'); await page.waitForTimeout(700);
+  ok('gmail.com als domein wordt geweigerd met uitleg', await page.evaluate(() => { const t = document.querySelector('#toast'); return !!t && !t.hidden && /gmail\.com/.test(t.textContent); }));
+  await page.fill('#tussenpersonen', 'beheer@vastgoed-proef.test'); await page.click('#saveTussenpersonen'); await page.waitForTimeout(700);
+}
+noErr('Tussenpersoon');
+
 // 8b) OPDRACHT-VENSTER & DATA-INTEGRITEIT (audit 28 sep 2026): dubbelklik = één
 // opdracht, Esc/klik-naast met getypte notitie vraagt eerst, Esc werkt weer na een
 // eigen invoervenster, aanvraag-adres (intake) blijft na Opslaan staan, en een
@@ -2006,7 +2033,13 @@ const drsModal = await page.evaluate((id) => ({ regel: (document.querySelector(`
 ok('DRS-rapport: regel met postcode + plaats + klantnaam', drsModal.regel === '4879 NB Etten-Leur — North Ridge BV', drsModal.regel);
 ok('DRS-rapport: voorbeeld in het vaste formaat (*kop*, *Afgerond:*)', /^\*\w+dag \d{2}-\d{2}\*/.test(drsModal.tekst) && /\*Afgerond:\*\n\n.*4879 NB Etten-Leur — North Ridge BV/.test(drsModal.tekst), drsModal.tekst.slice(0, 160));
 ok('DRS-rapport: ook *Offerte:* en *Afspraken:* (met notitie en tijd)', /\*Offerte:\*\n\n(?:[^*\n][^\n]*\n\n)*4661 AA Halsteren — Offerte Klant, Offerte 3 cilinders verstuurd/.test(drsModal.tekst) && /\*Afspraken:\*\n\n(?:[^*\n][^\n]*\n\n)*4703 AB Roosendaal — Afspraak Klant \(28-10 09:30\)/.test(drsModal.tekst), drsModal.tekst);
-await page.fill(`.drs-rij[data-k^="${drsId}"] .drs-regel`, '4879 NB Etten-Leur — North Ridge BV (achterdeur)');
+// Het venster kan net na het openen nog één keer worden bijgewerkt (verse gegevens van de
+// server); valt dat precies op het invullen, dan is de invoer weg. Daarom invullen, kort
+// wachten en zo nodig nog een keer — de controle zelf blijft: het voorbeeld volgt de regel.
+for (let i = 0; i < 4; i++) {
+  await page.fill(`.drs-rij[data-k^="${drsId}"] .drs-regel`, '4879 NB Etten-Leur — North Ridge BV (achterdeur)');
+  if (await page.waitForFunction(() => /achterdeur/.test((document.querySelector('#drsTekst') || {}).value || ''), null, { timeout: 1500 }).then(() => true).catch(() => false)) break;
+}
 ok('regel aanpassen werkt het voorbeeld meteen bij', /achterdeur/.test(await page.evaluate(() => document.querySelector('#drsTekst').value)));
 await page.click('#drsKopieer');
 await page.waitForSelector('#drsNaKopie:not([hidden])', { timeout: 4000 }).catch(() => {});

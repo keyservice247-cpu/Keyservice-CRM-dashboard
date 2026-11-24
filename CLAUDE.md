@@ -171,6 +171,22 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   dag (`_alerts.stil_instroom`, `_alerts.stil_groepStil` — de laatste alleen op werkdagen).
   Er verandert NIETS aan een koppeling: dit kijkt alleen. Tests: koppelingen-test (23, zonder
   server), start-test 18, rollen-test +4, browser +4.
+- **Tussenpersoon wordt nooit de klant (audit D1, kritiek):** een beheerder/VvE/opdrachtgever
+  die klussen doorstuurt mailt voor meerdere mensen. (1) LIJST `settings.tussenpersonen`
+  (adres of eigen domein; gmail/hotmail e.d. als domein geweigerd; Instellingen → Aanvragen &
+  inbox → `#tussenpersonenKaart`): zo'n adres — en elk DRS-mailadres — is via
+  `nooitKlantMail()` nooit een klantsleutel (findCustomer/findCustomerStrong slaan het over)
+  en wordt niet als klantmail opgeslagen. (2) VANGNET zonder lijst in `upsertCustomer`:
+  zelfde e-mail, maar `anderePersoon()` (andere echte naam zonder gedeeld naamwoord ÉN ander
+  geldig nummer) → geen koppeling, nieuwe klant zonder dat adres. In beide gevallen houdt de
+  opdracht het adres in `order.intake.email` (factuur/bevestiging kan ernaartoe) en krijgt hij
+  `order.tussenpersoonHint {email, reden: lijst|gedeeld, andereNaam}` → melding in het
+  opdrachtvenster (`#tp-banner`: "Altijd zo behandelen" zet het adres op de lijst, "Begrepen"
+  haalt de melding weg; POST /api/orders/:id/tussenpersoon, kantoor). Het klantrecord
+  verandert nooit. Zelfde persoon met nieuw nummer of "J. de Vries"/"Jan de Vries" blijft één
+  klant. Een antwoord van de tussenpersoon hangt daardoor niet meer vanzelf aan een opdracht:
+  het komt in de inbox (mens beslist). Tests: pakket1-test 60 (+13), scenarios 123 ongewijzigd
+  groen, browser +5.
 - **Klantadres verbeterd → lopende opdracht volgt:** PATCH /api/customers/:id zet het nieuwe
   adres ook op LOPENDE opdrachten waarvan het opdrachtadres letterlijk het oude klantadres
   was (een afwijkend werkadres en afgehandelde opdrachten blijven; updatedAt blijft staan).
@@ -1551,6 +1567,10 @@ server/pipeline.js — er bestaat geen pad eromheen.
    venster zou samenvoegen blijft in de inbox voor de assistente.
 2. Klant-matching ALLEEN op harde identificatoren: e-mail exact óf telefoon
    genormaliseerd (matchPhone: +31/0031 ↔ 0). Naam is NOOIT koppelgrond.
+   AANSCHERPING 24 nov 2026 (audit D1, roadmap akkoord eigenaar 23 nov): een e-mailadres
+   van een TUSSENPERSOON (lijst in Instellingen, of DRS) is geen identificator; en zelfde
+   e-mail met een andere naam én een ander nummer is niet dezelfde klant (vangnet,
+   `anderePersoon`). Strenger, nooit ruimer: naam blijft nooit koppelgrond.
    Bij 1-op-1 WhatsApp is het ÉCHTE afzendernummer de hardste identificator
    (25 jul, Karin-casus): bridge/Cloud-API sturen fromPhone mee én plakken het
    als laatste regel "Telefoon: +31…" onder de body (senderPhoneFromText leest

@@ -2745,6 +2745,17 @@ function ovVolgendeStap(o, { canWrite, isMonteur }) {
 }
 // MERK en ANNULERINGSREDEN in het opdrachtvenster (24 nov 2026). De keuzelijsten komen van de
 // server (state.meta.merken / annuleerRedenen); het systeem stelt voor, een mens beslist.
+// TUSSENPERSOON (24 nov 2026, audit D1): het e-mailadres van deze aanvraag is van iemand die
+// voor meerdere mensen mailt. Het is NIET als klantgegeven opgeslagen; kantoor beslist of
+// dat adres voortaan altijd zo behandeld wordt. De monteur ziet geen naam van een andere klant.
+function tussenpersoonBannerHTML(o, canWrite) {
+  const h = o.tussenpersoonHint;
+  const tekst = h.reden === 'lijst'
+    ? `Deze aanvraag is doorgestuurd door een tussenpersoon (<strong>${esc(h.email)}</strong>). Dat adres is niet als klantgegeven opgeslagen.`
+    : `Het e-mailadres <strong>${esc(h.email)}</strong> hoort ook bij ${canWrite && h.andereNaam ? `klant <strong>${esc(h.andereNaam)}</strong>` : 'een andere klant'}, met een andere naam en een ander nummer. Waarschijnlijk mailt iemand voor meerdere mensen. Het adres is <strong>niet</strong> als klantgegeven opgeslagen; de twee klanten zijn apart gebleven.`;
+  const knoppen = canWrite ? `<span class="sug-actions">${h.reden === 'lijst' ? '' : '<button type="button" class="btn btn-sm" data-tp="toevoegen" title="Zet dit adres op de lijst Opdrachtgevers en tussenpersonen">Altijd zo behandelen</button> '}<button type="button" class="btn btn-sm" data-tp="negeren">Begrepen</button></span>` : '';
+  return `<div class="sug-banner" id="tp-banner">${icon('user', 13)} ${tekst} ${knoppen}</div>`;
+}
 function merkNaamVan(key) { return ((state.meta?.merken || []).find((m) => m.key === key) || {}).naam || key || ''; }
 function merkVeldHTML(o) {
   const merken = state.meta?.merken || [];
@@ -2844,6 +2855,14 @@ function ovBindTabs(o, { stap, isMonteur, begin }) {
   $$('[data-ovklik]', m).forEach((b) => { b.onclick = () => $(`#${b.dataset.ovklik}`)?.click(); });
   // Een groepje zonder knoppen (bv. geen recht op die acties) laat geen los kopje achter.
   $$('.ov-actiegroep', m).forEach((g) => { g.hidden = !g.querySelector('.ov-actieknoppen .btn'); });
+  // Tussenpersoon-melding: kantoor handelt hem af zonder het venster te sluiten.
+  $$('#tp-banner [data-tp]', m).forEach((k) => { k.onclick = () => eenKeer(k, async () => {
+    try {
+      await api(`/api/orders/${o.id}/tussenpersoon`, 'POST', { actie: k.dataset.tp });
+      delete o.tussenpersoonHint; const bn = $('#tp-banner', m); if (bn) bn.remove();
+      toast(k.dataset.tp === 'toevoegen' ? 'Dit adres wordt voortaan nooit meer als klantgegeven gebruikt' : 'Melding weggehaald');
+    } catch (err) { toast(err.message, true); }
+  }); });
   // Reden van annuleren: alleen in beeld als de status op Geannuleerd staat.
   const anRij = $('#f-annuleer-rij', m), stSel = $('#f-status', m);
   if (anRij && stSel) {
@@ -2927,6 +2946,7 @@ function openOrderModal(id, pool) {
     ${o && o.customerIncomplete ? `<div class="sug-banner sug-warn">${icon('user', 13)} <strong>Klant onbekend — aanvullen.</strong> Er is geen echte klantnaam in het bericht gevonden (de afzender is nooit automatisch de klant). Vul hieronder de klantgegevens aan.</div>` : ''}
     ${o && o.mergeSuggestion ? `<div class="sug-banner">${icon('merge', 13)} Mogelijk zelfde opdracht als de open opdracht <strong>${esc(o.mergeSuggestion.title)}</strong> van deze klant. Niets is automatisch samengevoegd. ${canWrite ? `<span class="sug-actions"><button type="button" class="btn btn-sm" id="sug-merge-do">Samenvoegen</button> <button type="button" class="btn btn-sm" id="sug-merge-no">Negeren</button></span>` : ''}</div>` : ''}
     ${o && o.dataSuggestions && o.dataSuggestions.length ? `<div class="sug-banner">${icon('user', 13)} <strong>Deze aanvraag wijkt af van het klantrecord.</strong> Niets is automatisch gewijzigd; de opdracht gebruikt de gegevens uit de aanvraag.${o.dataSuggestions.map((sg) => `<div class="sug-row">${esc(sg.field)}: <span class="muted">"${esc(sg.from ?? sg.current ?? '—')}"</span> → <strong>"${esc(sg.to ?? sg.value ?? '')}"</strong>${canWrite && (sg.to ?? sg.value) ? ` <span class="sug-actions"><button type="button" class="btn btn-sm sug-apply" data-field="${esc(sg.field)}">Bijwerken</button> <button type="button" class="btn btn-sm sug-skip" data-field="${esc(sg.field)}">Negeren</button></span>` : ''}</div>`).join('')}</div>` : ''}
+    ${o && o.tussenpersoonHint ? tussenpersoonBannerHTML(o, canWrite) : ''}
     <div class="ov-paneel" data-ovp="details">
     ${o && o.sentToMonteur ? `<div class="sent-monteur">${icon('whatsapp', 13)} Verstuurd naar monteur ${esc(o.sentToMonteur.monteurName)} · ${fmtDateShort(o.sentToMonteur.at)}${o.sentToMonteur.status === 'sent' ? ' ✓' : o.sentToMonteur.status === 'failed' ? ' (mislukt)' : ' (wachtrij)'}${fotoStatusHTML(o.sentToMonteur)}</div>` : ''}
     ${o && canWrite ? drsKaartRegel(o) : ''}
@@ -6100,6 +6120,11 @@ async function loadSettingsHtml(s) {
       <textarea id="emailFilters" rows="3" placeholder="bv. bol.com, mijn leverancier bv">${esc(s.emailFilters || '')}</textarea>
       <p class="muted small" style="margin-top:6px">Standaard al actief: ${esc(s.emailFiltersDefault || '')}</p>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveEmailFilters">Filter opslaan</button></div> </div>
+    <div data-sg="inbox" class="info-card" style="margin-bottom:18px" id="tussenpersonenKaart"> <h3>Opdrachtgevers en tussenpersonen</h3>
+      <p class="muted small">Stuurt een <strong>vastgoedbeheerder, VvE of opdrachtgever</strong> klussen voor anderen door? Zet zijn e-mailadres hier. Dat adres wordt dan <strong>nooit als klantgegeven</strong> gebruikt: elke huurder of bewoner blijft een eigen klant, met zijn eigen naam op de factuur. De opdracht zelf onthoudt het adres wel, dus een factuur of bevestiging kan er gewoon naartoe.</p>
+      <textarea id="tussenpersonen" rows="3" placeholder="één per regel, bv. beheer@vastgoedkantoor.nl of vastgoedkantoor.nl">${esc((s.tussenpersonen || []).join('\n'))}</textarea>
+      <p class="muted small" style="margin-top:6px">Een e-mailadres of een eigen domein. Een domein als gmail.com kan niet: dan wordt geen enkele klant meer op zijn e-mail herkend.</p>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="saveTussenpersonen">Lijst opslaan</button></div> </div>
     <div data-sg="systeem" class="info-card" style="margin-bottom:18px"> <h3>Foto's en filmpjes automatisch opruimen</h3>
       <p class="muted small">Draait vanzelf om de paar dagen en ruimt twee dingen op: <strong>(1)</strong> alle foto's en filmpjes van <strong>afgeronde of geannuleerde</strong> opdrachten, een paar dagen na het afronden; <strong>(2)</strong> alle foto's en filmpjes <strong>ouder dan</strong> de ingestelde termijn, ook op lopende opdrachten en losse berichten. Opdrachten, klantgegevens, facturen, PDF's en <strong>werkbon-handtekeningen blijven altijd bewaard</strong>.</p>
       <div class="row" style="align-items:center;flex-wrap:wrap;gap:12px"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ac-enabled" style="width:auto" ${s.attachmentCleanup?.enabled !== false ? 'checked' : ''}>Aan</label>
@@ -6390,7 +6415,7 @@ async function loadSettingsHtml(s) {
     // (of aan het id, met een # ervoor).
     const INDELING = {
       werk: ['Kolommen (statussen)', 'Opdrachten naar monteur', 'Zelfde-moment-aanvragen', 'Wacht op antwoord', 'Snelle standaardantwoorden', 'DRS-rapport'],
-      inbox: ['uit welke groep', 'E-mailfilter', 'Website-formulieren'],
+      inbox: ['uit welke groep', 'E-mailfilter', 'Opdrachtgevers en tussenpersonen', 'Website-formulieren'],
       bericht: ['ontvangstbevestiging', 'Afspraakbevestiging', 'Monteur onderweg', 'follow-up op offertes', 'Review-verzoek', 'Trustpilot', 'E-mail handtekening', 'Testmail'],
       facturen: ['Factuurgegevens', 'Prijslijst', 'Pakketten'],
       team: ['Meldingen op je telefoon', 'WhatsApp-melding bij nieuwe aanvragen', 'ochtendbriefing', 'Wekelijkse AI-controle'],
@@ -6609,6 +6634,10 @@ async function loadSettingsHtml(s) {
     try { await api('/api/settings', 'PATCH', { whatsappOrderGroups: $('#waOrderGroups').value }); toast('WhatsApp opdracht-groepen opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
+  if ($('#saveTussenpersonen')) $('#saveTussenpersonen').onclick = (e) => eenKeer(e.currentTarget, async () => {
+    try { await api('/api/settings', 'PATCH', { tussenpersonen: $('#tussenpersonen').value.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean) }); toast('Lijst opgeslagen'); }
+    catch (err) { toast(err.message, true); }
+  });
   $('#saveEmailFilters').onclick = async () => {
     try { await api('/api/settings', 'PATCH', { emailFilters: $('#emailFilters').value }); toast('E-mailfilter opgeslagen'); }
     catch (err) { toast(err.message, true); }

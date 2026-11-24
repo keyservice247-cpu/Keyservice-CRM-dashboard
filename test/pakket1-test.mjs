@@ -150,5 +150,52 @@ ok('GET /status werkt zonder inlog (200) en zegt "goed"', st.status === 200 && s
 ok('alleen ja/nee en leeftijden — geen namen, nummers of tekst', Object.keys(stj).sort().join(',') === 'brugMinutenStil,gestartMinutenGeleden,laatsteControleMinutenGeleden,omgeving,onderdelen,status' && !/0611|Proef|@/.test(JSON.stringify(stj)) && Object.values(stj.onderdelen).every((v) => v === null || typeof v === 'boolean'));
 ok('wordt niet bewaard door de browser of een tussenstation', st.headers.get('cache-control') === 'no-store');
 
+// ---------- D1: tussenpersoon ----------
+console.log('\n== D1 — een tussenpersoon wordt nooit de klant ==');
+{
+  const BEHEER = 'beheer@vastgoed-voorbeeld.test';
+  const stuur = async (id, van, naam, tel, adres, onderwerp = 'Slot kapot bij huurder') => (await api('POST', '/api/ingest/email', { from: van, subject: onderwerp, externalId: id, body: `Graag een monteur sturen.\nNaam: ${naam}\nTelefoon: ${tel}\nAdres: ${adres}\nProbleem: slot van de voordeur is kapot` }, { token: true })).json;
+  const keur = async (reviewId, extra = {}) => (await api('POST', `/api/reviews/${reviewId}/approve`, extra, { cookie: admin })).json?.order;
+  const klant = async (id) => (await api('GET', '/api/customers', null, { cookie: admin })).json.find((c) => c.id === id);
+  // Twee verschillende huurders, doorgestuurd vanaf hetzelfde adres van de beheerder.
+  const r1 = await stuur('d1-a', `Beheer Voorbeeld <${BEHEER}>`, 'Huurder Een', '0611000301', 'Eerstelaan 1, 3333 AA Proefstad');
+  const o1 = await keur(r1.reviewId, { customerName: 'Huurder Een', customerPhone: '0611000301', customerEmail: BEHEER, customerAddress: 'Eerstelaan 1, 3333 AA Proefstad' });
+  const r2 = await stuur('d1-b', `Beheer Voorbeeld <${BEHEER}>`, 'Bewoner Twee', '0611000302', 'Tweedestraat 2, 3333 BB Proefstad');
+  const o2 = await keur(r2.reviewId, { customerName: 'Bewoner Twee', customerPhone: '0611000302', customerEmail: BEHEER, customerAddress: 'Tweedestraat 2, 3333 BB Proefstad' });
+  ok('twee huurders via hetzelfde afzenderadres worden TWEE klanten (was: één)', !!o1 && !!o2 && o1.customerId !== o2.customerId, JSON.stringify([o1?.customerId, o2?.customerId]));
+  const k1 = await klant(o1.customerId); const k2 = await klant(o2.customerId);
+  ok('huurder 1 houdt zijn eigen naam, nummer en adres', k1.name === 'Huurder Een' && k1.phone === '0611000301' && /Eerstelaan/.test(k1.address));
+  ok('huurder 2 krijgt het gedeelde adres NIET als klantgegeven', k2.name === 'Bewoner Twee' && k2.phone === '0611000302' && !k2.email, JSON.stringify(k2.email));
+  ok('de opdracht van huurder 2 legt uit waarom, en houdt het adres voor déze aanvraag', o2.tussenpersoonHint?.reden === 'gedeeld' && o2.tussenpersoonHint.email === BEHEER && o2.tussenpersoonHint.andereNaam === 'Huurder Een' && o2.intake?.email === BEHEER && !o1.tussenpersoonHint, JSON.stringify(o2.tussenpersoonHint));
+  ok('geen stille wijziging: op opdracht 2 staat geen suggestie om huurder 1 te overschrijven', !(o2.dataSuggestions || []).length);
+  // Wat NIET verandert: dezelfde persoon blijft dezelfde klant.
+  const r3 = await stuur('d1-c', 'Karin Zelf <karin.zelf@voorbeeld.test>', 'Karin Zelf', '0611000303', 'Derdeweg 3, 3333 CC Proefstad', 'Cilinder vervangen');
+  const o3 = await keur(r3.reviewId, { customerName: 'Karin Zelf', customerPhone: '0611000303', customerEmail: 'karin.zelf@voorbeeld.test' });
+  const r4 = await stuur('d1-d', 'Karin Zelf <karin.zelf@voorbeeld.test>', 'K. Zelf', '0611000399', 'Derdeweg 3, 3333 CC Proefstad', 'Nog een slot');
+  const o4 = await keur(r4.reviewId, { customerName: 'K. Zelf', customerPhone: '0611000399', customerEmail: 'karin.zelf@voorbeeld.test' });
+  ok('zelfde e-mail, zelfde achternaam, nieuw nummer = dezelfde klant (met een suggestie voor het nummer)', o3.customerId === o4.customerId && !o4.tussenpersoonHint && (o4.dataSuggestions || []).some((x) => x.field === 'telefoon'), JSON.stringify([o3.customerId === o4.customerId, o4.dataSuggestions]));
+  // Kantoor zet het adres op de lijst: daarna is het nooit meer een klantsleutel.
+  ok('monteur mag de melding niet afhandelen (403)', (await api('POST', `/api/orders/${o2.id}/tussenpersoon`, { actie: 'toevoegen' }, { cookie: mon })).status === 403);
+  const toe = await api('POST', `/api/orders/${o2.id}/tussenpersoon`, { actie: 'toevoegen' }, { cookie: ass });
+  ok('assistente: "altijd zo behandelen" zet het adres op de lijst en haalt de melding weg', toe.status === 200 && toe.json.tussenpersonen.includes(BEHEER) && !(await api('GET', `/api/orders/${o2.id}`, null, { cookie: admin })).json.tussenpersoonHint, JSON.stringify(toe.json));
+  const r5 = await stuur('d1-e', `Beheer Voorbeeld <${BEHEER}>`, 'Huurder Een', '0611000301', 'Eerstelaan 1, 3333 AA Proefstad', 'Nog een klus voor huurder 1');
+  const o5 = await keur(r5.reviewId, { customerName: 'Huurder Een', customerPhone: '0611000301', customerEmail: BEHEER });
+  // (Binnen het zelfde-moment-venster hangt deze aanvraag aan zijn lopende opdracht — Regel 1.)
+  ok('volgende klus voor huurder 1 via de beheerder: gevonden op zijn NUMMER, niet op het adres van de beheerder', o5.customerId === o1.customerId && o5.customerId !== o2.customerId && (await klant(o1.customerId)).name === 'Huurder Een', JSON.stringify([o5.customerId === o1.customerId, o5.id === o1.id]));
+  const r6 = await stuur('d1-f', `Beheer Voorbeeld <${BEHEER}>`, 'Nieuwe Derde', '0611000306', 'Vierdeplein 4, 3333 DD Proefstad');
+  const o6 = await keur(r6.reviewId, { customerName: 'Nieuwe Derde', customerPhone: '0611000306', customerEmail: BEHEER });
+  const k6 = await klant(o6.customerId);
+  ok('nieuwe huurder via de beheerder: eigen klant, zonder het adres van de beheerder', ![o1.customerId, o2.customerId].includes(o6.customerId) && !k6.email && o6.intake?.email === BEHEER, JSON.stringify(k6));
+  // De lijst in Instellingen.
+  const fout = await api('PATCH', '/api/settings', { tussenpersonen: ['gmail.com'] }, { cookie: admin });
+  ok('een domein als gmail.com wordt geweigerd (anders herkent het CRM niemand meer op e-mail)', fout.status === 400 && /gmail\.com/.test(fout.json?.error || ''), JSON.stringify(fout.json));
+  const goed = await api('PATCH', '/api/settings', { tussenpersonen: [BEHEER, 'vve-voorbeeld.test', 'iemand@gmail.com'] }, { cookie: admin });
+  const inst = (await api('GET', '/api/settings', null, { cookie: admin })).json;
+  ok('adres, eigen domein en een los gmail-adres mogen wél', goed.status === 200 && (inst.tussenpersonen || []).join() === `${BEHEER},vve-voorbeeld.test,iemand@gmail.com`, JSON.stringify(inst.tussenpersonen));
+  const r7 = await stuur('d1-g', 'Secretaris <secretaris@vve-voorbeeld.test>', 'Bewoner Vijf', '0611000307', 'Vijfdehof 5, 3333 EE Proefstad');
+  const o7 = await keur(r7.reviewId, { customerName: 'Bewoner Vijf', customerPhone: '0611000307', customerEmail: 'secretaris@vve-voorbeeld.test' });
+  ok('een heel domein op de lijst werkt voor elk adres van dat domein', o7.tussenpersoonHint?.reden === 'lijst' && !(await klant(o7.customerId)).email);
+}
+
 console.log(`\n========== PAKKET 1: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (failed) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

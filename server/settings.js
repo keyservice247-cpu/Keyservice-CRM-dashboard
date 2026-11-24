@@ -407,6 +407,34 @@ export function getTrustpilot() {
   };
 }
 
+// OPDRACHTGEVERS EN TUSSENPERSONEN (24 nov 2026, audit D1). Een vastgoedbeheerder, VvE of
+// opdrachtgever die klussen DOORSTUURT mailt voor meerdere mensen. Zijn e-mailadres is dus
+// nooit een klantsleutel en wordt nooit als e-mailadres van de klant opgeslagen — anders
+// komt de klus van huurder 2 bij huurder 1 te hangen (verkeerde naam op de factuur).
+// De lijst bevat adressen ("beheer@voorbeeld.nl") of hele domeinen ("voorbeeld.nl").
+// Een domein waar iedereen een adres heeft (gmail, hotmail …) mag NIET als domein: dan zou
+// geen enkele klant meer op zijn e-mail herkend worden. Een volledig adres mag altijd.
+const IEDEREEN_DOMEINEN = new Set(['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.nl', 'outlook.com', 'outlook.nl', 'live.nl', 'live.com', 'msn.com', 'icloud.com', 'me.com', 'yahoo.com', 'yahoo.nl', 'ziggo.nl', 'kpnmail.nl', 'kpnplanet.nl', 'planet.nl', 'home.nl', 'xs4all.nl', 'hetnet.nl', 'casema.nl', 'upcmail.nl', 'telfort.nl', 'tele2.nl', 'online.nl', 'quicknet.nl', 'chello.nl', 'proton.me', 'protonmail.com']);
+export function sanitizeTussenpersonen(input) {
+  const ruw = Array.isArray(input) ? input : String(input || '').split(/[\n,;]+/);
+  const goed = []; const geweigerd = [];
+  for (const r of ruw) {
+    const v = String(r || '').trim().toLowerCase().replace(/^@/, '');
+    if (!v) continue;
+    const isAdres = /^[^@\s]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(v);
+    const isDomein = !v.includes('@') && /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(v);
+    if (isAdres || (isDomein && !IEDEREEN_DOMEINEN.has(v))) { if (!goed.includes(v)) goed.push(v); } else geweigerd.push(v);
+  }
+  return { lijst: goed.slice(0, 100), geweigerd };
+}
+export function getTussenpersonen() { return sanitizeTussenpersonen(db().settings.tussenpersonen || []).lijst; }
+export function isTussenpersoonEmail(adres) {
+  const a = String(adres || '').trim().toLowerCase();
+  if (!a.includes('@')) return false;
+  const domein = a.split('@')[1];
+  return getTussenpersonen().some((x) => (x.includes('@') ? x === a : domein === x || domein.endsWith('.' + x)));
+}
+
 // Welk Trustpilot-adres hoort bij dit merk? Schuifpuiservice zijn eigen adres als dat is
 // ingevuld, anders het gewone (zo verandert er niets zolang er één adres is).
 export function trustpilotBccVoor(merkKey) {

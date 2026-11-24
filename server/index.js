@@ -96,7 +96,7 @@ import {
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
   getHtmlSignature, getWeeklyAiCheck, syncBundlesToPriceList, getGoogleSync,
-  noteRequiredStatusKeys, DEFAULT_ATTACHMENT_CLEANUP } from './settings.js';
+  noteRequiredStatusKeys, DEFAULT_ATTACHMENT_CLEANUP, getTussenpersonen, sanitizeTussenpersonen } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -3603,6 +3603,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     onderwegMsg: getOnderweg(),
     reviewRequest: getReviewRequest(),
     trustpilot: getTrustpilot(),
+    tussenpersonen: getTussenpersonen(),
     autoScan: db().settings.autoScan || { enabled: false, hour: 5 },
     crmAlerts: getCrmAlerts(),
     morningBriefing: getMorningBriefing(),
@@ -3885,6 +3886,13 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   }
   if ('formSubmitBox' in b) {
     db().settings.formSubmitBox = { alleenFormulieren: !(b.formSubmitBox && b.formSubmitBox.alleenFormulieren === false) };
+  }
+  // Opdrachtgevers en tussenpersonen (audit D1): hun adres is nooit een klantsleutel.
+  if ('tussenpersonen' in b) {
+    const { lijst, geweigerd } = sanitizeTussenpersonen(b.tussenpersonen);
+    if (geweigerd.length) return res.status(400).json({ error: `Niet opgeslagen: "${geweigerd.slice(0, 3).join('", "')}" kan niet. Vul een e-mailadres in (naam@bedrijf.nl) of een eigen domein (bedrijf.nl). Een domein als gmail.com of hotmail.com mag niet: dan wordt geen enkele klant meer op zijn e-mail herkend.` });
+    db().settings.tussenpersonen = lijst;
+    logActivity(req.user.name, 'tussenpersonen bijgewerkt', `${lijst.length} adres(sen)/domein(en)`);
   }
   if ('trustpilot' in b) {
     const t = b.trustpilot || {};
@@ -4903,6 +4911,26 @@ app.post('/api/formulieren/activatie/afgehandeld', requireRole('admin', 'assiste
   if (!ok) return res.status(404).json({ error: 'Niet gevonden' });
   logActivity(req.user.name, 'FormSubmit-activatie afgehandeld', String(req.body?.sleutel || '').slice(0, 120));
   res.json({ ok: true });
+});
+
+// TUSSENPERSOON-MELDING OP EEN OPDRACHT (24 nov 2026, audit D1). Het e-mailadres van de
+// aanvraag hoort bij iemand die voor meerdere mensen mailt. Kantoor beslist: "altijd zo
+// behandelen" zet het adres op de lijst; "negeren" haalt alleen de melding weg. Het
+// klantrecord verandert hier nooit.
+app.post('/api/orders/:id/tussenpersoon', requireRole('admin', 'assistent'), (req, res) => {
+  const order = db().orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'Niet gevonden' });
+  const hint = order.tussenpersoonHint;
+  if (!hint) return res.status(400).json({ error: 'Er staat geen melding op deze opdracht.' });
+  if (req.body?.actie === 'toevoegen') {
+    const { lijst, geweigerd } = sanitizeTussenpersonen([...getTussenpersonen(), hint.email]);
+    if (geweigerd.length) return res.status(400).json({ error: 'Dit adres kan niet op de lijst.' });
+    db().settings.tussenpersonen = lijst;
+    logActivity(req.user.name, 'tussenpersoon toegevoegd', `${hint.email} (vanaf opdracht ${order.title})`);
+  }
+  delete order.tussenpersoonHint;
+  saveSoon();
+  res.json({ ok: true, tussenpersonen: getTussenpersonen() });
 });
 
 // TRUSTPILOT-UITNODIGING VANAF EEN OPDRACHT (5 okt 2026, wens eigenaar "zelf bepalen
