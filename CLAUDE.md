@@ -156,6 +156,21 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   waar alles nu staat; "gezien" per toestel in localStorage `ksNieuwGezien`. Altijd terug te
   vinden via Account → "Wat is er veranderd?" (`#acc-nieuw`). Bij een volgende grote
   herindeling: NIEUW_VERSIE ophogen en de punten in `nieuwPunten()` bijwerken. Browser +5.
+- **Alle koppelingen in één oogopslag (server/koppelingen.js, audit E5/E12/E16/I7):**
+  `beoordeelKoppelingen(feiten)` is een PURE functie → 8 regels (mailIn, mailUit, waGroep,
+  waOfficieel, website, agenda, ai, opslag) met stand goed/let/fout/uit, uitleg in gewone taal
+  en "wat nu", plus `instroom` (laatste bericht van alle kanalen samen: 18 u = let, 36 u =
+  fout; nooit in de testomgeving). `koppelFeiten()` verzamelt (alleen lezen): lastHealth,
+  hartslag van de bridge, laatste binnengekomen bericht per kanaal (gememoiseerd), mislukte
+  mails/appjes 24 u, agenda, back-up, schijf. Vangt de STILLE STORING: bridge verbonden maar
+  24+ uur geen groepsbericht terwijl er opdracht-groepen zijn. GET /api/koppelingen/status
+  (admin + assistent; geen sleutels/adressen). Scherm: kaart bovenaan Instellingen →
+  Koppelingen (`#koppelOverzichtKaart`, in INDELING) en venster `openKoppelStatus()` (ook voor
+  de assistente). Werklijst op Start: `koppelFouten` → rode regel per kapotte koppeling
+  (`ga.actie 'koppelstatus'`). Watchdog: `koppelAlarmen` → hooguit 1 melding per soort per
+  dag (`_alerts.stil_instroom`, `_alerts.stil_groepStil` — de laatste alleen op werkdagen).
+  Er verandert NIETS aan een koppeling: dit kijkt alleen. Tests: koppelingen-test (23, zonder
+  server), start-test 18, rollen-test +4, browser +4.
 - **Klantadres verbeterd → lopende opdracht volgt:** PATCH /api/customers/:id zet het nieuwe
   adres ook op LOPENDE opdrachten waarvan het opdrachtadres letterlijk het oude klantadres
   was (een afwijkend werkadres en afgehandelde opdrachten blijven; updatedAt blijft staan).

@@ -170,14 +170,22 @@ await openFactuur(corrSetup.invId, '#inv-rep');
 ok('reparatielocatie: leegmaken → terug naar de standaard (veld toont weer het klantadres)', !(await invVan(corrSetup.invId)).reparatieAdres && await page.inputValue('#inv-rep') === 'Klantlaan 1, 3911 AA Rhenen');
 // Klantadres wijzigen in hetzelfde venster: een onaangeroerde reparatielocatie volgt mee;
 // staat er een eigen adres, dan blijft dat staan en zegt de melding dat erbij.
-await page.evaluate(() => { document.querySelector('#modal details').open = true; });
-await page.fill('#cust-address', 'Klantlaan 2, 3911 AA Rhenen');
-await page.click('#cust-save');
+// Het venster wordt na de vorige Opslaan opnieuw opgebouwd; op een drukke machine kan dat net
+// ná het invullen gebeuren (dan is de invoer weg en faalt de controle zonder dat er iets stuk
+// is). Daarom: invullen, kort wachten, nakijken dat het er nog staat, dán pas opslaan.
+const zetKlantAdres = async (adres) => {
+  for (let i = 0; i < 4; i++) {
+    await page.evaluate(() => { const d = document.querySelector('#modal details'); if (d) d.open = true; });
+    await page.fill('#cust-address', adres); await page.waitForTimeout(250);
+    if (await page.inputValue('#cust-address').catch(() => '') === adres) break;
+  }
+  await page.click('#cust-save');
+};
+await zetKlantAdres('Klantlaan 2, 3911 AA Rhenen');
 await page.waitForFunction(() => (document.querySelector('#inv-rep') || {}).value === 'Klantlaan 2, 3911 AA Rhenen', null, { timeout: 6000 }).catch(() => {});
 ok('klantadres gewijzigd in de editor: een onaangeroerde reparatielocatie volgt het nieuwe adres', await page.inputValue('#inv-rep') === 'Klantlaan 2, 3911 AA Rhenen');
 await page.fill('#inv-rep', 'Loods 3, Havenweg 12, 4811 XX Breda');
-await page.fill('#cust-address', 'Klantlaan 1, 3911 AA Rhenen');
-await page.click('#cust-save');
+await zetKlantAdres('Klantlaan 1, 3911 AA Rhenen');
 await page.waitForFunction(() => /niet meegewijzigd/.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
 ok('klantadres gewijzigd terwijl er een eigen reparatielocatie staat: die blijft staan, met een melding', await page.inputValue('#inv-rep') === 'Loods 3, Havenweg 12, 4811 XX Breda' && /reparatielocatie hieronder is niet meegewijzigd/.test(await page.evaluate(() => (document.querySelector('#toast') || {}).textContent || '')));
 // Vergrendelen: als betaald verstuurd (WhatsApp-wachtrij) → verstuurd + betaald.
@@ -430,6 +438,26 @@ clear();
   await page.evaluate(() => closeModal());
 }
 noErr('Uitleg wat is er veranderd');
+
+// 8a6) ALLE KOPPELINGEN IN ÉÉN OOGOPSLAG (24 nov 2026).
+clear();
+{
+  await page.evaluate(() => goView('settings')); await page.waitForTimeout(1500);
+  await instKies(page, 'koppel'); await page.waitForTimeout(900);
+  const ko = await page.evaluate(() => { const k = document.querySelector('#koppelOverzichtKaart'); return { groep: k?.dataset.sg, zichtbaar: !!k && k.offsetParent !== null, eerste: document.querySelector('#settingsPanel .inst-inhoud > [data-sg="koppel"]')?.id, rijen: [...document.querySelectorAll('#koppelOverzicht .ko-rij')].map((r) => r.dataset.ko).sort().join(), kop: document.querySelector('#koppelOverzicht .ko-kop')?.textContent.trim(), instroom: !!document.querySelector('#koppelOverzicht .ko-instroom') }; });
+  ok('Instellingen → Koppelingen begint met "Alle koppelingen in één oogopslag": 8 koppelingen + of er nog iets binnenkomt', ko.groep === 'koppel' && ko.zichtbaar && ko.eerste === 'koppelOverzichtKaart' && ko.rijen === 'agenda,ai,mailIn,mailUit,opslag,waGroep,waOfficieel,website' && !!ko.kop && ko.instroom, JSON.stringify(ko));
+  await page.click('#koppelOverzicht [data-ko-ververs]'); await page.waitForTimeout(600);
+  ok('Ververs haalt het overzicht opnieuw op', await page.evaluate(() => document.querySelectorAll('#koppelOverzicht .ko-rij').length === 8));
+  await page.evaluate(() => openKoppelStatus()); await page.waitForTimeout(700);
+  ok('hetzelfde overzicht als venster (vanaf de werklijst op Start), met de weg naar Instellingen', await page.evaluate(() => !document.querySelector('#modalRoot').hidden && document.querySelectorAll('#koppelStatusVenster .ko-rij').length === 8 && !!document.querySelector('#ko-inst')));
+  await page.evaluate(() => closeModal());
+  await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
+  await page.evaluate(() => openKoppelStatus()); await page.waitForTimeout(700);
+  ok('telefoon: het overzicht past binnen het scherm', await page.evaluate(() => { const m = document.querySelector('#modal'); return m.scrollWidth <= m.clientWidth + 1 && [...m.querySelectorAll('.ko-rij')].every((r) => r.getBoundingClientRect().right <= 391); }));
+  await page.evaluate(() => closeModal());
+  await page.setViewportSize({ width: 1280, height: 800 });
+}
+noErr('Koppelingen-overzicht');
 
 // 8b) OPDRACHT-VENSTER & DATA-INTEGRITEIT (audit 28 sep 2026): dubbelklik = één
 // opdracht, Esc/klik-naast met getypte notitie vraagt eerst, Esc werkt weer na een

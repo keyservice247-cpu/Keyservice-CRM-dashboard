@@ -5,6 +5,7 @@ import { db, id, now, save, saveSoon, logActivity, diskFreeMB, noodOpruimronde, 
 import { TEST } from './omgeving.js';
 import { isDrsOrder } from './drs-rapport.js';
 import { merkVan, merkVanFactuur, merkNaam, reviewLinkVoor } from './merk.js';
+import { koppelingenOverzicht, koppelAlarmen } from './koppelingen.js';
 import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
@@ -451,6 +452,19 @@ async function runWatchdog() {
       }
     }
   }
+  // STILLE STORINGEN (24 nov 2026, audit E12/E16): er komt nergens meer iets binnen, of de
+  // WhatsApp-koppeling is verbonden maar leest de groepen niet. Hooguit één melding per
+  // soort per dag; zodra het weer loopt, verdwijnt de vlag vanzelf. Alleen kijken, niets doen.
+  try {
+    const dagNl = nlDag();
+    const weekdag = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', weekday: 'short' }).format(new Date());
+    const alarmen = koppelAlarmen(koppelingenOverzicht(), { werkdag: !['Sat', 'Sun'].includes(weekdag) });
+    for (const soort of ['instroom', 'groepStil']) {
+      const a = alarmen.find((x) => x.sleutel === soort); const vlag = `stil_${soort}`;
+      if (a && s._alerts[vlag] !== dagNl) { s._alerts[vlag] = dagNl; save(); await alertAdmins(a.titel, a.tekst); }
+      else if (!a && s._alerts[vlag]) { delete s._alerts[vlag]; save(); }
+    }
+  } catch (err) { console.error('[bewaking] stille storingen:', err.message); }
   // Outbox-bewaking: WhatsApp-berichten die MISLUKKEN of lang blijven hangen (dan
   // krijgt een klant/monteur z'n bericht niet). Alleen RECENTE problemen (<24u) tellen,
   // zodat het alarm vanzelf stopt zodra de bridge weer verstuurt. Max 1 melding/dag.

@@ -29,10 +29,11 @@ const ERNST_VOLGORDE = { rood: 0, oranje: 1, grijs: 2 };
  * @param {number}  in_.drsTeMelden        aantal DRS-opdrachten dat nog gemeld moet worden
  * @param {Array}   in_.onvolledig         opdrachten zonder klantnaam [{id, title}]
  * @param {object}  in_.bridge             {ingesteld, stilMin} van de WhatsApp-bridge
+ * @param {Array}   in_.koppelFouten       andere koppelingen die niet werken [{sleutel, naam, uitleg}]
  */
 export function eerstDoenLijst(in_) {
   const { monteur = false, nu = Date.now(), pending = [], wacht = [], reacties = [], afspraakGeweest = [], offertesStil = [],
-    teFactureren = [], verlopenFacturen = 0, drsTeMelden = 0, onvolledig = [], bridge = null } = in_ || {};
+    teFactureren = [], verlopenFacturen = 0, drsTeMelden = 0, onvolledig = [], bridge = null, koppelFouten = [] } = in_ || {};
   const uit = [];
   const zet = (p) => { if (p.aantal > 0) uit.push(p); };
   const mv = (n, een, meer) => (n === 1 ? een : meer.replace('{n}', String(n)));
@@ -45,7 +46,11 @@ export function eerstDoenLijst(in_) {
     if (bridge && bridge.ingesteld && bridge.stilMin >= 15) {
       zet({ sleutel: 'bridge', ernst: 'rood', aantal: 1, titel: 'WhatsApp-groepen komen niet binnen',
         uitleg: `De koppeling met de groepen is ${duurTekst(bridge.stilMin * 60000)} stil. Opdrachten uit de groep kunnen ontbreken.`,
-        knop: 'Koppelingen', ga: { view: 'settings', groep: 'koppel' } });
+        knop: 'Bekijken', ga: { actie: 'koppelstatus' } });
+    }
+    // Een andere koppeling die niet werkt (mail, agenda, AI, opslag): elk een eigen regel.
+    for (const k of koppelFouten || []) {
+      zet({ sleutel: `koppeling:${k.sleutel}`, ernst: 'rood', aantal: 1, titel: `${k.naam} werkt niet`, uitleg: String(k.uitleg || '').slice(0, 160), knop: 'Bekijken', ga: { actie: 'koppelstatus' } });
     }
     zet({ sleutel: 'inbox', ernst: 'rood', aantal: pending.length,
       titel: mv(pending.length, '1 nieuwe aanvraag beoordelen', '{n} nieuwe aanvragen beoordelen'),

@@ -1547,6 +1547,7 @@ async function eerstDoenGa(p) {
   try {
     if (ga.open) { markSeen(ga.open); await openOrderVers(ga.open); return; }
     if (ga.actie === 'drsrapport') { await openDrsRapport(); return; }
+    if (ga.actie === 'koppelstatus') { await openKoppelStatus(); return; }
     if (ga.col) { state.boardTab = ga.col; state._focusCol = ga.col; }
     if (ga.chatFilter) { _chatFilter = ga.chatFilter; _lastChatListHtml = ''; }
     if (ga.groep) { try { localStorage.setItem('ksInstellingenGroep', ga.groep); } catch { /* privévenster */ } }
@@ -6040,6 +6041,7 @@ async function loadSettingsHtml(s) {
         <button class="btn" id="testBackupMail">Stuur nu een testmail</button>
       </div>
     </div>
+    <div data-sg="koppel" class="info-card" style="margin-bottom:18px" id="koppelOverzichtKaart"><h3>Alle koppelingen in één oogopslag</h3><div id="koppelOverzicht" class="muted small">Laden…</div></div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px" id="formulierenKaart"><h3>Website-formulieren</h3><div class="muted small">Laden…</div></div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px;border-left:4px solid var(--danger)"> <h3>${icon('whatsapp', 15)} Wegwerpnummer pauzeren (noodrem)</h3>
       <p class="muted small">Is het <strong>wegwerpnummer</strong> (tijdelijk) geblokkeerd? Zet dit vinkje AAN: de bridge krijgt dan een lege wachtrij, zodat er via dat nummer niets meer uitgaat (groeps- en monteursberichten). Wat klaarstond blijft bewaard en gaat vanzelf alsnog uit zodra je de pauze uitzet. <strong>De officiële WhatsApp-route (klantberichten, facturen, bevestigingen) loopt gewoon door</strong> — die staat los van dit nummer. Ontvangen blijft ook gewoon werken.</p>
@@ -6393,7 +6395,7 @@ async function loadSettingsHtml(s) {
       facturen: ['Factuurgegevens', 'Prijslijst', 'Pakketten'],
       team: ['Meldingen op je telefoon', 'WhatsApp-melding bij nieuwe aanvragen', 'ochtendbriefing', 'Wekelijkse AI-controle'],
       ai: ['Bedrijfsprofiel', 'Verkeer analyseren', 'AI laten leren filteren', 'AI-dagoverzicht'],
-      koppel: ['Officiële WhatsApp', 'Wegwerpnummer pauzeren', '#wa-pair-card', 'WhatsApp-verbinding testen', 'WhatsApp-groepen koppelen', 'Google Agenda', 'abonnementslink'],
+      koppel: ['Alle koppelingen in één oogopslag', 'Officiële WhatsApp', 'Wegwerpnummer pauzeren', '#wa-pair-card', 'WhatsApp-verbinding testen', 'WhatsApp-groepen koppelen', 'Google Agenda', 'abonnementslink'],
       systeem: ['Back-ups', 'automatisch opruimen', 'Hoe alles werkt'],
     };
     const paneel = $('#settingsPanel');
@@ -6629,6 +6631,7 @@ async function loadSettingsHtml(s) {
   };
   $('#openAttMgr').onclick = openAttachmentManager;
   laadSigPerUser();
+  laadKoppelOverzicht('#koppelOverzicht');
   laadFormulierStatus();
   $('#saveSignature').onclick = async () => {
     const htmlSignature = {
@@ -7216,6 +7219,44 @@ function vulFormulierAlarm(st) {
   if (el.dataset.html === html) return;
   el.dataset.html = html; el.innerHTML = html;
   if ($('#formAlarmOpen')) $('#formAlarmOpen').onclick = () => { try { localStorage.setItem('ksInstellingenGroep', 'koppel'); } catch { /* geen opslag */ } showView('settings'); };
+}
+// ---------- ALLE KOPPELINGEN IN ÉÉN OOGOPSLAG (24 nov 2026) ----------
+// De server beoordeelt (server/koppelingen.js); hier alleen tonen: per koppeling een stip,
+// in gewone taal wat er aan de hand is en — als er iets mis is — wat je moet doen.
+function koppelOverzichtHTML(d) {
+  if (!d || !Array.isArray(d.regels)) return '<div class="muted small">Kon de koppelingen niet laden.</div>';
+  const woord = { goed: 'werkt', let: 'let op', fout: 'werkt niet', uit: 'uit' };
+  const kop = d.stand === 'goed' ? `<div class="ko-kop ko-goed">${icon('check', 15)} Alles werkt.</div>`
+    : d.stand === 'let' ? '<div class="ko-kop ko-let">Er is iets om naar te kijken.</div>'
+      : '<div class="ko-kop ko-fout">Er werkt iets niet.</div>';
+  const rij = (r) => `<li class="ko-rij ko-${esc(r.stand)}" data-ko="${esc(r.sleutel)}">
+      <span class="ko-stip" aria-hidden="true"></span>
+      <span class="ko-midden"><strong>${esc(r.naam)}</strong><span class="ko-uitleg">${esc(r.uitleg)}</span>${r.watNu && r.stand !== 'goed' ? `<span class="ko-watnu"><em>Wat nu:</em> ${esc(r.watNu)}</span>` : ''}</span>
+      <span class="ko-woord">${esc(woord[r.stand] || r.stand)}</span></li>`;
+  const ins = d.instroom || {};
+  return `${kop}
+    <div class="ko-instroom ko-${esc(ins.stand || 'goed')}"><span class="ko-stip" aria-hidden="true"></span><span>${esc(ins.uitleg || '')}</span></div>
+    <ul class="ko-lijst">${d.regels.map(rij).join('')}</ul>
+    <div class="ko-voet"><span class="muted small">Bijgewerkt ${esc(fmtDate(d.at))}</span> <button type="button" class="btn btn-sm" data-ko-ververs>Ververs</button></div>`;
+}
+async function laadKoppelOverzicht(sel) {
+  const el = typeof sel === 'string' ? $(sel) : sel; if (!el) return null;
+  let d = null;
+  try { d = await api('/api/koppelingen/status'); } catch (err) { el.innerHTML = `<div class="error small">${esc(err.message)}</div>`; return null; }
+  el.classList.remove('muted', 'small');
+  el.innerHTML = koppelOverzichtHTML(d);
+  const knop = el.querySelector('[data-ko-ververs]');
+  if (knop) knop.onclick = () => eenKeer(knop, () => laadKoppelOverzicht(el));
+  return d;
+}
+async function openKoppelStatus() {
+  modal(`<h2>Koppelingen</h2>
+    <p class="muted small" style="margin:-6px 0 12px">Werkt alles, en wanneer kwam er voor het laatst iets binnen?</p>
+    <div id="koppelStatusVenster" class="muted small">Laden…</div>
+    <div class="modal-actions"><span></span><div class="right">${hasPerm('settings') ? '<button class="btn" id="ko-inst">Naar Instellingen → Koppelingen</button>' : ''}<button class="btn btn-primary" id="ko-sluit">Sluiten</button></div></div>`);
+  $('#ko-sluit').onclick = closeModal;
+  if ($('#ko-inst')) $('#ko-inst').onclick = () => { try { localStorage.setItem('ksInstellingenGroep', 'koppel'); } catch { /* privévenster */ } closeModal(); goView('settings'); };
+  await laadKoppelOverzicht('#koppelStatusVenster');
 }
 async function laadFormulierStatus() {
   const el = $('#formulierenKaart'); if (!el) return;

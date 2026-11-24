@@ -43,7 +43,10 @@ ok('enkelvoud klopt', een.map((x) => x.titel).join(' | ') === '1 nieuwe aanvraag
 ok('wacht korter dan 24 uur = oranje', een.find((x) => x.sleutel === 'wacht').ernst === 'oranje');
 ok('niets te doen = lege lijst (het scherm zegt dan "alles is bij")', eerstDoenLijst({ monteur: false, nu: NU }).length === 0 && eerstDoenLijst().length === 0);
 const stil = eerstDoenLijst({ monteur: false, nu: NU, pending: [{ createdAt: min(1) }], bridge: { ingesteld: true, stilMin: 40 } });
-ok('WhatsApp-groepen 15+ min stil = bovenaan, met verwijzing naar Koppelingen', stil[0].sleutel === 'bridge' && stil[0].ga.view === 'settings' && stil[0].ga.groep === 'koppel' && /40 min/.test(stil[0].uitleg), JSON.stringify(stil[0]));
+ok('WhatsApp-groepen 15+ min stil = bovenaan, en opent het koppelingen-overzicht', stil[0].sleutel === 'bridge' && stil[0].ga.actie === 'koppelstatus' && /40 min/.test(stil[0].uitleg), JSON.stringify(stil[0]));
+const kf = eerstDoenLijst({ monteur: false, nu: NU, pending: [{ createdAt: min(1) }], koppelFouten: [{ sleutel: 'mailUit', naam: 'E-mail versturen', uitleg: 'SMTP weigert de login' }, { sleutel: 'agenda', naam: 'Google Agenda', uitleg: 'Niet meer verbonden' }] });
+ok('een andere kapotte koppeling (mail, agenda…) staat als eigen rode regel bovenaan', kf[0].sleutel === 'koppeling:mailUit' && kf[0].titel === 'E-mail versturen werkt niet' && kf[0].ernst === 'rood' && kf[1].sleutel === 'koppeling:agenda' && kf[2].sleutel === 'inbox' && kf[0].ga.actie === 'koppelstatus', JSON.stringify(kf.map((x) => x.sleutel)));
+ok('de monteur ziet geen meldingen over koppelingen', !eerstDoenLijst({ monteur: true, nu: NU, koppelFouten: [{ sleutel: 'mailUit', naam: 'E-mail versturen', uitleg: 'x' }] }).length);
 ok('korter stil, of nooit gekoppeld = geen melding', !eerstDoenLijst({ nu: NU, bridge: { ingesteld: true, stilMin: 14 } }).length && !eerstDoenLijst({ nu: NU, bridge: { ingesteld: false, stilMin: 999 } }).length);
 
 console.log('\n== Monteur: alleen zijn eigen werk ==');

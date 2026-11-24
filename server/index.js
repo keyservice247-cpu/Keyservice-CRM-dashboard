@@ -60,6 +60,7 @@ import {
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken, wachtOpAntwoordDagen, voorbeeldTekst } from './gesprekken.js';
 import { eerstDoenLijst } from './eerst-doen.js';
+import { koppelingenOverzicht } from './koppelingen.js';
 import { MERKEN, isMerk, merkVan, merkVanFactuur, merkNaam } from './merk.js';
 import { STANDAARD_REDENEN, isReden } from './annulering.js';
 import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, kantoor, gedeeldMetNamen, zetVolgorde } from './taken.js';
@@ -2904,6 +2905,7 @@ app.get('/api/overview', requireAuth, (req, res) => {
       verlopenFacturen, drsTeMelden: monteur ? 0 : drsTeMeldenTeller(),
       onvolledig: active.filter((o) => o.customerIncomplete && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status)).map(kort),
       bridge: { ingesteld: !!last && !TEST, stilMin: ageSec == null ? 0 : Math.floor(ageSec / 60) },
+      koppelFouten: monteur ? [] : (() => { try { return koppelingenOverzicht().regels.filter((r) => r.stand === 'fout' && r.sleutel !== 'waGroep').map((r) => ({ sleutel: r.sleutel, naam: r.naam, uitleg: r.uitleg })); } catch { return []; } })(),
     });
   } catch (err) { console.error('  [start] werklijst mislukt:', err.message); }
 
@@ -6982,6 +6984,14 @@ app.get('/', (req, res) => {
 // Het geeft ALLEEN ja/nee en leeftijden terug — geen namen, geen aantallen, geen tekst.
 // 200 zolang de server leeft en de database schrijft; 503 als opslaan mislukt. Het woord
 // "aandacht" in het antwoord betekent: een koppeling werkt niet (voor een trefwoord-alarm).
+// ALLE KOPPELINGEN IN ÉÉN OOGOPSLAG (24 nov 2026): werkt het, wanneer kwam er voor het laatst
+// iets binnen, en wat moet je doen. Kantoor mag dit zien (de assistente merkt een storing
+// het eerst). Geen sleutels, adressen of wachtwoorden in het antwoord.
+app.get('/api/koppelingen/status', requireRole('admin', 'assistent'), (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(koppelingenOverzicht());
+});
+
 app.get('/status', (req, res) => {
   const h = lastHealth();
   const minSinds = (iso) => (iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)) : null);

@@ -357,6 +357,20 @@ console.log('\n== Merk en annuleringsreden: wie mag wat (24 nov 2026) ==');
   cookie = adminCookie;
 }
 
+console.log('\n== Alle koppelingen in één oogopslag: wie mag het zien (24 nov 2026) ==');
+{
+  cookie = adminCookie;
+  const k = await api('GET', '/api/koppelingen/status');
+  const sleutels = (k.json?.regels || []).map((r) => r.sleutel).sort().join();
+  ok('beheerder: acht koppelingen met stand en uitleg in gewone taal', k.status === 200 && sleutels === 'agenda,ai,mailIn,mailUit,opslag,waGroep,waOfficieel,website' && k.json.regels.every((r) => ['goed', 'let', 'fout', 'uit'].includes(r.stand) && r.naam && r.uitleg) && !!k.json.instroom, sleutels);
+  ok('geen sleutel, wachtwoord of mailadres in het antwoord', !/test123|password|@keyservice|token/i.test(JSON.stringify(k.json)), JSON.stringify(k.json).slice(0, 200));
+  await login('assistente@keyservice.nl', 'assist123');
+  ok('assistente mag het overzicht zien (zij merkt een storing het eerst)', (await api('GET', '/api/koppelingen/status')).status === 200);
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  ok('monteur niet (403)', (await api('GET', '/api/koppelingen/status')).status === 403);
+  cookie = adminCookie;
+}
+
 console.log('\n== Start: werklijst "Eerst doen" per rol (24 nov 2026) ==');
 {
   cookie = adminCookie;
