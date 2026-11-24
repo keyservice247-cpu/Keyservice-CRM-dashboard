@@ -339,6 +339,32 @@ console.log('\n== Reparatielocatie + factuur corrigeren: wie mag wat (23 nov 202
   cookie = adminCookie;
 }
 
+console.log('\n== Start: werklijst "Eerst doen" per rol (24 nov 2026) ==');
+{
+  cookie = adminCookie;
+  // Opdracht van de gekoppelde monteur met een afspraak van gisteren die nog open staat.
+  const gisteren = new Date(Date.now() - 86400000); const p2 = (n) => String(n).padStart(2, '0');
+  const gDag = `${gisteren.getFullYear()}-${p2(gisteren.getMonth() + 1)}-${p2(gisteren.getDate())}`;
+  const oE = await api('POST', '/api/orders', { customerName: 'Werklijst Klant', customerPhone: '0612777081', title: 'Ede — werklijstproef', monteurId: montRec.json?.id, status: 'afspraak_ingepland', appointmentAt: `${gDag}T10:00`, appointmentEndAt: `${gDag}T11:00` });
+  const a = await api('GET', '/api/overview');
+  const lijstA = a.json?.eerstDoen || [];
+  ok('beheerder: Start geeft de werklijst mee, elk punt met titel, telling en bestemming', a.status === 200 && Array.isArray(a.json?.eerstDoen) && lijstA.length > 0 && lijstA.every((x) => x.sleutel && x.titel && x.aantal > 0 && x.ga), JSON.stringify(lijstA).slice(0, 300));
+  ok('…met de afspraak die geweest is maar nog open staat', lijstA.some((x) => x.sleutel === 'afspraakGeweest'), lijstA.map((x) => x.sleutel).join());
+  await login('assistente@keyservice.nl', 'assist123');
+  const s2 = await api('GET', '/api/overview');
+  ok('assistente: dezelfde werklijst, zonder één bedrag', s2.status === 200 && (s2.json?.eerstDoen || []).length > 0 && !/€|euro/i.test(JSON.stringify(s2.json.eerstDoen)), JSON.stringify(s2.json?.eerstDoen).slice(0, 200));
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  const m2 = await api('GET', '/api/overview');
+  const lijstM = m2.json?.eerstDoen || [];
+  ok('monteur: alleen punten over zijn eigen werk (geen inbox, wachtlijst, DRS of facturen van anderen)', m2.status === 200 && lijstM.every((x) => ['reactie', 'afspraakGeweest', 'factureren'].includes(x.sleutel)), lijstM.map((x) => x.sleutel).join());
+  ok('monteur: zijn eigen verlopen afspraak staat erin', lijstM.some((x) => x.sleutel === 'afspraakGeweest'), JSON.stringify(lijstM).slice(0, 200));
+  await login('monteurlos@keyservice.nl', 'monteur123');
+  const m3 = await api('GET', '/api/overview');
+  ok('monteur zonder koppeling: lege werklijst (niets van anderen)', m3.status === 200 && (m3.json?.eerstDoen || []).length === 0, JSON.stringify(m3.json?.eerstDoen));
+  cookie = adminCookie;
+  if (oE.json?.id) await api('PATCH', `/api/orders/${oE.json.id}`, { status: 'afgerond', note: 'klaar' });
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

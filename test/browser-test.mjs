@@ -349,6 +349,32 @@ clear();
 }
 noErr('Opdrachtvenster nieuwe indeling');
 
+// 8a3) START: werklijst "Eerst doen" bovenaan (24 nov 2026, herontwerp).
+clear();
+{
+  // Een losse e-mail gaat altijd eerst langs een mens → er wacht dus zeker één aanvraag.
+  await page.evaluate(() => fetch('/api/ingest/email', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ from: 'Start Proef <startproef@example.nl>', subject: 'Slot voordeur kapot', body: 'Goedemiddag, het slot van mijn voordeur is kapot en ik kan niet meer afsluiten. Kunt u langskomen?\nNaam: Start Proef\nTelefoon: 0611000321\nAdres: Dorpsstraat 5, 3911 AA Rhenen', externalId: 'bt-start-1' }) }));
+  await page.evaluate(() => goView('overview')); await page.waitForTimeout(1800);
+  const ed = await page.evaluate(() => {
+    const blok = document.querySelector('#eerstDoenBlok'); const taken = document.querySelector('#takenVandaagBlok'); const kpi = document.querySelector('#ovKpis');
+    return { er: !!blok && !!blok.querySelector('.eerst-doen'), rijen: [...document.querySelectorAll('.eerst-rij')].map((r) => r.dataset.eerst), boven: !!blok && !!kpi && (blok.compareDocumentPosition(kpi) & Node.DOCUMENT_POSITION_FOLLOWING) > 0 && (!taken || (blok.compareDocumentPosition(taken) & Node.DOCUMENT_POSITION_FOLLOWING) > 0), zoek: !!document.querySelector('#globalSearch'), kpis: document.querySelectorAll('#ovKpis .kpi-card').length, tekst: blok ? blok.innerText : '' };
+  });
+  ok('Start: werklijst "Eerst doen" staat bovenaan, vóór taken en tegels; zoekveld en tegels zijn er nog', ed.er && ed.boven && ed.zoek && ed.kpis === 7, JSON.stringify({ ...ed, tekst: ed.tekst.slice(0, 120) }));
+  ok('Start: de werklijst toont de wachtende aanvragen als eerste punt, zonder bedragen', ed.rijen[0] === 'inbox' && !/€/.test(ed.tekst), ed.rijen.join());
+  await page.click('.eerst-rij[data-eerst="inbox"]'); await page.waitForTimeout(900);
+  ok('Start: klik op het punt brengt je naar de inbox', await page.evaluate(() => !document.querySelector('#view-inbox').hidden));
+  await page.evaluate(() => goView('overview')); await page.waitForTimeout(1200);
+  if (ed.rijen.includes('drs')) {
+    await page.click('.eerst-rij[data-eerst="drs"]'); await page.waitForTimeout(1200);
+    ok('Start: het punt DRS-rapport opent het rapportvenster', await page.evaluate(() => !document.querySelector('#modalRoot').hidden && /DRS/i.test(document.querySelector('#modal').textContent)));
+    await page.evaluate(() => closeModal());
+  }
+  await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(400);
+  ok('Start op de telefoon: de werklijst past binnen het scherm en elke regel is een tikdoel (≥ 44 px)', await page.evaluate(() => { const r = [...document.querySelectorAll('.eerst-rij')].map((x) => x.getBoundingClientRect()); return r.length > 0 && r.every((x) => x.right <= 391 && x.height >= 44) && document.documentElement.scrollWidth <= 391; }));
+  await page.setViewportSize({ width: 1280, height: 800 });
+}
+noErr('Start: Eerst doen');
+
 // 8b) OPDRACHT-VENSTER & DATA-INTEGRITEIT (audit 28 sep 2026): dubbelklik = één
 // opdracht, Esc/klik-naast met getypte notitie vraagt eerst, Esc werkt weer na een
 // eigen invoervenster, aanvraag-adres (intake) blijft na Opslaan staan, en een
@@ -1553,6 +1579,19 @@ noErr('Mobiel plakkende balken');
   const gemaakt = await mp.evaluate(() => fetch('/api/orders').then((r) => r.json()).then((os) => os.find((o) => /noodroute via scherm/.test(o.title))));
   ok('monteur: kaart via het formulier ÉCHT aangemaakt (geen "Titel verplicht")', !!gemaakt, JSON.stringify(gemaakt && gemaakt.title));
   ok('monteur: kaart hangt aan hemzelf + vlag zelf aangemaakt', !!gemaakt && gemaakt.monteurId === mSetup.monteurId && gemaakt.zelfAangemaaktDoorMonteur === true, JSON.stringify(gemaakt && { m: gemaakt.monteurId, z: gemaakt.zelfAangemaaktDoorMonteur }));
+  // MIJN DAG (24 nov 2026): een afspraak van vandaag staat bovenaan het bord van de monteur.
+  ok('monteur zonder afspraak vandaag: "Mijn dag" zegt dat eerlijk', await mp.evaluate(() => { const e = document.querySelector('#mijnDag'); return !!e && !e.hidden && /geen afspraken vandaag/.test(e.textContent); }));
+  const mdOk = await mp.evaluate(async (id) => {
+    const d = new Date(); const p = (n) => String(n).padStart(2, '0'); const dag = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    const r = await fetch('/api/orders/' + id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appointmentAt: dag + 'T23:30', appointmentEndAt: dag + 'T23:45' }) });
+    await loadBoard(); return r.status;
+  }, gemaakt && gemaakt.id);
+  await mp.waitForTimeout(600);
+  const md = await mp.evaluate(() => { const e = document.querySelector('#mijnDag'); const rij = e && e.querySelector('.md-rij'); return { zichtbaar: !!e && !e.hidden, tekst: e ? e.innerText.replace(/\s+/g, ' ') : '', bel: !!(rij && rij.querySelector('a[href^="tel:0611009988"]')), bovenBord: !!e && (e.compareDocumentPosition(document.querySelector('#board')) & Node.DOCUMENT_POSITION_FOLLOWING) > 0 }; });
+  ok('monteur: afspraak van vandaag staat in "Mijn dag" boven het bord, met tijd en belknop', mdOk === 200 && md.zichtbaar && /1 afspraak vandaag/.test(md.tekst) && /23:30/.test(md.tekst) && /noodroute via scherm/.test(md.tekst) && md.bel && md.bovenBord, JSON.stringify([mdOk, md]));
+  await mp.click('#mijnDag [data-md-open]'); await mp.waitForTimeout(700);
+  ok('monteur: tik op de afspraak opent de opdracht', await mp.locator('#f-title').count() === 1 && /noodroute via scherm/.test(await mp.inputValue('#f-title')));
+  await mp.evaluate(() => closeModal());
   // Kaart MET samenvoeg-suggestie (browser-audit 16 sep, kritiek): de monteur-modal
   // brak op null.onclick en geen enkele knop werkte meer.
   const sugId = await page.evaluate(async (monteurId) => {

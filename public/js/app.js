@@ -1473,6 +1473,34 @@ function zetOvDeel(id, html) {
   _ovDelen[id] = html;
   el.innerHTML = html;
 }
+// ---------- EERST DOEN: één werklijst bovenaan Start (24 nov 2026, herontwerp) ----------
+// De server bepaalt de lijst met vaste regels (server/eerst-doen.js); hier alleen tekenen en
+// naar de juiste plek gaan. Is er niets te doen, dan staat dat er ook — geen leeg gat.
+function eerstDoenHTML(lijst) {
+  if (!lijst.length) return `<div class="info-card eerst-doen eerst-leeg"><div class="eerst-kop"><h3>Eerst doen</h3></div><div class="eerst-niets">${icon('check', 16)} Niets dat op je wacht. Alles is bij.</div></div>`;
+  return `<div class="info-card eerst-doen">
+    <div class="eerst-kop"><h3>Eerst doen</h3><span class="muted small">${lijst.length} ${lijst.length === 1 ? 'punt' : 'punten'} · belangrijkste bovenaan</span></div>
+    <ul class="eerst-lijst">${lijst.map((p) => `
+      <li><button type="button" class="eerst-rij" data-eerst="${esc(p.sleutel)}">
+        <span class="eerst-stip eerst-${esc(p.ernst)}" aria-hidden="true"></span>
+        <span class="eerst-midden"><strong>${esc(p.titel)}</strong>${p.uitleg ? `<span class="muted small">${esc(p.uitleg)}</span>` : ''}</span>
+        <span class="btn btn-sm eerst-knop">${esc(p.knop || 'Bekijken')}</span>
+      </button></li>`).join('')}
+    </ul></div>`;
+}
+async function eerstDoenGa(p) {
+  if (!p || !p.ga) return;
+  const ga = p.ga;
+  try {
+    if (ga.open) { markSeen(ga.open); await openOrderVers(ga.open); return; }
+    if (ga.actie === 'drsrapport') { await openDrsRapport(); return; }
+    if (ga.col) { state.boardTab = ga.col; state._focusCol = ga.col; }
+    if (ga.chatFilter) { _chatFilter = ga.chatFilter; _lastChatListHtml = ''; }
+    if (ga.groep) { try { localStorage.setItem('ksInstellingenGroep', ga.groep); } catch { /* privévenster */ } }
+    await goView(ga.view);
+    if (ga.invFilter) { const sel = $('#invFilter'); if (sel && [...sel.options].some((o) => o.value === ga.invFilter)) { sel.value = ga.invFilter; renderInvoices(); } }
+  } catch (err) { toast(err.message, true); }
+}
 async function loadOverview() {
   const kantoor = state.me.role !== 'monteur';
   // Taken en wacht-op-antwoord TEGELIJK met het overzicht ophalen en in één keer
@@ -1500,6 +1528,7 @@ async function loadOverview() {
       <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${kantoor ? ', bericht' : ''}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
       <div id="gsResults" hidden></div>
     </div>
+    <div id="eerstDoenBlok" class="ov-dyn"></div>
     ${kantoor ? `<div id="formulierAlarmBlok"></div><div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>
     <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -1526,6 +1555,8 @@ async function loadOverview() {
     _ovDagAt = 0; _ovWeekAt = 0;
     // Eén gedelegeerde klik voor alle tegels/lijsten — overleeft het vervangen van een blok.
     panel.onclick = async (e) => {
+      const ed = e.target.closest('[data-eerst]');
+      if (ed && panel.contains(ed)) { eerstDoenGa((state._eerstDoen || []).find((p) => p.sleutel === ed.dataset.eerst)); return; }
       const go = e.target.closest('[data-go]');
       if (go && panel.contains(go)) {
         const col = go.dataset.col;
@@ -1550,6 +1581,8 @@ async function loadOverview() {
   const list = (arr, empty) => arr.length
     ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
     : `<div class="muted small">${empty}</div>`;
+  state._eerstDoen = Array.isArray(d.eerstDoen) ? d.eerstDoen : [];
+  zetOvDeel('eerstDoenBlok', eerstDoenHTML(state._eerstDoen));
   zetOvDeel('ovKpis', `
       ${card(k.teControleren, 'Te controleren', 'inbox', k.teControleren ? 'kpi-attn' : '')}
       ${card(k.klantReacties, 'Klant reageerde', 'board', k.klantReacties ? 'kpi-attn' : '')}
@@ -1868,6 +1901,40 @@ function filteredOrders() {
   });
 }
 
+// ---------- MIJN DAG (24 nov 2026, herontwerp): de monteur ziet bovenaan zijn bord meteen
+// zijn afspraken van vandaag, op tijd, met Bellen / Navigeer / Openen. Alleen zijn eigen
+// opdrachten (de server geeft hem niets anders). Kantoor heeft hiervoor Start en de Agenda.
+let _lastMijnDagHtml = null;
+function renderMijnDag() {
+  const el = $('#mijnDag'); if (!el) return;
+  if (!state.me || state.me.role !== 'monteur') { if (!el.hidden) { el.hidden = true; el.innerHTML = ''; } return; }
+  const vandaag = lokaleDag();
+  const morgen = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE');
+  const open = (state.orders || []).filter((o) => o.appointmentAt && !['afgerond', 'geannuleerd'].includes(o.status));
+  const vd = open.filter((o) => String(o.appointmentAt).slice(0, 10) === vandaag).sort((a, b) => String(a.appointmentAt).localeCompare(String(b.appointmentAt)));
+  const nMorgen = open.filter((o) => String(o.appointmentAt).slice(0, 10) === morgen).length;
+  const tijd = (o) => String(o.appointmentAt).slice(11, 16);
+  const rij = (o) => {
+    const tel = o.intake?.phone || o.customer?.phone || '';
+    const adres = o.intake?.address || o.customer?.address || '';
+    return `<li class="md-rij">
+      <button type="button" class="md-open" data-md-open="${esc(o.id)}">
+        <span class="md-tijd">${esc(tijd(o))}</span>
+        <span class="md-midden"><strong>${esc(o.title || 'Opdracht')}</strong><span class="muted small">${esc(o.customer?.name || '')}${adres ? ` · ${esc(adres)}` : ''}</span></span>
+      </button>
+      <span class="md-knoppen">
+        ${tel ? `<a class="btn btn-sm" href="tel:${esc(String(tel).replace(/\s+/g, ''))}" aria-label="Bel de klant">${icon('phone', 14)} Bel</a>` : ''}
+        ${adres ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(adres)}" aria-label="Navigeer naar het adres">${icon('pin', 14)} Route</a>` : ''}
+      </span></li>`;
+  };
+  const html = `<div class="info-card mijn-dag">
+    <div class="eerst-kop"><h3>Mijn dag</h3><span class="muted small">${vd.length ? `${vd.length} ${vd.length === 1 ? 'afspraak' : 'afspraken'} vandaag` : 'geen afspraken vandaag'}${nMorgen ? ` · morgen ${nMorgen}` : ''}</span></div>
+    ${vd.length ? `<ul class="md-lijst">${vd.map(rij).join('')}</ul>` : ''}</div>`;
+  if (html === _lastMijnDagHtml && !el.hidden) return;
+  _lastMijnDagHtml = html;
+  el.innerHTML = html; el.hidden = false;
+  el.onclick = (e) => { const b = e.target.closest('[data-md-open]'); if (b) { markSeen(b.dataset.mdOpen); openOrderModal(b.dataset.mdOpen); } };
+}
 function renderBoard() {
   const board = $('#board');
   // NIET tekenen tijdens slepen/vegen (13 sep): het gesleepte element zou uit de
@@ -1876,6 +1943,7 @@ function renderBoard() {
   // Titel meebewegen met het gekozen hoofdmenu.
   const titles = { all: 'Opdrachten', email: 'E-mail — opdrachten', whatsapp: 'WhatsApp — opdrachten' };
   const h = $('#view-board h2'); if (h) h.textContent = titles[state.channel] || 'Opdrachten';
+  renderMijnDag();
   const orders = filteredOrders();
   const statuses = state.meta.statuses || [];
   // Per kolom de kaarten + hun HTML één keer uitrekenen: nodig voor zowel de volledige

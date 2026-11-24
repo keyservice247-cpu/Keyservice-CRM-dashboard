@@ -116,6 +116,19 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   van tabblad); een nieuw veld of nieuwe knop hoort in een paneel of in een groepje.
   Geschiedenis leest alleen bestaande tijdstempels + systeemregels (niets nieuws opgeslagen).
   "Nieuwe opdracht" is het oude, korte formulier zonder tabbladen. Browser-test +14.
+- **Start: werklijst "Eerst doen" (server/eerst-doen.js, pure functie `eerstDoenLijst`):** GET
+  /api/overview geeft `eerstDoen` mee: per punt {sleutel, ernst rood/oranje/grijs, aantal, titel,
+  uitleg, knop, ga}. Vaste regels, geen AI, NOOIT bedragen. Kantoor: bridge 15+ min stil, inbox
+  (oudste wachttijd), wacht op antwoord (rood na 24 u), klantreactie, afspraak geweest maar
+  opdracht nog open, offertes 3+ dagen stil, afgerond zonder factuur (`nogTeFacturerenOrders`,
+  gedeeld met /api/invoices/todo), facturen over de termijn (≤ 2 mnd oud, zelfde grens als
+  Facturen), DRS nog te melden, opdracht zonder klantnaam. Monteur: alleen reactie /
+  afspraakGeweest / factureren van eigen opdrachten. Scherm: `#eerstDoenBlok` direct onder het
+  zoekveld (`eerstDoenHTML`, `eerstDoenGa` — één opdracht opent meteen die opdracht, anders
+  naar het juiste scherm/kolom/filter). De knoppen AI-dagcheck/Status-scan op Start zijn niet
+  meer voor de monteur. Tests: start-test (16, zonder server), rollen-test +6, browser +5.
+- **Mijn dag (monteur):** `#mijnDag` boven zijn bord (`renderMijnDag`, uit state.orders):
+  afspraken van vandaag op tijd met Bel / Route / tik = opdracht openen; "morgen N".
 - **Klantadres verbeterd → lopende opdracht volgt:** PATCH /api/customers/:id zet het nieuwe
   adres ook op LOPENDE opdrachten waarvan het opdrachtadres letterlijk het oude klantadres
   was (een afwijkend werkadres en afgehandelde opdrachten blijven; updatedAt blijft staan).

@@ -60,7 +60,7 @@
       <section id="view-overview" class="view">
         <div class="view-head">
           <div><h2 id="overviewHi">Overzicht</h2><div class="muted small" id="overviewDate"></div></div>
-          <div class="view-actions"><button id="ovDailyCheck" class="btn btn-primary">AI-dagcheck</button><button id="ovDigestBtn" class="btn">Status-scan</button></div>
+          <div class="view-actions"><button id="ovDailyCheck" class="btn perm-write">AI-dagcheck</button><button id="ovDigestBtn" class="btn perm-write">Status-scan</button></div>
         </div>
         <div id="overviewPanel"></div>
       </section>
@@ -104,6 +104,8 @@
             <button id="boardBulkClear" class="btn btn-sm">Selectie wissen</button>
           </div>
         </div>
+        <!-- Mijn dag (24 nov 2026): alleen voor de monteur — zijn afspraken van vandaag bovenaan. -->
+        <div id="mijnDag" hidden></div>
         <div id="board" class="board"></div>
         <div id="trashZone" class="trash-zone">Sleep een opdracht hierheen om naar de prullenbak te verplaatsen</div>
         <div id="boardFoot" class="board-foot perm-write"><button id="collapseBtnFoot" class="btn btn-sm" type="button">Afgehandelde opdrachten inklappen</button></div>

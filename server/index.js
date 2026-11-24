@@ -59,6 +59,7 @@ import {
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken, wachtOpAntwoordDagen, voorbeeldTekst } from './gesprekken.js';
+import { eerstDoenLijst } from './eerst-doen.js';
 import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, kantoor, gedeeldMetNamen, zetVolgorde } from './taken.js';
 import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
 import { startFollowUps } from './followup.js';
@@ -2833,6 +2834,14 @@ function dagoverzichtZonderGeld(payload) {
   return uit;
 }
 
+// De lijst "wacht op antwoord" loopt alle berichten langs; Start vraagt hem bij elke
+// verversing. Eén keer per wijziging (en hooguit 5 minuten oud) is genoeg.
+let _wachtStart = { sleutel: '', lijst: [] };
+function wachtVoorStart() {
+  const sleutel = `${changeVersion()}|${Math.floor(Date.now() / 300000)}`;
+  if (_wachtStart.sleutel !== sleutel) _wachtStart = { sleutel, lijst: onbeantwoordeGesprekken(2).map((w) => ({ naam: w.naam, at: w.at })) };
+  return _wachtStart.lijst;
+}
 app.get('/api/overview', requireAuth, (req, res) => {
   // MONTEUR ziet alleen zijn eigen werk (browser-audit 16 sep): voorheen kreeg hij
   // bedrijfsbrede KPI's, "te controleren" van een inbox waar hij niet in mag en het
@@ -2858,7 +2867,36 @@ app.get('/api/overview', requireAuth, (req, res) => {
   const last = db().settings.whatsappLastSeen || null;
   const ageSec = last ? (Date.now() - new Date(last).getTime()) / 1000 : null;
 
+  // EERST DOEN: één werklijst bovenaan Start (zie eerst-doen.js). Alles hieronder bestond al
+  // als los getal of losse lijst; hier komt het samen, per rol.
+  const kort = (o) => ({ id: o.id, title: o.title || '' });
+  const afspraakGeweest = active.filter((o) => o.appointmentAt && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status) && new Date(o.appointmentAt).getTime() < startTodayMs).map(kort);
+  let verlopenFacturen = 0;
+  if (!monteur) {
+    const payDays = getInvoiceSettings().paymentDays || 7;
+    const tweeMaanden = new Date(); tweeMaanden.setMonth(tweeMaanden.getMonth() - 2);
+    for (const i of db().invoices || []) {
+      if (i.type === 'offerte' || i.status !== 'verzonden' || !i.sentAt) continue;
+      if (new Date(i.sentAt).getTime() < tweeMaanden.getTime()) continue; // zelfde grens als de teller op Facturen
+      if (new Date(betaalTermijnStart(i)).getTime() + payDays * 86400000 < Date.now()) verlopenFacturen++;
+    }
+  }
+  let eerstDoen = [];
+  try {
+    eerstDoen = eerstDoenLijst({
+      monteur, nu: Date.now(),
+      pending: monteur ? [] : db().reviews.filter((r) => r.status === 'pending').map((r) => ({ createdAt: r.createdAt })),
+      wacht: monteur ? [] : wachtVoorStart(),
+      reacties: repliedList, afspraakGeweest, offertesStil: staleQuotes,
+      teFactureren: nogTeFacturerenOrders(req.user).list.map(kort),
+      verlopenFacturen, drsTeMelden: monteur ? 0 : drsTeMeldenTeller(),
+      onvolledig: active.filter((o) => o.customerIncomplete && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status)).map(kort),
+      bridge: { ingesteld: !!last && !TEST, stilMin: ageSec == null ? 0 : Math.floor(ageSec / 60) },
+    });
+  } catch (err) { console.error('  [start] werklijst mislukt:', err.message); }
+
   res.json({
+    eerstDoen,
     kpis: {
       nieuwVandaag: active.filter((o) => isToday(o.createdAt)).length,
       teControleren: monteur ? 0 : db().reviews.filter((r) => r.status === 'pending').length,
@@ -5167,7 +5205,9 @@ app.post('/api/bundles/add', requirePerm('settings'), (req, res) => {
 // NOG TE FACTUREREN: afgeronde kaarten (ook gearchiveerd) waar géén factuur aan
 // hangt — zodat er nooit meer omzet wordt vergeten. Monteur ziet alleen eigen werk.
 // LET OP: vóór de /:id-route registreren, anders vangt die "todo" af.
-app.get('/api/invoices/todo', requireAuth, (req, res) => {
+// Welke afgeronde opdrachten hebben nog geen echte factuur? Gedeeld door de Facturen-pagina
+// ('Nog te factureren') en de werklijst op Start, zodat beide hetzelfde tellen.
+function nogTeFacturerenOrders(user) {
   // Alleen een ECHTE factuur telt als "gefactureerd" (28 sep 2026, audit): een
   // offerte (order.invoiceId wijst ook naar offertes!) of een lege €0-factuur die
   // nooit verstuurd is (bv. "Maak factuur" geopend en meteen gesloten — door
@@ -5178,9 +5218,13 @@ app.get('/api/invoices/todo', requireAuth, (req, res) => {
   const invById = new Map((db().invoices || []).map((i) => [i.id, i]));
   const invByOrder = new Set((db().invoices || []).filter((i) => i.orderId && echteFactuur(i)).map((i) => i.orderId));
   const leegPerOrder = new Map((db().invoices || []).filter((i) => i.orderId && i.type !== 'offerte' && !echteFactuur(i)).map((i) => [i.orderId, i]));
-  const maps = buildMaps();
   let list = (db().orders || []).filter((o) => o.status === 'afgerond' && !echteFactuur(invById.get(o.invoiceId)) && !invByOrder.has(o.id));
-  if (req.user.role === 'monteur') list = list.filter((o) => o.monteurId && o.monteurId === req.user.monteurId);
+  if (user.role === 'monteur') list = list.filter((o) => o.monteurId && o.monteurId === user.monteurId);
+  return { list, leegPerOrder, invById };
+}
+app.get('/api/invoices/todo', requireAuth, (req, res) => {
+  const { list, leegPerOrder, invById } = nogTeFacturerenOrders(req.user);
+  const maps = buildMaps();
   res.json(list
     .sort((a, b) => String(b.completedAt || b.updatedAt || '').localeCompare(String(a.completedAt || a.updatedAt || '')))
     .slice(0, 100)
