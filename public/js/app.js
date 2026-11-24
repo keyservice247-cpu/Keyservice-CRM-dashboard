@@ -1476,6 +1476,59 @@ function zetOvDeel(id, html) {
 // ---------- EERST DOEN: één werklijst bovenaan Start (24 nov 2026, herontwerp) ----------
 // De server bepaalt de lijst met vaste regels (server/eerst-doen.js); hier alleen tekenen en
 // naar de juiste plek gaan. Is er niets te doen, dan staat dat er ook — geen leeg gat.
+// ---------- WAT IS ER VERANDERD? (24 nov 2026, herontwerp) ----------
+// Wens eigenaar: na de vernieuwing moet iedereen alles terugvinden zoals gewend. Daarom een
+// korte, wegklikbare uitleg per rol: op Start (kantoor) en boven het bord (monteur), en altijd
+// terug te vinden via Account. Het is een gewone kaart in de pagina — geen venster dat je werk
+// blokkeert. "Gezien" wordt per toestel onthouden (localStorage).
+const NIEUW_VERSIE = '2026-11';
+function nieuwGezien() { try { return localStorage.getItem('ksNieuwGezien') === NIEUW_VERSIE; } catch { return false; } }
+function nieuwPunten() {
+  if (state.me && state.me.role === 'monteur') return [
+    ['Mijn dag', 'Bovenaan je opdrachten staan je afspraken van vandaag, op tijd, met Bel en Route.'],
+    ['Opdracht met tabbladen', 'Details · Gesprek · Foto\'s · Geschiedenis. Werkbon, Factuur en Onderweg staan nog steeds bovenaan én onderaan.'],
+    ['Eén volgende stap', 'Bovenin een opdracht staat wat het systeem als volgende stap voorstelt, bijvoorbeeld Onderweg melden of Afronden.'],
+    ['Factuur', 'Je kunt de reparatielocatie zelf invullen als die anders is dan het adres van de klant.'],
+    ['Annuleren', 'Zet je een opdracht op Geannuleerd, kies dan kort de reden.'],
+  ];
+  const punten = [
+    ['Menu', 'E-mail en WhatsApp staan niet meer los in het menu: het zijn de knoppen Alle · E-mail · WhatsApp boven het bord bij Opdrachten.'],
+    ['Start: Eerst doen', 'Bovenaan staat één lijst met wat er nu moet gebeuren, het belangrijkste eerst. Een tik brengt je naar de juiste plek.'],
+    ['Opdracht met tabbladen', 'Details · Gesprek · Foto\'s · Geschiedenis. Alle knoppen staan onderaan, in vaste groepjes: Klant · Werk · Planning · Meer. Opslaan bewaart alle tabbladen tegelijk.'],
+    ['Eén volgende stap', 'Bovenin een opdracht staat de voorgestelde volgende stap (bijvoorbeeld Beantwoorden of Afspraak plannen).'],
+    ['Annuleren met reden', 'Kies bij annuleren een reden. Op Cijfers zie je daarna waarom klanten afhaken.'],
+    ['Factuur', 'Reparatielocatie is in te vullen in de factuur. Een verstuurde, betaalde factuur kun je corrigeren binnen hetzelfde nummer (knop Corrigeren, met reden).'],
+  ];
+  if (hasPerm('settings')) punten.push(['Instellingen', 'Kies links een onderwerp of zoek een instelling op een woord. Er is niets verdwenen.']);
+  if (hasPerm('settings')) punten.push(['Twee merken', 'Elke opdracht hoort bij Key Service 24/7 of Schuifpuiservice. Vul bij Instellingen → Berichten aan klanten de reviewlink van Schuifpuiservice in.']);
+  return punten;
+}
+function nieuwBalkHTML() {
+  if (nieuwGezien()) return '';
+  return `<div class="info-card nieuw-balk" id="nieuwBalk">
+    <div class="nieuw-tekst"><strong>Het CRM is opnieuw ingedeeld.</strong> <span class="muted">Alles is er nog; het staat rustiger bij elkaar.</span></div>
+    <div class="nieuw-knoppen"><button type="button" class="btn btn-sm btn-primary" data-nieuw="toon">Bekijk wat er anders is</button><button type="button" class="btn btn-sm" data-nieuw="weg">Sluiten</button></div>
+  </div>`;
+}
+function nieuwSluit() {
+  try { localStorage.setItem('ksNieuwGezien', NIEUW_VERSIE); } catch { /* privévenster: dan komt hij volgende keer terug */ }
+  $$('#nieuwBalk').forEach((b) => b.remove());
+  _lastMijnDagHtml = null;
+}
+function openWatIsNieuw() {
+  const punten = nieuwPunten();
+  modal(`<h2>Wat is er veranderd?</h2>
+    <p class="muted small" style="margin:-6px 0 12px">Alles wat je gewend bent is er nog. Dit staat anders:</p>
+    <ol class="nieuw-lijst">${punten.map(([t, u]) => `<li><strong>${esc(t)}</strong><span>${esc(u)}</span></li>`).join('')}</ol>
+    <p class="muted small" style="margin-top:12px">Later nog eens lezen? Klik onderaan het menu op <strong>Account</strong> → <strong>Wat is er veranderd?</strong></p>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn btn-primary" id="nw-ok">Duidelijk</button></div></div>`);
+  $('#nw-ok').onclick = () => { nieuwSluit(); closeModal(); };
+}
+// Eén klikafhandeling voor de balk, waar hij ook staat (Start of boven het bord).
+document.addEventListener('click', (e) => {
+  const k = e.target.closest('[data-nieuw]'); if (!k) return;
+  if (k.dataset.nieuw === 'weg') nieuwSluit(); else openWatIsNieuw();
+});
 function eerstDoenHTML(lijst) {
   if (!lijst.length) return `<div class="info-card eerst-doen eerst-leeg"><div class="eerst-kop"><h3>Eerst doen</h3></div><div class="eerst-niets">${icon('check', 16)} Niets dat op je wacht. Alles is bij.</div></div>`;
   return `<div class="info-card eerst-doen">
@@ -1528,6 +1581,7 @@ async function loadOverview() {
       <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${kantoor ? ', bericht' : ''}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
       <div id="gsResults" hidden></div>
     </div>
+    ${nieuwBalkHTML()}
     <div id="eerstDoenBlok" class="ov-dyn"></div>
     ${kantoor ? `<div id="formulierAlarmBlok"></div><div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>
     <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
@@ -1927,7 +1981,7 @@ function renderMijnDag() {
         ${adres ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(adres)}" aria-label="Navigeer naar het adres">${icon('pin', 14)} Route</a>` : ''}
       </span></li>`;
   };
-  const html = `<div class="info-card mijn-dag">
+  const html = `${nieuwBalkHTML()}<div class="info-card mijn-dag">
     <div class="eerst-kop"><h3>Mijn dag</h3><span class="muted small">${vd.length ? `${vd.length} ${vd.length === 1 ? 'afspraak' : 'afspraken'} vandaag` : 'geen afspraken vandaag'}${nMorgen ? ` · morgen ${nMorgen}` : ''}</span></div>
     ${vd.length ? `<ul class="md-lijst">${vd.map(rij).join('')}</ul>` : ''}</div>`;
   if (html === _lastMijnDagHtml && !el.hidden) return;
@@ -7609,11 +7663,13 @@ function openReplyModal(ctx = {}) {
 function openAccountModal() {
   modal(`
     <h2>Mijn account</h2> <p class="muted small">${esc(state.me.name)} · ${esc(state.me.email)} · rol: ${esc(state.me.role)}</p>
+    <p style="margin:0 0 4px"><button type="button" class="btn btn-sm" id="acc-nieuw">Wat is er veranderd?</button></p>
     <h3 style="margin:16px 0 6px;font-size:15px">${icon('bell', 14)} Meldingen op dit toestel</h3>
     <p class="muted small" style="margin:0 0 8px">${pushUitlegVoorRol()}</p>
     <div id="pushPanel" class="muted small">Laden…</div>
     <h3 style="margin:16px 0 10px;font-size:15px">Wachtwoord wijzigen</h3> <label>Huidig wachtwoord <input id="p-cur" type="password"></label> <label>Nieuw wachtwoord <input id="p-new" type="password" placeholder="minimaal 6 tekens"></label> <label>Herhaal nieuw wachtwoord <input id="p-new2" type="password"></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="p-cancel">Sluiten</button><button class="btn btn-primary" id="p-save">Wijzigen</button> </div></div>`);
   loadPush();
+  $('#acc-nieuw').onclick = () => openWatIsNieuw();
   $('#p-cancel').onclick = closeModal;
   $('#p-save').onclick = async () => {
     const cur = $('#p-cur').value, n1 = $('#p-new').value, n2 = $('#p-new2').value;

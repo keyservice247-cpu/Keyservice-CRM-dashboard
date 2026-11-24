@@ -150,6 +150,12 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   instellingen blijven staan als een ouder scherm ze niet meestuurt. /api/me meta: `merken`,
   `annuleerRedenen`. Tests: merk-test (13, zonder server), betaald-keuze-test 62 (+10, echte
   mails via de nep-SMTP), rollen-test +5, browser +2.
+- **Uitleg "Wat is er veranderd?" (app.js: NIEUW_VERSIE, nieuwPunten, nieuwBalkHTML,
+  openWatIsNieuw):** wegklikbare balk `#nieuwBalk` bovenaan Start (kantoor) en boven "Mijn
+  dag" (monteur) — géén venster dat vanzelf opent; "Bekijk wat er anders is" toont per rol
+  waar alles nu staat; "gezien" per toestel in localStorage `ksNieuwGezien`. Altijd terug te
+  vinden via Account → "Wat is er veranderd?" (`#acc-nieuw`). Bij een volgende grote
+  herindeling: NIEUW_VERSIE ophogen en de punten in `nieuwPunten()` bijwerken. Browser +5.
 - **Klantadres verbeterd → lopende opdracht volgt:** PATCH /api/customers/:id zet het nieuwe
   adres ook op LOPENDE opdrachten waarvan het opdrachtadres letterlijk het oude klantadres
   was (een afwijkend werkadres en afgehandelde opdrachten blijven; updatedAt blijft staan).

@@ -411,6 +411,26 @@ clear();
 }
 noErr('Merk + annuleringsreden');
 
+// 8a5) UITLEG "WAT IS ER VERANDERD?" (24 nov 2026): één keer zichtbaar, wegklikbaar, en
+// altijd terug te vinden via Account. Geen venster dat het werk blokkeert.
+clear();
+{
+  await page.evaluate(() => { try { localStorage.removeItem('ksNieuwGezien'); } catch {} const p = document.querySelector('#overviewPanel'); if (p) p.dataset.skelet = ''; });
+  await page.evaluate(() => goView('overview')); await page.waitForTimeout(1800);
+  const nb = await page.evaluate(() => { const b = document.querySelector('#nieuwBalk'); const ed = document.querySelector('#eerstDoenBlok'); return { er: !!b && b.offsetParent !== null, venster: !document.querySelector('#modalRoot').hidden, boven: !!b && !!ed && (b.compareDocumentPosition(ed) & Node.DOCUMENT_POSITION_FOLLOWING) > 0 }; });
+  ok('Start: balk "Het CRM is opnieuw ingedeeld" staat bovenaan en opent zelf geen venster', nb.er && !nb.venster && nb.boven, JSON.stringify(nb));
+  await page.click('#nieuwBalk [data-nieuw="toon"]'); await page.waitForTimeout(400);
+  const nv = await page.evaluate(() => ({ open: !document.querySelector('#modalRoot').hidden, punten: document.querySelectorAll('.nieuw-lijst li').length, tekst: document.querySelector('#modal').innerText }));
+  ok('uitleg voor kantoor: waar E-mail/WhatsApp, Eerst doen, tabbladen en Instellingen nu staan', nv.open && nv.punten >= 7 && /Alle · E-mail · WhatsApp/.test(nv.tekst) && /Eerst doen/.test(nv.tekst) && /Details · Gesprek/.test(nv.tekst) && /Instellingen/.test(nv.tekst), String(nv.punten));
+  await page.click('#nw-ok'); await page.waitForTimeout(300);
+  ok('na "Duidelijk" is de balk weg en blijft hij weg (per toestel onthouden)', await page.evaluate(() => !document.querySelector('#nieuwBalk') && localStorage.getItem('ksNieuwGezien') === '2026-11'));
+  await page.evaluate(() => openAccountModal()); await page.waitForTimeout(400);
+  await page.click('#acc-nieuw'); await page.waitForTimeout(300);
+  ok('Account → "Wat is er veranderd?" toont de uitleg opnieuw', await page.evaluate(() => document.querySelectorAll('.nieuw-lijst li').length >= 7));
+  await page.evaluate(() => closeModal());
+}
+noErr('Uitleg wat is er veranderd');
+
 // 8b) OPDRACHT-VENSTER & DATA-INTEGRITEIT (audit 28 sep 2026): dubbelklik = één
 // opdracht, Esc/klik-naast met getypte notitie vraagt eerst, Esc werkt weer na een
 // eigen invoervenster, aanvraag-adres (intake) blijft na Opslaan staan, en een
@@ -1616,6 +1636,7 @@ noErr('Mobiel plakkende balken');
   ok('monteur: kaart via het formulier ÉCHT aangemaakt (geen "Titel verplicht")', !!gemaakt, JSON.stringify(gemaakt && gemaakt.title));
   ok('monteur: kaart hangt aan hemzelf + vlag zelf aangemaakt', !!gemaakt && gemaakt.monteurId === mSetup.monteurId && gemaakt.zelfAangemaaktDoorMonteur === true, JSON.stringify(gemaakt && { m: gemaakt.monteurId, z: gemaakt.zelfAangemaaktDoorMonteur }));
   // MIJN DAG (24 nov 2026): een afspraak van vandaag staat bovenaan het bord van de monteur.
+  ok('monteur: de uitleg-balk staat boven "Mijn dag" en noemt in het venster zijn eigen punten', await mp.evaluate(async () => { const b = document.querySelector('#mijnDag #nieuwBalk'); if (!b) return false; b.querySelector('[data-nieuw="toon"]').click(); await new Promise((r) => setTimeout(r, 300)); const t = document.querySelector('#modal').innerText; const goed = /Mijn dag/.test(t) && /Werkbon, Factuur en Onderweg/.test(t) && !/Instellingen/.test(t); document.querySelector('#nw-ok').click(); await new Promise((r) => setTimeout(r, 300)); return goed && !document.querySelector('#nieuwBalk'); }));
   ok('monteur zonder afspraak vandaag: "Mijn dag" zegt dat eerlijk', await mp.evaluate(() => { const e = document.querySelector('#mijnDag'); return !!e && !e.hidden && /geen afspraken vandaag/.test(e.textContent); }));
   const mdOk = await mp.evaluate(async (id) => {
     const d = new Date(); const p = (n) => String(n).padStart(2, '0'); const dag = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
