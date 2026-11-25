@@ -332,6 +332,8 @@ function hasPerm(key) {
   if (!me || !me.user) { window.location.href = '/'; return; }
   state.me = me.user; state.meta = me.meta;
   toonTestBalk();
+  // Bovenbalk: zoeken werkt op elk scherm; de stand van de koppelingen elke 5 minuten bijwerken.
+  try { initGlobalSearch(); laadTopKoppel(); setInterval(() => { if (!document.hidden) laadTopKoppel(); }, 5 * 60000); } catch { /* de bovenbalk mag het starten nooit breken */ }
   $('#userName').textContent = `${me.user.name} · ${me.user.role}`;
   $('#avatar').textContent = (me.user.name || '?').trim().charAt(0).toUpperCase();
   $('#aiMode').textContent = me.meta.aiMode === 'ai' ? 'AI actief' : 'AI: demo';
@@ -1177,7 +1179,7 @@ async function vulTakenVandaag(vooraf) {
   const takenBlokHtml = JSON.stringify(lijst.map((t) => [t.id, t.titel, t.urgentie, t.dagen]));
   if (takenBlokHtml === window._lastTakenBlokHtml && el.children.length) return;
   window._lastTakenBlokHtml = takenBlokHtml;
-  el.innerHTML = `<div class="info-card" style="margin-bottom:18px;border-left:4px solid #4a6fa5">
+  el.innerHTML = `<div class="info-card ov-blok">
     <h3 style="margin:0 0 6px">${icon('list', 15)} Vandaag — taken (${lijst.length})</h3>
     <ul class="ov-list">${lijst.map((t) => `<li data-taak="${esc(t.id)}"><strong>${esc(t.titel)}</strong> <span class="muted">· ${TAAK_URG[t.urgentie] || t.urgentie}${t.dagen !== null && t.dagen !== undefined ? ` · ${t.dagen < 0 ? Math.abs(t.dagen) + ' dagen te laat' : t.dagen === 0 ? 'vandaag' : 'nog ' + t.dagen + ' dagen'}` : ''}</span></li>`).join('')}</ul></div>`;
   $$('li[data-taak]', el).forEach((li) => li.onclick = () => goView('taken'));
@@ -1432,6 +1434,7 @@ function showView(view, tab) {
   $$('.bn-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $$('.view').forEach((v) => (v.hidden = v.id !== `view-${view}`));
   document.body.dataset.view = view; // voor CSS per scherm (bv. de push-hintbalk niet in Berichten)
+  { const zr = $('#gsResults'); if (zr) zr.hidden = true; }   // zoekresultaten van de bovenbalk dicht bij een ander scherm
   // Bij een ANDER scherm bovenaan beginnen. Zonder dit hield de pagina de scrollpositie
   // van het vorige scherm vast; is het nieuwe scherm korter, dan klemt de browser die
   // positie en zie je alles verspringen (voelt als een balk die beweegt).
@@ -1529,6 +1532,7 @@ function initGlobalSearch() {
     box.hidden = false;
     $$('.gs-row', box).forEach((b) => b.onclick = async () => {
       const t = b.dataset.t;
+      box.hidden = true;   // de lijst hangt onder de bovenbalk: na een keuze dicht
       if (t === 'cust') return openCustomerDossier(b.dataset.id);
       if (t === 'order') {
         return openOrderVers(b.dataset.id, { seen: true });
@@ -1544,6 +1548,30 @@ function initGlobalSearch() {
   };
   inp.oninput = () => { clearTimeout(_gsTimer); _gsTimer = setTimeout(doSearch, 300); };
   inp.onkeydown = (e) => { if (e.key === 'Escape') { inp.value = ''; box.hidden = true; } };
+  // Opnieuw in het veld klikken toont de laatste resultaten weer; ernaast klikken sluit ze.
+  inp.onfocus = () => { if (box.innerHTML && inp.value.trim().length >= 2) box.hidden = false; };
+  if (!initGlobalSearch._buiten) {
+    initGlobalSearch._buiten = true;
+    document.addEventListener('pointerdown', (e) => { if (!e.target.closest || !e.target.closest('.tb-zoek')) { const b = $('#gsResults'); if (b) b.hidden = true; } });
+  }
+}
+
+// STAND VAN DE KOPPELINGEN in de bovenbalk (kantoor): één regel, klik = het hele overzicht.
+// Alleen kijken — er verandert niets aan een koppeling.
+async function laadTopKoppel() {
+  const knop = $('#tbKoppel'); if (!knop) return;
+  if (!state.me || state.me.role === 'monteur') { knop.hidden = true; return; }
+  let d;
+  try { d = await api('/api/koppelingen/status'); } catch { return; }
+  if (!d || !Array.isArray(d.regels)) return;
+  const fout = d.regels.filter((r) => r.stand === 'fout').length + ((d.instroom || {}).stand === 'fout' ? 1 : 0);
+  const let_ = d.regels.filter((r) => r.stand === 'let').length + ((d.instroom || {}).stand === 'let' ? 1 : 0);
+  const stand = fout ? 'fout' : let_ ? 'let' : 'goed';
+  knop.className = 'tb-koppel tb-' + stand;
+  $('#tbKoppelTekst').textContent = fout ? (fout === 1 ? '1 koppeling werkt niet' : `${fout} koppelingen werken niet`)
+    : let_ ? (let_ === 1 ? '1 koppeling vraagt aandacht' : `${let_} koppelingen vragen aandacht`) : 'Alle koppelingen werken';
+  knop.hidden = false;
+  knop.onclick = () => openKoppelStatus();
 }
 
 // ---------- Overzicht / Home ----------
@@ -1570,10 +1598,12 @@ function zetOvDeel(id, html) {
 // korte, wegklikbare uitleg per rol: op Start (kantoor) en boven het bord (monteur), en altijd
 // terug te vinden via Account. Het is een gewone kaart in de pagina — geen venster dat je werk
 // blokkeert. "Gezien" wordt per toestel onthouden (localStorage).
-const NIEUW_VERSIE = '2026-11';
+const NIEUW_VERSIE = '2026-12';   // ontwerp 2 (bovenbalk, Start in twee kolommen, bord, inbox)
 function nieuwGezien() { try { return localStorage.getItem('ksNieuwGezien') === NIEUW_VERSIE; } catch { return false; } }
 function nieuwPunten() {
   if (state.me && state.me.role === 'monteur') return [
+    ['Zoeken', 'Het zoekveld staat nu bovenaan (op de telefoon: op Start en onderin bij Zoek). Je zoekt op naam, 06-nummer, postcode of factuurnummer.'],
+    ['Snel filteren', 'Boven je opdrachten staan knoppen: Klant reageerde, Spoed en Ligt stil.'],
     ['Mijn dag', 'Bovenaan je opdrachten staan je afspraken van vandaag, op tijd, met Bel en Route.'],
     ['Opdracht met tabbladen', 'Details · Gesprek · Foto\'s · Geschiedenis. Werkbon, Factuur en Onderweg staan nog steeds bovenaan én onderaan.'],
     ['Eén volgende stap', 'Bovenin een opdracht staat wat het systeem als volgende stap voorstelt, bijvoorbeeld Onderweg melden of Afronden.'],
@@ -1581,6 +1611,11 @@ function nieuwPunten() {
     ['Annuleren', 'Zet je een opdracht op Geannuleerd, kies dan kort de reden.'],
   ];
   const punten = [
+    ['Zoeken, altijd bovenaan', 'Het zoekveld van Start staat nu bovenaan elk scherm: klant, 06-nummer, postcode of factuurnummer. Op de telefoon staat het op Start en onderin bij Zoek.'],
+    ['Koppelingen in één oogopslag', 'Rechtsboven staat of alle koppelingen werken (mail, WhatsApp, website, agenda). Een klik toont het hele overzicht.'],
+    ['Start in twee kolommen', 'Links wat je moet doen (Eerst doen, dagoverzicht, weekrapport), rechts vandaag (taken, afspraken, wie wacht op antwoord).'],
+    ['Opdrachten: snel filteren', 'Boven het bord staan knoppen: Klant reageerde, Spoed, DRS, Eigen en Ligt stil. De keuzelijsten zijn er nog. De knoppen (Status-scan, DRS-rapport, Plak opdracht …) staan rechtsboven naast "+ Nieuwe opdracht".'],
+    ['Inbox: lijst en bericht', 'Links de lijst, rechts het gekozen bericht met alle velden. Het vinkje voor bulk-acties staat in de lijst. Op de telefoon staat alles nog onder elkaar.'],
     ['Menu', 'E-mail en WhatsApp staan niet meer los in het menu: het zijn de knoppen Alle · E-mail · WhatsApp boven het bord bij Opdrachten.'],
     ['Start: Eerst doen', 'Bovenaan staat één lijst met wat er nu moet gebeuren, het belangrijkste eerst. Een tik brengt je naar de juiste plek.'],
     ['Opdracht met tabbladen', 'Details · Gesprek · Foto\'s · Geschiedenis. Alle knoppen staan onderaan, in vaste groepjes: Klant · Werk · Planning · Meer. Opslaan bewaart alle tabbladen tegelijk.'],
@@ -1667,32 +1702,31 @@ async function loadOverview() {
   if (skeletOntbreekt()) await Promise.race([window._pushHintKlaar, new Promise((r) => setTimeout(r, 300))]);
   if (skeletOntbreekt()) { // opnieuw kijken: een gelijktijdige aanroep kan het skelet al gezet hebben
     panel.innerHTML = `
-    <div class="info-card" style="margin-bottom:18px;position:relative">
-      <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek alles: klant, opdracht, factuur${kantoor ? ', bericht' : ''}… (naam, 06-nummer, adres, factuurnummer)" style="width:100%">
-      <div id="gsResults" hidden></div>
-    </div>
     ${nieuwBalkHTML()}
+    <div class="ov-raster"><div class="ov-links">
     <div id="eerstDoenBlok" class="ov-dyn"></div>
-    ${kantoor ? `<div id="formulierAlarmBlok"></div><div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>
-    <div class="info-card" id="dayov" style="margin-bottom:18px;border-left:4px solid var(--accent)">
+    ${kantoor ? `<div id="formulierAlarmBlok"></div>
+    <div class="info-card" id="dayov">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <h3 style="margin:0">${icon('sparkles', 16)} Jouw dag in één oogopslag</h3>
         <span class="muted small" id="dayov-meta" style="margin-left:auto"></span>
         <button class="btn btn-sm" id="dayov-refresh" title="Nieuwe AI-scan: WhatsApp tot 7 dagen + e-mail tot 14 dagen terug">${icon('refresh', 13)} Ververs</button>
       </div>
       <div id="dayov-body" class="muted small dayov-laden" style="margin-top:10px">Dagoverzicht laden…</div>
-    </div>` : ''}
-    <div class="kpi-grid ov-dyn" id="ovKpis"></div>
-    <div class="ov-cols ov-dyn" id="ovLijsten"></div>
-    <div class="ov-cols ov-dyn" id="ovVerdeling"></div>
-    ${kantoor ? `
-    <div class="info-card" style="margin-top:18px">
+    </div>
+    <div class="info-card" id="ovWeekrapport">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <h3 style="margin:0">${icon('activity', 15)} Weekrapport</h3>
         <select id="wr-offset" style="max-width:170px;margin-left:auto"><option value="0">Deze week</option><option value="1">Vorige week</option><option value="2">2 weken terug</option></select>
       </div>
       <div id="wr-body" class="muted small wr-laden" style="margin-top:10px">Laden…</div>
-    </div>` : ''}`;
+    </div>` : ''}
+    </div><div class="ov-rechts">
+    ${kantoor ? '<div id="takenVandaagBlok"></div><div id="onbeantwoordBlok"></div>' : ''}
+    <div class="ov-cols ov-dyn" id="ovLijsten"></div>
+    </div></div>
+    <div class="kpi-grid ov-dyn" id="ovKpis"></div>
+    <div class="ov-cols ov-dyn" id="ovVerdeling"></div>`;
     panel.dataset.skelet = skelet;
     for (const key of Object.keys(_ovDelen)) delete _ovDelen[key];
     window._lastTakenBlokHtml = ''; window._lastWachtHtml = ''; window._lastDayovHtml = ''; window._lastWeekHtml = '';
@@ -2020,6 +2054,44 @@ function boardPeriodRange(keuze) {
   return null;
 }
 
+// SNELFILTERS boven het bord (ontwerp nov 2026). "DRS" en "Eigen" zetten gewoon de bestaande
+// keuzelijst; de drie andere zijn een extra doorsnede bovenop wat er al gekozen is.
+const BOARD_STIL_DAGEN = 5;   // zelfde grens als de ochtendbriefing ("5+ dagen stil")
+const boardIsOpen = (o) => !['afgerond', 'geannuleerd'].includes(o.status);
+function boardSnelPast(o, soort) {
+  if (soort === 'reactie') return (o.unreadReplies || 0) > 0 || !!o.customerReplied;
+  if (soort === 'spoed') return !!o.urgent && boardIsOpen(o);
+  if (soort === 'stil') return boardIsOpen(o) && Date.now() - new Date(o.updatedAt || o.createdAt || 0).getTime() > BOARD_STIL_DAGEN * 86400000;
+  return true;
+}
+function tekenBoardSnel() {
+  const el = $('#boardSnel'); if (!el) return;
+  const mont = $('#boardMonteurFilter')?.value || '';
+  const basis = state.orders.filter((o) => (state.channel === 'email' ? orderChannel(o) === 'email' : state.channel === 'whatsapp' ? orderChannel(o) === 'whatsapp' : true));
+  const tel = (soort) => basis.filter((o) => boardSnelPast(o, soort)).length;
+  const kantoor = state.me?.role !== 'monteur';
+  const knop = (id, label, aan, n, titel) => `<button type="button" class="snel${aan ? ' on' : ''}" data-snel="${id}" aria-pressed="${aan ? 'true' : 'false'}"${titel ? ` title="${esc(titel)}"` : ''}>${esc(label)}${n ? ` <span class="snel-n">${n}</span>` : ''}</button>`;
+  const html = [
+    knop('', 'Alles', !state.boardSnel && !mont),
+    knop('reactie', 'Klant reageerde', state.boardSnel === 'reactie', tel('reactie'), 'Opdrachten waar de klant het laatst iets heeft gestuurd'),
+    knop('spoed', 'Spoed', state.boardSnel === 'spoed', tel('spoed')),
+    kantoor ? knop('src:drs', 'DRS', mont === 'src:drs') : '',
+    kantoor ? knop('src:eigen', 'Eigen', mont === 'src:eigen', 0, 'Keyservice-opdrachten: website, e-mail, telefoon') : '',
+    knop('stil', 'Ligt stil', state.boardSnel === 'stil', tel('stil'), `Lopende opdrachten waar ${BOARD_STIL_DAGEN} dagen of langer niets mee is gedaan`),
+  ].join('');
+  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+  if (!el.dataset.gebonden) {
+    el.dataset.gebonden = '1';
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-snel]'); if (!b) return;
+      const v = b.dataset.snel; const sel = $('#boardMonteurFilter');
+      if (v === '') { state.boardSnel = ''; if (sel) sel.value = ''; }
+      else if (v.startsWith('src:')) { if (sel) sel.value = sel.value === v ? '' : v; }
+      else state.boardSnel = state.boardSnel === v ? '' : v;
+      renderBoard(); zoekInArchief();
+    });
+  }
+}
 function filteredOrders() {
   const q = ($('#boardSearch').value || '').toLowerCase();
   const mont = $('#boardMonteurFilter').value;
@@ -2036,6 +2108,7 @@ function filteredOrders() {
       const t = new Date(o.createdAt || 0).getTime();
       if (!(t >= bereik[0] && t < bereik[1])) return false;
     }
+    if (state.boardSnel && !boardSnelPast(o, state.boardSnel)) return false;
     if (q) {
       const threadTxt = (o.thread || []).map((t) => t.body || '').join(' ');
       const hay = `${o.title} ${o.description || ''} ${o.customer?.name || ''} ${o.customer?.phone || ''} ${o.customer?.email || ''} ${o.customer?.address || ''} ${o.notes || ''} ${o.source || ''} ${threadTxt}`.toLowerCase();
@@ -2084,6 +2157,7 @@ function renderBoard() {
   // NIET tekenen tijdens slepen/vegen (13 sep): het gesleepte element zou uit de
   // pagina verdwijnen. Onthouden en na het loslaten alsnog verversen.
   if (window._dragging) { window._boardRenderNaSleep = true; return; }
+  tekenBoardSnel();
   // Titel meebewegen met het gekozen hoofdmenu.
   const titles = { all: 'Opdrachten', email: 'E-mail — opdrachten', whatsapp: 'WhatsApp — opdrachten' };
   const h = $('#view-board h2'); if (h) h.textContent = titles[state.channel] || 'Opdrachten';
@@ -3579,6 +3653,7 @@ async function loadInbox(append = false) {
       : filter === 'overige'
       ? '<div class="empty">Niets bij "Geen aanvraag" — geen geklets of leveranciersmail.</div>'
       : '<div class="empty">Geen berichten om te controleren. Goed bezig!</div>';
+    inboxLijstTeken();   // lege lijst: de indeling lijst + bericht gaat uit
     return;
   }
   // Selectie leeft in inboxSel (Set) en wordt in reviewHTML als checked teruggezet —
@@ -3589,6 +3664,10 @@ async function loadInbox(append = false) {
   // "Toon meer" weer dichtgeklapt en het scherm dat zichtbaar verspringt.
   const inboxVinger = `${filter}\n${rowsHTML}`;
   if (!append && inboxVinger === _lastInboxHtml && list.children.length) return;
+  // Lijst + bericht (pc): daar schuift niet de pagina maar het bericht-vlak zelf. Onthoud waar
+  // de gebruiker in het open bericht was, zodat een verversing hem niet naar boven gooit.
+  const splitActief = !!($('#inboxSplit')?.classList.contains('aan') && $('#inboxLijst') && $('#inboxLijst').offsetParent !== null);
+  const berichtScroll = splitActief ? list.scrollTop : 0; const openWas = state._inboxOpen;
   if (!append) _lastInboxHtml = inboxVinger;
   if (append) {
     // Vingerafdruk bijwerken i.p.v. wissen: anders tekende de volgende verversing
@@ -3600,7 +3679,7 @@ async function loadInbox(append = false) {
     // staan, ook als er bovenaan een nieuw bericht bij komt (Safari kent geen
     // scroll-anchoring; alle elementen zijn na het vervangen nieuw).
     let anker = null;
-    if (window.scrollY > 0) {
+    if (!splitActief && window.scrollY > 0) {   // in de lijst+bericht-indeling zijn de andere berichten verborgen
       for (const el of list.querySelectorAll('.review')) {
         const r = el.getBoundingClientRect();
         if (r.bottom > 60) { anker = { id: el.dataset.id, top: r.top }; break; }
@@ -3628,6 +3707,69 @@ async function loadInbox(append = false) {
     list.insertAdjacentHTML('beforeend', `<div id="inboxMoreWrap" style="text-align:center;margin:14px 0"><button class="btn" id="inboxMore">Toon meer (${total - shown} van ${total} resterend)</button></div>`);
     $('#inboxMore').onclick = () => loadInbox(true);
   }
+  inboxLijstTeken();
+  if (splitActief && berichtScroll && state._inboxOpen === openWas) list.scrollTop = berichtScroll;
+}
+
+// INBOX ALS LIJST + BERICHT (ontwerp nov 2026). De berichten zelf (met hun velden en knoppen)
+// blijven precies zoals ze waren in #reviewList; links komt een korte lijst en op de pc is
+// alleen het gekozen bericht in beeld. Op de telefoon verandert er niets (alles onder elkaar).
+function inboxKortTijd(iso) {
+  const d = new Date(iso); if (!iso || Number.isNaN(d.getTime())) return '';
+  const nu = new Date(); const zelfdeDag = d.toDateString() === nu.toDateString();
+  return zelfdeDag ? d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' });
+}
+function inboxKies(id, { scroll = true } = {}) {
+  const list = $('#reviewList'); if (!list) return;
+  const rijen = $$('.review', list); if (!rijen.length) return;
+  const doel = rijen.find((r) => r.dataset.id === id) || rijen[0];
+  state._inboxOpen = doel.dataset.id;
+  rijen.forEach((r) => r.classList.toggle('open', r === doel));
+  $$('#inboxLijst .il-item').forEach((b) => { const aan = b.dataset.id === state._inboxOpen; b.classList.toggle('on', aan); b.setAttribute('aria-selected', aan ? 'true' : 'false'); });
+  if (scroll && $('#inboxSplit')?.classList.contains('aan')) list.scrollTop = 0;
+}
+function inboxLijstTeken() {
+  const split = $('#inboxSplit'); const lijst = $('#inboxLijst'); const list = $('#reviewList');
+  if (!split || !lijst || !list) return;
+  const rijen = $$('.review', list);
+  split.classList.toggle('aan', rijen.length > 0);
+  if (!rijen.length) { lijst.innerHTML = ''; return; }
+  const meer = $('#inboxMore', list);
+  // Leespositie in de lijst vasthouden: komt er bovenaan een bericht bij, dan blijft het
+  // bovenste zichtbare bericht op dezelfde plek staan (anders sprong de lijst naar boven).
+  let anker = null;
+  if (lijst.scrollTop > 0) {
+    const boven = lijst.getBoundingClientRect().top;
+    for (const el of lijst.querySelectorAll('.il-item')) { const r = el.getBoundingClientRect(); if (r.bottom > boven + 4) { anker = { id: el.dataset.id, afstand: r.top - boven }; break; } }
+  }
+  lijst.innerHTML = rijen.map((r) => {
+    const d = r.dataset; const vink = $('.r-select', r);
+    return `<div class="il-item" role="option" tabindex="0" data-id="${esc(d.id)}">
+      ${vink && state.me.role !== 'monteur' ? `<input type="checkbox" class="il-vink" aria-label="Selecteren" ${vink.checked ? 'checked' : ''}>` : ''}
+      <span class="il-stip" style="background:${esc(d.ilKleur || '#667085')}" aria-hidden="true"></span>
+      <span class="il-midden"><span class="il-naam">${esc(d.ilNaam || 'Onbekend')}${d.ilPlaats ? ` <span class="il-plaats">· ${esc(d.ilPlaats)}</span>` : ''}</span><span class="il-tekst">${esc(d.ilTekst || '')}</span></span>
+      <span class="il-rechts"><span>${esc(d.ilBron || '')}</span><span>${esc(inboxKortTijd(d.ilTijd))}</span></span></div>`;
+  }).join('') + (meer ? `<div class="il-meer"><button type="button" class="btn btn-sm" id="inboxMoreLijst">${esc(meer.textContent)}</button></div>` : '');
+  if (anker) {
+    const terug = lijst.querySelector(`.il-item[data-id="${CSS.escape(anker.id)}"]`);
+    if (terug) lijst.scrollTop += (terug.getBoundingClientRect().top - lijst.getBoundingClientRect().top) - anker.afstand;
+  }
+  if (!lijst.dataset.gebonden) {
+    lijst.dataset.gebonden = '1';
+    lijst.addEventListener('click', (e) => {
+      if (e.target.closest('#inboxMoreLijst')) { $('#inboxMore')?.click(); return; }
+      const item = e.target.closest('.il-item'); if (!item) return;
+      const vink = e.target.closest('.il-vink');
+      if (vink) {   // vinkje in de lijst = het vinkje van het bericht zelf (bulk-acties werken daarop)
+        const echte = $(`#reviewList .review[data-id="${CSS.escape(item.dataset.id)}"] .r-select`);
+        if (echte) { echte.checked = vink.checked; echte.dispatchEvent(new Event('change', { bubbles: true })); }
+        return;
+      }
+      inboxKies(item.dataset.id);
+    });
+    lijst.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('il-item')) { e.preventDefault(); inboxKies(e.target.dataset.id); } });
+  }
+  inboxKies(state._inboxOpen, { scroll: false });
 }
 
 function selectedReviewIds() {
@@ -3644,8 +3786,13 @@ function reviewHTML(r) {
   const conf = Math.round((s.confidence || 0) * 100);
   const monteurOpts = '<option value="">— monteur later —</option>' + state.monteurs.map((mo) => `<option value="${mo.id}">${esc(mo.name)}</option>`).join('');
   const defaultSource = r.drsBron ? 'DRS e-mail' : r.channel === 'whatsapp' ? 'Keyservice WhatsApp' : r.channel === 'email' ? 'Keyservice e-mail' : 'Handmatig';
+  // Voor de lijst links (ontwerp nov 2026): wie, waar het over gaat, via welke weg en wanneer.
+  const ilNaam = (s.customerName || m.sender || 'Onbekend').trim();
+  const ilPlaats = ((s.customerAddress || '').match(/\b\d{4}\s?[A-Z]{2}\s+([^,]+)$/i) || (s.customerAddress || '').match(/,\s*([^,\d][^,]*)$/) || [])[1] || '';
+  const ilTekst = (s.problem || m.subject || m.body || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  const ilBron = m.group ? 'groep' : r.channel === 'whatsapp' ? 'WhatsApp' : r.channel === 'email' ? (/website/i.test(m.mailbox || '') ? 'Website' : 'E-mail') : 'Handmatig';
   return `
-    <div class="review" data-id="${r.id}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open opdracht: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}${r.autoOvergeslagen ? `<span class="chip" style="background:#fef3c7;color:#92400e" title="Waarom dit bericht niet automatisch een opdracht werd">Niet automatisch: ${esc(r.autoOvergeslagen)}</span>` : ''}${r.onvolledigeOpdracht && r.status === 'overige' ? `<span class="chip chip-onvolledig" title="Bericht uit de opdracht-groep met een deel van de klantgegevens — geen opdracht gemaakt">Onvolledige opdracht? Controleer</span>` : ''}
+    <div class="review" data-id="${r.id}" data-il-naam="${esc(ilNaam)}" data-il-plaats="${esc(ilPlaats.trim())}" data-il-tekst="${esc(ilTekst)}" data-il-bron="${esc(ilBron)}" data-il-tijd="${esc(m.receivedAt || '')}" data-il-kleur="${esc(statusColor(s.status))}" data-il-zeker="${conf}" style="border-left-color:${esc(statusColor(s.status))}"> <div class="review-top"> <div> <label class="bulk-check" style="margin-right:8px"><input type="checkbox" class="r-select" data-id="${r.id}" ${inboxSel.has(r.id) ? 'checked' : ''}></label><strong>${sourceIcon(r.channel)} ${esc(m.sender || 'Onbekend')}</strong> ${m.group ? `<span class="chip src-groep">${icon('users', 13)} ${esc(m.group)}</span>` : ''}${m.mailbox ? `<span class="chip" title="Bron/route waarlangs dit binnenkwam">${icon('mail', 12)} ${esc(m.mailbox)}</span>` : ''}${r.knownCustomer ? `<span class="chip" style="background:#e7f0fe;color:#1d4ed8" title="Afzender herkend op telefoonnummer/e-mailadres">${icon('user', 12)} Bekende klant: ${esc(r.knownCustomer.name || 'zonder naam')}${r.knownCustomer.openOrderTitle ? ` — open opdracht: ${esc(r.knownCustomer.openOrderTitle)}` : ''}</span>` : ''}${r.autoOvergeslagen ? `<span class="chip" style="background:#fef3c7;color:#92400e" title="Waarom dit bericht niet automatisch een opdracht werd">Niet automatisch: ${esc(r.autoOvergeslagen)}</span>` : ''}${r.onvolledigeOpdracht && r.status === 'overige' ? `<span class="chip chip-onvolledig" title="Bericht uit de opdracht-groep met een deel van de klantgegevens — geen opdracht gemaakt">Onvolledige opdracht? Controleer</span>` : ''}
           <div class="muted small">${esc(m.subject || '')} · ${fmtDate(m.receivedAt)}</div> </div> <div class="small muted" style="text-align:right">AI-zekerheid ${conf}%<br> <span class="confidence"><div style="width:${conf}%;background:${conf>=70?'#10b981':conf>=40?'#f59e0b':'#ef4444'}"></div></span> <div class="muted small">${s.engine && s.engine !== 'regels' ? 'AI: ' + esc(s.engine) : ''}</div> </div> </div> ${s.aiNotOrder ? '<div class="not-order-warn">⚠ AI denkt dat dit GEEN klantopdracht is (bv. incasso/leverancier/reclame)</div>' : ''} <div class="review-msg">${esc(m.body || '')}</div> ${m.attachments && m.attachments.length ? `<div class="attach-grid" style="margin:8px 0">${attachmentsHTML(m.attachments)}</div>` : ''} <div class="small"><strong>AI herkende:</strong> ${esc(s.reasoning || '')}${s.aiStatus && s.aiStatus !== s.status ? ` <em>(AI-categorie: ${esc(statusLabel(s.aiStatus))})</em>` : ''}</div> <div class="review-actions r-velden"> <label class="small" style="margin:0">Kolom<select class="r-status" style="margin-top:3px">${statusOptionsHTML(s.status)}</select></label> <label class="small" style="margin:0">Klant<input class="r-cname" value="${esc(s.customerName || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Telefoon<input class="r-cphone" value="${esc(s.customerPhone || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">E-mail<input class="r-cemail" value="${esc(s.customerEmail || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Adres<input class="r-caddress" value="${esc(s.customerAddress || '')}" style="margin-top:3px"></label> <label class="small" style="margin:0">Herkomst${sourceSelect(defaultSource, 'r-source')}</label> <label class="small" style="margin:0">Monteur<select class="r-monteur" style="margin-top:3px">${monteurOpts}</select></label> </div> <label class="small" style="margin:10px 0 0">Probleem / omschrijving<textarea class="r-problem" rows="2" style="margin-top:3px">${esc(s.problem || '')}</textarea></label> <div class="review-actions" style="margin-top:10px">${r.status === 'rejected'
       ? `<button class="btn r-restore">${icon('reply', 14)} Terugzetten</button>${hasPerm('inbox') ? '<button class="btn btn-danger r-perm">Definitief verwijderen</button>' : ''}`
       : `<button class="btn r-reply">${icon('reply', 14)} Snel antwoord</button> <button class="btn btn-success r-approve">Goedkeuren</button> <button class="btn btn-danger r-reject">Afwijzen</button>`} </div> </div>`;
@@ -8293,6 +8440,7 @@ function bindButtons() {
     // Ook de selectie zelf bijwerken (inboxSel): zonder dat verdwenen alle vinkjes bij de
     // eerstvolgende verversing en liep het scherm gewoon door met verversen.
     $$('.r-select').forEach((c) => { c.checked = e.target.checked; if (c.checked) inboxSel.add(c.dataset.id); else inboxSel.delete(c.dataset.id); });
+    $$('#inboxLijst .il-vink').forEach((c) => { c.checked = e.target.checked; });
     updateBulkCount();
   });
   $('#bulkRejectBtn')?.addEventListener('click', async () => {

@@ -260,6 +260,36 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   als het bedrijfsprofiel nog niet is opgeslagen.
   Tests: browser-test 467 (+45 voor deze ronde); alle 32 suites samen 2.033, 0 fouten.
 
+- **ONTWERP 2 — de volledige look van het prototype (25 nov 2026; ALLEEN op de testomgeving tot
+  de eigenaar "ja" zegt):** blok "ONTWERP 2 — NOVEMBER 2026" onderaan styles.css (bouwt voort op
+  de basislaag). Kleuren en inhoud van de opdrachtkaarten zijn gebleven; er is geen knop weg.
+  (a) BOVENBALK `#topBalk` (index.html, in `.content`; pc: sticky): het zoekveld `#globalSearch`
+  + `#gsResults` is van Start naar de bovenbalk verhuisd (zelfde id's, `initGlobalSearch` bij
+  de start; resultaten als uitklaplijst, dicht bij keuze / Esc / ernaast klikken / ander
+  scherm) en rechts `#tbKoppel` = stand van de koppelingen (`laadTopKoppel`, GET
+  /api/koppelingen/status, elke 5 min, klik = `openKoppelStatus`; niet voor de monteur).
+  Telefoon: de balk staat alleen op Start (elders kost hij geen ruimte; "Zoek" zit onderin).
+  (b) START IN TWEE KOLOMMEN: `.ov-raster` > `.ov-links` (Eerst doen, formulier-alarm,
+  dagoverzicht, `#ovWeekrapport`) + `.ov-rechts` (taken, wacht op antwoord, `#ovLijsten`);
+  daaronder de tegels en de verdeling. Telefoon: één kolom in de oude volgorde (CSS `order`).
+  (c) BORD: snelfilters `#boardSnel` (`tekenBoardSnel`, `boardSnelPast`, `state.boardSnel`):
+  Alles · Klant reageerde · Spoed · DRS · Eigen · Ligt stil (5+ dagen, `BOARD_STIL_DAGEN`);
+  DRS/Eigen zetten de bestaande keuzelijst `#boardMonteurFilter`. Kolommen zonder grijze bak.
+  De zes bordknoppen zitten in `.board-knoppen` (pc: rechtsboven naast de titel; telefoon:
+  `display:contents`, dus de bestaande `order`-regels blijven werken).
+  (d) INBOX ALS LIJST + BERICHT (≥ 1000 px): `#inboxSplit` > `#inboxLijst` + `#reviewList`.
+  De berichten zelf zijn ongewijzigd (zelfde velden/knoppen/handlers); `inboxLijstTeken()`
+  bouwt de lijst links uit `data-il-*` op elk `.review`, `inboxKies(id)` toont één bericht
+  (`.review.open`, `state._inboxOpen`), het vinkje in de lijst (`.il-vink`) bedient het echte
+  `.r-select`, "Toon meer" staat ook in de lijst (`#inboxMoreLijst`), de leespositie van de
+  lijst blijft staan bij een verversing. Telefoon: alles onder elkaar zoals altijd.
+  TESTS DIE EEN BERICHT BEDIENEN openen het eerst (`inboxOpenMet`, `inboxToonMeer`).
+  (e) OVERIG: vlakken zonder schaduw, "Openen" in de facturenlijst is een gewone knop,
+  monteur ziet "Mijn dag" op de telefoon als eerste, factuurregel op de telefoon over de
+  volle breedte. Uitleg "Wat is er veranderd?" bijgewerkt (NIEUW_VERSIE '2026-12').
+  HULP BIJ TESTEN: `scratchpad/run-snap.sh <poort>` draait de browsertest op een
+  momentopname van de werkmap, zodat je intussen verder kunt werken.
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)

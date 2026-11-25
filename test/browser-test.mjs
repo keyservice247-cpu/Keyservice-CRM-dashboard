@@ -19,6 +19,15 @@ const clear = () => { jsErrors.length = 0; };
 // Instellingen (23 nov 2026): een onderwerp kiezen. Op de telefoon staat de lijst met
 // onderwerpen achter '← Alle instellingen' zodra je er één hebt geopend.
 const instKies = async (pg, g) => { await pg.evaluate(() => { const t = document.querySelector('#instTerug'); if (t && t.offsetParent) t.click(); }); return pg.click(`#settingsPanel .sg-chip[data-g="${g}"]`); };
+// Inbox (ontwerp nov 2026): op de pc staat links een lijst en is alleen het gekozen bericht in
+// beeld. Open een bericht zoals een gebruiker dat doet: klik in de lijst (telefoon: niets nodig).
+const inboxOpenMet = async (pg, tekst) => pg.evaluate((t) => {
+  const r = [...document.querySelectorAll('#reviewList .review')].find((x) => x.textContent.includes(t)); if (!r) return false;
+  const item = document.querySelector(`#inboxLijst .il-item[data-id="${r.dataset.id}"]`);
+  if (item && item.offsetParent !== null) item.click();
+  return true;
+}, tekst);
+const inboxToonMeer = async (pg) => { const links = pg.locator('#inboxMoreLijst'); if (await links.isVisible().catch(() => false)) await links.click(); else await pg.click('#inboxMore'); };
 const noErr = (label) => { const r = jsErrors.filter((e) => !/favicon|manifest|ServiceWorker|the server responded with a status of 4/i.test(e)); ok(`${label}: geen JS-fout in de browser`, r.length === 0, r.join(' | ')); };
 
 // 1) Login
@@ -431,7 +440,7 @@ clear();
   const nv = await page.evaluate(() => ({ open: !document.querySelector('#modalRoot').hidden, punten: document.querySelectorAll('.nieuw-lijst li').length, tekst: document.querySelector('#modal').innerText }));
   ok('uitleg voor kantoor: waar E-mail/WhatsApp, Eerst doen, tabbladen en Instellingen nu staan', nv.open && nv.punten >= 7 && /Alle · E-mail · WhatsApp/.test(nv.tekst) && /Eerst doen/.test(nv.tekst) && /Details · Gesprek/.test(nv.tekst) && /Instellingen/.test(nv.tekst), String(nv.punten));
   await page.click('#nw-ok'); await page.waitForTimeout(300);
-  ok('na "Duidelijk" is de balk weg en blijft hij weg (per toestel onthouden)', await page.evaluate(() => !document.querySelector('#nieuwBalk') && localStorage.getItem('ksNieuwGezien') === '2026-11'));
+  ok('na "Duidelijk" is de balk weg en blijft hij weg (per toestel onthouden)', await page.evaluate(() => !document.querySelector('#nieuwBalk') && /^\d{4}-\d{2}$/.test(localStorage.getItem('ksNieuwGezien') || '')));
   await page.evaluate(() => openAccountModal()); await page.waitForTimeout(400);
   await page.click('#acc-nieuw'); await page.waitForTimeout(300);
   ok('Account → "Wat is er veranderd?" toont de uitleg opnieuw', await page.evaluate(() => document.querySelectorAll('.nieuw-lijst li').length >= 7));
@@ -1548,6 +1557,7 @@ noErr('Mobiel plakkende balken');
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.waitForTimeout(400);
   clear();
+  await inboxOpenMet(page, 'afwijs@example.nl'); await page.waitForTimeout(200);
   await rij.locator('.r-reject').click();
   await page.waitForTimeout(700);
   ok('1-klik afwijzen: melding met Ongedaan maken + Reden toevoegen, geen venster', await page.locator('#tr-undo').count() === 1 && await page.locator('#tr-reason').count() === 1 && await page.locator('#rj-save').count() === 0);
@@ -1557,6 +1567,7 @@ noErr('Mobiel plakkende balken');
   ok('ongedaan maken zet het bericht terug in de wachtrij', terug === 'pending', String(terug));
   await page.waitForTimeout(600);
   const rij2 = page.locator('#reviewList .review', { hasText: 'afwijs@example.nl' }).first();
+  await inboxOpenMet(page, 'afwijs@example.nl'); await page.waitForTimeout(200);
   await rij2.locator('.r-reject').click();
   await page.waitForTimeout(700);
   await page.click('#tr-reason');
@@ -1632,18 +1643,19 @@ noErr('Mobiel plakkende balken');
   const totaal0 = await page.evaluate(() => fetch('/api/reviews?status=pending&limit=1').then((r) => r.json()).then((d) => d.total || 0));
   for (let i = 0, n = 10; i < Math.max(0, 72 - totaal0); i++, n++) await ingest(n, aanvraag(n));
   await page.evaluate(() => goView('inbox'));
-  await page.waitForSelector('#inboxMore', { timeout: 8000 }).catch(() => {});
-  await page.click('#inboxMore');
+  await page.waitForSelector('#inboxMore', { state: 'attached', timeout: 8000 }).catch(() => {});
+  await inboxToonMeer(page);
   await page.waitForTimeout(1200);
   const rijenVoor = await page.locator('#reviewList .review').count();
+  // De leespositie zit op de pc in de lijst links (die schuift zelf); daar meten we.
   const anker = await page.evaluate(() => {
-    const rows = [...document.querySelectorAll('#reviewList .review')];
-    const el = rows[rows.length - 3]; el.scrollIntoView({ block: 'start' }); window.scrollBy(0, -100);
-    return { id: el.dataset.id, top: el.getBoundingClientRect().top, y: window.scrollY };
+    const rows = [...document.querySelectorAll('#inboxLijst .il-item')];
+    const el = rows[rows.length - 3]; el.scrollIntoView({ block: 'start' }); document.querySelector('#inboxLijst').scrollTop -= 100;
+    return { id: el.dataset.id, top: el.getBoundingClientRect().top, y: document.querySelector('#inboxLijst').scrollTop };
   });
   await ingest(999, aanvraag(999));
   const nieuwIn = await page.waitForFunction(() => /Live Klant 999/.test(document.querySelector('#reviewList')?.textContent || ''), null, { timeout: 15000 }).then(() => true).catch(() => false);
-  const naInbox = await page.evaluate((id) => { const el = document.querySelector(`#reviewList .review[data-id="${id}"]`); return { rijen: document.querySelectorAll('#reviewList .review').length, top: el ? el.getBoundingClientRect().top : null, y: window.scrollY }; }, anker.id);
+  const naInbox = await page.evaluate((id) => { const el = document.querySelector(`#inboxLijst .il-item[data-id="${id}"]`); return { rijen: document.querySelectorAll('#reviewList .review').length, top: el ? el.getBoundingClientRect().top : null, y: window.scrollY }; }, anker.id);
   ok('Inbox: nieuw bericht komt live binnen', nieuwIn);
   ok('Inbox: na "Toon meer" blijft de lijst uitgeklapt bij een verversing (niet terug naar 60)', rijenVoor > 60 && naInbox.rijen >= rijenVoor, `${rijenVoor} -> ${naInbox.rijen}`);
   ok('Inbox: leespositie blijft staan (zelfde bericht op dezelfde hoogte)', naInbox.top !== null && Math.abs(naInbox.top - anker.top) < 5, JSON.stringify({ anker, naInbox }));
@@ -2575,6 +2587,76 @@ clear();
   await page.evaluate(() => goView('board')); await page.waitForTimeout(500);
 }
 noErr('Naloop deel 3');
+
+// ONTWERP 2 (25 nov 2026): de volledige look van het goedgekeurde prototype — bovenbalk met
+// zoeken + koppelingen, Start in twee kolommen, snelfilters op het bord, inbox als lijst + bericht.
+clear();
+{
+  await page.evaluate(() => { if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // --- bovenbalk: zoeken werkt op ELK scherm; resultaten sluiten bij een keuze of een ander scherm ---
+  await page.evaluate(() => goView('board')); await page.waitForTimeout(900);
+  const tb = await page.evaluate(() => { const b = document.querySelector('#topBalk'); const z = document.querySelector('#globalSearch'); const r = b.getBoundingClientRect(); return { zichtbaar: z.offsetParent !== null, top: Math.round(r.top), plakt: getComputedStyle(b).position, inStart: !!document.querySelector('#overviewPanel #globalSearch') }; });
+  ok('ontwerp: het zoekveld staat in een vaste bovenbalk, ook op het bord (niet meer alleen op Start)', tb.zichtbaar && tb.top === 0 && tb.plakt === 'sticky' && !tb.inStart, JSON.stringify(tb));
+  await page.fill('#globalSearch', 'Browser');
+  await page.waitForFunction(() => !document.querySelector('#gsResults').hidden && document.querySelector('#gsResults').textContent.length > 3, null, { timeout: 6000 }).catch(() => {});
+  const zoekOpen = await page.evaluate(() => !document.querySelector('#gsResults').hidden);
+  await page.evaluate(() => showView('invoices')); await page.waitForTimeout(500);
+  const zoekNaWissel = await page.evaluate(() => document.querySelector('#gsResults').hidden);
+  ok('ontwerp: zoeken vanaf het bord geeft resultaten; bij een ander scherm klappen ze dicht', zoekOpen && zoekNaWissel, JSON.stringify({ zoekOpen, zoekNaWissel }));
+  await page.fill('#globalSearch', ''); await page.waitForTimeout(400);
+  // --- stand van de koppelingen rechtsboven, klik = het overzicht ---
+  await page.waitForFunction(() => { const k = document.querySelector('#tbKoppel'); return k && !k.hidden; }, null, { timeout: 8000 }).catch(() => {});
+  const kop = await page.evaluate(() => { const k = document.querySelector('#tbKoppel'); return { zichtbaar: !!k && !k.hidden, tekst: (document.querySelector('#tbKoppelTekst') || {}).textContent || '' }; });
+  ok('ontwerp: rechtsboven staat hoe de koppelingen ervoor staan', kop.zichtbaar && /koppeling/i.test(kop.tekst), JSON.stringify(kop));
+  await page.click('#tbKoppel'); await page.waitForSelector('#modal .ko-lijst', { timeout: 8000 }).catch(() => {});
+  ok('ontwerp: een klik daarop opent het overzicht van alle koppelingen', !!(await page.$('#modal .ko-lijst')));
+  await page.evaluate(() => { modalSchoon(); closeModal(); });
+
+  // --- Start in twee kolommen ---
+  await page.evaluate(() => goView('overview')); await page.waitForSelector('#eerstDoenBlok', { timeout: 8000 }); await page.waitForTimeout(1200);
+  const st2 = await page.evaluate(() => { const l = document.querySelector('.ov-links').getBoundingClientRect(); const r = document.querySelector('.ov-rechts').getBoundingClientRect(); return { links: Math.round(l.left), rechts: Math.round(r.left), naast: r.left > l.right - 2 && Math.abs(r.top - l.top) < 4, eerstLinks: !!document.querySelector('.ov-links #eerstDoenBlok'), lijstenRechts: !!document.querySelector('.ov-rechts #ovLijsten'), kpis: !!document.querySelector('#ovKpis') }; });
+  ok('ontwerp: Start staat in twee kolommen — links Eerst doen, rechts de lijsten van vandaag; de tegels staan er nog', st2.naast && st2.eerstLinks && st2.lijstenRechts && st2.kpis, JSON.stringify(st2));
+
+  // --- bord: snelfilters; de knoppen staan als groep rechtsboven ---
+  await page.evaluate(() => goView('board')); await page.waitForSelector('#boardSnel .snel', { timeout: 8000 }); await page.waitForTimeout(600);
+  const totaalKaarten = await page.locator('#board .card[data-id]').count();
+  await page.click('#boardSnel [data-snel="spoed"]'); await page.waitForTimeout(500);
+  const spoed = await page.evaluate(() => ({ kaarten: [...document.querySelectorAll('#board .card[data-id]')].length, alleSpoed: [...document.querySelectorAll('#board .card[data-id]')].every((c) => c.classList.contains('urgent')), aan: document.querySelector('#boardSnel [data-snel="spoed"]').classList.contains('on') }));
+  await page.click('#boardSnel [data-snel="src:drs"]'); await page.waitForTimeout(400);
+  const drsKeuze = await page.evaluate(() => document.querySelector('#boardMonteurFilter').value);
+  await page.click('#boardSnel [data-snel=""]'); await page.waitForTimeout(500);
+  const naAlles = await page.evaluate(() => ({ kaarten: document.querySelectorAll('#board .card[data-id]').length, keuze: document.querySelector('#boardMonteurFilter').value, snel: state.boardSnel || '' }));
+  ok('ontwerp: snelfilter "Spoed" toont alleen spoed; "DRS" zet de bestaande keuzelijst; "Alles" zet alles terug', spoed.aan && spoed.alleSpoed && spoed.kaarten <= totaalKaarten && drsKeuze === 'src:drs' && naAlles.kaarten === totaalKaarten && naAlles.keuze === '' && naAlles.snel === '', JSON.stringify({ totaalKaarten, spoed, drsKeuze, naAlles }));
+  const knoppen = await page.evaluate(() => { const g = document.querySelector('.board-knoppen').getBoundingClientRect(); const h = document.querySelector('#view-board .view-head h2').getBoundingClientRect(); const n = document.querySelector('#newOrderBtn').getBoundingClientRect(); return { opRegelVanTitel: Math.abs(g.top - h.top) < 30, nieuwRechts: n.right > innerWidth - 80, alle: ['digestBtn', 'collapseBtn', 'phoneOrderBtn', 'drsReportBtn', 'pasteOrderBtn', 'newOrderBtn'].every((id) => { const e = document.getElementById(id); return e && e.offsetParent !== null; }) }; });
+  ok('ontwerp: alle bordknoppen staan er nog, rechtsboven naast de titel, met "+ Nieuwe opdracht" helemaal rechts', knoppen.opRegelVanTitel && knoppen.nieuwRechts && knoppen.alle, JSON.stringify(knoppen));
+
+  // --- inbox: lijst links, alleen het gekozen bericht rechts; vinkje in de lijst = vinkje van het bericht ---
+  await page.evaluate(() => Promise.all([1, 2].map((i) => fetch('/api/ingest/email', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ from: `Ontwerp Proef ${i} <ontwerp${i}@example.nl>`, subject: 'Slot kapot', externalId: `bt-ontwerp-${i}-${Date.now()}`, body: `Goedemiddag, het slot van de voordeur is kapot.\nNaam: Ontwerp Proef ${i}\nAdres: Proefweg ${i}, 3911 AA Rhenen\nTelefoon: 06110002${i}0` }) }))));
+  await page.evaluate(() => goView('inbox')); await page.waitForSelector('#inboxLijst .il-item', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(700);
+  const ib = await page.evaluate(() => { const rijen = [...document.querySelectorAll('#reviewList .review')]; const zichtbaar = rijen.filter((r) => r.offsetParent !== null); return { split: document.querySelector('#inboxSplit').classList.contains('aan'), items: document.querySelectorAll('#inboxLijst .il-item').length, rijen: rijen.length, zichtbaar: zichtbaar.length, open: zichtbaar[0] ? zichtbaar[0].dataset.id : '', aan: (document.querySelector('#inboxLijst .il-item.on') || { dataset: {} }).dataset.id }; });
+  ok('ontwerp: de inbox toont links de lijst en rechts precies één (het gekozen) bericht', ib.split && ib.items === ib.rijen && ib.items >= 2 && ib.zichtbaar === 1 && ib.open === ib.aan, JSON.stringify(ib));
+  await page.locator('#inboxLijst .il-item').nth(1).click(); await page.waitForTimeout(250);
+  const ib2 = await page.evaluate(() => { const z = [...document.querySelectorAll('#reviewList .review')].filter((r) => r.offsetParent !== null); return { zichtbaar: z.length, open: z[0] ? z[0].dataset.id : '', tweede: document.querySelectorAll('#inboxLijst .il-item')[1].dataset.id, velden: !!(z[0] && z[0].querySelector('.r-cname') && z[0].querySelector('.r-cname').offsetParent !== null) }; });
+  ok('ontwerp: een ander bericht aanklikken in de lijst opent dát bericht, met de velden om te corrigeren', ib2.zichtbaar === 1 && ib2.open === ib2.tweede && ib2.velden, JSON.stringify(ib2));
+  await page.locator('#inboxLijst .il-item .il-vink').first().click(); await page.waitForTimeout(200);
+  const vinkje = await page.evaluate(() => { const id = document.querySelector('#inboxLijst .il-item').dataset.id; return { echt: document.querySelector(`#reviewList .review[data-id="${id}"] .r-select`).checked, inSel: inboxSel.has(id), teller: (document.querySelector('#bulkCount') || {}).textContent || '' }; });
+  ok('ontwerp: het vinkje in de lijst selecteert het bericht voor de bulk-acties', vinkje.echt && vinkje.inSel && /1 geselecteerd/.test(vinkje.teller), JSON.stringify(vinkje));
+  await page.locator('#inboxLijst .il-item .il-vink').first().click(); await page.waitForTimeout(150);
+  // telefoon: alles onder elkaar zoals altijd (geen lijst links)
+  await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(400);
+  const ibTel = await page.evaluate(() => ({ lijst: document.querySelector('#inboxLijst').offsetParent !== null, zichtbaar: [...document.querySelectorAll('#reviewList .review')].filter((r) => r.offsetParent !== null).length, rijen: document.querySelectorAll('#reviewList .review').length }));
+  ok('ontwerp: op de telefoon staat de inbox gewoon onder elkaar (alle berichten zichtbaar)', !ibTel.lijst && ibTel.zichtbaar === ibTel.rijen && ibTel.rijen >= 2, JSON.stringify(ibTel));
+  await page.evaluate(() => goView('overview')); await page.waitForTimeout(900);
+  const telStart = await page.evaluate(() => { const z = document.querySelector('#globalSearch'); const r = z.getBoundingClientRect(); return { zichtbaar: z.offsetParent !== null, binnen: r.left >= 0 && r.right <= 390, kop: Math.round(document.querySelector('.sidebar').getBoundingClientRect().height) }; });
+  await page.evaluate(() => goView('board')); await page.waitForTimeout(600);
+  const telBord = await page.evaluate(() => document.querySelector('#topBalk').offsetParent !== null);
+  ok('ontwerp: op de telefoon staat het zoekveld op Start (past binnen 390 px) en kost het op andere schermen geen ruimte', telStart.zichtbaar && telStart.binnen && telStart.kop < 90 && !telBord, JSON.stringify({ telStart, telBord }));
+  await page.setViewportSize({ width: 1440, height: 900 }); await page.waitForTimeout(300);
+  // opruimen: de twee proefberichten weer weg
+  await page.evaluate(async () => { const d = await fetch('/api/reviews?status=pending&limit=500').then((r) => r.json()); for (const r of (d.items || d)) if (/Ontwerp Proef/.test(JSON.stringify(r))) await fetch(`/api/reviews/${r.id}/reject`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }); });
+}
+noErr('Ontwerp 2');
 
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();

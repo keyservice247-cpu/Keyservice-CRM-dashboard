@@ -55,6 +55,15 @@
     </aside>
 
     <main class="content">
+      <!-- Bovenbalk (ontwerp november 2026): zoeken op elk scherm + de stand van de koppelingen. -->
+      <header class="topbalk" id="topBalk">
+        <div class="tb-zoek">
+          <svg class="tb-zoek-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input id="globalSearch" type="search" autocomplete="off" placeholder="Zoek klant, 06-nummer, postcode, factuurnummer…" aria-label="Zoek in alles: klanten, opdrachten, facturen en berichten">
+          <div id="gsResults" hidden></div>
+        </div>
+        <button type="button" id="tbKoppel" class="tb-koppel" hidden title="Bekijk hoe alle koppelingen ervoor staan"><span class="tb-stip" aria-hidden="true"></span><span id="tbKoppelTekst"></span></button>
+      </header>
       <div id="pushHint" class="push-hint" hidden></div>
       <!-- Overzicht / Home -->
       <section id="view-overview" class="view">
@@ -86,14 +95,19 @@
               <option value="maand">Deze maand</option>
             </select>
             <select id="boardMonteurFilter"><option value="">Alle monteurs</option></select>
+            <!-- knoppen als groep: op de pc rechts naast de titel, op de telefoon gewoon in de rij (display:contents) -->
+            <div class="board-knoppen">
             <button id="digestBtn" class="btn perm-write">Status-scan</button>
             <button id="collapseBtn" class="btn perm-write">Inklappen</button>
             <button id="phoneOrderBtn" class="btn perm-write" title="Snel een telefonische aanvraag noteren">Telefoon</button>
             <button id="drsReportBtn" class="btn perm-write" title="Dagrapport voor DRS: alleen wat nog niet gemeld is — nooit twee keer dezelfde opdracht">DRS-rapport <span id="drsReportBadge" class="drs-badge" hidden></span></button>
             <button id="pasteOrderBtn" class="btn perm-write" title="Plak een DRS-bericht uit WhatsApp — de klantgegevens worden er automatisch uitgehaald">Plak opdracht</button>
             <button id="newOrderBtn" class="btn btn-primary perm-write">+ Nieuwe opdracht</button>
+            </div>
           </div>
         </div>
+        <!-- Snelfilters (ontwerp nov 2026): één tik voor de meest gebruikte doorsnedes. -->
+        <div id="boardSnel" class="snel-rij" role="group" aria-label="Snel filteren"></div>
         <div id="boardBulkBar" class="bulk-bar perm-write" hidden>
           <span id="boardBulkCount" class="bulk-count"></span>
           <div class="bulk-actions">
@@ -141,7 +155,11 @@
           <button id="rejectAllPendingBtn" class="btn btn-danger btn-sm">Hele lijst afwijzen</button>
           <button id="emptyRejectedBtn" class="btn btn-danger btn-sm admin-only">Prullenbak legen</button>
         </div>
-        <div id="reviewList" class="review-list"></div>
+        <!-- Lijst links, het gekozen bericht rechts (ontwerp nov 2026; op de telefoon gewoon onder elkaar). -->
+        <div id="inboxSplit" class="inbox-split">
+          <div id="inboxLijst" class="inbox-lijst" role="listbox" aria-label="Berichten"></div>
+          <div id="reviewList" class="review-list"></div>
+        </div>
       </section>
 
       <!-- Klanten -->
