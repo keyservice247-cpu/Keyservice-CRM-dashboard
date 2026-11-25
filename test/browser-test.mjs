@@ -2178,6 +2178,175 @@ const fk = await page.evaluate(() => { const k = document.querySelector('#formul
 ok('Instellingen: kaart "Website-formulieren" met lijst per website, reserve-mailbox en schakelaar', fk.er && fk.lijst && fk.mailbox && fk.schakelaar && fk.breedteOk, JSON.stringify(fk));
 noErr('Website-formulieren');
 
+// NIETS GAAT STIL VERLOREN (24 nov 2026, naloop van het hele systeem na de klacht "op het
+// kruisje krijg ik geen melding"). Alles hieronder was vóór de reparatie zonder melding weg.
+clear();
+{
+  await page.evaluate(() => { if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+  // helper: voer iets uit en vang de browser-vraag (confirm) die daarbij komt
+  const metVraag = async (doe, { ja = false } = {}) => {
+    const gezien = []; const h = async (d) => { gezien.push(d.message()); try { if (ja) await d.accept(); else await d.dismiss(); } catch { /* al afgehandeld */ } };
+    page.on('dialog', h); try { await doe(); await page.waitForTimeout(350); } finally { page.off('dialog', h); }
+    return gezien;
+  };
+  const sluitVraag = () => page.evaluate(() => { const w = document.querySelector('#sluitVraag'); return w ? { titel: w.querySelector('h3').textContent, knoppen: [...w.querySelectorAll('button')].map((x) => x.textContent.trim()).join('|') } : null; });
+  const uniek = Date.now();
+
+  // --- 1. vervolgknop in de opdracht met een niet-opgeslagen wijziging ---
+  await page.evaluate(() => goView('board')); await page.waitForTimeout(900);
+  const nlId = await page.evaluate(() => { const o = state.orders.find((x) => !['afgerond', 'geannuleerd'].includes(x.status)); return o ? o.id : ''; });
+  await page.evaluate((id) => openOrderModal(id), nlId); await page.waitForSelector('#f-notes', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(600);
+  await page.evaluate(() => ovNaarVeld('#f-notes')); await page.waitForTimeout(200);
+  const nlNotitie = 'Naloop notitie ' + uniek;
+  await page.fill('#f-notes', nlNotitie);
+  await page.click('#f-werkbon'); await page.waitForTimeout(400);
+  let nv = await sluitVraag();
+  ok('opdracht: knop Werkbon met een niet-opgeslagen notitie vraagt "Eerst opslaan?" (was: notitie stil weg)', !!nv && nv.titel === 'Eerst opslaan?' && nv.knoppen === 'Opslaan en doorgaan|Doorgaan zonder opslaan|Terug', JSON.stringify(nv));
+  await page.click('#sv-terug'); await page.waitForTimeout(250);
+  ok('"Terug" laat de opdracht open met de getypte notitie', (await page.inputValue('#f-notes')) === nlNotitie && !(await sluitVraag()));
+  await page.click('#f-werkbon'); await page.waitForTimeout(300);
+  await page.click('#sv-opslaan'); await page.waitForSelector('#wb-work', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(400);
+  const nlBewaard = await page.evaluate((id) => fetch(`/api/orders/${id}`).then((r) => r.json()).then((o) => o.notes || ''), nlId);
+  ok('"Opslaan en doorgaan" bewaart de notitie én opent daarna de werkbon', nlBewaard === nlNotitie && !!(await page.$('#wb-work')), nlBewaard);
+
+  // --- 2. werkbon: alleen een handtekening = ook een wijziging ---
+  if (await page.$('#wb-sign')) {
+    await page.locator('#wb-sign').scrollIntoViewIfNeeded();
+    const vak = await page.locator('#wb-sign').boundingBox();
+    await page.mouse.move(vak.x + 30, vak.y + 30); await page.mouse.down(); await page.mouse.move(vak.x + 130, vak.y + 60, { steps: 5 }); await page.mouse.up();
+    await page.keyboard.press('Escape'); await page.waitForTimeout(350);
+    nv = await sluitVraag();
+    ok('werkbon: alleen een handtekening gezet → sluiten vraagt eerst (was: handtekening stil weg)', !!nv, JSON.stringify(nv));
+    if (nv) { await page.click('#sv-weg'); await page.waitForTimeout(300); }
+  }
+  await page.evaluate(() => { if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+
+  // --- 3. zonder wijziging geen vraag; Annuleren in vervolgvensters gaat terug naar de opdracht ---
+  await page.evaluate((id) => openOrderModal(id), nlId); await page.waitForSelector('#f-snooze', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(500);
+  await page.evaluate(() => document.querySelector('#f-snooze').scrollIntoView({ block: 'center' }));
+  await page.click('#f-snooze'); await page.waitForTimeout(500);
+  ok('opdracht zonder wijziging: vervolgknop opent meteen (geen onnodige vraag)', !(await sluitVraag()) && !!(await page.$('#sn-cancel')));
+  await page.click('#sn-cancel'); await page.waitForSelector('#f-notes', { state: 'attached', timeout: 6000 }).catch(() => {}); await page.waitForTimeout(400);
+  ok('herinnering: Annuleren brengt je terug in de opdracht (was: alles dicht)', !!(await page.$('#f-notes')) && await page.evaluate(() => !document.querySelector('#modalRoot').hidden));
+
+  // --- 4. meldingen zijn zichtbaar terwijl een venster open staat ---
+  await page.evaluate(() => toast('Proefmelding naloop')); await page.waitForTimeout(250);
+  const tz = await page.evaluate(() => { const el = document.querySelector('#toast'); const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return { op: Number(cs.opacity), top: Math.round(r.top), z: Number(cs.zIndex), hidden: el.hidden }; });
+  ok('een gewone melding is zichtbaar als er een venster open staat (was: onzichtbaar)', !tz.hidden && tz.op > 0.5 && tz.top < 140 && tz.z > 300, JSON.stringify(tz));
+  await page.evaluate(() => { modalSchoon(); closeModal(); const t = document.querySelector('#toast'); if (t) t.hidden = true; });
+
+  // --- 5. Instellingen: weggaan met iets dat niet is opgeslagen ---
+  await page.evaluate(() => goView('settings')); await page.waitForSelector('#ar-subject', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(1200);
+  await instKies(page, 'bericht'); await page.waitForTimeout(300);
+  const arOud = await page.inputValue('#ar-subject');
+  await page.fill('#ar-subject', 'Onderwerp naloop ' + uniek);
+  let vr = await metVraag(() => page.evaluate(() => showView('board')));
+  ok('Instellingen: weggaan met een niet-opgeslagen veld vraagt eerst en noemt het blok', vr.length === 1 && /nog niet is opgeslagen/.test(vr[0]) && /ontvangstbevestiging/i.test(vr[0]) && await page.evaluate(() => state.view === 'settings'), JSON.stringify(vr));
+  ok('Instellingen: Annuleren = blijven, de tekst staat er nog', (await page.inputValue('#ar-subject')) === 'Onderwerp naloop ' + uniek);
+  await page.fill('#ar-subject', arOud);
+  vr = await metVraag(() => page.evaluate(() => showView('board')));
+  ok('Instellingen: teruggezet naar de oude waarde = geen vraag', vr.length === 0 && await page.evaluate(() => state.view === 'board'), JSON.stringify(vr));
+  await page.evaluate(() => goView('settings')); await page.waitForSelector('#tm-to', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(1200);
+  await instKies(page, 'bericht'); await page.waitForTimeout(300);
+  await page.fill('#tm-to', 'proef@voorbeeld.test'); await page.click('#ar-body');
+  vr = await metVraag(() => page.evaluate(() => showView('board')));
+  ok('Instellingen: een testadres of alleen aanklikken is geen wijziging (geen onnodige vraag)', vr.length === 0 && await page.evaluate(() => state.view === 'board'), JSON.stringify(vr));
+
+  // --- 6. Instellingen: een ander blok opslaan gooit getypte invoer niet weg ---
+  await page.evaluate(() => goView('settings')); await page.waitForSelector('#amw-hours', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(1200);
+  await instKies(page, 'werk'); await page.waitForTimeout(300);
+  const amwOud = await page.inputValue('#amw-hours'); const amwNieuw = String((Number(amwOud) || 0) + 3);
+  await page.fill('#amw-hours', amwNieuw);
+  await page.evaluate(() => [...document.querySelectorAll('#settingsPanel button')].find((x) => /Bronnen opslaan/.test(x.textContent)).click());
+  await page.waitForFunction(() => /Bronnen opgeslagen/.test((document.querySelector('#toast') || {}).textContent || ''), null, { timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(1800);
+  ok('Instellingen: "Bronnen opslaan" laat een getypt getal in een ANDER blok staan (was: weg)', (await page.inputValue('#amw-hours').catch(() => 'weg')) === amwNieuw, await page.inputValue('#amw-hours').catch(() => 'weg'));
+  vr = await metVraag(() => page.evaluate(() => showView('board')), { ja: true });
+  ok('…en dat veld telt nog steeds als niet opgeslagen; OK = weggaan', vr.length === 1 && /Zelfde-moment/i.test(vr[0]) && await page.evaluate(() => state.view === 'board'), JSON.stringify(vr));
+
+  // --- 7. de twee velden voor de opdracht-groepen lopen gelijk ---
+  await page.evaluate(() => goView('settings')); await page.waitForSelector('#waOrderGroups', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(1200);
+  await instKies(page, 'inbox'); await page.waitForTimeout(300);
+  const grOud = await page.inputValue('#waOrderGroups');
+  await page.fill('#waOrderGroups', 'Proefgroep ' + uniek);
+  await page.evaluate(() => { const k = document.querySelector('#waOrderGroups').closest('.info-card'); [...k.querySelectorAll('button')].find((x) => /opslaan/i.test(x.textContent)).click(); });
+  await page.waitForTimeout(900);
+  ok('Instellingen: het tweede groepenveld volgt het eerste (was: latere Opslaan zette stil de oude groepen terug)', (await page.inputValue('#md-ordergroups')) === 'Proefgroep ' + uniek, await page.inputValue('#md-ordergroups').catch(() => 'geen veld'));
+  await page.fill('#waOrderGroups', grOud);
+  await page.evaluate(() => { const k = document.querySelector('#waOrderGroups').closest('.info-card'); [...k.querySelectorAll('button')].find((x) => /opslaan/i.test(x.textContent)).click(); });
+  await page.waitForTimeout(900);
+  vr = await metVraag(() => page.evaluate(() => showView('board')));
+  ok('Instellingen: na opslaan geen vraag bij weggaan', vr.length === 0 && await page.evaluate(() => state.view === 'board'), JSON.stringify(vr));
+
+  // --- 8. inbox: getypte correctie overleeft een hertekening en een filterwissel ---
+  await page.evaluate(() => fetch('/api/ingest/email', { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify({ from: 'Naloop Proef <naloopproef@example.nl>', subject: 'Slot achterdeur klemt', externalId: 'bt-naloop-' + Date.now(), body: 'Goedemiddag, het slot van de achterdeur klemt. Kunt u langskomen?\nNaam: Naloop Proef\nAdres: Proefstraat 12, 3911 AA Rhenen\nTelefoon: 0611000123' }) }));
+  await page.evaluate(() => goView('inbox')); await page.waitForSelector('#reviewList .review', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(600);
+  const nlRev = await page.evaluate(() => (document.querySelector('#reviewList .review') || { dataset: {} }).dataset.id || '');
+  if (nlRev) {
+    const veld = `.review[data-id="${nlRev}"] .r-cname`;
+    await page.fill(veld, 'Naam Naloop Getypt'); await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await page.evaluate(() => { _lastInboxHtml = ''; return loadInbox(); }); await page.waitForTimeout(900);
+    ok('inbox: een getypte correctie overleeft een hertekening van de lijst (was: weg na goedkeuren van een ander bericht)', (await page.inputValue(veld).catch(() => 'weg')) === 'Naam Naloop Getypt', await page.inputValue(veld).catch(() => 'weg'));
+    await page.selectOption('#inboxFilter', { index: 1 }); await page.waitForTimeout(900);
+    await page.selectOption('#inboxFilter', { index: 0 }); await page.waitForTimeout(900);
+    ok('inbox: de correctie staat er nog na een ander filter en terug', (await page.inputValue(veld).catch(() => 'weg')) === 'Naam Naloop Getypt', await page.inputValue(veld).catch(() => 'weg'));
+    const bu = await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return { tegengehouden: e.defaultPrevented, wat: ietsOnbewaard() }; });
+    ok('tabblad sluiten/verversen met een getypte correctie → de browser vraagt eerst', bu.tegengehouden === true && /inbox/.test(bu.wat), JSON.stringify(bu));
+    await page.evaluate((v) => { const el = document.querySelector(v); el.value = el.defaultValue; }, veld);
+  } else ok('inbox: er is een bericht om mee te testen', false, 'geen inbox-item');
+  await page.evaluate(() => { const c = document.querySelector('#selectAll'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.evaluate(() => { _lastInboxHtml = ''; return loadInbox(); }); await page.waitForTimeout(900);
+  const selNa = await page.evaluate(() => ({ sel: inboxSel.size, vink: [...document.querySelectorAll('.r-select')].filter((c) => c.checked).length, tot: document.querySelectorAll('.r-select').length }));
+  ok('inbox: "alles selecteren" blijft staan na een verversing (was: alle vinkjes weg)', selNa.tot > 0 && selNa.sel === selNa.tot && selNa.vink === selNa.tot, JSON.stringify(selNa));
+  await page.evaluate(() => { const c = document.querySelector('#selectAll'); c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true })); });
+
+  // --- 9. Taken: gekozen Privé/Hoog blijft staan; half getypte taak → uitloggen vraagt ---
+  await page.evaluate(() => goView('taken')); await page.waitForSelector('#tkSnel', { timeout: 8000 }); await page.waitForTimeout(500);
+  await page.click('#tkSnel .tk-keuze[data-k="categorie"] .tk-opt[data-v="prive"]');
+  await page.click('#tkSnel .tk-keuze[data-k="urgentie"] .tk-opt[data-v="hoog"]');
+  await page.evaluate(() => loadTaken()); await page.waitForTimeout(800);
+  const tkKeuze = await page.evaluate(() => ({ c: (document.querySelector('#tkSnel .tk-keuze[data-k="categorie"] .tk-opt.active') || { dataset: {} }).dataset.v, u: (document.querySelector('#tkSnel .tk-keuze[data-k="urgentie"] .tk-opt.active') || { dataset: {} }).dataset.v }));
+  ok('Taken: gekozen Privé + Hoog blijft staan bij een hertekening (was: terug naar Zakelijk — zichtbaar voor kantoor)', tkKeuze.c === 'prive' && tkKeuze.u === 'hoog', JSON.stringify(tkKeuze));
+  await page.fill('#tkSnelTitel', 'Half getypte taak');
+  vr = await metVraag(() => page.evaluate(() => document.querySelector('#logoutBtn').click()));
+  ok('uitloggen met iets dat niet is opgeslagen vraagt eerst; Annuleren = ingelogd blijven', vr.length === 1 && /niet is opgeslagen/.test(vr[0]) && await page.evaluate(() => fetch('/api/me').then((r) => r.json()).then((j) => !!j.user)), JSON.stringify(vr));
+  await page.fill('#tkSnelTitel', '');
+  await page.click('#tkSnel .tk-keuze[data-k="categorie"] .tk-opt[data-v="zakelijk"]');
+
+  // --- 10. Berichten: concept per gesprek ---
+  await page.evaluate(() => goView('chats')); await page.waitForSelector('.chat-item', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(500);
+  const nlChats = await page.evaluate(() => [...document.querySelectorAll('.chat-item')].map((x) => x.dataset.cid));
+  if (nlChats.length >= 2) {
+    await page.click(`.chat-item[data-cid="${nlChats[0]}"]`); await page.waitForSelector('#cpText', { timeout: 6000 }); await page.waitForTimeout(400);
+    await page.fill('#cpText', 'Half getypt antwoord naloop');
+    await page.click(`.chat-item[data-cid="${nlChats[1]}"]`); await page.waitForTimeout(900);
+    const leeg = await page.inputValue('#cpText').catch(() => '?');
+    await page.click(`.chat-item[data-cid="${nlChats[0]}"]`); await page.waitForTimeout(900);
+    ok('Berichten: een half getypt antwoord staat er weer als je terugkomt in het gesprek (was: weg); het andere gesprek begint leeg', leeg === '' && (await page.inputValue('#cpText').catch(() => '?')) === 'Half getypt antwoord naloop', leeg);
+    await page.fill('#cpText', ''); await page.waitForTimeout(100);
+  } else ok('Berichten: er zijn twee gesprekken om mee te testen', false, String(nlChats.length));
+  const rust = await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return { tegengehouden: e.defaultPrevented, wat: ietsOnbewaard() }; });
+  ok('niets openstaand → de browser vraagt niets bij sluiten (geen vals alarm)', rust.tegengehouden === false && rust.wat === '', JSON.stringify(rust));
+
+  // --- 11. DRS "was al gemeld" vraagt eerst; aangepaste regel is geen verlies bij sluiten ---
+  await page.evaluate(() => goView('board')); await page.waitForTimeout(600);
+  await page.evaluate(() => openDrsRapport()); await page.waitForSelector('[data-drs]', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(600);
+  if (await page.$('.drs-regel')) {
+    await page.locator('.drs-regel').first().fill('1234 AB Proefstad — naloop'); await page.waitForTimeout(150);
+    vr = await metVraag(() => page.locator('.drs-al').first().click());
+    ok('DRS-rapport: "was al gemeld" vraagt eerst; Annuleren laat de regel staan (was: één tik = voorgoed uit het rapport)', vr.length === 1 && /AL GEMELD/.test(vr[0]) && (await page.locator('.drs-regel').first().inputValue()) === '1234 AB Proefstad — naloop', JSON.stringify(vr));
+    await page.keyboard.press('Escape'); await page.waitForTimeout(350);
+    ok('DRS-rapport: een aangepaste regel wordt onthouden → sluiten zonder vals alarm', !(await sluitVraag()) && await page.evaluate(() => document.querySelector('#modalRoot').hidden), JSON.stringify(await sluitVraag()));
+  }
+  await page.evaluate(() => { const w = document.querySelector('#sluitVraag'); if (w) w.remove(); if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+
+  // --- 12. ingelogd op de inlogpagina belanden → meteen door naar het CRM ---
+  await page.goto(BASE + '/login.html'); await page.waitForSelector('.view:not([hidden])', { timeout: 10000 }).catch(() => {});
+  ok('inlogpagina terwijl je al bent ingelogd → meteen door naar het CRM (terugknop zette je op een inlogscherm)', !/login\.html/.test(page.url()) && !!(await page.$('.view:not([hidden])')), page.url());
+  await page.waitForTimeout(800);
+}
+noErr('Naloop: niets gaat stil verloren');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

@@ -87,6 +87,11 @@ async function api(path, method = 'GET', body) {
     // Geen JSON terug (bv. 502 tijdens een herstart van de server): eerlijk zeggen.
     throw new Error(res.status >= 500 ? 'De server is even niet bereikbaar (herstart?) — probeer het over een halve minuut opnieuw.' : 'Er ging iets mis');
   }
+  // Instellingen: een geslaagde PATCH (of een POST naar een instellingen-route) betekent dat
+  // het blok waarin op Opslaan is geklikt nu bewaard is — niet meer "nog niet opgeslagen".
+  if (state.view === 'settings' && (method === 'PATCH' || method === 'PUT' || (method === 'POST' && /instellingen|settings/.test(path)))) {
+    try { instellingenBewaard(_instLaatsteKaart); } catch { /* bewaking mag een opslag nooit breken */ }
+  }
   return data ?? {};
 }
 
@@ -243,8 +248,12 @@ function googleCalUrl({ title, at, end, details, location }) {
 
 // Verwijderde opdracht(en) terughalen uit de prullenbak (voor de undo-knop).
 async function restoreOrders(ids) {
-  for (const id of ids) { try { await api(`/api/trash/${id}/restore`, 'POST'); } catch { /* al weg */ } }
-  toast(ids.length > 1 ? `${ids.length} teruggehaald` : 'Teruggehaald');
+  // Eerlijk melden (24 nov 2026): voorheen stond er altijd "Teruggehaald", ook als het niet lukte.
+  let gelukt = 0; let fout = '';
+  for (const id of ids) { try { await api(`/api/trash/${id}/restore`, 'POST'); gelukt++; } catch (err) { fout = err.message || 'onbekende fout'; } }
+  if (gelukt === ids.length) toast(ids.length > 1 ? `${ids.length} teruggehaald` : 'Teruggehaald');
+  else if (!gelukt) toast(`Terughalen is niet gelukt: ${fout}`, true);
+  else toast(`${gelukt} van ${ids.length} teruggehaald — de rest lukte niet: ${fout}`, true);
   loadBoard();
 }
 
@@ -427,9 +436,28 @@ function veldInHertekenGebied(view) {
 // (ander tabblad/app), bij terugkomst, of na 10 minuten zonder aanraking. Daarna zet
 // de app je terug op hetzelfde scherm, dezelfde kolom en dezelfde scrollhoogte —
 // voorheen sprong elke open telefoon na een deploy terug naar Start.
+// Staat er ergens iets dat is ingetypt maar nog niet is opgeslagen/verstuurd? Gebruikt voor
+// de zelf-verversing na een update én voor de vraag van de browser bij het sluiten of
+// verversen van het tabblad (24 nov 2026: zonder dit was het werk zonder melding weg).
+function ietsOnbewaard() {
+  try {
+    if (!$('#modalRoot')?.hidden && modalHeeftWijzigingen()) return 'een open venster';
+    if (Object.keys(_chatConcept).length || ($('#cpText')?.value || '').trim()) return 'een getypt bericht';
+    if (state.view === 'settings' && instellingenGewijzigd().length) return 'Instellingen';
+    if (invoerSnapshot($('#reviewList')).length) return 'een correctie in de inbox';
+    if (($('#tkSnelTitel')?.value || '').trim()) return 'een nieuwe taak';
+  } catch { /* twijfel = niets tegenhouden */ }
+  return '';
+}
+window.addEventListener('beforeunload', (e) => {
+  if (window._appReloading || window._uitloggen) return;
+  if (!ietsOnbewaard()) return;
+  e.preventDefault(); e.returnValue = '';   // de browser toont zijn eigen vraag "Site verlaten?"
+});
 function veiligOmTeHerladen() {
   if (window._dragging || !$('#modalRoot')?.hidden) return false;
   if (($('#cpText')?.value || '').trim()) return false;
+  if (ietsOnbewaard()) return false;
   if (boardSel.size || inboxSel.size) return false;
   // Instellingen: vaak half ingevulde (nog niet opgeslagen) velden zonder focus.
   if (state.view === 'settings') return false;
@@ -586,7 +614,13 @@ function bindNav() {
     if (b.dataset.action === 'search') { openCommandPalette(); return; }
     showView(b.dataset.view, b);
   }));
-  $('#logoutBtn').addEventListener('click', async () => { await api('/api/logout', 'POST'); window.location.href = '/'; });
+  $('#logoutBtn').addEventListener('click', async () => {
+    // Eerst vragen als er nog iets openstaat: na het uitloggen is het niet meer op te slaan.
+    const wat = ietsOnbewaard();
+    if (wat && !confirm(`Er staat nog iets dat niet is opgeslagen (${wat}).\n\nOK = toch uitloggen (het gaat verloren).\nAnnuleren = blijven.`)) return;
+    window._uitloggen = true;
+    await api('/api/logout', 'POST'); window.location.href = '/';
+  });
   $('#accountBtn').addEventListener('click', openAccountModal);
   const themeBtn = $('#themeBtn');
   if (themeBtn) {
@@ -636,7 +670,7 @@ async function loadChats(fromPulse) {
   }
   $('#chatsLayout')?.classList.toggle('active-chat', !!_chatActive);
   syncChatStatusBar();
-  if (!fromPulse) api('/api/chats/seen', 'POST').catch(() => {});
+  if (!fromPulse && state.me?.role !== 'monteur') api('/api/chats/seen', 'POST').catch(() => {});   // teamteller: niet voor de monteur (gaf elke keer een 403)
   let list;
   try { list = await api('/api/chats'); } catch { return; }
   if (!Array.isArray(list)) return;
@@ -666,6 +700,7 @@ function chatMatcht(c, q) {
 // naam + tijd, vinkjes bij ons laatste bericht, groene teller bij ongelezen, en
 // filterknoppen Alle / Ongelezen / Wacht op antwoord.
 let _chatFilter = 'alle';
+const _chatConcept = {};          // getypte, nog niet verstuurde tekst per gesprek
 const CHAT_AVATAR_KLEUREN = ['#00a884', '#4a7fd6', '#c2554f', '#d4893a', '#8e6cd1', '#3f9d6b', '#cc5f8f', '#2b9fb3', '#b08d57', '#6b7fa3'];
 function chatInitialen(naam) {
   const woorden = String(naam || '').replace(/\b(b\.?v\.?|v\.?o\.?f\.?|n\.?v\.?)\b/gi, '').split(/[\s\-–—&,.]+/).filter((w) => /[a-zà-ÿ]/i.test(w));
@@ -837,7 +872,14 @@ function renderTaken() {
   const snelWas = $('#tkSnelTitel')?.value || '';
   const hadFocus = document.activeElement && document.activeElement.id === 'tkSnelTitel';
   const scrollWas = window.scrollY;
-  setTimeout(() => { const el = $('#tkSnelTitel'); if (el && snelWas && !el.value) { el.value = snelWas; if (hadFocus) el.focus(); } if (scrollWas) window.scrollTo(0, scrollWas); }, 0);
+  // Ook de keuze Zakelijk/Privé en de urgentie onthouden: die sprongen bij elke hertekening
+  // terug naar Zakelijk/Middel — een privé bedoelde taak werd zo zichtbaar voor het kantoor.
+  const keuzeWas = {}; $$('#tkSnel .tk-keuze').forEach((g) => { const a = g.querySelector('.tk-opt.active'); if (a) keuzeWas[g.dataset.k] = a.dataset.v; });
+  setTimeout(() => {
+    const el = $('#tkSnelTitel'); if (el && snelWas && !el.value) { el.value = snelWas; if (hadFocus) el.focus(); }
+    $$('#tkSnel .tk-keuze').forEach((g) => { const v = keuzeWas[g.dataset.k]; if (!v || !g.querySelector(`.tk-opt[data-v="${v}"]`)) return; g.querySelectorAll('.tk-opt').forEach((o) => o.classList.toggle('active', o.dataset.v === v)); });
+    if (scrollWas) window.scrollTo(0, scrollWas);
+  }, 0);
   const alles = _takenCache;
   const mijNaam = String(state.me.name || '').trim().split(/\s+/)[0].toLowerCase();
   const isMij = (t) => (t.toegewezen || []).some((n) => String(n).trim().split(/\s+/)[0].toLowerCase() === mijNaam);
@@ -905,7 +947,7 @@ function renderTaken() {
   $('#tkSnel').onsubmit = async (e) => {
     e.preventDefault();
     const titel = ($('#tkSnelTitel').value || '').trim();
-    if (!titel) return;
+    if (!titel) { $('#tkSnelTitel').focus(); toast('Typ eerst wat er moet gebeuren'); return; }
     const categorie = $('.tk-keuze[data-k="categorie"] .tk-opt.active')?.dataset.v || 'zakelijk';
     const urgentie = $('.tk-keuze[data-k="urgentie"] .tk-opt.active')?.dataset.v || 'middel';
     // Dubbele taak voorkomen (28 sep 2026, audit): het veld bleef na toevoegen gevuld
@@ -1007,11 +1049,11 @@ async function openTaakModal(id) {
     ...losseNamen.map((n) => ({ naam: n, label: n, sub: 'geen account', aan: true })),
   ];
   const wieHTML = wieOpties.length
-    ? `<div class="tk-deel-lijst" id="tk-wie-lijst">${wieOpties.map((o) => `<label class="tk-deel-opt"><input type="checkbox" class="tk-wie-opt" value="${esc(o.naam)}" ${o.aan ? 'checked' : ''}> ${esc(o.label)} <span class="muted small">(${esc(o.sub)})</span></label>`).join('')}</div>`
+    ? `<div class="tk-deel-lijst" id="tk-wie-lijst">${wieOpties.map((o) => `<label class="tk-deel-opt"><input type="checkbox" class="tk-wie-opt" data-bewaak value="${esc(o.naam)}" ${o.aan ? 'checked' : ''}> ${esc(o.label)} <span class="muted small">(${esc(o.sub)})</span></label>`).join('')}</div>`
     : '<div class="muted small">Geen kantoor-accounts gevonden.</div>';
   const deelBlok = eigenaar ? `<div id="tk-deelblok" ${t.categorie === 'prive' ? '' : 'hidden'}>
       <div class="small" style="margin:4px 0 4px;font-weight:600">Delen met (optioneel)</div>
-      ${collegas.length ? `<div class="tk-deel-lijst">${collegas.map((c) => `<label class="tk-deel-opt"><input type="checkbox" class="tk-deel" value="${esc(c.id)}" ${(t.gedeeldMet || []).includes(c.id) ? 'checked' : ''}> ${esc(c.name)} <span class="muted small">(${c.role === 'admin' ? 'beheerder' : 'assistente'})</span></label>`).join('')}</div>`
+      ${collegas.length ? `<div class="tk-deel-lijst">${collegas.map((c) => `<label class="tk-deel-opt"><input type="checkbox" class="tk-deel" data-bewaak value="${esc(c.id)}" ${(t.gedeeldMet || []).includes(c.id) ? 'checked' : ''}> ${esc(c.name)} <span class="muted small">(${c.role === 'admin' ? 'beheerder' : 'assistente'})</span></label>`).join('')}</div>`
         : '<div class="muted small">Geen collega\'s om mee te delen (alleen kantoor-accounts).</div>'}
       <div class="muted small" style="margin-top:4px">Niet aangevinkt = alleen jij ziet deze taak. Gedeeld = die collega ziet 'm ook en kan 'm overnemen.</div>
     </div>` : (t.categorie === 'prive' ? `<div class="muted small">Privé-taak van ${esc(t.eigenaarNaam || 'een collega')}, met jou gedeeld. Je kunt 'm bewerken en afvinken.</div>` : '');
@@ -1078,7 +1120,7 @@ async function openTaakModal(id) {
   };
   const catSel = $('#tk-cat'); if (catSel) catSel.onchange = () => { const b = $('#tk-deelblok'); if (b) b.hidden = catSel.value !== 'prive'; };
   if ($('#tk-delete')) $('#tk-delete').onclick = async () => {
-    if (!confirm('Taak verwijderen?')) return;
+    if (!confirm('Taak verwijderen? Bijlagen bij deze taak gaan ook weg.')) return;
     try { await api(`/api/taken/${t.id}`, 'DELETE'); closeModal(); toast('Taak verwijderd'); loadTaken(); } catch (err) { toast(err.message, true); }
   };
   $('#tk-save').onclick = async () => {
@@ -1276,6 +1318,9 @@ async function renderChatPane(scrollDown) {
   pane.dataset.chat = _chatActive;
   _lastChatMsgsHtml = msgsHtml;
   bindMsgs();
+  // Concept per gesprek (24 nov 2026): wie halverwege een antwoord naar een ander gesprek
+  // of terug naar de lijst ging, was zijn tekst kwijt. Nu staat hij er weer als je terugkomt.
+  { const tv = $('#cpText'); const cid = _chatActive; if (tv) { if (_chatConcept[cid] && !tv.value) tv.value = _chatConcept[cid]; tv.addEventListener('input', () => { if (tv.value.trim()) _chatConcept[cid] = tv.value; else delete _chatConcept[cid]; }); } }
   const nieuw = $('#cpMsgs');
   if (nieuw) nieuw.scrollTop = nieuw.scrollHeight;
   $('#cpBack')?.addEventListener('click', sluitChat);
@@ -1314,6 +1359,7 @@ async function renderChatPane(scrollDown) {
         : `/api/chats/${_chatActive}/send`;
       const r = await api(sendUrl, 'POST', isTelChat ? { text } : { text, kanaal });
       if (veldNu) veldNu.value = '';
+      delete _chatConcept[_chatActive];
       if (r.kanaal === 'email') toast('E-mail verstuurd');
       else if (r.paused) toast('In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit', true);
       await renderChatPane(true);
@@ -1326,6 +1372,16 @@ async function renderChatPane(scrollDown) {
 
 function showView(view, tab) {
   if (view === 'settings' && !hasPerm('settings')) { toast('Instellingen zijn alleen voor de beheerder', true); return; }
+  // Weg uit Instellingen terwijl er iets is ingevuld dat niet is opgeslagen? Eerst vragen
+  // (24 nov 2026): elk blok heeft zijn eigen Opslaan-knop en dat vergeet je makkelijk.
+  if (state.view === 'settings' && view !== 'settings') {
+    const open = instellingenGewijzigd();
+    if (open.length) {
+      const blokken = [...new Set(open.map(instBlokNaam))].slice(0, 4).map((n) => `• ${n}`).join('\n');
+      if (!confirm(`In Instellingen staat iets dat nog niet is opgeslagen:\n${blokken}\n\nOK = weggaan zonder opslaan.\nAnnuleren = blijven, zodat je in dat blok op Opslaan kunt klikken.`)) return;
+      _instBegin.clear();
+    }
+  }
   const anderView = state.view !== view;
   state.view = view;
   if (view !== 'assistant') ssPollActive = false; // statusscan-pollen stoppen buiten de AI-pagina
@@ -2575,6 +2631,35 @@ window.attImgKapot = (img) => {
   a.classList.remove('att-img'); a.classList.add('att-file');
   a.innerHTML = `${icon('file', 22)}<span>foto — tik om te openen</span>`;
 };
+// Aantal foto's op het tabblad en in het kopje bijwerken (bleef na toevoegen op het oude getal).
+function ovFotoTeller(o) {
+  const n = (o.attachments || []).length;
+  const tab = $('#modal .ov-tab[data-ovtab="fotos"]');
+  if (tab) { let b = tab.querySelector('.ov-tab-n'); if (n && !b) { b = document.createElement('span'); b.className = 'ov-tab-n'; tab.append(' ', b); } if (b) { if (n) b.textContent = n; else b.remove(); } }
+  const kop = $('#modal .attach .thread-head'); if (kop && kop.childNodes[1]) kop.childNodes[1].textContent = ` Foto's & bestanden${n ? ` (${n})` : ''} `;
+}
+// FOTO WEGHALEN IN DE OPDRACHT (24 nov 2026, naloop): dat kon alleen via Instellingen →
+// Foto's & video's beheren. Knop "Verwijderen…" zet de foto's in kiesstand: tik op de foto
+// die weg moet → bevestigen → weg. De werkbon-handtekening weigert de server.
+function ovBindFotoWeg(o) {
+  const knop = $('#f-fotoweg'); const grid = $('#f-attachgrid'); if (!knop || !grid) return;
+  const stand = (aan) => { grid.classList.toggle('att-kies-weg', aan); knop.textContent = aan ? 'Klaar' : 'Verwijderen…'; knop.classList.toggle('btn-danger', aan); let h = $('#f-fotoweg-hint'); if (aan && !h) { h = document.createElement('div'); h.id = 'f-fotoweg-hint'; h.className = 'muted small'; h.textContent = 'Tik op de foto of het bestand dat weg moet.'; grid.before(h); } else if (!aan && h) h.remove(); };
+  knop.onclick = () => stand(!grid.classList.contains('att-kies-weg'));
+  grid.addEventListener('click', async (e) => {
+    if (!grid.classList.contains('att-kies-weg')) return;
+    const tegel = e.target.closest('#f-attachgrid > *'); if (!tegel) return;
+    e.preventDefault(); e.stopPropagation();
+    const att = (o.attachments || [])[[...grid.children].indexOf(tegel)]; if (!att) return;
+    if (!confirm(`"${att.filename || 'Dit bestand'}" van deze opdracht verwijderen?\n\nDit kan niet ongedaan worden gemaakt.`)) return;
+    try {
+      const bij = await api(`/api/orders/${o.id}/attachments/${att.id}`, 'DELETE');
+      o.attachments = bij.attachments || [];
+      grid.innerHTML = attachmentsHTML(o.attachments); ovFotoTeller(o);
+      toast('Verwijderd'); if (!o.attachments.length) { stand(false); knop.remove(); }
+      loadBoard();
+    } catch (err) { toast(err.message, true); }
+  }, true);
+}
 function attachmentsHTML(atts) {
   if (!atts || !atts.length) return '<div class="muted small">Nog geen foto’s of bestanden.</div>';
   const isKind = (a, soort) => a.kind === soort || new RegExp('^' + soort + '/').test(a.mime || '');
@@ -2632,7 +2717,7 @@ function openSendMonteurModal(order) {
     <h2>Naar monteur sturen</h2>
     <p class="muted small">De opdracht wordt als nette samenvatting naar de WhatsApp-groep van de monteur gestuurd via de bridge.</p>
     ${al ? `<div class="sm-al-verstuurd">Al verstuurd naar ${esc(al.monteurName || 'de monteur')} · ${fmtDateShort(al.at)}. Nogmaals versturen zet het bericht opnieuw in de groep.</div>` : ''}
-    <label>Monteur <select id="sm-monteur">${opts || '<option>(geen monteurs)</option>'}</select></label>
+    <label>Monteur <select id="sm-monteur" data-geen-wijziging>${opts || '<option>(geen monteurs)</option>'}</select></label>
     ${imgs.length ? `
     <label style="margin-top:10px">Foto's meesturen <span class="muted small">— staan aan; tik op een foto om hem weg te laten (max ${MAX_FOTOS})</span>
       <button type="button" class="btn btn-sm" id="sm-imgall" style="margin-left:8px">${aan.size ? 'geen' : 'alles'}</button></label>
@@ -2804,7 +2889,7 @@ function ovKopHTML(o, { canWrite, isMonteur, kv, stap }) {
         ${tel ? `<a href="tel:${esc(String(tel).replace(/\s+/g, ''))}" class="ov-klant-link">${icon('phone', 13)} ${esc(tel)}</a>` : ''}
         ${adres ? `<a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(adres)}" target="_blank" rel="noopener" class="ov-klant-link">${icon('pin', 13)} ${esc(adres)}</a>` : ''}
       </div>
-      ${stap ? `<div class="ov-stap"><button type="button" class="btn btn-primary" id="ov-stap">${esc(stap.label)}</button><span class="muted small">Volgende stap — ${esc(stap.uitleg)}</span></div>` : ''}
+      ${stap ? `<div class="ov-stap"><button type="button" class="btn btn-primary" id="ov-stap" data-vervolg="${esc(stap.klik || '')}">${esc(stap.label)}</button><span class="muted small">Volgende stap — ${esc(stap.uitleg)}</span></div>` : ''}
     </div>
     <div class="ov-tabs" role="tablist" aria-label="Onderdelen van de opdracht">
       ${tab('details', 'Details', 0)}${tab('gesprek', 'Gesprek', nNieuw || nGesprek, nNieuw ? ' nieuw' : '')}${tab('fotos', "Foto's", nFoto)}${tab('historie', 'Geschiedenis', 0)}
@@ -2869,7 +2954,7 @@ function ovBindTabs(o, { stap, isMonteur, begin }) {
     const toon = () => { anRij.hidden = stSel.value !== 'geannuleerd'; };
     toon(); stSel.addEventListener('change', toon);
     const over = $('#f-annuleer-over', m);
-    if (over) over.onclick = () => { $('#f-annuleer').value = over.dataset.reden; $('#f-annuleer-hint').textContent = 'Overgenomen — klik Opslaan om het te bewaren.'; };
+    if (over) over.onclick = () => { $('#f-annuleer').value = over.dataset.reden; $('#f-annuleer-hint').textContent = 'Overgenomen — klik Opslaan om het te bewaren.'; modalMarkeerVuil(); };
   }
   ovToonTab(begin || 'details');
   const knop = $('#ov-stap');
@@ -2960,7 +3045,8 @@ function openOrderModal(id, pool) {
     ${o ? '<div class="ov-paneel" data-ovp="fotos" hidden>' : ''}
     ${o ? `
       <div class="attach"> <div class="thread-head">${icon('paperclip', 15)} Foto's &amp; bestanden${o.attachments && o.attachments.length ? ` (${o.attachments.length})` : ''}
-          <button class="btn btn-sm" id="f-addfile" type="button" style="margin-left:auto">+ Toevoegen</button> <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden> </div> <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div> </div>` : ''}
+          ${o.attachments && o.attachments.length ? `<button class="btn btn-sm" id="f-fotoweg" type="button" style="margin-left:auto" title="Een foto of bestand van deze opdracht weghalen">Verwijderen…</button>` : ''}
+          <button class="btn btn-sm" id="f-addfile" type="button"${o.attachments && o.attachments.length ? '' : ' style="margin-left:auto"'}>+ Toevoegen</button> <input type="file" id="f-fileinput" accept="image/*,video/*,application/pdf" multiple hidden> </div> <div class="attach-grid" id="f-attachgrid">${attachmentsHTML(o.attachments)}</div> </div>` : ''}
     ${o ? '</div>' : ''}
     ${o ? '<div class="ov-paneel" data-ovp="gesprek" hidden>' : ''}
     ${o && o.thread && o.thread.length ? `
@@ -3155,7 +3241,7 @@ function openOrderModal(id, pool) {
       if (tpKnop) tpKnop.innerHTML = `${icon('sparkles', 14)} Trustpilot ✓`;
     } catch (err) { toast(err.message, true); }
   }); };
-  if (o && $('#f-onweg')) $('#f-onweg').onclick = async () => {
+  if (o && $('#f-onweg')) $('#f-onweg').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     // Vooraf laten zien via welk kanaal het gaat (punt 7) — en stoppen als er niets is.
     const tel = (o.intake?.phone || o.customer?.phone || '').replace(/\D/g, '');
     const mail = (o.intake?.email || o.customer?.email || '').trim();
@@ -3164,7 +3250,7 @@ function openOrderModal(id, pool) {
     if (!confirm(`Klant laten weten dat de monteur nu onderweg is?\n\nGaat via: ${via}${o.onderwegAt ? '\n(Er is al eerder een onderweg-bericht gestuurd.)' : ''}`)) return;
     try { const r = await api(`/api/orders/${o.id}/onderweg`, 'POST', {}); toast(r.summary || 'Onderweg-bericht verstuurd'); closeModal(); loadBoard(); }
     catch (err) { toast(err.message, true); }
-  };
+  });
   // Afspraak annuleren: haalt de datum weg (verdwijnt uit de agenda + Google Agenda) en
   // brengt desgewenst de klant op de hoogte. De opdracht zelf blijft bestaan.
   if (o && canWrite && $('#f-cancel-appt')) $('#f-cancel-appt').onclick = () => {
@@ -3192,6 +3278,7 @@ function openOrderModal(id, pool) {
   if (o) {
     const fileInput = $('#f-fileinput');
     $('#f-addfile').onclick = () => fileInput.click();
+    ovBindFotoWeg(o);
     fileInput.onchange = async () => {
       const files = [...fileInput.files];
       if (!files.length) return;
@@ -3228,6 +3315,7 @@ function openOrderModal(id, pool) {
       }
       const grid = $('#f-attachgrid');   // kan weg zijn als het venster intussen dicht ging
       if (grid) { grid.innerHTML = attachmentsHTML(o.attachments); flash(grid); }
+      ovFotoTeller(o);
       // Eerlijke melding: hier stond altijd "Toegevoegd", óók als élke upload faalde
       // (die foutmelding werd meteen overschreven).
       if (mislukt) toast(gelukt ? `${gelukt} toegevoegd, ${mislukt} mislukt: ${laatsteFout}` : `Uploaden mislukt: ${laatsteFout}`, true);
@@ -3254,6 +3342,8 @@ function openOrderModal(id, pool) {
   });
   const begin = leesForm();
   $('#f-save').onclick = (e) => eenKeer(e.currentTarget, async () => {
+    // "Opslaan en doorgaan" (vraag bij een vervolgknop): alleen als déze opslag slaagt.
+    const vervolgNaOpslaan = _naOpslaanVervolg; _naOpslaanVervolg = '';
     // Monteur: verplichte notitie voordat een opdracht naar offerte/afgerond/geannuleerd gaat.
     const noteRequired = noteRequiredKeys();
     if (isMonteur && o && $('#f-status').value !== o.status && noteRequired.includes($('#f-status').value) && !($('#f-notes').value || '').trim()) {
@@ -3345,6 +3435,12 @@ function openOrderModal(id, pool) {
       // en zie je de échte foutmelding van de server i.p.v. "Opgeslagen".
       if (klantFout) { toast('Opdracht opgeslagen, maar de klantgegevens NIET: ' + klantFout, true); loadBoard(); return; }
       modalSchoon(); closeModal(); toast('Opgeslagen'); loadBoard();
+      if (o && vervolgNaOpslaan) {
+        // Verse opdracht openen (met wat net is opgeslagen) en de gekozen knop indrukken.
+        await openOrderVers(o.id);
+        const knop = document.querySelector(vervolgNaOpslaan);
+        if (knop) knop.click();
+      }
     } catch (err) { toast(err.message, true); }
   });
   if (o && canWrite) $('#f-delete').onclick = async () => {
@@ -3368,6 +3464,7 @@ async function refreshInboxBadge() {
 
 const INBOX_PAGE = 60; // aantal berichten per keer renderen (voorkomt vastlopen)
 let _lastInboxHtml = '';   // laatst getekende inbox, om nutteloos hertekenen te herkennen
+const _inboxGetypt = new Map();   // getypte, nog niet verwerkte correcties per bericht|veld
 async function loadInbox(append = false) {
   append = append === true; // als change-handler krijgt hij een Event mee — dat is géén "Toon meer"
   const filter = $('#inboxFilter')?.value || 'pending';
@@ -3454,7 +3551,16 @@ async function loadInbox(append = false) {
         if (r.bottom > 60) { anker = { id: el.dataset.id, top: r.top }; break; }
       }
     }
+    // Correcties in ándere berichten niet weggooien — ook niet als je even een ander filter
+    // bekijkt (dan staat het bericht tijdelijk niet in beeld; _inboxGetypt onthoudt het).
+    const inBeeld = new Set($$('.review', list).map((r) => r.dataset.id));
+    for (const k of [..._inboxGetypt.keys()]) if (inBeeld.has(k.split('|')[0])) _inboxGetypt.delete(k);   // wat in beeld stond wordt opnieuw gemeten
+    for (const x of invoerSnapshot(list)) _inboxGetypt.set(x.sleutel, { ...x, filter: state._inboxVorigFilter || filter });
     list.innerHTML = rowsHTML;
+    invoerTerugzetten(list, [..._inboxGetypt.values()]);
+    // Bericht weg uit hetzelfde filter (goedgekeurd/afgewezen)? Dan hoeft zijn correctie niet bewaard.
+    for (const [k, x] of [..._inboxGetypt]) if (x.filter === filter && !list.querySelector(`.review[data-id="${CSS.escape(k.split('|')[0])}"]`)) _inboxGetypt.delete(k);
+    state._inboxVorigFilter = filter;
     if (anker) {
       const terug = list.querySelector(`.review[data-id="${CSS.escape(anker.id)}"]`);
       if (terug) { const d = terug.getBoundingClientRect().top - anker.top; if (Math.abs(d) > 1) window.scrollTo(0, window.scrollY + d); }
@@ -3983,12 +4089,12 @@ function openCampaignModal() {
     <div id="cp-progress" class="muted small" style="margin-top:8px"></div>
     <div class="modal-actions"><span></span><div class="right"><button class="btn" id="cp-cancel">Annuleren</button><button class="btn btn-primary" id="cp-send">Versturen</button></div></div>`);
   $('#cp-cancel').onclick = closeModal;
-  $('#cp-testbtn').onclick = async () => {
+  $('#cp-testbtn').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const to = $('#cp-test').value.trim();
     if (!to) return toast('Vul een testadres in', true);
     try { await api('/api/campaign/send', 'POST', { subject: $('#cp-subject').value, body: $('#cp-body').value, test: to }); toast(`Testmail verstuurd naar ${to}`); }
     catch (err) { toast(err.message, true); }
-  };
+  });
   $('#cp-send').onclick = async () => {
     const doel = $('#cp-who').value === 'all' ? all : filtered;
     const subject = $('#cp-subject').value.trim();
@@ -4013,10 +4119,10 @@ function openCampaignModal() {
 
 function openCustomerModal(c) {
   modal(`
-    <h2>${c ? 'Klant bewerken' : 'Nieuwe klant'}</h2> <label>Naam <input id="c-name" value="${esc(c?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="c-phone" value="${esc(c?.phone || '')}"></label> <label>E-mail <input id="c-email" value="${esc(c?.email || '')}"></label> </div> <label>Adres <input id="c-address" value="${esc(c?.address || '')}"></label> <label>Type <select id="c-type"> <option value="lead" ${c?.type==='lead'?'selected':''}>Lead</option> <option value="klant" ${c?.type==='klant'?'selected':''}>Klant</option> </select></label> <label>Notities <textarea id="c-notes" rows="2">${esc(c?.notes || '')}</textarea></label> <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="c-optout" style="width:auto" ${c?.campaignOptOut ? 'checked' : ''}> Geen campagne-mails sturen (klant is afgemeld)</label> <div class="modal-actions"> ${c ? '<button class="btn btn-danger" id="c-del">Verwijderen</button>' : '<span></span>'}
+    <h2>${c ? 'Klant bewerken' : 'Nieuwe klant'}</h2> <label>Naam <input id="c-name" value="${esc(c?.name || '')}"></label> <div class="row"> <label>Telefoon <input id="c-phone" value="${esc(c?.phone || '')}"></label> <label>E-mail <input id="c-email" value="${esc(c?.email || '')}"></label> </div> <label>Adres <input id="c-address" value="${esc(c?.address || '')}"></label> <label>Type <select id="c-type"> <option value="lead" ${c?.type==='lead'?'selected':''}>Lead</option> <option value="klant" ${c?.type==='klant'?'selected':''}>Klant</option> </select></label> <label>Notities <textarea id="c-notes" rows="2">${esc(c?.notes || '')}</textarea></label> <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="c-optout" data-bewaak style="width:auto" ${c?.campaignOptOut ? 'checked' : ''}> Geen campagne-mails sturen (klant is afgemeld)</label> <div class="modal-actions"> ${c ? '<button class="btn btn-danger" id="c-del">Verwijderen</button>' : '<span></span>'}
       <div class="right"><button class="btn" id="c-cancel">Annuleren</button><button class="btn btn-primary" id="c-save">Opslaan</button></div> </div>`);
   $('#c-cancel').onclick = closeModal;
-  $('#c-save').onclick = async () => {
+  $('#c-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const payload = { name: $('#c-name').value, phone: $('#c-phone').value, email: $('#c-email').value, address: $('#c-address').value, type: $('#c-type').value, notes: $('#c-notes').value, campaignOptOut: $('#c-optout').checked };
     if (!payload.name) return toast('Naam verplicht', true);
     try {
@@ -4024,7 +4130,7 @@ function openCustomerModal(c) {
       else await api('/api/customers', 'POST', payload);
       closeModal(); toast('Opgeslagen'); loadCustomers();
     } catch (err) { toast(err.message, true); }
-  };
+  });
   if (c) $('#c-del').onclick = async () => {
     if (!confirm('Klant verwijderen?')) return;
     try { await api(`/api/customers/${c.id}`, 'DELETE'); closeModal(); toast('Verwijderd'); loadCustomers(); }
@@ -4055,7 +4161,7 @@ async function loadMonteurs() {
   $$('#monteurList .chip-click[data-mfilter]').forEach((el) => el.onclick = () => openMonteurOrders(el.dataset.mid, el.dataset.mname, el.dataset.mfilter));
   $$('[data-medit]').forEach((b) => b.onclick = () => openMonteurModal(state.monteurs.find((m) => m.id === b.dataset.medit)));
   $$('[data-mdel]').forEach((b) => b.onclick = async () => {
-    if (!confirm('Monteur verwijderen?')) return;
+    if (!confirm('Monteur verwijderen?\n\nAl zijn opdrachten blijven bestaan, maar staan daarna zonder monteur. Dit kan niet ongedaan worden gemaakt.')) return;
     try { await api(`/api/monteurs/${b.dataset.mdel}`, 'DELETE'); toast('Verwijderd'); loadMonteurs(); }
     catch (err) { toast(err.message, true); }
   });
@@ -4093,11 +4199,11 @@ function openPhoneIntakeModal() {
     <div class="row"><label>Naam klant <input id="pi-name" placeholder="naam"></label><label>Telefoon <input id="pi-phone" placeholder="06-…"></label></div>
     <label>Plaats of adres <input id="pi-address" placeholder="bv. Breda, of straat + postcode"></label>
     <label>Wat is het probleem? <textarea id="pi-problem" rows="3" placeholder="bv. buitengesloten, cilinder vervangen, schuifpui klemt…"></textarea></label>
-    <div class="row"><label>Monteur <select id="pi-monteur">${monteurOpts}</select></label><label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:24px"><input type="checkbox" id="pi-urgent" style="width:auto"> Spoed</label></div>
+    <div class="row"><label>Monteur <select id="pi-monteur">${monteurOpts}</select></label><label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:24px"><input type="checkbox" id="pi-urgent" data-bewaak style="width:auto"> Spoed</label></div>
     <div class="modal-actions"><span></span><div class="right"><button class="btn" id="pi-cancel">Annuleren</button><button class="btn btn-primary" id="pi-save">Opdracht aanmaken</button></div></div>`);
   $('#pi-name').focus();
   $('#pi-cancel').onclick = closeModal;
-  $('#pi-save').onclick = async () => {
+  $('#pi-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const name = $('#pi-name').value.trim();
     const problem = $('#pi-problem').value.trim();
     if (!name && !$('#pi-phone').value.trim()) return toast('Vul minimaal een naam of telefoonnummer in', true);
@@ -4116,7 +4222,7 @@ function openPhoneIntakeModal() {
       });
       closeModal(); toast('Opdracht aangemaakt'); loadBoard();
     } catch (err) { toast(err.message, true); }
-  };
+  });
 }
 
 // Opvolg-herinnering (snooze): kies wanneer deze kaart terug moet komen.
@@ -4150,7 +4256,7 @@ function openSnoozeModal(o) {
   $$('.sn-q').forEach((b) => b.onclick = () => set(b.dataset.at));
   $('#sn-save').onclick = () => { const v = $('#sn-custom').value; if (!v) return toast('Kies een moment', true); set(v); };
   if ($('#sn-clear')) $('#sn-clear').onclick = () => set(null);
-  $('#sn-cancel').onclick = () => { closeModal(); };
+  $('#sn-cancel').onclick = () => openOrderModal(o.id);   // terug naar de opdracht, niet alles dicht
 }
 
 // ---------- Werkbon (uitgevoerd werk + materialen + handtekening klant) ----------
@@ -4183,7 +4289,7 @@ function openWerkbonModal(o) {
     document.removeEventListener('touchmove', move); document.removeEventListener('touchend', end); document.removeEventListener('touchcancel', end);
   };
   const start = (e) => {
-    drawing = true; drew = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); e.preventDefault();
+    drawing = true; drew = true; modalMarkeerVuil(); const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); e.preventDefault();
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', end);
     document.addEventListener('touchmove', move, { passive: false }); document.addEventListener('touchend', end); document.addEventListener('touchcancel', end);
   };
@@ -4191,7 +4297,7 @@ function openWerkbonModal(o) {
   cv.addEventListener('touchstart', start, { passive: false });
   $('#wb-clear').onclick = () => { ctx.clearRect(0, 0, cv.width, cv.height); drew = false; };
   $('#wb-cancel').onclick = () => openOrderModal(o.id);
-  $('#wb-save').onclick = async () => {
+  $('#wb-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     try {
       let signatureAttachmentId = '';
       if (drew) {
@@ -4205,7 +4311,7 @@ function openWerkbonModal(o) {
       // Terug naar de KAART (punt 3): de factuur is de volgende stap, niet het bord.
       toast('Werkbon opgeslagen — nu de factuur?'); openOrderModal(o.id); loadBoard();
     } catch (err) { toast(err.message, true); }
-  };
+  });
 }
 
 // ---------- Factuur (regels, btw, versturen als PDF) ----------
@@ -4480,7 +4586,7 @@ function renderInvoiceEditor(ctx) {
         ${inv.id && isQuote && (inv.status === 'goedgekeurd' || inv.status === 'verzonden') ? `<button class="btn" id="inv-tofactuur">${inv.convertedInvoiceId ? '→ Open factuur' : '→ Maak factuur'}</button>` : ''}
         ${inv.id ? `<button class="btn" id="inv-copy">${icon('merge', 13)} Kopieer</button>` : ''}
         ${inv.id && pinKnopMag() ? `<button class="btn${inv.vastgepind ? ' inv-pin-aan' : ''}" id="inv-pin" title="${inv.vastgepind ? 'Vastgepind — staat bovenaan bij Facturen. Klik om los te maken.' : 'Bovenaan zetten bij Facturen (voor jou en je collega)'}">${icon('punaise', 13)} ${inv.vastgepind ? 'Losmaken' : 'Vastpinnen'}</button>` : ''}
-        ${inv.id && !locked ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}`}
+        ${inv.id && !locked && (state.me?.role === 'admin' || inv.status === 'concept' || (inv.status === 'betaald' && !inv.sentAt)) ? `<button class="btn btn-danger" id="inv-del">${icon('trash', 13)} Verwijder</button>` : ''}`}
       </div>
       <div class="right">
         ${inv.id ? `<a class="btn" target="_blank" rel="noopener" href="/api/invoices/${inv.id}/pdf">${icon('eye', 14)} PDF openen</a>` : ''}
@@ -4615,15 +4721,23 @@ function renderInvoiceEditor(ctx) {
   // bij een al verstuurd document). Geeft false als de gebruiker annuleert.
   const standNu = () => JSON.stringify({ l: readLines(), b: $('#inv-btw') && $('#inv-btw').value, n: $('#inv-note') && $('#inv-note').value, d: readDiscount(), s: readSignature() !== undefined, r: readRep() || '' });
   const beginStand = standNu();
+  // Zelfde vergelijking voor de vraag "Wijzigingen opslaan?" bij sluiten (24 nov 2026).
+  if (!locked) _modalVuilCheck = () => !!$('#inv-save') && standNu() !== beginStand;
   const bewaarEerst = async () => {
     if (locked || !inv.id || standNu() === beginStand) return true;
     if (!confirmEditIfSent()) return false;
     await saveConcept();
     return true;
   };
-  if ($('#cust-save')) $('#cust-save').onclick = async () => {
+  // De klantgegevens in dit venster hebben een eigen knop. Typte je daar een nieuw e-mailadres
+  // en klikte je meteen op Versturen, dan ging de factuur naar het OUDE adres (24 nov 2026,
+  // naloop). Daarom: is het klantblok gewijzigd, dan wordt het bij Opslaan/Versturen eerst
+  // bewaard. Geeft false als dat niet lukt (dan gaat de handeling niet door).
+  const klantblokGewijzigd = () => !!$('#cust-save') && ['name', 'phone', 'email', 'address'].some((k) => { const el = $('#cust-' + k); return !!el && el.value.trim() !== String(customer[k] || '').trim(); });
+  const klantblokEerst = async () => (klantblokGewijzigd() ? bewaarKlantblok() : true);
+  const bewaarKlantblok = async () => {
     const cp = { name: $('#cust-name').value, phone: $('#cust-phone').value, email: $('#cust-email').value, address: $('#cust-address').value };
-    if (!cp.name.trim()) { toast('Naam mag niet leeg zijn', true); return; }
+    if (!cp.name.trim()) { toast('Naam mag niet leeg zijn', true); return false; }
     try {
       const oudAdres = String(customer.address || '').trim();
       const updated = await api(`/api/customers/${customer.id}`, 'PATCH', cp);
@@ -4647,8 +4761,12 @@ function renderInvoiceEditor(ctx) {
         } catch { /* veld blijft zoals het was */ }
       }
       toast(melding);
-    } catch (err) { toast(err.message, true); }
+      // De velden staan nu gelijk aan wat bewaard is: geen "niet opgeslagen" meer voor dit blok.
+      ['name', 'phone', 'email', 'address'].forEach((k) => { const el = $('#cust-' + k); if (el) { el.value = customer[k] || ''; el.defaultValue = el.value; } });
+      return true;
+    } catch (err) { toast(err.message, true); return false; }
   };
+  if ($('#cust-save')) $('#cust-save').onclick = (ev) => eenKeer(ev.currentTarget, bewaarKlantblok);
   $('#inv-cancel').onclick = closeModal;
   if ($('#inv-share')) $('#inv-share').onclick = (e) => shareInvoicePdf(inv.id, `${woord}-${inv.number || ''}${customer.name ? ' ' + customer.name : ''}`, e.currentTarget);
   if ($('#inv-resend')) $('#inv-resend').onclick = () => resendInvoice(inv.id, `${woord} ${inv.number || ''}`, customer.email || inv.sentTo || '', () => { closeModal(); if (ctx.after) ctx.after(); }, { factuur: !isQuote, nummer: inv.number, bedrag: inv.totalIncl, status: inv.status, trustpilotAl: inv.trustpilotAt || customer.trustpilotUitgenodigdAt || '' });
@@ -4666,7 +4784,11 @@ function renderInvoiceEditor(ctx) {
     const regelsNu = readLines();
     renderInvoiceEditor({ ...ctx, inv: { ...inv, lines: regelsNu.length ? regelsNu : inv.lines }, correctie: { reden } });
   };
-  if ($('#inv-save')) $('#inv-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => { if (!confirmEditIfSent()) return; try {
+  if ($('#inv-save')) $('#inv-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => { if (!confirmEditIfSent()) return; if (!(await klantblokEerst())) return;
+    // Lege nieuwe factuur/offerte (24 nov 2026): één tik op Opslaan maakte een genummerde
+    // factuur van € 0 (bij "standaard betaald" zelfs als betaald). Eerst vragen.
+    if (!inv.id && !readLines().length && !confirm(`Deze ${isQuote ? 'offerte' : 'factuur'} heeft nog geen regels.\n\nToch opslaan? Er wordt dan een ${isQuote ? 'offerte' : 'factuur'}nummer gebruikt.\n\nOK = toch opslaan.  Annuleren = eerst regels invullen.`)) return;
+    try {
     // Melding op het ANTWOORD van de server (28 sep 2026, audit): een nieuwe factuur
     // krijgt bij standaardBetaald meteen 'betaald', terwijl hier "Concept opgeslagen"
     // stond (de knop heette bij een nieuwe factuur ook "Concept opslaan").
@@ -4687,6 +4809,7 @@ function renderInvoiceEditor(ctx) {
   const totaalNu = () => { const t = $('#inv-totals strong:last-child'); const m = t && t.textContent.match(/([\d.,]+)/); return m ? Number(m[1].replace(/\./g, '').replace(',', '.')) : (inv.totalIncl ?? null); };
   const tpKeuze = {};
   if ($('#inv-send')) $('#inv-send').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    if (!(await klantblokEerst())) return;
     if (!customer.email) { toast('Deze klant heeft nog geen e-mailadres — vul dat eerst in (op de opdracht of bij Klanten).', true); return; }
     let keuze = null;
     if (isQuote) {
@@ -4705,6 +4828,7 @@ function renderInvoiceEditor(ctx) {
   });
   // Versturen via WhatsApp: de PDF gaat als bijlage mee naar het 06 van de klant.
   if ($('#inv-send-wa')) $('#inv-send-wa').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    if (!(await klantblokEerst())) return;
     const tel = (ctx.order && ctx.order.intake && ctx.order.intake.phone) || customer.phone || '';
     if (!tel) { toast('Deze klant heeft nog geen telefoonnummer — vul dat eerst in.', true); return; }
     let keuze = null;
@@ -4884,7 +5008,7 @@ async function loadAssistant() {
     api('/api/settings').then((st) => { const el = $('#ss-auto'); if (el) el.checked = !!st.autoScan?.enabled; }).catch(() => {});
     $('#ss-auto').onchange = async () => {
       try { await api('/api/settings', 'PATCH', { autoScan: { enabled: $('#ss-auto').checked, hour: 5 } }); toast($('#ss-auto').checked ? 'Nachtelijke scan aan (rond 05:00)' : 'Nachtelijke scan uit'); }
-      catch (err) { toast(err.message, true); }
+      catch (err) { toast(err.message, true); const el = $('#ss-auto'); if (el) el.checked = !el.checked; }   // mislukt = schakelaar terug
     };
   }
   $$('.as-ex').forEach((b) => b.onclick = () => { $('#as-q').value = b.textContent; });
@@ -5174,11 +5298,11 @@ async function openMonteurModal(m) {
   // Automatische review per monteur aan/uit — los van de algemene instelling.
   const revWrap = document.createElement('label');
   revWrap.style.cssText = 'display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:4px';
-  revWrap.innerHTML = `<input type="checkbox" id="m-reviewauto" style="width:auto"${m?.reviewAuto === false ? '' : ' checked'}> Automatisch review vragen na een afgeronde opdracht van deze monteur`;
+  revWrap.innerHTML = `<input type="checkbox" id="m-reviewauto" data-bewaak style="width:auto"${m?.reviewAuto === false ? '' : ' checked'}> Automatisch review vragen na een afgeronde opdracht van deze monteur`;
   const acties = $('#modal .modal-actions');
   if (acties) acties.parentNode.insertBefore(revWrap, acties);
   $('#m-cancel').onclick = closeModal;
-  $('#m-save').onclick = async () => {
+  $('#m-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const payload = { name: $('#m-name').value, phone: $('#m-phone').value, email: $('#m-email').value, waGroup: $('#m-wagroup').value, reviewAuto: !!$('#m-reviewauto')?.checked };
     if ($('#m-cal')) payload.calendarId = $('#m-cal').value;
     if (!payload.name) return toast('Naam verplicht', true);
@@ -5187,7 +5311,7 @@ async function openMonteurModal(m) {
       else await api('/api/monteurs', 'POST', payload);
       closeModal(); toast('Opgeslagen'); loadMonteurs();
     } catch (err) { toast(err.message, true); }
-  };
+  });
 }
 
 // ---------- AI control panel ----------
@@ -5211,10 +5335,13 @@ async function loadControl() {
       loadControl();
     } catch (err) { toast(err.message, true); }
   };
-  $('#runArchive').onclick = async () => {
-    const r = await api('/api/archives/run', 'POST');
-    toast(r.archived > 0 ? `${r.archived} opdrachten ingeklapt onder "${r.week.label}"` : 'Niets om in te klappen (al gedaan of niets passend)');
-  };
+  $('#runArchive').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    if (!confirm('Alle afgehandelde opdrachten van de afgelopen week nu inklappen? Ze verdwijnen van het bord en staan daarna onder "Ingeklapte agenda\'s".')) return;
+    try {
+      const r = await api('/api/archives/run', 'POST');
+      toast(r.archived > 0 ? `${r.archived} opdrachten ingeklapt onder "${r.week.label}"` : 'Niets om in te klappen (al gedaan of niets passend)');
+    } catch (err) { toast(err.message, true); }
+  });
 }
 
 async function loadFeedbackList() {
@@ -5232,6 +5359,7 @@ async function loadFeedbackList() {
       ${f.sample ? `<div class="muted small" style="margin-top:3px">“${esc(f.sample.slice(0, 120))}…”</div>` : ''}
     </div>`).join('');
   $$('.fb-del').forEach((b) => b.onclick = async () => {
+    if (!confirm('Dit leervoorbeeld verwijderen? De AI leert er dan niet meer van.')) return;
     try { await api(`/api/feedback/${b.dataset.id}`, 'DELETE'); toast('Verwijderd'); loadFeedbackList(); }
     catch (err) { toast(err.message, true); }
   });
@@ -5406,7 +5534,7 @@ function renderInvoices() {
   // Zelf een review vragen bij een verzonden factuur — het moment waarop de klus af is.
   $$('.inv-review').forEach((b) => b.onclick = async () => {
     const alGedaan = b.textContent.includes('✓');
-    if (alGedaan && !confirm('Er is al een review gevraagd voor deze opdracht. Nog een keer sturen?')) return;
+    if (!confirm(alGedaan ? 'Er is al een review gevraagd voor deze opdracht. Nog een keer sturen?' : 'De klant nu een review-verzoek sturen (per e-mail en WhatsApp, voor zover bekend)?')) return;
     b.disabled = true; const oud = b.innerHTML; b.textContent = 'Versturen…';
     try {
       const r = await api(`/api/invoices/${b.dataset.id}/review-request`, 'POST', { force: alGedaan });
@@ -5415,10 +5543,11 @@ function renderInvoices() {
     } catch (err) { toast(err.message, true); b.disabled = false; b.innerHTML = oud; }
   });
   $$('.inv-tp').forEach((b) => b.onclick = () => stuurTrustpilotFactuur(b.dataset.id, b.dataset.al, b, () => loadInvoices()));
-  const quickStatus = (sel, status, msg) => $$(sel).forEach((b) => b.onclick = async () => {
+  const quickStatus = (sel, status, msg, vraag = '') => $$(sel).forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    if (vraag && !confirm(vraag)) return;
     try { await api(`/api/invoices/${b.dataset.id}/status`, 'POST', { status: b.dataset.status || status }); toast(msg); loadInvoices(); }
     catch (err) { toast(err.message, true); }
-  });
+  }));
   quickStatus('.inv-mark', 'betaald', 'Betaald ✓');
   quickStatus('.inv-unmark', 'verzonden', 'Gemarkeerd als nog niet betaald');
   quickStatus('.inv-heropen', 'verzonden', 'Terug naar open — telt weer als openstaand');
@@ -5438,7 +5567,7 @@ function renderInvoices() {
       openStandaloneInvoice((r.invoice || r).id);
     } catch (err) { toast(err.message, true); }
   }));
-  quickStatus('.inv-ok', 'goedgekeurd', 'Offerte goedgekeurd ✓');
+  quickStatus('.inv-ok', 'goedgekeurd', 'Offerte goedgekeurd ✓', 'Deze offerte op Goedgekeurd zetten?\n\nDe offerte is daarna niet meer te wijzigen. Als dat zo is ingesteld, staat er meteen een factuurconcept klaar.');
 }
 
 // Leesbare modelnaam ("claude-opus-5-5" → "Opus 5.5").
@@ -5785,7 +5914,7 @@ function openFinanceEntry(kind) {
     <div class="modal-actions"><span></span><div class="right"><button class="btn" id="fe-cancel">Annuleren</button><button class="btn btn-primary" id="fe-save">Boeken</button></div></div>`);
   $$('.fq').forEach((b) => b.onclick = () => { const q = quick[Number(b.dataset.i)]; if (!q) return; $('#fe-amount').value = q.amount; $('#fe-cat').value = q.category; $('#fe-note').value = q.note || ''; });
   $('#fe-cancel').onclick = closeModal;
-  $('#fe-save').onclick = async () => {
+  $('#fe-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const payload = { kind, amount: Number($('#fe-amount').value), date: $('#fe-date').value, category: $('#fe-cat').value, monteurId: $('#fe-monteur').value || null, note: $('#fe-note').value };
     if (income) payload.source = $('#fe-source')?.value || '';
     if (!(payload.amount > 0)) { toast('Vul een bedrag in', true); return; }
@@ -5798,7 +5927,7 @@ function openFinanceEntry(kind) {
       closeModal(); loadFinance();
     }
     catch (err) { toast(err.message, true); }
-  };
+  });
 }
 
 
@@ -5811,7 +5940,7 @@ function openBackfillModal() {
     <h2>${icon('tag', 16)} Historie alsnog boeken</h2>
     <p class="muted small">Het systeem boekt normaal alleen vanaf het moment dat automatisch boeken aanstond. Hiermee haal je het verleden alsnog op: elke <strong>betaalde factuur</strong> als omzet (excl. btw) en elke <strong>afgeronde DRS-klus</strong> als fee. Niets wordt geboekt tot jij op de knop drukt.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin:10px 0">
-      <label style="margin:0">Vanaf datum <input id="bf-since" type="date" value="${esc(defSince)}"></label>
+      <label style="margin:0">Vanaf datum <input id="bf-since" type="date" value="${esc(defSince)}" data-geen-wijziging></label>
       <button class="btn" id="bf-load">Bekijken</button>
       <span class="muted small" id="bf-summary" style="margin-left:auto"></span>
     </div>
@@ -5935,14 +6064,14 @@ function openFinanceSettings() {
       <input class="rec-label" value="${esc(r.label)}" placeholder="Naam" style="flex:2">
       <input class="rec-amount" type="number" min="0" step="0.01" value="${esc(String(r.amount))}" style="width:100px" title="Bedrag">
       <select class="rec-period" style="width:110px"><option value="month" ${r.period === 'month' ? 'selected' : ''}>per maand</option><option value="week" ${r.period === 'week' ? 'selected' : ''}>per week</option></select>
-      <label style="display:flex;align-items:center;gap:5px;margin:0;font-weight:400"><input type="checkbox" class="rec-active" style="width:auto" ${r.active ? 'checked' : ''}>aan</label>
+      <label style="display:flex;align-items:center;gap:5px;margin:0;font-weight:400"><input type="checkbox" class="rec-active" data-bewaak style="width:auto" ${r.active ? 'checked' : ''}>aan</label>
       <button type="button" class="btn btn-sm rec-del">${icon('x', 12)}</button>
     </div>`;
   modal(`
     <h2>${icon('tag', 16)} Vaste kosten &amp; CEO-rapport</h2>
     <h3 style="margin:0 0 6px">Automatisch boeken</h3>
     <p class="muted small" style="margin-bottom:8px">Het systeem boekt zelf: elke <strong>betaalde factuur</strong> als omzet (excl. btw, juiste bron + monteur) en per <strong>afgeronde DRS-opdracht</strong> automatisch de vaste fee. Nooit dubbel; handmatig corrigeren blijft mogelijk.</p>
-    <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fs-autosync" style="width:auto" ${s.autoSync !== false ? 'checked' : ''}> Automatisch boeken aanzetten</label>
+    <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="fs-autosync" data-bewaak style="width:auto" ${s.autoSync !== false ? 'checked' : ''}> Automatisch boeken aanzetten</label>
     <label>Fee per afgeronde DRS-opdracht (€) <input id="fs-drsfee" type="number" min="0" step="0.5" value="${esc(String(s.drsFeePerJob ?? 42.5))}" style="max-width:130px"></label>
     <hr style="border:none;border-top:1px solid var(--line-soft);margin:14px 0">
     <label>Gemiddelde kosten per schuifpui-klus (€) <input id="fs-avg" type="number" min="0" step="1" value="${esc(String(s.avgJobCost))}"><span class="muted small">Voor winstschatting en AI-context.</span></label>
@@ -5952,11 +6081,11 @@ function openFinanceSettings() {
     <button type="button" class="btn btn-sm" id="rec-add">+ Vaste kostenpost</button>
     <h3 style="margin:16px 0 6px">Wekelijks CEO-rapport per e-mail</h3>
     <p class="muted small" style="margin-bottom:8px">Elke maandagochtend automatisch: omzet, kosten, winst, nieuwe aanvragen, openstaande facturen en aandachtspunten.</p>
-    <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wr-enabled" style="width:auto" ${s.weeklyReport.enabled ? 'checked' : ''}> Wekelijks rapport aanzetten</label>
+    <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wr-enabled" data-bewaak style="width:auto" ${s.weeklyReport.enabled ? 'checked' : ''}> Wekelijks rapport aanzetten</label>
     <div class="row"><label>Naar e-mailadres <input id="wr-email" value="${esc(s.weeklyReport.email)}" placeholder="jij@keyservice247.nl"></label><label>Uur (maandag) <input id="wr-hour" type="number" min="0" max="23" value="${esc(String(s.weeklyReport.hour))}" style="max-width:90px"></label></div>
     <button type="button" class="btn btn-sm" id="wr-test">Stuur nu een test-rapport</button>
     <div class="modal-actions"><span></span><div class="right"><button class="btn" id="fs-cancel">Annuleren</button><button class="btn btn-primary" id="fs-save">Opslaan</button></div></div>`);
-  const bindRec = () => $$('#rec-rows .rec-del').forEach((b) => b.onclick = () => b.closest('.rec-row').remove());
+  const bindRec = () => $$('#rec-rows .rec-del').forEach((b) => b.onclick = () => { b.closest('.rec-row').remove(); modalMarkeerVuil(); });
   bindRec();
   $('#rec-add').onclick = () => { $('#rec-rows').insertAdjacentHTML('beforeend', recRow({ id: 'rec_' + Date.now(), label: '', amount: 0, period: 'month', active: true })); bindRec(); };
   const collect = () => ({
@@ -5966,12 +6095,12 @@ function openFinanceSettings() {
     recurring: $$('#rec-rows .rec-row').map((r) => ({ id: r.dataset.id, label: $('.rec-label', r).value, amount: Number($('.rec-amount', r).value) || 0, period: $('.rec-period', r).value, active: $('.rec-active', r).checked, category: $('.rec-label', r).value })).filter((r) => r.label),
     weeklyReport: { enabled: $('#wr-enabled').checked, email: $('#wr-email').value, hour: Number($('#wr-hour').value) || 8 },
   });
-  $('#wr-test').onclick = async () => {
+  $('#wr-test').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const to = $('#wr-email').value.trim();
     if (!to) { toast('Vul eerst een e-mailadres in', true); return; }
     try { await api('/api/finance/settings', 'POST', collect()); await api('/api/finance/weekly-report/test', 'POST', { to }); toast('Test-rapport verstuurd — check je mail'); }
     catch (err) { toast(err.message, true); }
-  };
+  });
   $('#fs-cancel').onclick = closeModal;
   $('#fs-save').onclick = async () => {
     try { await api('/api/finance/settings', 'POST', collect()); toast('Opgeslagen'); closeModal(); loadFinance(); }
@@ -6004,7 +6133,19 @@ function renderAnalysis(a) {
 
 async function loadSettings() {
   const s = await api('/api/settings');
+  // Wat de gebruiker in andere blokken heeft getypt en nog niet heeft opgeslagen, overleeft
+  // het opnieuw opbouwen (na "Kolommen opslaan" was dat allemaal weg). Alleen velden met een id.
+  const paneel = $('#settingsPanel');
+  const openstaand = instellingenGewijzigd().map((el) => ({ plek: instPlek(el), waarde: instWaarde(el), vink: el.type === 'checkbox' || el.type === 'radio' })).filter((x) => x.plek);
   await loadSettingsHtml(s);
+  for (const x of openstaand) {
+    const el = paneel && instOpPlek(paneel, x.plek);
+    if (!el || !instTelt(el)) continue;
+    const nu = instWaarde(el);
+    if (nu === x.waarde) continue;                 // was dit blok: nu gewoon opgeslagen
+    _instBegin.set(el, nu);                        // beginwaarde = wat de server nu zegt
+    if (x.vink) el.checked = x.waarde === 'true'; else el.value = x.waarde;
+  }
   // Admin-onderdelen die pas nu gerenderd zijn (bv. Google-kaart) alsnog wegfilteren
   // voor een assistente met instellingen-recht (audit 16 sep).
   if (state.me.role !== 'admin') $$('#settingsPanel .admin-only').forEach((el) => { const need = el.dataset.need; if (!need || !hasPerm(need)) el.remove(); });
@@ -6631,7 +6772,12 @@ async function loadSettingsHtml(s) {
     catch (err) { toast(err.message, true); }
   };
   $('#saveWaGroups').onclick = async () => {
-    try { await api('/api/settings', 'PATCH', { whatsappOrderGroups: $('#waOrderGroups').value }); toast('WhatsApp opdracht-groepen opgeslagen'); }
+    try {
+      await api('/api/settings', 'PATCH', { whatsappOrderGroups: $('#waOrderGroups').value }); toast('WhatsApp opdracht-groepen opgeslagen');
+      // Hetzelfde gegeven staat ook in het blok "Automatisch naar monteur": dat veld bijwerken,
+      // anders zet een latere Opslaan daar stil de OUDE groepen terug.
+      const tweede = $('#md-ordergroups'); if (tweede) { tweede.value = $('#waOrderGroups').value; tweede.defaultValue = tweede.value; _instBegin.delete(tweede); tweede.dispatchEvent(new Event('input')); }
+    }
     catch (err) { toast(err.message, true); }
   };
   if ($('#saveTussenpersonen')) $('#saveTussenpersonen').onclick = (e) => eenKeer(e.currentTarget, async () => {
@@ -6790,12 +6936,12 @@ async function loadSettingsHtml(s) {
   if ($('#wa-pause')) $('#wa-pause').onchange = async () => {
     const aan = $('#wa-pause').checked;
     try { await api('/api/settings', 'PATCH', { whatsappPaused: aan }); toast(aan ? 'WhatsApp-verzending GEPAUZEERD — er gaat niets meer uit' : 'Pauze eraf — wachtrij gaat weer lopen'); }
-    catch (err) { toast(err.message, true); }
+    catch (err) { toast(`NIET opgeslagen: ${err.message}`, true); const el = $('#wa-pause'); if (el) el.checked = !aan; }   // schakelaar mag nooit iets anders tonen dan de echte stand
   };
   if ($('#wa-cloud-send')) $('#wa-cloud-send').onchange = async () => {
     const aan = $('#wa-cloud-send').checked;
     try { await api('/api/settings', 'PATCH', { whatsappCloudSend: aan }); toast(aan ? 'Klantberichten gaan nu via de officiële WhatsApp' : 'Klantberichten gaan weer via de bridge'); }
-    catch (err) { toast(err.message, true); }
+    catch (err) { toast(`NIET opgeslagen: ${err.message}`, true); const el = $('#wa-cloud-send'); if (el) el.checked = !aan; }
   };
   if ($('#wa-cloud-test')) $('#wa-cloud-test').onclick = async () => {
     const uit = $('#wa-cloud-testout');
@@ -6817,7 +6963,7 @@ async function loadSettingsHtml(s) {
   if ($('#wa-bridge-groepen')) $('#wa-bridge-groepen').onchange = async () => {
     const aan = $('#wa-bridge-groepen').checked;
     try { await api('/api/settings', 'PATCH', { bridgeGroupsOnly: aan }); toast(aan ? 'Bridge doet alleen nog groepen — klantberichten gaan officieel' : 'Bridge mag ook weer klantberichten versturen'); }
-    catch (err) { toast(err.message, true); }
+    catch (err) { toast(`NIET opgeslagen: ${err.message}`, true); const el = $('#wa-bridge-groepen'); if (el) el.checked = !aan; }
   };
   if ($('#wa-cloud-template')) $('#wa-cloud-template').onchange = async () => {
     try { await api('/api/settings', 'PATCH', { whatsappCloudTemplate: $('#wa-cloud-template').value.trim() }); toast('Sjabloonnaam opgeslagen'); }
@@ -6873,7 +7019,7 @@ async function loadSettingsHtml(s) {
   $('#copyCalUrl')?.addEventListener('click', async () => {
     const v = $('#calUrl').value;
     try { await navigator.clipboard.writeText(v); toast('Agenda-link gekopieerd'); }
-    catch { $('#calUrl').select(); document.execCommand('copy'); toast('Agenda-link gekopieerd'); }
+    catch { $('#calUrl').select(); if (document.execCommand('copy')) toast('Agenda-link gekopieerd'); else toast('Kopiëren lukt hier niet — de link is geselecteerd, kopieer hem zelf (lang drukken → Kopieer)', true); }
   });
 
   // Google Agenda 2-weg: status, verbinden, standaardagenda, loskoppelen.
@@ -7165,7 +7311,7 @@ async function loadSettingsHtml(s) {
   const renderSourceRow = (val = '') => {
     const row = document.createElement('div');
     row.className = 'editor-row';
-    row.innerHTML = `<input type="text" value="${esc(val)}" placeholder="Bijv. DRS WhatsApp groep"><button class="btn btn-sm btn-danger"></button>`;
+    row.innerHTML = `<input type="text" value="${esc(val)}" placeholder="Bijv. DRS WhatsApp groep"><button class="btn btn-sm btn-danger" title="Bron verwijderen" aria-label="Bron verwijderen">${icon('trash', 13)}</button>`;
     row.querySelector('button').onclick = () => row.remove();
     sourceRows.appendChild(row);
   };
@@ -7185,7 +7331,7 @@ async function loadSettingsHtml(s) {
     row.className = 'tmpl-row';
     row.dataset.id = t.id || '';
     row.innerHTML = `
-      <div class="editor-row"><input type="text" class="t-title" value="${esc(t.title || '')}" placeholder="Titel van het antwoord"><button class="btn btn-sm btn-danger"></button></div> <textarea class="t-body" rows="4" placeholder="De standaardtekst…">${esc(t.body || '')}</textarea>`;
+      <div class="editor-row"><input type="text" class="t-title" value="${esc(t.title || '')}" placeholder="Titel van het antwoord"><button class="btn btn-sm btn-danger" title="Standaardantwoord verwijderen" aria-label="Standaardantwoord verwijderen">${icon('trash', 13)}</button></div> <textarea class="t-body" rows="4" placeholder="De standaardtekst…">${esc(t.body || '')}</textarea>`;
     row.querySelector('button').onclick = () => row.remove();
     tmplRows.appendChild(row);
   };
@@ -7506,7 +7652,7 @@ function openUserPermsModal(u) {
   const effective = (role, k) => (u.perms && typeof u.perms[k] === 'boolean') ? u.perms[k] : (ROLE_PERM_DEFAULTS[role] || {})[k];
   const rows = (role) => PERM_LABELS.map(([k, label, sub]) => `
     <label class="perm-row" style="display:flex;align-items:flex-start;gap:10px;flex-direction:row;padding:9px 0;border-bottom:1px solid var(--line-soft);margin:0">
-      <input type="checkbox" class="up-perm" data-k="${k}" style="width:auto;margin-top:3px" ${effective(role, k) ? 'checked' : ''} ${role === 'admin' ? 'checked disabled' : ''}>
+      <input type="checkbox" class="up-perm" data-bewaak data-k="${k}" style="width:auto;margin-top:3px" ${effective(role, k) ? 'checked' : ''} ${role === 'admin' ? 'checked disabled' : ''}>
       <span><strong style="font-weight:600">${esc(label)}</strong><br><span class="muted small">${esc(sub)}</span></span>
     </label>`).join('');
   modal(`
@@ -7561,14 +7707,14 @@ function openUserModal() {
   const syncMonteur = () => { $('#u-monteur-wrap').hidden = $('#u-role').value !== 'monteur'; };
   $('#u-role').addEventListener('change', syncMonteur); syncMonteur();
   $('#u-cancel').onclick = closeModal;
-  $('#u-save').onclick = async () => {
+  $('#u-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const role = $('#u-role').value;
     const payload = { name: $('#u-name').value, email: $('#u-email').value, password: $('#u-pass').value, role, monteurId: role === 'monteur' ? $('#u-monteur').value : null };
     if (!payload.name || !payload.email || payload.password.length < 6) return toast('Vul alles in (wachtwoord min. 6 tekens)', true);
     if (role === 'monteur' && !payload.monteurId) return toast('Kies welke monteur dit account is', true);
     try { await api('/api/users', 'POST', payload); closeModal(); toast('Gebruiker aangemaakt'); loadUsers(); }
     catch (err) { toast(err.message, true); }
-  };
+  });
 }
 
 // ---------- Afwijzen met feedback (AI laten leren) ----------
@@ -7662,6 +7808,7 @@ function openReplyModal(ctx = {}) {
 
   const aiBtn = $('#rep-ai');
   if (aiBtn) aiBtn.onclick = async () => {
+    if (($('#rep-body').value || '').trim() && !confirm('Je hebt al een antwoord getypt. Vervangen door het AI-concept?')) return;
     aiBtn.disabled = true; aiBtn.textContent = 'Bezig…';
     try {
       const out = await api(`/api/orders/${ctx.orderId}/suggest-reply`, 'POST');
@@ -7691,7 +7838,7 @@ function openReplyModal(ctx = {}) {
   $('#rep-copy').onclick = async () => {
     const t = fullText();
     try { await navigator.clipboard.writeText(t); toast('Tekst gekopieerd'); }
-    catch { const b = $('#rep-body'); b.value = t; b.select(); document.execCommand('copy'); toast('Tekst gekopieerd'); }
+    catch { const b = $('#rep-body'); const eigen = b.value; b.value = t; b.select(); const gelukt = document.execCommand('copy'); b.value = eigen; if (gelukt) toast('Tekst gekopieerd'); else toast('Kopiëren lukt hier niet — selecteer de tekst en kopieer hem zelf', true); }
   };
   const mailBtn = $('#rep-mail');
   if (mailBtn) mailBtn.onclick = () => {
@@ -7755,12 +7902,12 @@ function openSimulateModal() {
   modal(`
     <h2>Bericht handmatig toevoegen</h2> <p class="muted small">Handig om een bericht uit je <strong>WhatsApp-groep</strong> door te zetten: kopieer het en plak het hieronder. De AI deelt het daarna in.</p> <label>Kanaal <select id="s-channel"> <option value="whatsapp">WhatsApp</option><option value="email">E-mail</option> </select></label> <label>Afzender (naam / nummer / e-mail) <input id="s-sender" placeholder="Jan Jansen of 06-12345678"></label> <label>Groep (optioneel) <input id="s-group" placeholder="bv. DRS WhatsApp groep"></label> <label>Onderwerp (bij e-mail) <input id="s-subject" placeholder="Offerte aanvraag voordeurslot"></label> <label>Bericht <textarea id="s-body" rows="4" placeholder="Hoi, ik ben buitengesloten en kom mijn huis niet in. Kunnen jullie snel langskomen?"></textarea></label> <div class="modal-actions"><span></span><div class="right"> <button class="btn" id="s-cancel">Annuleren</button><button class="btn btn-primary" id="s-save">Versturen</button> </div></div>`);
   $('#s-cancel').onclick = closeModal;
-  $('#s-save').onclick = async () => {
+  $('#s-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const payload = { channel: $('#s-channel').value, sender: $('#s-sender').value, group: $('#s-group').value, subject: $('#s-subject').value, body: $('#s-body').value };
     if (!payload.body) return toast('Bericht verplicht', true);
     try { await api('/api/simulate', 'POST', payload); closeModal(); toast('Bericht ontvangen — zie Inbox'); refreshInboxBadge(); if (state.view === 'inbox') loadInbox(); }
     catch (err) { toast(err.message, true); }
-  };
+  });
 }
 
 // ---------- Status-scan (digest) ----------
@@ -7885,7 +8032,7 @@ function tekenDrsRapport() {
   const sleutel = (i) => `${i.orderId}|${i.cat}`;
   const rij = (i) => {
     const k = st.keuze.get(sleutel(i)) || { aan: false, regel: i.regel };
-    return `<div class="drs-rij${i.waarschuwingen.length ? ' drs-let-op' : ''}" data-k="${esc(sleutel(i))}">
+    return `<div class="drs-rij${i.waarschuwingen.length ? ' drs-let-op' : ''}" data-k="${esc(sleutel(i))}" data-geen-wijziging>
       <label class="drs-vink"><input type="checkbox" class="drs-aan" ${k.aan ? 'checked' : ''} aria-label="Meenemen in het rapport"></label>
       <div class="drs-rij-in">
         <input class="drs-regel" value="${esc(k.regel)}" aria-label="Regel in het rapport">
@@ -7954,6 +8101,9 @@ function tekenDrsRapport() {
     $('.drs-regel', r).oninput = (e) => { k.regel = e.target.value; ververs(); };
     $('.drs-al', r).onclick = (ev) => { const b = ev.currentTarget; eenKeer(b, async () => {
       const [orderId, cat] = r.dataset.k.split('|');
+      // Eerst vragen (24 nov 2026): de knop staat vlak naast "opdracht" en één tik haalde de
+      // opdracht voorgoed uit het rapport, zonder dat hij aan DRS gemeld werd.
+      if (!confirm(`"${k.regel}"\n\nAfvinken als AL GEMELD aan DRS? Hij komt dan niet meer in het rapport.\n\nOK = ja, was al gemeld.  Annuleren = laten staan.`)) return;
       try { await api('/api/drs-rapport/markeer', 'POST', { via: 'handmatig', items: [{ orderId, cat, regel: k.regel }] }); toast('Afgevinkt als al gemeld'); openDrsRapport(); }
       catch (err) { toast(err.message, true); }
     }); };
@@ -8040,6 +8190,8 @@ async function openDuplicatesModal() {
     const gi = b.dataset.merge;
     const primaryId = $(`input[name="primary-${gi}"]:checked`).value;
     const mergeIds = groups[gi].map((c) => c.id);
+    const blijft = (groups[gi].find((c) => c.id === primaryId) || {}).name || 'de gekozen klant';
+    if (!confirm(`${mergeIds.length} klanten samenvoegen tot één?\n\nAlle opdrachten, facturen en berichten gaan naar "${blijft}". De andere klant${mergeIds.length > 2 ? 'en verdwijnen' : ' verdwijnt'}. Dit kan niet ongedaan worden gemaakt.`)) return;
     try {
       const r = await api('/api/customers/merge', 'POST', { primaryId, mergeIds });
       toast(`Samengevoegd (${r.movedOrders} opdrachten verplaatst)`);
@@ -8081,7 +8233,9 @@ function bindButtons() {
   $('#finSettings')?.addEventListener('click', openFinanceSettings);
   $('#inboxFilter')?.addEventListener('change', () => loadInbox());
   $('#selectAll')?.addEventListener('change', (e) => {
-    $$('.r-select').forEach((c) => (c.checked = e.target.checked));
+    // Ook de selectie zelf bijwerken (inboxSel): zonder dat verdwenen alle vinkjes bij de
+    // eerstvolgende verversing en liep het scherm gewoon door met verversen.
+    $$('.r-select').forEach((c) => { c.checked = e.target.checked; if (c.checked) inboxSel.add(c.dataset.id); else inboxSel.delete(c.dataset.id); });
     updateBulkCount();
   });
   $('#bulkRejectBtn')?.addEventListener('click', async () => {
@@ -8108,7 +8262,7 @@ function bindButtons() {
   });
   $('#bulkApproveBtn')?.addEventListener('click', async () => {
     const pct = Number($('#bulkApprovePct').value);
-    if (!confirm(`Alle inbox-berichten met AI-zekerheid van ${pct}% of hoger automatisch goedkeuren (worden opdrachten)?`)) return;
+    if (!confirm(`Alle inbox-berichten met AI-zekerheid van ${pct}% of hoger goedkeuren?\n\nElk bericht wordt een opdracht en gaat — als dat zo is ingesteld — meteen door naar de monteur.`)) return;
     try { const r = await api('/api/reviews/bulk-approve', 'POST', { minConfidence: pct }); toast(r.count ? `${r.count} goedgekeurd (≥${pct}%)` : 'Geen berichten boven de drempel'); loadInbox(); refreshInboxBadge(); loadBoard(); }
     catch (err) { toast(err.message, true); }
   });
@@ -8241,7 +8395,10 @@ function closeModal() {
 // velden (type=search of [data-geen-wijziging]) tellen niet mee.
 var _modalAangeraakt = new Set(); // var: modal() kan in theorie vóór deze regel draaien
 var _kaartScroll = null;          // scrollstand van de opdracht onder een vervolgvenster (zie modal())
-function modalSchoon() { if (_modalAangeraakt) _modalAangeraakt.clear(); }
+var _modalExtraVuil = false;      // iets gewijzigd dat geen invoerveld is (bv. een handtekening getekend)
+var _modalVuilCheck = null;       // eigen controle van een venster (bv. de factuur-editor: regels uit een pakket)
+function modalSchoon() { if (_modalAangeraakt) _modalAangeraakt.clear(); _modalExtraVuil = false; _modalVuilCheck = null; }
+function modalMarkeerVuil() { _modalExtraVuil = true; }
 function veldGewijzigd(el) {
   if (!el || !el.isConnected || el.disabled) return false;
   if (el.closest('[data-geen-wijziging]')) return false;
@@ -8260,8 +8417,89 @@ function veldGewijzigd(el) {
   }
   return false;
 }
+// GETYPTE INVOER OVERLEEFT EEN HERTEKENING (24 nov 2026, naloop). Een lijst of paneel dat
+// opnieuw wordt opgebouwd (inbox na goedkeuren van een ánder bericht, Instellingen na het
+// opslaan van één blok) gooide alles weg wat ergens anders al was ingetypt. Snapshot vóór,
+// terugzetten ná — alleen als de server intussen niet zelf een andere waarde heeft.
+function invoerSleutel(v, bereik) {
+  if (v.id) return '#' + v.id;
+  const rij = v.closest('[data-id]');
+  const kl = [...v.classList].find((c) => /^[a-z]+-[a-z]/.test(c));
+  return rij && bereik.contains(rij) && kl ? `${rij.dataset.id}|${kl}` : '';
+}
+const invoerBegin = (v) => (v.tagName === 'SELECT' ? (([...v.options].find((o) => o.defaultSelected) || v.options[0] || {}).value || '') : v.defaultValue);
+function invoerSnapshot(bereik) {
+  if (!bereik) return [];
+  return $$('input, textarea, select', bereik).filter(veldGewijzigd)
+    .map((v) => ({ sleutel: invoerSleutel(v, bereik), waarde: v.value, begin: invoerBegin(v) })).filter((x) => x.sleutel);
+}
+function invoerTerugzetten(bereik, lijst) {
+  if (!bereik) return;
+  for (const x of lijst || []) {
+    let v = null;
+    if (x.sleutel[0] === '#') v = bereik.querySelector('#' + CSS.escape(x.sleutel.slice(1)));
+    else { const [rid, kl] = x.sleutel.split('|'); const rij = bereik.querySelector(`[data-id="${CSS.escape(rid)}"]`); v = rij && rij.querySelector('.' + CSS.escape(kl)); }
+    if (!v || v === document.activeElement || invoerBegin(v) !== x.begin) continue; // server heeft een andere waarde: die wint
+    v.value = x.waarde;
+  }
+}
+
+// INSTELLINGEN: wat is er aangeraakt en nog niet opgeslagen? Elk blok heeft een eigen
+// Opslaan-knop; wie na het typen een ander menu koos, was zijn invoer zonder melding kwijt.
+// We onthouden per veld de waarde van vóór de eerste aanraking (veel velden worden na het
+// tekenen nog door code gevuld, dus de HTML-beginwaarde zegt hier niets).
+const _instBegin = new Map();     // veld → waarde vóór de eerste aanraking door de gebruiker
+let _instLaatsteKaart = null;     // blok waarin het laatst op een knop is geklikt (= wat er wordt opgeslagen)
+const instWaarde = (el) => (el.type === 'checkbox' || el.type === 'radio' ? String(el.checked) : el.value);
+// Geen instelling die je moet opslaan: testadres/-nummer, keuzelijst van een actie, kopieerveld,
+// en schakelaars die zichzelf meteen opslaan.
+const INST_GEEN = new Set(['instZoek', 'tm-to', 'wt-phone', 'analyzeDays', 'learnDays', 'calUrl', 'wa-pause', 'wa-cloud-send', 'wa-bridge-groepen', 'wa-cloud-template', 'fsAlleenFormulieren']);
+const instTelt = (el) => !!el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && !['search', 'file', 'button', 'submit', 'hidden'].includes(el.type) && !el.readOnly && !INST_GEEN.has(el.id) && !el.hasAttribute('data-geen-wijziging') && !el.closest('[data-geen-wijziging]');
+// Vaste plek van een veld binnen Instellingen: zijn id, of (rijen zonder id, zoals kolommen en
+// de prijslijst) de titel van het blok + soort veld + het hoeveelste het is.
+function instPlek(el) {
+  if (el.id) return '#' + el.id;
+  const k = el.closest('.info-card'); if (!k) return '';
+  const soort = el.tagName + '.' + [...el.classList].join('.') + ':' + (el.type || '');
+  const zelfde = [...k.querySelectorAll(el.tagName)].filter((x) => !x.id && x.tagName + '.' + [...x.classList].join('.') + ':' + (x.type || '') === soort);
+  return `${instBlokNaam(el)}|${soort}|${zelfde.indexOf(el)}`;
+}
+function instOpPlek(paneel, plek) {
+  if (plek[0] === '#') return paneel.querySelector('#' + CSS.escape(plek.slice(1)));
+  const [titel, soort, nr] = plek.split('|');
+  const k = [...paneel.querySelectorAll('.info-card')].find((x) => instBlokNaam(x.querySelector('h3') || x) === titel); if (!k) return null;
+  const tag = soort.split('.')[0];
+  return [...k.querySelectorAll(tag)].filter((x) => !x.id && x.tagName + '.' + [...x.classList].join('.') + ':' + (x.type || '') === soort)[Number(nr)] || null;
+}
+{
+  const p = document.getElementById('settingsPanel');
+  if (p) {
+    const voor = (e) => { const el = e.target; if (instTelt(el) && !_instBegin.has(el)) _instBegin.set(el, instWaarde(el)); };
+    p.addEventListener('focusin', voor, true);
+    p.addEventListener('pointerdown', voor, true);
+    // Een vinkje dat via zijn label wordt aangetikt krijgt geen pointerdown op het veld zelf:
+    // dan is dit de eerste keer dat we het zien, en is het zojuist omgezet.
+    p.addEventListener('change', (e) => { const el = e.target; if (!e.isTrusted || !instTelt(el) || _instBegin.has(el)) return; _instBegin.set(el, el.type === 'checkbox' ? String(!el.checked) : el.value); }, true);
+    p.addEventListener('click', (e) => { const k = e.target.closest && e.target.closest('button'); if (k) _instLaatsteKaart = k.closest('.info-card'); }, true);
+  }
+}
+function instellingenGewijzigd() {
+  const uit = [];
+  for (const [el, begin] of _instBegin) {
+    if (!el.isConnected) { _instBegin.delete(el); continue; }
+    if (instWaarde(el) !== begin) uit.push(el);
+  }
+  return uit;
+}
+// Na een geslaagde opslag gelden de velden van dát blok als bewaard.
+function instellingenBewaard(kaart) {
+  for (const el of [..._instBegin.keys()]) if (!el.isConnected || (kaart && kaart.contains(el))) _instBegin.delete(el);
+}
+const instBlokNaam = (el) => { const k = el.closest('.info-card'); return ((k && k.querySelector('h3') && k.querySelector('h3').textContent) || 'een blok').trim().replace(/\s+/g, ' ').slice(0, 60); };
 function modalHeeftWijzigingen() {
   if ($('#modalRoot').hidden) return false;
+  if (_modalExtraVuil) return true;
+  if (_modalVuilCheck) { try { if (_modalVuilCheck()) return true; } catch { /* venster intussen vervangen */ } }
   return [...(_modalAangeraakt || [])].some(veldGewijzigd);
 }
 {
@@ -8289,28 +8527,47 @@ function sluitDoorGebruiker() {
 // of Terug. Eén vangst op het venster zelf, zodat ook een knop die later wordt toegevoegd
 // meedoet zolang zijn id eindigt op -cancel / -close / -sluit (of hij data-sluit draagt).
 function modalBewaarKnop() {
-  const knoppen = $$('#modal .modal-actions .btn-primary').filter((k) => !k.disabled && k.offsetParent !== null);
-  const k = knoppen[knoppen.length - 1];
-  return k && /opslaan|bewaren/i.test(k.textContent || '') ? k : null;
+  // De knop die het venster opslaat: in de knoppenrij onderaan, met "opslaan" in de tekst.
+  // Niet altijd de blauwe knop (in de factuur is dat "Versturen"); daarom op tekst, met de
+  // blauwe knop als voorkeur.
+  const knoppen = $$('#modal .modal-actions button').filter((k) => !k.disabled && k.offsetParent !== null && /opslaan|bewaren/i.test(k.textContent || ''));
+  return knoppen.find((k) => k.classList.contains('btn-primary')) || knoppen[0] || null;
 }
+// VERVOLGKNOPPEN in het opdrachtvenster (Werkbon, Factuur, Stuur naar monteur, Snel antwoord
+// …) vervangen het venster; getypte invoer was dan weg, ook na "Terug". Geeft de selector
+// terug waarmee dezelfde knop ná het opslaan opnieuw te vinden is ('' = geen vervolgknop).
+const VERVOLG_IDS = ['f-reply', 'f-merge', 'f-send-monteur', 'f-snooze', 'f-werkbon', 'f-invoice', 'f-quote', 'f-cancel-appt', 'f-onweg', 'sug-merge-do', 'sug-merge-no'];
+function vervolgKnopSelector(el) {
+  if (!el || !$('#modal').dataset.kaart) return '';
+  if (VERVOLG_IDS.includes(el.id)) return `#${el.id}`;
+  if (el.id === 'ov-stap') return el.dataset.vervolg || '';
+  if (el.dataset && el.dataset.sb && VERVOLG_IDS.includes(el.dataset.sb)) return `#${el.dataset.sb}`;
+  if (el.dataset && el.dataset.ovklik && VERVOLG_IDS.includes(el.dataset.ovklik)) return `#${el.dataset.ovklik}`;
+  for (const c of ['sug-apply', 'sug-skip']) if (el.classList.contains(c)) return `#modal .${c}[data-field="${CSS.escape(el.dataset.field || '')}"]`;
+  return '';
+}
+var _naOpslaanVervolg = '';        // na een geslaagde Opslaan: opdracht opnieuw openen en deze knop indrukken
 function isSluitKnop(el) {
   if (!el) return false;
   const id = el.id || '';
   return /(^|-)(cancel|close|sluit)$/i.test(id) || /Sluit$/.test(id) || id === 'ca-terug' || el.classList.contains('ov-sluit') || el.hasAttribute('data-sluit');
 }
 let _sluitVraagOpen = null;
-function vraagSluiten() {
+function vraagSluiten({ vervolg = false } = {}) {
   if (_sluitVraagOpen) return _sluitVraagOpen;
   _sluitVraagOpen = new Promise((resolve) => {
     const kanOpslaan = !!modalBewaarKnop();
     const wrap = document.createElement('div');
     wrap.className = 'mini-dialog-root'; wrap.id = 'sluitVraag';
+    // `vervolg`: de gebruiker klikte een knop die een ander venster opent (bv. Werkbon).
+    const titel = vervolg ? 'Eerst opslaan?' : kanOpslaan ? 'Wijzigingen opslaan?' : 'Sluiten zonder op te slaan?';
+    const uitleg = vervolg ? 'Je hebt iets gewijzigd dat nog niet is opgeslagen. Zonder opslaan gaat dat verloren.' : kanOpslaan ? 'Je hebt iets gewijzigd dat nog niet is opgeslagen.' : 'Wat je hebt ingevuld gaat dan verloren.';
     wrap.innerHTML = `<div class="mini-dialog" role="alertdialog" aria-modal="true" aria-labelledby="sv-titel">
-      <h3 id="sv-titel">${kanOpslaan ? 'Wijzigingen opslaan?' : 'Sluiten zonder op te slaan?'}</h3>
-      <p class="muted small">${kanOpslaan ? 'Je hebt iets gewijzigd dat nog niet is opgeslagen.' : 'Wat je hebt ingevuld gaat dan verloren.'}</p>
+      <h3 id="sv-titel">${titel}</h3>
+      <p class="muted small">${uitleg}</p>
       <div class="sv-knoppen">
-        ${kanOpslaan ? '<button type="button" class="btn btn-primary" id="sv-opslaan">Opslaan</button>' : ''}
-        <button type="button" class="btn${kanOpslaan ? '' : ' btn-danger'}" id="sv-weg">${kanOpslaan ? 'Niet opslaan' : 'Ja, sluiten'}</button>
+        ${kanOpslaan ? `<button type="button" class="btn btn-primary" id="sv-opslaan">${vervolg ? 'Opslaan en doorgaan' : 'Opslaan'}</button>` : ''}
+        <button type="button" class="btn${kanOpslaan ? '' : ' btn-danger'}" id="sv-weg">${vervolg ? 'Doorgaan zonder opslaan' : kanOpslaan ? 'Niet opslaan' : 'Ja, sluiten'}</button>
         <button type="button" class="btn" id="sv-terug">Terug</button>
       </div></div>`;
     document.body.appendChild(wrap);
@@ -8334,11 +8591,17 @@ function vraagSluiten() {
     // kruisje dat de knop Sluiten aanroept) moet gewoon doorlopen.
     if (!e.isTrusted) return;
     const knop = e.target && e.target.closest ? e.target.closest('button, a') : null;
-    if (!knop || !m.contains(knop) || !isSluitKnop(knop) || !modalHeeftWijzigingen()) return;
+    if (!knop || !m.contains(knop) || !modalHeeftWijzigingen()) return;
+    const vervolg = isSluitKnop(knop) ? '' : vervolgKnopSelector(knop);
+    if (!isSluitKnop(knop) && !vervolg) return;
     e.preventDefault(); e.stopImmediatePropagation();
-    vraagSluiten().then((keuze) => {
+    vraagSluiten({ vervolg: !!vervolg }).then((keuze) => {
       if (keuze === 'weg') { modalSchoon(); knop.click(); }      // de knop doet nu wat hij altijd deed
-      else if (keuze === 'opslaan') { const b = modalBewaarKnop(); if (b) b.click(); }
+      else if (keuze === 'opslaan') {
+        const b = modalBewaarKnop(); if (!b) return;
+        _naOpslaanVervolg = vervolg;                             // '' bij een gewone sluitknop
+        b.click();
+      }
     });
   }, true);
 }

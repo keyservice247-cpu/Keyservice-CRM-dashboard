@@ -193,6 +193,40 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   Reden: de monteur verbetert het klantrecord, en het opdrachtadres gaat naar de monteur en
   op de factuur.
 
+- **Niets gaat meer stil verloren (24 nov 2026, klacht eigenaar "op kruisje/Sluiten krijg ik geen
+  melding" + naloop van het hele systeem op dit soort gebruikerszaken):**
+  (1) VENSTER SLUITEN: elke manier van sluiten (kruisje, Sluiten/Annuleren, Esc, klik ernaast,
+  omlaag vegen) loopt via `sluitDoorGebruiker()`; is er iets gewijzigd (`modalHeeftWijzigingen`:
+  velden, `data-bewaak`-vinkjes, `modalMarkeerVuil()` voor o.a. de werkbon-handtekening,
+  `_modalVuilCheck` voor de factuurregels) dan vraagt `vraagSluiten()` (`#sluitVraag`): Opslaan ·
+  Niet opslaan · Terug. `modalBewaarKnop()` vindt zelf de Opslaan-knop van het venster.
+  (2) VERVOLGKNOP IN DE OPDRACHT (Werkbon, Factuur, Offerte, Beantwoorden, Herinnering, naar
+  monteur, Onderweg …; `VERVOLG_IDS`/`vervolgKnopSelector`): met een niet-opgeslagen wijziging
+  eerst "Eerst opslaan?" → Opslaan en doorgaan · Doorgaan zonder opslaan · Terug. Annuleren in
+  het herinnering-venster gaat terug naar de opdracht.
+  (3) INSTELLINGEN: elk blok heeft een eigen Opslaan-knop. `_instBegin` onthoudt per veld de
+  waarde van vóór de eerste aanraking; weggaan met iets dat niet is opgeslagen → vraag met de
+  naam van het blok; een geslaagde opslag markeert dát blok als bewaard (haak in `api()`);
+  opnieuw opbouwen na "Kolommen/Bronnen/Sjablonen opslaan" laat getypte invoer in ANDERE
+  blokken staan (`instPlek`/`instOpPlek`). Velden die geen instelling zijn (testadres,
+  keuzelijst van een actie, schakelaar die zichzelf opslaat) staan in `INST_GEEN` — EEN NIEUW
+  VELD DAT NIET VIA EEN OPSLAAN-KNOP GAAT HOORT DAAR OOK IN, anders vraagt het scherm ten
+  onrechte. De twee velden voor de opdracht-groepen (`#waOrderGroups` en `#md-ordergroups`)
+  lopen gelijk. Schakelaars (noodrem, officiële WhatsApp, nachtscan) springen terug als
+  opslaan mislukt.
+  (4) INBOX: getypte correcties in andere berichten overleven een hertekening
+  (`invoerSnapshot`/`invoerTerugzetten`); "alles selecteren" vult `inboxSel`.
+  (5) BERICHTEN: concept per gesprek (`_chatConcept`), weg na versturen.
+  (6) TAKEN: gekozen Zakelijk/Privé + urgentie in de snelle taak blijven staan.
+  (7) TABBLAD SLUITEN/VERVERSEN/UITLOGGEN: `ietsOnbewaard()` → de browser vraagt eerst
+  (`beforeunload`); uitloggen vraagt zelf; de zelf-verversing na een update wacht.
+  (8) Dubbelklik-bescherming (`eenKeer`) op de overige Opslaan-/testknoppen; bevestiging bij
+  klanten samenvoegen, offerte goedkeuren in de lijst, eerste review-verzoek, AI-concept over
+  getypte tekst, inklappen en feedback wissen; meldingen staan bovenaan als er een venster
+  open is (waren onzichtbaar); "Teruggehaald"/"Gekopieerd" alleen als het echt gelukt is.
+  REGEL VOOR NIEUWE CODE: een knop die een ander venster opent vanuit de opdracht hoort in
+  `VERVOLG_IDS`; een sluitknop heet `…-cancel`/`…-close`/`…-sluit` of draagt `data-sluit`.
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)

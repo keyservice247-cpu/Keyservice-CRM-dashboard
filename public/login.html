@@ -31,7 +31,11 @@
 
   <script>
     // Testomgeving herkenbaar maken (de server meldt dat zonder inlog).
-    fetch('/api/me').then((r) => r.json()).then((j) => { if (j && j.meta && j.meta.omgeving === 'test') document.getElementById('testNoot').hidden = false; }).catch(() => {});
+    fetch('/api/me').then((r) => r.json()).then((j) => {
+      // Al ingelogd (bv. via de terugknop hier beland)? Dan meteen door naar het CRM.
+      if (j && j.user) { window.location.replace('/'); return; }
+      if (j && j.meta && j.meta.omgeving === 'test') document.getElementById('testNoot').hidden = false;
+    }).catch(() => {});
     const form = document.getElementById('loginForm');
     const errEl = document.getElementById('loginError');
     const knop = form.querySelector('button[type=submit]');
@@ -46,7 +50,7 @@
         const res = await fetch('/api/login', {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
         });
-        if (res.ok) { window.location.href = '/'; return; }
+        if (res.ok) { window.location.replace('/'); return; }   // replace: de terugknop brengt je niet terug op de inlogpagina
         const data = await res.json().catch(() => ({}));
         errEl.textContent = data.error || (res.status === 429 ? 'Te veel pogingen — wacht even en probeer opnieuw.' : 'Inloggen mislukt');
         errEl.hidden = false;
