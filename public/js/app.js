@@ -8554,7 +8554,7 @@ function isSluitKnop(el) {
 }
 let _sluitVraagOpen = null;
 function vraagSluiten({ vervolg = false } = {}) {
-  if (_sluitVraagOpen) return _sluitVraagOpen;
+  if (_sluitVraagOpen && document.getElementById('sluitVraag')) return _sluitVraagOpen;   // alleen als de vraag er echt nog staat
   _sluitVraagOpen = new Promise((resolve) => {
     const kanOpslaan = !!modalBewaarKnop();
     const wrap = document.createElement('div');

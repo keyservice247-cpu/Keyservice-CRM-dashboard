@@ -2338,7 +2338,8 @@ clear();
     await page.keyboard.press('Escape'); await page.waitForTimeout(350);
     ok('DRS-rapport: een aangepaste regel wordt onthouden → sluiten zonder vals alarm', !(await sluitVraag()) && await page.evaluate(() => document.querySelector('#modalRoot').hidden), JSON.stringify(await sluitVraag()));
   }
-  await page.evaluate(() => { const w = document.querySelector('#sluitVraag'); if (w) w.remove(); if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+  if (await page.$('#sluitVraag #sv-weg')) { await page.click('#sluitVraag #sv-weg'); await page.waitForTimeout(250); }
+  await page.evaluate(() => { if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
 
   // --- 12. ingelogd op de inlogpagina belanden → meteen door naar het CRM ---
   await page.goto(BASE + '/login.html'); await page.waitForSelector('.view:not([hidden])', { timeout: 10000 }).catch(() => {});
@@ -2346,6 +2347,128 @@ clear();
   await page.waitForTimeout(800);
 }
 noErr('Naloop: niets gaat stil verloren');
+
+// NALOOP DEEL 2 (24 nov 2026): punten uit de twee browser-doorlopen (pc kantoor, telefoon + monteur).
+clear();
+{
+  const metVraag = async (doe, { ja = false } = {}) => {
+    const gezien = []; const h = async (d) => { gezien.push(d.message()); try { if (ja) await d.accept(); else await d.dismiss(); } catch { /* al afgehandeld */ } };
+    page.on('dialog', h); try { await doe(); await page.waitForTimeout(450); } finally { page.off('dialog', h); }
+    return gezien;
+  };
+  const sluitVraag = () => page.evaluate(() => { const w = document.querySelector('#sluitVraag'); return w ? { titel: w.querySelector('h3').textContent, knoppen: [...w.querySelectorAll('button')].map((x) => x.textContent.trim()).join('|') } : null; });
+  // De vraag netjes beantwoorden (knop), niet het element weghalen: anders blijft hij "open" staan.
+  const allesDicht = async () => { if (await page.$('#sluitVraag #sv-weg')) { await page.click('#sluitVraag #sv-weg'); await page.waitForTimeout(250); } await page.evaluate(() => { if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } }); };
+  await allesDicht();
+  await page.evaluate(() => goView('board')); await page.waitForTimeout(900);
+
+  // --- foto's in de opdracht: teller klopt na toevoegen; weghalen kan in de opdracht zelf ---
+  const d2Id = await page.evaluate(() => { const o = state.orders.find((x) => !['afgerond', 'geannuleerd'].includes(x.status)); return o ? o.id : ''; });
+  await page.evaluate((id) => openOrderModal(id), d2Id); await page.waitForSelector('#f-addfile', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(500);
+  await page.evaluate(() => ovToonTab('fotos')); await page.waitForTimeout(200);
+  const d2Voor = await page.evaluate((id) => fetch(`/api/orders/${id}`).then((r) => r.json()).then((o) => (o.attachments || []).length), d2Id);
+  // Elke run een andere afbeelding (inhoud-ontdubbeling zou een tweede keer dezelfde foto weigeren).
+  const d2Png = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 8; c.height = 8; const x = c.getContext('2d'); x.fillStyle = `rgb(${Date.now() % 255},${Math.floor(Math.random() * 255)},${Math.floor(Math.random() * 255)})`; x.fillRect(0, 0, 8, 8); return c.toDataURL('image/png').split(',')[1]; });
+  await page.setInputFiles('#f-fileinput', [{ name: 'naloop-proef.png', mimeType: 'image/png', buffer: Buffer.from(d2Png, 'base64') }]);
+  await page.waitForFunction((n) => document.querySelectorAll('#f-attachgrid > *').length > n, d2Voor, { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(400);
+  const d2Na = await page.evaluate(() => ({ tegels: document.querySelectorAll('#f-attachgrid > *').length, tab: (document.querySelector('#modal .ov-tab[data-ovtab="fotos"] .ov-tab-n') || {}).textContent || '', kop: ((document.querySelector('#modal .attach .thread-head') || {}).textContent || '').replace(/\s+/g, ' ') }));
+  ok('opdracht: na een foto toevoegen klopt de teller op het tabblad en in het kopje (bleef op het oude getal)', d2Na.tegels === d2Voor + 1 && d2Na.tab === String(d2Voor + 1) && d2Na.kop.includes(`(${d2Voor + 1})`), JSON.stringify(d2Na));
+  await allesDicht();
+  await page.evaluate((id) => openOrderModal(id), d2Id); await page.waitForSelector('#f-fotoweg', { state: 'attached', timeout: 8000 }).catch(() => {}); await page.waitForTimeout(400);
+  await page.evaluate(() => ovToonTab('fotos')); await page.waitForTimeout(200);
+  if (await page.$('#f-fotoweg')) {
+    await page.click('#f-fotoweg'); await page.waitForTimeout(150);
+    let fv = await metVraag(() => page.locator('#f-attachgrid > *').last().click());
+    const naNee = await page.evaluate(() => document.querySelectorAll('#f-attachgrid > *').length);
+    fv = fv.concat(await metVraag(() => page.locator('#f-attachgrid > *').last().click(), { ja: true }));
+    await page.waitForTimeout(600);
+    const naJa = await page.evaluate((id) => fetch(`/api/orders/${id}`).then((r) => r.json()).then((o) => (o.attachments || []).length), d2Id);
+    ok('opdracht: een foto weghalen kan in de opdracht zelf — eerst een vraag, Annuleren = blijft, OK = weg', fv.length === 2 && /verwijderen\?/.test(fv[0]) && naNee === d2Voor + 1 && naJa === d2Voor, JSON.stringify({ fv: fv.length, naNee, naJa, d2Voor }));
+  } else ok('opdracht: knop "Verwijderen…" staat bij de foto\'s', false);
+  await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+  ok('foto toevoegen/weghalen telt niet als niet-opgeslagen wijziging (geen onnodige vraag)', !(await sluitVraag()), JSON.stringify(await sluitVraag()));
+  await allesDicht();
+
+  // --- de tabbalk van de opdracht plakt strak bovenaan (geen strook waar velden doorheen schuiven) ---
+  await page.setViewportSize({ width: 1280, height: 560 });
+  await page.evaluate((id) => openOrderModal(id), d2Id); await page.waitForSelector('.ov-tabs', { timeout: 8000 }); await page.waitForTimeout(500);
+  const tabPlek = await page.evaluate(() => { const sc = document.querySelector('#modalRoot'); sc.scrollTop = 600; const r = document.querySelector('.ov-tabs').getBoundingClientRect(); return { top: Math.round(r.top), gescrold: Math.round(sc.scrollTop) }; });
+  ok('opdracht (pc): de tabbalk plakt strak tegen de bovenrand (was 40 px lager met velden erboven)', tabPlek.gescrold > 100 && tabPlek.top <= 1, JSON.stringify(tabPlek));
+  await allesDicht();
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  // --- factuur: lege nieuwe factuur opslaan vraagt eerst; klantgegevens gaan mee bij opslaan ---
+  const d2Fid = await page.evaluate(() => { const o = state.orders.find((x) => !x.invoiceId && !['afgerond', 'geannuleerd'].includes(x.status)); return o ? o.id : ''; });
+  if (d2Fid) {
+    await page.evaluate((id) => openOrderModal(id), d2Fid); await page.waitForSelector('#f-invoice', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(400);
+    await page.evaluate(() => document.querySelector('#f-invoice').click()); await page.waitForSelector('#inv-save', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(600);
+    const invVoor = await page.evaluate(() => fetch('/api/invoices').then((r) => r.json()).then((l) => l.length));
+    const lv = await metVraag(() => page.evaluate(() => document.querySelector('#inv-save').click()));
+    const invNa = await page.evaluate(() => fetch('/api/invoices').then((r) => r.json()).then((l) => l.length));
+    ok('factuur: Opslaan van een lege nieuwe factuur vraagt eerst; Annuleren = er wordt geen nummer verbruikt', lv.length === 1 && /nog geen regels/.test(lv[0]) && invNa === invVoor, JSON.stringify({ lv, invVoor, invNa }));
+    if (await page.$('#cust-email')) {
+      await page.evaluate(() => { const d = document.querySelector('#cust-email').closest('details'); if (d) d.open = true; });
+      const d2Mail = 'naloop' + Date.now() + '@voorbeeld.test';
+      await page.fill('#cust-email', d2Mail);
+      await page.fill('#inv-lines .il-desc', 'Proefregel naloop'); await page.fill('#inv-lines .il-price', '50');
+      await page.locator('#inv-save').scrollIntoViewIfNeeded(); await page.click('#inv-save'); await page.waitForTimeout(1500);
+      const d2Klant = await page.evaluate((id) => fetch(`/api/orders/${id}`).then((r) => r.json()).then((o) => fetch('/api/customers').then((r) => r.json()).then((l) => (l.find((c) => c.id === o.customerId) || {}).email || '')), d2Fid);
+      ok('factuur: een gewijzigd klant-e-mailadres wordt meebewaard bij Opslaan van de factuur (was: stil weg, factuur naar het oude adres)', d2Klant === d2Mail, d2Klant);
+    }
+    await allesDicht();
+    // regel weghalen = wijziging
+    await page.evaluate((id) => openOrderModal(id), d2Fid); await page.waitForSelector('#f-invoice', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(400);
+    await page.evaluate(() => document.querySelector('#f-invoice').click()); await page.waitForTimeout(1500);
+    if (await page.$('[data-dockeuze]')) { const e = await page.$('[data-dockeuze] .dk-rij, [data-dockeuze] [data-dk]'); if (e) { await e.click(); await page.waitForTimeout(1500); } }
+    if (await page.$('#inv-save') && await page.$('#inv-lines .il-del')) {
+      await page.click('#inv-lines .il-del'); await page.keyboard.press('Escape'); await page.waitForTimeout(350);
+      const rv = await sluitVraag();
+      ok('factuur: een regel weghalen telt als wijziging en de vraag biedt Opslaan (was: "Ja, sluiten" zonder Opslaan)', !!rv && rv.titel === 'Wijzigingen opslaan?' && /^Opslaan\|/.test(rv.knoppen), JSON.stringify(rv));
+    }
+    await allesDicht();
+  }
+
+  // --- taak: alleen een vinkje omzetten telt ook ---
+  await page.evaluate(() => goView('taken')); await page.waitForSelector('.tk-kaart .tk-body', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(400);
+  if (await page.$('.tk-kaart .tk-body')) {
+    await page.locator('.tk-kaart .tk-body').first().click(); await page.waitForSelector('.tk-wie-opt', { timeout: 6000 }).catch(() => {}); await page.waitForTimeout(300);
+    if (await page.$('.tk-wie-opt')) {
+      await page.locator('.tk-wie-opt').first().click(); await page.keyboard.press('Escape'); await page.waitForTimeout(350);
+      ok('taak: alleen een vinkje "Toegewezen aan" omgezet → sluiten vraagt eerst (was: wijziging stil weg)', !!(await sluitVraag()), JSON.stringify(await sluitVraag()));
+    }
+    await allesDicht();
+  }
+  // snelle taak met een leeg veld
+  await page.evaluate(() => { const t = document.querySelector('#toast'); if (t) { t.hidden = true; t.textContent = ''; } });
+  await page.evaluate(() => document.querySelector('#tkSnel').requestSubmit ? document.querySelector('#tkSnel').requestSubmit() : document.querySelector('#tkSnel button').click()); await page.waitForTimeout(300);
+  ok('snelle taak: Toevoegen met een leeg veld geeft uitleg (deed niets)', /Typ eerst/.test(await page.textContent('#toast')), await page.textContent('#toast'));
+
+  // --- Instellingen: verwijderknoppen in rijen hebben een icoon en een titel ---
+  await page.evaluate(() => goView('settings')); await page.waitForSelector('#statusRows .editor-row', { state: 'attached', timeout: 8000 }).catch(() => {}); await page.waitForTimeout(1200);
+  const rijKnoppen = await page.evaluate(() => [...document.querySelectorAll('#settingsPanel .editor-row > button.btn-danger')].map((x) => ({ titel: x.title, svg: !!x.querySelector('svg') })));
+  ok('Instellingen: elke verwijderknop bij kolommen, bronnen en standaardantwoorden heeft een icoon en een titel (waren lege knopjes)', rijKnoppen.length > 3 && rijKnoppen.every((x) => x.titel && x.svg), JSON.stringify(rijKnoppen.filter((x) => !x.titel || !x.svg)));
+  await page.evaluate(() => showView('board')); await page.waitForTimeout(500);
+
+  // --- telefoon: Facturen-knoppen in beeld; Berichten geeft de monteur geen geweigerde aanroep ---
+  const tp = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const tpFout = []; tp.on('response', (r) => { if (r.status() === 403) tpFout.push(r.request().method() + ' ' + r.url().replace(BASE, '')); });
+  await tp.goto(BASE + '/login.html', { waitUntil: 'networkidle' });
+  await tp.fill('input[type=email], input[name=email], #email', 'bmonteur@keyservice.nl');
+  await tp.fill('input[type=password], input[name=password], #password', 'monteur123');
+  await Promise.all([tp.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}), tp.click('button[type=submit], button')]);
+  await tp.waitForSelector('.view:not([hidden])', { timeout: 10000 }).catch(() => {}); await tp.waitForTimeout(1200);
+  const tpIn = await tp.evaluate(() => typeof state !== 'undefined' && !!state.me);
+  if (tpIn) {
+    await tp.evaluate(() => showView('chats')); await tp.waitForTimeout(1200);
+    ok('monteur opent Berichten zonder geweigerde aanroep (gaf elke keer een 403 in de console)', !tpFout.some((x) => /chats\/seen/.test(x)), tpFout.join(' | '));
+    await tp.evaluate(() => showView('invoices')); await tp.waitForTimeout(1200);
+    const tk = await tp.evaluate(() => ['#newInvoiceBtn', '#newQuoteBtn', '#invSearch', '#invFilter'].map((s) => { const e = document.querySelector(s); if (!e) return null; const r = e.getBoundingClientRect(); return { s, x1: Math.round(r.left), x2: Math.round(r.right), zichtbaar: r.width > 0 }; }).filter(Boolean));
+    ok('telefoon: + Factuur, + Offerte, zoeken en filter op Facturen passen binnen 390 px (+ Offerte stond buiten beeld)', tk.length >= 3 && tk.every((x) => !x.zichtbaar || (x.x1 >= 0 && x.x2 <= 390)), JSON.stringify(tk));
+  } else ok('telefoon: monteur kan inloggen voor de naloop-controles', false, await tp.url());
+  await tp.close();
+}
+noErr('Naloop deel 2');
 
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
