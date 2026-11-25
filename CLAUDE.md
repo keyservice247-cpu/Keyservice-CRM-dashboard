@@ -246,7 +246,19 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   REGEL VOOR NIEUWE CODE: een knop die een ander venster opent vanuit de opdracht hoort in
   `VERVOLG_IDS`; een sluitknop heet `…-cancel`/`…-close`/`…-sluit` of draagt `data-sluit`;
   na een `await` nooit `ev.currentTarget` gebruiken; de ingelogde gebruiker is `state.me`.
-  Tests: browser-test 460 (+38 voor deze ronde).
+  ONAFHANKELIJKE CONTROLE (25 nov 2026, vóór de livegang) — gevonden en hersteld:
+  `modalBewaarKnop()` koos in de factuur de knop "Delen / opslaan" (PDF delen) → nu alleen een
+  knop waarvan het id op `-save` eindigt; `beforeunload` vraagt niet na een klik op een
+  tel:/mailto:-link of download (`_geenVerlaatVraagTot`); verlopen sessie stuurt één keer weg
+  (`_sessieVerlopen`); het concept van HET VERSTUURDE gesprek wordt gewist (niet van het
+  gesprek dat intussen open staat); concepten staan ook in sessionStorage (`ksChatConcept`,
+  inbox-correcties via `pagehide` → `ksInboxGetypt`) en overleven een verversing — alleen wat
+  in beeld staat houdt een sluiting tegen (`ietsOnbewaard({herlaad})`); Instellingen onthoudt
+  het blok van het moment van opslaan (`window._instKaart`, rij `.sig-user` telt apart);
+  "Doorgaan zonder opslaan" wist de wijziging niet meer als het vervolg wordt afgebroken;
+  snelle taak springt na toevoegen terug naar Zakelijk/Middel; "Filterregels leren" weigert
+  als het bedrijfsprofiel nog niet is opgeslagen.
+  Tests: browser-test 467 (+45 voor deze ronde); alle 32 suites samen 2.033, 0 fouten.
 
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen

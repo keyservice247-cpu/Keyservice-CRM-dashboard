@@ -61,6 +61,10 @@ function sourceIcon(label) {
 }
 
 async function api(path, method = 'GET', body) {
+  // Instellingen-bewaking: onthoud NU in welk blok het laatst is geklikt (alleen als dat net
+  // gebeurde) — tegen de tijd dat het antwoord er is kan de gebruiker al ergens anders zijn.
+  // Bewust via window: deze functie draait al vóórdat de variabelen verderop bestaan.
+  const instKaart = Date.now() - (window._instKaartAt || 0) < 120000 ? (window._instKaart || null) : null;
   let res;
   try {
     res = await fetch(path, {
@@ -77,7 +81,15 @@ async function api(path, method = 'GET', body) {
   // Sessie verlopen: naar het inlogscherm. De aanroeper mag dan niet doorlopen met
   // "undefined" (gaf een Engelse JS-fout in de rode balk) — deze belofte lost nooit
   // op; de pagina navigeert toch weg.
-  if (res.status === 401) { window.location.href = '/'; return new Promise(() => {}); }
+  if (res.status === 401) {
+    // Eén keer wegsturen: kiest de gebruiker "blijven" (er stond nog iets niet-opgeslagens),
+    // dan niet bij elke verversing opnieuw vragen — wel zeggen wat er aan de hand is.
+    if (!window._sessieVerlopen) {
+      window._sessieVerlopen = true; window.location.href = '/';
+      setTimeout(() => { try { toast('Je bent uitgelogd (sessie verlopen). Kopieer wat je nog nodig hebt en ververs daarna de pagina om opnieuw in te loggen.', true); } catch { /* pagina is al weg */ } }, 1500);
+    }
+    return new Promise(() => {});
+  }
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     if (data && data.error) {
@@ -90,7 +102,7 @@ async function api(path, method = 'GET', body) {
   // Instellingen: een geslaagde PATCH (of een POST naar een instellingen-route) betekent dat
   // het blok waarin op Opslaan is geklikt nu bewaard is — niet meer "nog niet opgeslagen".
   if (state.view === 'settings' && (method === 'PATCH' || method === 'PUT' || (method === 'POST' && /instellingen|settings/.test(path)))) {
-    try { instellingenBewaard(_instLaatsteKaart); } catch { /* bewaking mag een opslag nooit breken */ }
+    try { if (instKaart) instellingenBewaard(instKaart); } catch { /* bewaking mag een opslag nooit breken */ }
   }
   return data ?? {};
 }
@@ -439,25 +451,37 @@ function veldInHertekenGebied(view) {
 // Staat er ergens iets dat is ingetypt maar nog niet is opgeslagen/verstuurd? Gebruikt voor
 // de zelf-verversing na een update én voor de vraag van de browser bij het sluiten of
 // verversen van het tabblad (24 nov 2026: zonder dit was het werk zonder melding weg).
-function ietsOnbewaard() {
+// `herlaad`: bij een verversing blijven concepten van gesprekken en inbox-correcties bewaard
+// (sessionStorage); die hoeven een verversing dus niet tegen te houden. Een concept in een
+// gesprek dat NIET open staat houdt nooit iets tegen (anders bleef de vraag de hele dag komen).
+function ietsOnbewaard({ herlaad = false } = {}) {
   try {
     if (!$('#modalRoot')?.hidden && modalHeeftWijzigingen()) return 'een open venster';
-    if (Object.keys(_chatConcept).length || ($('#cpText')?.value || '').trim()) return 'een getypt bericht';
+    if (($('#cpText')?.value || '').trim()) return 'een getypt bericht';
     if (state.view === 'settings' && instellingenGewijzigd().length) return 'Instellingen';
-    if (invoerSnapshot($('#reviewList')).length) return 'een correctie in de inbox';
+    if (!herlaad && invoerSnapshot($('#reviewList')).length) return 'een correctie in de inbox';
     if (($('#tkSnelTitel')?.value || '').trim()) return 'een nieuwe taak';
   } catch { /* twijfel = niets tegenhouden */ }
   return '';
 }
+// Een tel:/mailto:-link of een download verlaat de pagina niet, maar Chrome/Android vuurt er
+// wél beforeunload voor af: de monteur met een getypte notitie kreeg dan "Site verlaten?" bij
+// Bellen. Na zo'n klik vragen we daarom even niet.
+document.addEventListener('click', (e) => {
+  const a = e.target && e.target.closest ? e.target.closest('a[href]') : null; if (!a) return;
+  const h = a.getAttribute('href') || '';
+  if (/^(tel:|mailto:|sms:|whatsapp:|geo:|maps:)/i.test(h) || a.hasAttribute('download') || /^\/api\/backup\/download/.test(h)) window._geenVerlaatVraagTot = Date.now() + 2500;
+}, true);
 window.addEventListener('beforeunload', (e) => {
   if (window._appReloading || window._uitloggen) return;
+  if (Date.now() < (window._geenVerlaatVraagTot || 0)) return;
   if (!ietsOnbewaard()) return;
   e.preventDefault(); e.returnValue = '';   // de browser toont zijn eigen vraag "Site verlaten?"
 });
 function veiligOmTeHerladen() {
   if (window._dragging || !$('#modalRoot')?.hidden) return false;
   if (($('#cpText')?.value || '').trim()) return false;
-  if (ietsOnbewaard()) return false;
+  if (ietsOnbewaard({ herlaad: true })) return false;
   if (boardSel.size || inboxSel.size) return false;
   // Instellingen: vaak half ingevulde (nog niet opgeslagen) velden zonder focus.
   if (state.view === 'settings') return false;
@@ -619,6 +643,7 @@ function bindNav() {
     const wat = ietsOnbewaard();
     if (wat && !confirm(`Er staat nog iets dat niet is opgeslagen (${wat}).\n\nOK = toch uitloggen (het gaat verloren).\nAnnuleren = blijven.`)) return;
     window._uitloggen = true;
+    try { sessionStorage.removeItem('ksChatConcept'); sessionStorage.removeItem('ksInboxGetypt'); _inboxGetypt.clear(); } catch { /* niets te wissen */ }
     await api('/api/logout', 'POST'); window.location.href = '/';
   });
   $('#accountBtn').addEventListener('click', openAccountModal);
@@ -700,7 +725,10 @@ function chatMatcht(c, q) {
 // naam + tijd, vinkjes bij ons laatste bericht, groene teller bij ongelezen, en
 // filterknoppen Alle / Ongelezen / Wacht op antwoord.
 let _chatFilter = 'alle';
-const _chatConcept = {};          // getypte, nog niet verstuurde tekst per gesprek
+// Getypte, nog niet verstuurde tekst per gesprek. Staat ook in sessionStorage, zodat een
+// verversing (F5 of de zelf-verversing na een update) hem niet kwijtmaakt.
+const _chatConcept = (() => { try { const o = JSON.parse(sessionStorage.getItem('ksChatConcept') || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { return {}; } })();
+function bewaarChatConcept() { try { sessionStorage.setItem('ksChatConcept', JSON.stringify(_chatConcept)); } catch { /* geen opslag: dan alleen in dit scherm */ } }
 const CHAT_AVATAR_KLEUREN = ['#00a884', '#4a7fd6', '#c2554f', '#d4893a', '#8e6cd1', '#3f9d6b', '#cc5f8f', '#2b9fb3', '#b08d57', '#6b7fa3'];
 function chatInitialen(naam) {
   const woorden = String(naam || '').replace(/\b(b\.?v\.?|v\.?o\.?f\.?|n\.?v\.?)\b/gi, '').split(/[\s\-–—&,.]+/).filter((w) => /[a-zà-ÿ]/i.test(w));
@@ -874,7 +902,10 @@ function renderTaken() {
   const scrollWas = window.scrollY;
   // Ook de keuze Zakelijk/Privé en de urgentie onthouden: die sprongen bij elke hertekening
   // terug naar Zakelijk/Middel — een privé bedoelde taak werd zo zichtbaar voor het kantoor.
-  const keuzeWas = {}; $$('#tkSnel .tk-keuze').forEach((g) => { const a = g.querySelector('.tk-opt.active'); if (a) keuzeWas[g.dataset.k] = a.dataset.v; });
+  // Ná een geslaagde toevoeging begint het formulier weer op Zakelijk/Middel (zo was het
+  // altijd): anders werd de volgende taak ongemerkt óók Privé en zag de collega hem nooit.
+  const keuzeWas = {}; if (!window._tkSnelKeuzeTerug) $$('#tkSnel .tk-keuze').forEach((g) => { const a = g.querySelector('.tk-opt.active'); if (a) keuzeWas[g.dataset.k] = a.dataset.v; });
+  window._tkSnelKeuzeTerug = false;
   setTimeout(() => {
     const el = $('#tkSnelTitel'); if (el && snelWas && !el.value) { el.value = snelWas; if (hadFocus) el.focus(); }
     $$('#tkSnel .tk-keuze').forEach((g) => { const v = keuzeWas[g.dataset.k]; if (!v || !g.querySelector(`.tk-opt[data-v="${v}"]`)) return; g.querySelectorAll('.tk-opt').forEach((o) => o.classList.toggle('active', o.dataset.v === v)); });
@@ -959,6 +990,7 @@ function renderTaken() {
     try {
       await api('/api/taken', 'POST', { titel, categorie, urgentie });
       const veld = $('#tkSnelTitel'); if (veld && veld.value.trim() === titel) veld.value = '';
+      window._tkSnelKeuzeTerug = true;
       toast('Taak toegevoegd'); await loadTaken(); $('#tkSnelTitel')?.focus();
     }
     catch (err) { toast(err.message, true); }
@@ -1320,7 +1352,7 @@ async function renderChatPane(scrollDown) {
   bindMsgs();
   // Concept per gesprek (24 nov 2026): wie halverwege een antwoord naar een ander gesprek
   // of terug naar de lijst ging, was zijn tekst kwijt. Nu staat hij er weer als je terugkomt.
-  { const tv = $('#cpText'); const cid = _chatActive; if (tv) { if (_chatConcept[cid] && !tv.value) tv.value = _chatConcept[cid]; tv.addEventListener('input', () => { if (tv.value.trim()) _chatConcept[cid] = tv.value; else delete _chatConcept[cid]; }); } }
+  { const tv = $('#cpText'); const cid = _chatActive; if (tv) { if (_chatConcept[cid] && !tv.value) tv.value = _chatConcept[cid]; tv.addEventListener('input', () => { if (tv.value.trim()) _chatConcept[cid] = tv.value; else delete _chatConcept[cid]; bewaarChatConcept(); }); } }
   const nieuw = $('#cpMsgs');
   if (nieuw) nieuw.scrollTop = nieuw.scrollHeight;
   $('#cpBack')?.addEventListener('click', sluitChat);
@@ -1352,14 +1384,15 @@ async function renderChatPane(scrollDown) {
     const veldNu = $('#cpText');
     const text = (veldNu?.value || '').trim();
     if (!text) return;
+    const cidVerstuurd = _chatActive;   // vóór het wachten: intussen kan een ander gesprek open staan
     stuur.disabled = true;
     try {
       const sendUrl = isTelChat
         ? `/api/chats/nummer/${encodeURIComponent(_chatActive.slice(4))}/send`
         : `/api/chats/${_chatActive}/send`;
       const r = await api(sendUrl, 'POST', isTelChat ? { text } : { text, kanaal });
-      if (veldNu) veldNu.value = '';
-      delete _chatConcept[_chatActive];
+      if (veldNu && _chatActive === cidVerstuurd) veldNu.value = '';
+      delete _chatConcept[cidVerstuurd]; bewaarChatConcept();
       if (r.kanaal === 'email') toast('E-mail verstuurd');
       else if (r.paused) toast('In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit', true);
       await renderChatPane(true);
@@ -3464,7 +3497,26 @@ async function refreshInboxBadge() {
 
 const INBOX_PAGE = 60; // aantal berichten per keer renderen (voorkomt vastlopen)
 let _lastInboxHtml = '';   // laatst getekende inbox, om nutteloos hertekenen te herkennen
-const _inboxGetypt = new Map();   // getypte, nog niet verwerkte correcties per bericht|veld
+// Getypte, nog niet verwerkte correcties per bericht|veld. Bij het verlaten van de pagina
+// (verversen) gaan ze naar sessionStorage en komen ze daarna terug.
+const _inboxGetypt = new Map();
+try {
+  const b = JSON.parse(sessionStorage.getItem('ksInboxGetypt') || 'null'); sessionStorage.removeItem('ksInboxGetypt');
+  if (b && Date.now() - b.at < 15 * 60000 && Array.isArray(b.lijst)) for (const x of b.lijst) if (x && x.sleutel) _inboxGetypt.set(x.sleutel, x);
+} catch { /* niets terug te zetten */ }
+// Wat nu in de lijst staat opnieuw meten en onthouden (vóór de lijst wordt vervangen).
+function inboxOnthoudGetypt(list, filter) {
+  if (!list) return;
+  const inBeeld = new Set($$('.review', list).map((r) => r.dataset.id));
+  for (const k of [..._inboxGetypt.keys()]) if (inBeeld.has(k.split('|')[0])) _inboxGetypt.delete(k);
+  for (const x of invoerSnapshot(list)) _inboxGetypt.set(x.sleutel, { ...x, filter: state._inboxVorigFilter || filter });
+}
+window.addEventListener('pagehide', () => {
+  try {
+    inboxOnthoudGetypt($('#reviewList'), $('#inboxFilter')?.value || 'pending');
+    if (_inboxGetypt.size) sessionStorage.setItem('ksInboxGetypt', JSON.stringify({ at: Date.now(), lijst: [..._inboxGetypt.values()] }));
+  } catch { /* geen opslag */ }
+});
 async function loadInbox(append = false) {
   append = append === true; // als change-handler krijgt hij een Event mee — dat is géén "Toon meer"
   const filter = $('#inboxFilter')?.value || 'pending';
@@ -3518,6 +3570,9 @@ async function loadInbox(append = false) {
   updateBulkCount();
   if (!append && !reviews.length) {
     if (bulkBar) bulkBar.hidden = true;
+    // Ook bij een LEEG filter eerst onthouden wat er in de vorige lijst was getypt (anders was
+    // een correctie weg zodra je even naar een leeg filter keek).
+    inboxOnthoudGetypt(list, filter); state._inboxVorigFilter = filter;
     _lastInboxHtml = ''; // anders zou een latere verversing de oude lijst als 'ongewijzigd' zien
     list.innerHTML = filter === 'rejected'
       ? '<div class="empty">De inbox-prullenbak is leeg.</div>'
@@ -3553,9 +3608,7 @@ async function loadInbox(append = false) {
     }
     // Correcties in ándere berichten niet weggooien — ook niet als je even een ander filter
     // bekijkt (dan staat het bericht tijdelijk niet in beeld; _inboxGetypt onthoudt het).
-    const inBeeld = new Set($$('.review', list).map((r) => r.dataset.id));
-    for (const k of [..._inboxGetypt.keys()]) if (inBeeld.has(k.split('|')[0])) _inboxGetypt.delete(k);   // wat in beeld stond wordt opnieuw gemeten
-    for (const x of invoerSnapshot(list)) _inboxGetypt.set(x.sleutel, { ...x, filter: state._inboxVorigFilter || filter });
+    inboxOnthoudGetypt(list, filter);
     list.innerHTML = rowsHTML;
     invoerTerugzetten(list, [..._inboxGetypt.values()]);
     // Bericht weg uit hetzelfde filter (goedgekeurd/afgewezen)? Dan hoeft zijn correctie niet bewaard.
@@ -7094,7 +7147,7 @@ async function loadSettingsHtml(s) {
       catch (err) { toast(err.message, true); }
     };
     $('#g-savecal').onclick = async () => {
-      try { await api('/api/google/default-calendar', 'POST', { calendarId: $('#g-defcal').value }); toast('Standaardagenda opgeslagen'); }
+      try { await api('/api/google/default-calendar', 'POST', { calendarId: $('#g-defcal').value }); toast('Standaardagenda opgeslagen'); _instBegin.delete($('#g-defcal')); }
       catch (err) { toast(err.message, true); }
     };
     // "Controleer & herstel nu": laat per komende afspraak zien of hij in Google staat,
@@ -7241,7 +7294,7 @@ async function loadSettingsHtml(s) {
     try {
       await api('/api/settings', 'PATCH', payload);
       // Houd het losse veld hierboven in sync als het zichtbaar is.
-      if (whatsappOrderGroups !== undefined && $('#waOrderGroups')) $('#waOrderGroups').value = whatsappOrderGroups;
+      if (whatsappOrderGroups !== undefined && $('#waOrderGroups')) { $('#waOrderGroups').value = whatsappOrderGroups; _instBegin.delete($('#waOrderGroups')); }
       toast('Verstuur-instellingen opgeslagen');
     }
     catch (err) { toast(err.message, true); }
@@ -7260,13 +7313,17 @@ async function loadSettingsHtml(s) {
     btn.disabled = false; btn.textContent = 'Analyse starten';
   };
   $('#runLearn').onclick = async () => {
+    // De AI voegt regels toe aan het OPGESLAGEN bedrijfsprofiel en het veld wordt daarna
+    // ververst: een niet-opgeslagen wijziging in dat veld zou dan stil verdwijnen.
+    const profiel = $('#companyProfile');
+    if (profiel && _instBegin.has(profiel) && _instBegin.get(profiel) !== profiel.value) { toast('Sla eerst je wijziging in het bedrijfsprofiel op (knop "Bedrijfsprofiel opslaan") — anders gaat die verloren.', true); return; }
     const btn = $('#runLearn'); btn.disabled = true; btn.textContent = 'Bezig met leren…';
     $('#learnResult').innerHTML = '<div class="muted small">De AI bestudeert het verkeer en stelt filterregels op… ~10-30 sec.</div>';
     try {
       const out = await api('/api/learn-filter', 'POST', { days: Number($('#learnDays').value) });
       $('#learnResult').innerHTML = `<div class="analysis-box">${esc(out.rules).replace(/\n/g, '<br>')}</div><div class="muted small" style="margin-top:8px">Toegevoegd aan het bedrijfsprofiel. De AI gebruikt dit nu bij het filteren.</div>`;
       // Profielveld bijwerken zodat je de toevoeging direct ziet.
-      if ($('#companyProfile')) $('#companyProfile').value = out.companyProfile;
+      if ($('#companyProfile')) { $('#companyProfile').value = out.companyProfile; _instBegin.delete($('#companyProfile')); }
       toast('Filterregels toegevoegd aan bedrijfsprofiel');
     } catch (err) { $('#learnResult').innerHTML = `<div class="error small">${esc(err.message)}</div>`; }
     btn.disabled = false; btn.textContent = 'Filterregels leren & toevoegen';
@@ -8449,7 +8506,6 @@ function invoerTerugzetten(bereik, lijst) {
 // We onthouden per veld de waarde van vóór de eerste aanraking (veel velden worden na het
 // tekenen nog door code gevuld, dus de HTML-beginwaarde zegt hier niets).
 const _instBegin = new Map();     // veld → waarde vóór de eerste aanraking door de gebruiker
-let _instLaatsteKaart = null;     // blok waarin het laatst op een knop is geklikt (= wat er wordt opgeslagen)
 const instWaarde = (el) => (el.type === 'checkbox' || el.type === 'radio' ? String(el.checked) : el.value);
 // Geen instelling die je moet opslaan: testadres/-nummer, keuzelijst van een actie, kopieerveld,
 // en schakelaars die zichzelf meteen opslaan.
@@ -8480,7 +8536,10 @@ function instOpPlek(paneel, plek) {
     // Een vinkje dat via zijn label wordt aangetikt krijgt geen pointerdown op het veld zelf:
     // dan is dit de eerste keer dat we het zien, en is het zojuist omgezet.
     p.addEventListener('change', (e) => { const el = e.target; if (!e.isTrusted || !instTelt(el) || _instBegin.has(el)) return; _instBegin.set(el, el.type === 'checkbox' ? String(!el.checked) : el.value); }, true);
-    p.addEventListener('click', (e) => { const k = e.target.closest && e.target.closest('button'); if (k) _instLaatsteKaart = k.closest('.info-card'); }, true);
+    // In welk blok (of welke medewerker-rij) is het laatst iets gedaan? Dát deel geldt na een
+    // geslaagde opslag als bewaard. Ook een schakelaar die zichzelf opslaat telt (change).
+    const zetKaart = (e) => { if (!e.target || !e.target.closest) return; const b = e.target.closest('.sig-user, .info-card'); if (b) { window._instKaart = b; window._instKaartAt = Date.now(); } };
+    p.addEventListener('click', zetKaart, true); p.addEventListener('change', zetKaart, true);
   }
 }
 function instellingenGewijzigd() {
@@ -8530,7 +8589,10 @@ function modalBewaarKnop() {
   // De knop die het venster opslaat: in de knoppenrij onderaan, met "opslaan" in de tekst.
   // Niet altijd de blauwe knop (in de factuur is dat "Versturen"); daarom op tekst, met de
   // blauwe knop als voorkeur.
-  const knoppen = $$('#modal .modal-actions button').filter((k) => !k.disabled && k.offsetParent !== null && /opslaan|bewaren/i.test(k.textContent || ''));
+  // ALLEEN een echte opslaan-knop (id eindigt op -save): in de factuur staat ook "Delen /
+  // opslaan" (de PDF delen) — die werd gekozen, waardoor "Opslaan" in de vraag de PDF deelde
+  // en niets bewaarde (review 25 nov 2026).
+  const knoppen = $$('#modal .modal-actions button').filter((k) => !k.disabled && k.offsetParent !== null && /-save$/.test(k.id || '') && /opslaan|bewaren/i.test(k.textContent || ''));
   return knoppen.find((k) => k.classList.contains('btn-primary')) || knoppen[0] || null;
 }
 // VERVOLGKNOPPEN in het opdrachtvenster (Werkbon, Factuur, Stuur naar monteur, Snel antwoord
@@ -8596,7 +8658,10 @@ function vraagSluiten({ vervolg = false } = {}) {
     if (!isSluitKnop(knop) && !vervolg) return;
     e.preventDefault(); e.stopImmediatePropagation();
     vraagSluiten({ vervolg: !!vervolg }).then((keuze) => {
-      if (keuze === 'weg') { modalSchoon(); knop.click(); }      // de knop doet nu wat hij altijd deed
+      // Sluitknop: de wijziging mag weg. Vervolgknop: NIET wissen — breekt de gebruiker het
+      // vervolg af (bv. "Klant laten weten?" → Annuleren), dan staat zijn tekst er nog en moet
+      // sluiten daarna gewoon weer vragen. (Een programmatische klik passeert deze bewaking.)
+      if (keuze === 'weg') { if (!vervolg) modalSchoon(); knop.click(); }
       else if (keuze === 'opslaan') {
         const b = modalBewaarKnop(); if (!b) return;
         _naOpslaanVervolg = vervolg;                             // '' bij een gewone sluitknop

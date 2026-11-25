@@ -2470,6 +2470,112 @@ clear();
 }
 noErr('Naloop deel 2');
 
+// NALOOP DEEL 3 (25 nov 2026): punten uit de onafhankelijke controle van de wijzigingen.
+clear();
+{
+  const metVraag = async (doe, { ja = false } = {}) => {
+    const gezien = []; const h = async (d) => { gezien.push(d.type() + ':' + d.message()); try { if (ja || d.type() === 'beforeunload') await d.accept(); else await d.dismiss(); } catch { /* al afgehandeld */ } };
+    page.on('dialog', h); try { await doe(); await page.waitForTimeout(450); } finally { page.off('dialog', h); }
+    return gezien;
+  };
+  const sluitVraag = () => page.evaluate(() => { const w = document.querySelector('#sluitVraag'); return w ? { titel: w.querySelector('h3').textContent, knoppen: [...w.querySelectorAll('button')].map((x) => x.textContent.trim()).join('|') } : null; });
+  const allesDicht = async () => { if (await page.$('#sluitVraag #sv-weg')) { await page.click('#sluitVraag #sv-weg'); await page.waitForTimeout(250); } await page.evaluate(() => { if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } }); };
+  await allesDicht();
+  await page.evaluate(() => goView('board')); await page.waitForTimeout(900);
+
+  // --- "Opslaan" in de vraag bewaart de FACTUUR (koos eerst de knop "Delen / opslaan" → PDF gedeeld, niets bewaard) ---
+  const d3 = await page.evaluate(async () => { const l = await fetch('/api/invoices').then((r) => r.json()); const i = l.find((x) => x.type !== 'offerte' && x.orderId && !x.sentAt && (x.lines || []).length); return i ? { id: i.id, orderId: i.orderId } : null; });
+  if (d3) {
+    await page.evaluate((id) => openOrderModal(id), d3.orderId); await page.waitForSelector('#f-invoice', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(400);
+    await page.evaluate(() => document.querySelector('#f-invoice').click()); await page.waitForTimeout(1500);
+    if (await page.$('[data-dockeuze]')) { const e = await page.$('[data-dockeuze] .dk-rij, [data-dockeuze] [data-dk]'); if (e) { await e.click(); await page.waitForTimeout(1500); } }
+    const heeftDelen = !!(await page.$('#inv-share')) && !!(await page.$('#inv-save'));
+    const nieuweTekst = 'Regel via de sluit-vraag ' + Date.now();
+    if (heeftDelen) {
+      await page.fill('#inv-lines .il-desc', nieuweTekst); await page.keyboard.press('Escape'); await page.waitForTimeout(350);
+      const v = await sluitVraag();
+      const knopDoel = await page.evaluate(() => { const b = modalBewaarKnop(); return b ? b.id : ''; });
+      if (v) { await page.click('#sv-opslaan'); await page.waitForTimeout(1800); }
+      const bewaard = await page.evaluate((id) => fetch(`/api/invoices/${id}`).then((r) => r.json()).then((j) => ((j.invoice || j).lines || []).map((x) => x.description).join('|')).catch(() => fetch('/api/invoices').then((r) => r.json()).then((l) => ((l.find((x) => x.id === id) || {}).lines || []).map((x) => x.description).join('|'))), d3.id);
+      ok('factuur met een knop "Delen / opslaan": "Opslaan" in de sluit-vraag bewaart de factuur (deelde eerst de PDF en bewaarde niets)', !!v && knopDoel === 'inv-save' && bewaard.includes(nieuweTekst), JSON.stringify({ v, knopDoel, bewaard }));
+    } else ok('factuur met Delen- én Opslaan-knop gevonden voor de test', false, JSON.stringify(d3));
+    await allesDicht();
+  } else ok('er is een opgeslagen factuur om de sluit-vraag op te testen', false);
+
+  // --- "Doorgaan zonder opslaan" + vervolg afgebroken: de wijziging telt nog (sluiten vraagt daarna gewoon) ---
+  const d3Ord = await page.evaluate(() => { const o = state.orders.find((x) => !['afgerond', 'geannuleerd'].includes(x.status)); return o ? o.id : ''; });
+  await page.evaluate((id) => openOrderModal(id), d3Ord); await page.waitForSelector('#f-notes', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(500);
+  await page.evaluate(() => ovNaarVeld('#f-notes')); await page.fill('#f-notes', 'Nog niet opgeslagen ' + Date.now());
+  if (await page.$('#f-onweg')) {
+    await page.evaluate(() => document.querySelector('#f-onweg').scrollIntoView({ block: 'center' }));
+    await page.click('#f-onweg'); await page.waitForTimeout(300);
+    const eerst = await sluitVraag();
+    const afgebroken = await metVraag(async () => { if (await page.$('#sv-weg')) await page.click('#sv-weg'); });   // de vraag "Klant laten weten…?" → Annuleren
+    await page.waitForTimeout(300);
+    const nogOpen = await page.evaluate(() => !document.querySelector('#modalRoot').hidden && !!document.querySelector('#f-notes'));
+    if (nogOpen) {
+      await page.keyboard.press('Escape'); await page.waitForTimeout(350);
+      ok('opdracht: "Doorgaan zonder opslaan" en daarna het vervolg afbreken → sluiten vraagt nog steeds (wijziging telde niet meer)', !!eerst && !!(await sluitVraag()), JSON.stringify({ eerst, afgebroken, na: await sluitVraag() }));
+    }
+  }
+  await allesDicht();
+
+  // --- bellen/mailen met iets dat niet is opgeslagen geeft GEEN "Site verlaten?" ---
+  await page.evaluate(() => goView('taken')); await page.waitForSelector('#tkSnelTitel', { timeout: 8000 }); await page.waitForTimeout(300);
+  await page.fill('#tkSnelTitel', 'Half getypt voor de bel-test');
+  const bel = await page.evaluate(async () => {
+    const meet = () => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; };
+    const voor = meet();
+    const a = document.createElement('a'); a.href = 'tel:0612345678'; a.textContent = 'bel'; a.addEventListener('click', (e) => e.preventDefault()); document.body.appendChild(a); a.click();
+    const direct = meet(); a.remove();
+    await new Promise((r) => setTimeout(r, 2700));
+    return { voor, direct, later: meet() };
+  });
+  ok('bellen (tel:-link) met iets dat niet is opgeslagen geeft geen "Site verlaten?"; daarna beschermt de vraag weer', bel.voor === true && bel.direct === false && bel.later === true, JSON.stringify(bel));
+  await page.fill('#tkSnelTitel', '');
+
+  // --- snelle taak: na een geslaagde toevoeging weer Zakelijk/Middel ---
+  await page.click('#tkSnel .tk-keuze[data-k="categorie"] .tk-opt[data-v="prive"]');
+  await page.fill('#tkSnelTitel', 'Privé proeftaak naloop ' + Date.now()); await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('#tkSnelTitel').value, null, { timeout: 6000 }).catch(() => {}); await page.waitForTimeout(700);
+  const naToevoegen = await page.evaluate(() => (document.querySelector('#tkSnel .tk-keuze[data-k="categorie"] .tk-opt.active') || { dataset: {} }).dataset.v);
+  ok('snelle taak: na toevoegen staat de keuze weer op Zakelijk (de volgende taak werd anders ongemerkt ook Privé)', naToevoegen === 'zakelijk', naToevoegen);
+
+  // --- Instellingen: opslaan in het ene blok markeert een ANDER blok niet als bewaard ---
+  await page.evaluate(() => goView('settings')); await page.waitForSelector('#ar-subject', { state: 'attached', timeout: 8000 }); await page.waitForTimeout(1200);
+  await instKies(page, 'bericht'); await page.waitForTimeout(300);
+  const d3Oud = await page.inputValue('#ar-subject');
+  await page.fill('#ar-subject', 'Niet opgeslagen onderwerp ' + Date.now());
+  await page.evaluate(() => { const k = document.querySelector('#ow-subject').closest('.info-card'); [...k.querySelectorAll('button')].find((x) => /opslaan/i.test(x.textContent)).click(); });
+  await page.waitForTimeout(900);
+  let d3v = await metVraag(() => page.evaluate(() => showView('board')));
+  ok('Instellingen: een ander blok opslaan laat het niet-opgeslagen blok als "nog niet opgeslagen" staan', d3v.length === 1 && /ontvangstbevestiging/i.test(d3v[0]) && !/onderweg/i.test(d3v[0]), JSON.stringify(d3v));
+  await page.fill('#ar-subject', d3Oud);
+  d3v = await metVraag(() => page.evaluate(() => showView('board')));
+
+  // --- concepten overleven een verversing (F5 / zelf-verversing na een update) ---
+  await page.evaluate(() => goView('inbox')); await page.waitForSelector('#reviewList .review', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(500);
+  const d3Rev = await page.evaluate(() => (document.querySelector('#reviewList .review') || { dataset: {} }).dataset.id || '');
+  if (d3Rev) { await page.fill(`.review[data-id="${d3Rev}"] .r-cname`, 'Correctie Overleeft Verversen'); await page.evaluate(() => document.activeElement && document.activeElement.blur()); }
+  const magHerladen = await page.evaluate(() => veiligOmTeHerladen());
+  await page.evaluate(() => goView('chats')); await page.waitForSelector('.chat-item', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(400);
+  const d3Chat = await page.evaluate(() => (document.querySelector('.chat-item') || { dataset: {} }).dataset.cid || '');
+  if (d3Chat) { await page.click(`.chat-item[data-cid="${d3Chat}"]`); await page.waitForSelector('#cpText', { timeout: 6000 }); await page.waitForTimeout(300); await page.fill('#cpText', 'Concept overleeft verversen'); }
+  await metVraag(() => page.reload({ waitUntil: 'networkidle' }), { ja: true });
+  await page.waitForSelector('.view:not([hidden])', { timeout: 10000 }).catch(() => {}); await page.waitForTimeout(1200);
+  await page.evaluate(() => goView('inbox')); await page.waitForSelector('#reviewList .review', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(700);
+  const naF5Inbox = d3Rev ? await page.inputValue(`.review[data-id="${d3Rev}"] .r-cname`).catch(() => 'weg') : 'geen item';
+  await page.evaluate(() => goView('chats')); await page.waitForSelector('.chat-item', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(400);
+  if (d3Chat) { await page.click(`.chat-item[data-cid="${d3Chat}"]`); await page.waitForSelector('#cpText', { timeout: 6000 }).catch(() => {}); await page.waitForTimeout(500); }
+  const naF5Chat = d3Chat ? await page.inputValue('#cpText').catch(() => 'weg') : 'geen gesprek';
+  ok('na een verversing staan de getypte inbox-correctie en het half getypte bericht er weer; de zelf-verversing wacht niet eindeloos op een inbox-correctie', naF5Inbox === 'Correctie Overleeft Verversen' && naF5Chat === 'Concept overleeft verversen' && magHerladen === true, JSON.stringify({ naF5Inbox, naF5Chat, magHerladen }));
+  if (d3Chat) { await page.fill('#cpText', ''); await page.waitForTimeout(100); }
+  await page.evaluate(() => goView('inbox')); await page.waitForTimeout(600);
+  if (d3Rev) await page.evaluate((id) => { const v = document.querySelector(`.review[data-id="${id}"] .r-cname`); if (v) v.value = v.defaultValue; }, d3Rev);
+  await page.evaluate(() => goView('board')); await page.waitForTimeout(500);
+}
+noErr('Naloop deel 3');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
