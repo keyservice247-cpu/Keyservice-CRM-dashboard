@@ -224,8 +224,29 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   klanten samenvoegen, offerte goedkeuren in de lijst, eerste review-verzoek, AI-concept over
   getypte tekst, inklappen en feedback wissen; meldingen staan bovenaan als er een venster
   open is (waren onzichtbaar); "Teruggehaald"/"Gekopieerd" alleen als het echt gelukt is.
+  (9) FACTUUR: gewijzigde klantgegevens in het klantblok worden meebewaard bij Opslaan/Versturen
+  (`klantblokEerst`); een LEGE nieuwe factuur opslaan vraagt eerst (verbruikt een nummer);
+  Verwijder-knop alleen zichtbaar als het mag (verzonden = beheerder).
+  (10) FOTO'S IN DE OPDRACHT: knop "Verwijderen…" (`#f-fotoweg`, `ovBindFotoWeg`) zet de foto's
+  in kiesstand → tik + bevestigen = weg (bestaande DELETE-route; handtekening weigert de
+  server); `ovFotoTeller` houdt het tabblad en het kopje bij.
+  (11) Vinkjes die bij de gegevens horen dragen `data-bewaak` (taak toewijzen/delen, klant
+  geen-campagne, monteur auto-review, rechten, vaste kosten); keuzes die geen invoer zijn
+  dragen `data-geen-wijziging` (DRS-regels — die worden onthouden —, monteur kiezen bij
+  versturen, datum bij "Historie alsnog boeken"). DRS "was al gemeld" vraagt eerst.
+  (12) TELEFOON: Facturen-knoppen in beeld (`#view-invoices .view-actions` wrapt), in Berichten
+  is de balk "Testomgeving" verborgen (duwde de verstuurbalk achter de onderbalk), tikdoelen
+  40 px; op de pc plakt de tabbalk van de opdracht strak bovenaan (`.ov-tabs{top:-40px}` —
+  de ruimte rond het venster). Inlogpagina terwijl je bent ingelogd → meteen naar het CRM.
+  BEWUST NIET GEDAAN (keuze eigenaar / hoort bij het ontwerp): "+ Factuur → klant kiezen"
+  maakt nog steeds meteen een genummerd document; Sluiten in Factuur/Snel antwoord sluit
+  alles (Werkbon/Herinnering gaan terug naar de opdracht); smalle factuurregel en lage
+  "Mijn dag" op de telefoon (stap 2, ontwerp); vraag in de AI-assistent blijft niet staan
+  na een uitstapje via het menu.
   REGEL VOOR NIEUWE CODE: een knop die een ander venster opent vanuit de opdracht hoort in
-  `VERVOLG_IDS`; een sluitknop heet `…-cancel`/`…-close`/`…-sluit` of draagt `data-sluit`.
+  `VERVOLG_IDS`; een sluitknop heet `…-cancel`/`…-close`/`…-sluit` of draagt `data-sluit`;
+  na een `await` nooit `ev.currentTarget` gebruiken; de ingelogde gebruiker is `state.me`.
+  Tests: browser-test 460 (+38 voor deze ronde).
 
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
