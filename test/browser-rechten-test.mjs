@@ -72,7 +72,7 @@ console.log('\n== Beheerder ==');
   // ---- ontwerp november 2026: menu, kanaalknoppen, lettertype ----
   await page.evaluate(() => showView('board', document.querySelector('.nav-item[data-view="board"]'))); await page.waitForTimeout(1200);
   const menu = await page.evaluate(() => { const g = document.querySelector('.sidebar-foot').getBoundingClientRect().top; const items = [...document.querySelectorAll('.sidebar .nav-item')].filter((e) => !e.hidden && e.offsetParent); return { aantal: items.length, buiten: items.filter((e) => e.getBoundingClientRect().bottom > g + 1).map((e) => e.textContent.trim()), groepen: [...document.querySelectorAll('.sidebar .nav-sep')].filter((e) => !e.hidden).map((e) => e.textContent.trim()) }; });
-  ok('menu: 16 onderdelen, allemaal in beeld op een scherm van 900 hoog', menu.aantal === 16 && menu.buiten.length === 0, JSON.stringify(menu));
+  ok('menu: 17 onderdelen (Campagnes erbij), allemaal in beeld op een scherm van 900 hoog', menu.aantal === 17 && menu.buiten.length === 0, JSON.stringify(menu));
   ok('menu: vier duidelijke groepen', menu.groepen.join('|') === 'Klanten & geld|Team & hulp|Beheer', menu.groepen.join('|'));
   ok('menu: "E-mail" en "WhatsApp" zijn geen losse menu-items meer', await page.evaluate(() => !document.querySelector('.nav-item[data-channel="email"]') && !document.querySelector('.nav-item[data-channel="whatsapp"]')));
   const alle = await page.evaluate(() => document.querySelectorAll('#board .card').length);

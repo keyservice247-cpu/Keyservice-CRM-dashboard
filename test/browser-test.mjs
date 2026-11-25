@@ -2658,6 +2658,74 @@ clear();
 }
 noErr('Ontwerp 2');
 
+// ============================================================================================
+// CAMPAGNES (25 nov 2026, stap 3): e-mail naar bestaande klanten. De AI (of de vaste regels) stelt
+// voor, een mens beslist: er gaat niets uit zonder klik. Verzonnen klanten (.test-adressen).
+clear();
+{
+  const dlg = async (doe, ja) => { const gezien = []; const h = async (d) => { gezien.push(d.message()); try { if (ja || d.type() === 'beforeunload') await d.accept(); else await d.dismiss(); } catch { /* al afgehandeld */ } }; page.on('dialog', h); try { await doe(); await page.waitForTimeout(500); } finally { page.off('dialog', h); } return gezien; };
+  await page.evaluate(() => { if (document.querySelector('#sluitVraag #sv-weg')) document.querySelector('#sluitVraag #sv-weg').click(); if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // vier verzonnen klanten met een e-mailadres, zodat er altijd iets voor te stellen valt
+  await page.evaluate(async () => { for (let i = 1; i <= 4; i++) await fetch('/api/customers', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: `Campagne Proef ${i}`, email: `campagne-proef-${i}@voorbeeld.test`, phone: `06100000${40 + i}`, address: `Proefstraat ${i}, 3911 AA Rhenen` }) }); });
+  const menu = await page.evaluate(() => { const k = document.querySelector('.nav-item[data-view="campagnes"]'); return { er: !!k, zichtbaar: !!k && !k.hidden && k.offsetParent !== null, naFacturen: !!k && k.previousElementSibling && k.previousElementSibling.dataset.view === 'invoices' }; });
+  ok('campagnes: het menu-item staat bij Klanten & geld, direct onder Facturen', menu.er && menu.zichtbaar && menu.naFacturen, JSON.stringify(menu));
+  await page.click('.nav-item[data-view="campagnes"]'); await page.waitForSelector('#cmpLijst > *', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(500);
+  const info = await page.textContent('#cmpInfo');
+  ok('campagnes: het scherm toont hoeveel klanten bereikbaar zijn en de grenzen (per dag, rust per klant)', /klanten met een e-mailadres/.test(info) && /hooguit \d+ verstuurd/.test(info) && /per \d+ dagen/.test(info), info);
+  await page.click('#cmpVoorstelBtn'); await page.waitForSelector('.cmp-voorstel', { timeout: 30000 }).catch(() => {}); await page.waitForTimeout(400);
+  const vst = await page.evaluate(() => [...document.querySelectorAll('.cmp-voorstel')].map((v) => ({ knop: !!v.querySelector('[data-vst]'), tekst: v.textContent.length })));
+  const lijstVoor = await page.locator('#cmpLijst .cmp-rij').count();
+  ok('campagnes: "Stel campagnes voor" geeft voorstellen met uitleg; een voorstel verstuurt niets (er komt geen campagne bij)', vst.length >= 1 && vst.every((v) => v.knop && v.tekst > 60) && lijstVoor === 0, JSON.stringify({ vst, lijstVoor }));
+  await page.locator('.cmp-voorstel [data-vst]').first().click(); await page.waitForSelector('#cm-tekst', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(900);
+  const concept = await page.evaluate(() => ({ onderwerp: (document.querySelector('#cm-onderwerp') || {}).value || '', tekst: (document.querySelector('#cm-tekst') || {}).value || '', wie: (document.querySelector('#cm-wie') || {}).textContent || '', knoppen: ['#cm-save', '#cm-plan', '#cm-nu', '#cm-testbtn', '#cm-ai'].every((k) => !!document.querySelector(k)) }));
+  ok('campagnes: een voorstel wordt een CONCEPT met onderwerp, tekst met {naam}, het aantal ontvangers en de knoppen Opslaan · Inplannen · Nu versturen', concept.onderwerp.length > 3 && /\{naam\}/.test(concept.tekst) && /kla(nt|nten) krij/.test(concept.wie) && concept.knoppen, JSON.stringify({ ...concept, tekst: concept.tekst.slice(0, 40) }));
+  const nee = await dlg(() => page.click('#cm-nu'), false);
+  const naNee = await page.evaluate(async () => ({ editor: !!document.querySelector('#cm-tekst'), status: ((await fetch('/api/campagnes').then((r) => r.json())).campagnes || []).map((c) => c.status).join(',') }));
+  ok('campagnes: "Nu versturen" vraagt eerst met het aantal ontvangers; Annuleren = er gaat niets uit', nee.length === 1 && /versturen naar \d+/.test(nee[0]) && naNee.editor && naNee.status === 'concept', JSON.stringify({ nee, naNee }));
+  await dlg(async () => { await page.click('#cm-nu'); await page.waitForSelector('.cmp-tegels', { timeout: 10000 }).catch(() => {}); }, true);
+  const verloop = await page.evaluate(() => ({ tegels: document.querySelectorAll('.cmp-tegels > *').length, tekst: (document.querySelector('#modal') || {}).textContent || '' }));
+  ok('campagnes: na "ja" opent de voortgang (verstuurd · wacht nog · overgeslagen · mislukt · reacties · opdrachten); zonder mailinstelling staat er duidelijk "Proef"', verloop.tegels >= 6 && /verstuurd/.test(verloop.tekst) && /wacht nog/.test(verloop.tekst) && /reacties/.test(verloop.tekst) && /Proef/.test(verloop.tekst), JSON.stringify({ tegels: verloop.tegels, tekst: verloop.tekst.slice(0, 160) }));
+  await page.click('#cv-close'); await page.waitForTimeout(700);
+  const rij = await page.evaluate(() => ({ rijen: document.querySelectorAll('#cmpLijst .cmp-rij').length, tekst: (document.querySelector('#cmpLijst') || {}).textContent || '' }));
+  ok('campagnes: de campagne staat daarna in de lijst met status en resultaat (verstuurd · reacties · nieuwe opdrachten)', rij.rijen === 1 && /Verstuurd|Bezig|Gepland/.test(rij.tekst) && /reacties/.test(rij.tekst) && /nieuwe opdrachten/.test(rij.tekst), rij.tekst.slice(0, 200));
+  // een gestarte campagne is geen concept meer: de tekst kan niet stil veranderen
+  const vast = await page.evaluate(async () => { const c = ((await fetch('/api/campagnes').then((r) => r.json())).campagnes || [])[0]; const r = await fetch(`/api/campagnes/${c.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tekst: 'Andere tekst' }) }); return r.status; });
+  ok('campagnes: de tekst van een gestarte campagne is niet meer te wijzigen (409)', vast === 409, vast);
+  // nieuw concept: sluiten met getypte tekst vraagt eerst, met Opslaan
+  await page.click('#cmpNieuwBtn'); await page.waitForSelector('#cm-tekst', { timeout: 8000 }); await page.waitForTimeout(500);
+  await page.fill('#cm-onderwerp', 'Proef onderwerp'); await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+  const sv = await page.evaluate(() => { const w = document.querySelector('#sluitVraag'); return w ? [...w.querySelectorAll('button')].map((x) => x.textContent.trim()).join('|') : null; });
+  ok('campagnes: een concept met getypte tekst sluiten vraagt eerst (Opslaan · Niet opslaan · Terug)', !!sv && /^Opslaan\|/.test(sv), sv);
+  if (sv) { await page.click('#sv-weg'); await page.waitForTimeout(300); }
+  // het snelle venster op Klanten wijst de weg naar Campagnes
+  await page.evaluate(() => goView('customers')); await page.waitForSelector('#campaignBtn', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(500);
+  if (await page.$('#campaignBtn')) {
+    await page.click('#campaignBtn'); await page.waitForSelector('#cp-subject', { timeout: 8000 }).catch(() => {});
+    ok('campagnes: het snelle mail-venster bij Klanten bestaat nog en verwijst naar het nieuwe scherm', !!(await page.$('#cp-subject')) && /Campagnes/.test(await page.textContent('#modal .cmp-tip').catch(() => '')), '');
+    await page.evaluate(() => { modalSchoon(); closeModal(); });
+  }
+  // telefoon: past binnen het scherm
+  await page.setViewportSize({ width: 390, height: 844 }); await page.evaluate(() => showView('campagnes')); await page.waitForTimeout(1000);
+  const telC = await page.evaluate(() => ({ breed: document.documentElement.scrollWidth, knop: (() => { const k = document.querySelector('#cmpNieuwBtn').getBoundingClientRect(); return k.left >= 0 && k.right <= 390 && k.height >= 38; })() }));
+  ok('campagnes: op de telefoon past het scherm binnen 390 px en is "+ Nieuwe campagne" een volwaardige knop', telC.breed <= 392 && telC.knop, JSON.stringify(telC));
+  await page.setViewportSize({ width: 1440, height: 900 }); await page.waitForTimeout(300);
+  // monteur: geen menu-item en de server weigert
+  const mc = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await mc.goto(BASE + '/login.html', { waitUntil: 'networkidle' });
+  await mc.fill('input[type=email], input[name=email], #email', 'bmonteur@keyservice.nl');
+  await mc.fill('input[type=password], input[name=password], #password', 'monteur123');
+  await Promise.all([mc.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}), mc.click('button[type=submit], button')]);
+  await mc.waitForSelector('.view:not([hidden])', { timeout: 10000 }).catch(() => {}); await mc.waitForTimeout(1000);
+  const mIn = await mc.evaluate(() => typeof state !== 'undefined' && !!state.me && state.me.role === 'monteur');
+  if (mIn) {
+    const mm = await mc.evaluate(async () => { const k = document.querySelector('.nav-item[data-view="campagnes"]'); return { zichtbaar: !!k && !k.hidden && k.offsetParent !== null, lijst: (await fetch('/api/campagnes')).status, start: (await fetch('/api/campagnes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status }; });
+    ok('campagnes: de monteur ziet het menu-item niet en de server weigert (403)', !mm.zichtbaar && mm.lijst === 403 && mm.start === 403, JSON.stringify(mm));
+  } else ok('campagnes: monteur kon inloggen voor de rechtencontrole', false, 'inloggen als monteur mislukte');
+  await mc.close();
+}
+noErr('Campagnes');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

@@ -1533,7 +1533,7 @@ h1, h2, h3, h4 { letter-spacing: -0.01em; }
 .card-title { font-weight: 600; font-size: 14px; line-height: 1.4; }
 strong, b { font-weight: 600; }
 
-/* ---- zijbalk (alleen pc): 16 onderdelen in vier groepen, past op een laptop van 900 hoog ---- */
+/* ---- zijbalk (alleen pc): 17 onderdelen in vier groepen, past op een laptop van 900 hoog ---- */
 @media (min-width: 821px) {
   .sidebar { padding: 14px 10px 12px; overflow: hidden; }
   .sidebar .nav { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
@@ -1541,6 +1541,16 @@ strong, b { font-weight: 600; }
   .nav-item { padding: 6px 10px; min-height: 34px; border-radius: 8px; font-weight: 500; font-size: 14px; margin-bottom: 0; }
   .nav-sep { font-size: 11px; letter-spacing: .07em; margin: 10px 10px 3px; padding: 0; font-weight: 500; color: var(--muted); }
   .sidebar-foot { gap: 8px; padding-top: 10px; margin-top: 8px; }
+}
+/* 17 onderdelen sinds "Campagnes" (25 nov 2026): tot 960 hoog iets compacter, zodat alles in beeld blijft. */
+@media (min-width: 821px) and (max-height: 960px) {
+  .nav-item { min-height: 32px; padding: 5px 10px; }
+  .nav-sep { margin: 7px 10px 2px; }
+  .brand { padding-bottom: 8px; }
+}
+@media (min-width: 821px) and (max-height: 860px) {
+  .nav-item { min-height: 30px; padding: 4px 10px; }
+  .nav-sep { margin: 5px 10px 2px; }
 }
 .nav-item:hover { background: var(--line-soft); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
@@ -1983,3 +1993,46 @@ table th { font-size: 12px; font-weight: 500; letter-spacing: .03em; color: var(
   .inv-line .il-qty { flex: 0 0 88px; width: auto !important; }
   .inv-line .il-price { flex: 1 1 110px; width: auto !important; }
 }
+
+/* ---- Campagnes (stap 3) ---- */
+.cmp-info { margin: -6px 0 16px; line-height: 1.6; }
+.cmp-kaart { padding: 0; overflow: hidden; margin-bottom: 20px; }
+.cmp-kaart > h3, .cmp-kop { padding: 16px 20px 12px; margin: 0; }
+.cmp-kop { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cmp-kop h3 { margin: 0; } .cmp-kop .muted { flex: 1 1 260px; }
+.cmp-kaart > p { padding: 0 20px 16px; margin: 0; }
+.cmp-leeg { margin-bottom: 20px; }
+.cmp-rijen { list-style: none; margin: 0; padding: 0; }
+.cmp-rij { padding: 14px 20px; border-top: 1px solid var(--line-soft); cursor: pointer; }
+.cmp-rij:hover { background: var(--line-soft); }
+.cmp-rij:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cmp-rij-hoofd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cmp-naam { font-weight: 600; font-size: 15px; color: var(--ink); }
+.cmp-status { margin-left: auto; font-size: 12px; font-weight: 500; padding: 3px 10px; border-radius: 999px; background: var(--line-soft); color: var(--ink-soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cmp-status.cmp-bezig { background: var(--accent-soft); color: var(--accent); }
+.cmp-status.cmp-gepland { background: var(--warn-soft, #faf1dd); color: var(--warn, #8f5f08); }
+.cmp-status.cmp-verstuurd { background: var(--ok-soft, #e6f3ec); color: var(--ok, #24764c); }
+.cmp-status.cmp-gestopt, .cmp-status.cmp-gepauzeerd { background: var(--danger-soft, #fbeceb); color: var(--danger); }
+.cmp-bron { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-soft); }
+.cmp-res { margin-top: 6px; font-size: 13px; color: var(--ink-soft); }
+.cmp-fout { color: var(--danger); } .cmp-proef { margin-left: 6px; font-size: 12px; color: var(--warn, #8f5f08); }
+.cmp-melding { margin: 6px 0 0; font-size: 13px; color: var(--warn, #8f5f08); }
+.cmp-voorstellen { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0; border-top: 1px solid var(--line-soft); }
+.cmp-voorstel { padding: 16px 20px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 8px; }
+.cmp-voorstel .cmp-status { margin-left: 0; }
+.cmp-waarom { margin: 0; font-size: 14px; line-height: 1.5; }
+.cmp-knoppen { margin-top: auto; padding-top: 4px; }
+.cmp-tekst summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+.cmp-tekst pre { white-space: pre-wrap; font: inherit; font-size: 13px; background: var(--line-soft); border-radius: 8px; padding: 12px 14px; margin: 8px 0 0; }
+.cmp-waarom-blok { background: var(--accent-soft); border-radius: 8px; padding: 10px 14px; font-size: 13px; line-height: 1.5; margin-bottom: 12px; }
+.cmp-wie { background: var(--line-soft); border-radius: 8px; padding: 10px 14px; margin: 8px 0 4px; font-size: 14px; }
+.cmp-ontv { list-style: none; margin: 8px 0 0; padding: 0; max-height: 220px; overflow-y: auto; font-size: 13px; }
+.cmp-ontv li { padding: 4px 0; border-top: 1px solid var(--line); }
+.cmp-ai { display: flex; gap: 8px; align-items: center; margin: 10px 0 4px; flex-wrap: wrap; }
+.cmp-ai input { flex: 1 1 240px; }
+.cmp-tegels { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin: 12px 0 14px; }
+.cmp-tegels > div { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.cmp-tegels strong { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; } .cmp-tegels span { font-size: 12px; color: var(--muted); }
+.cmp-o { display: inline-block; min-width: 86px; font-size: 12px; color: var(--muted); }
+.cmp-o-verstuurd { color: var(--ok, #24764c); } .cmp-o-mislukt { color: var(--danger); }
+@media (max-width: 820px) { .cmp-status { margin-left: 0; } .cmp-voorstellen { grid-template-columns: 1fr; } }

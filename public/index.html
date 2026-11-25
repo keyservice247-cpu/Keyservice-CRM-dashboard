@@ -29,6 +29,7 @@
         <div class="nav-sep">Klanten &amp; geld</div>
         <button class="nav-item" data-view="customers"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 6-5s6 2 6 5"/><path d="M16 5.5a3 3 0 0 1 0 5.5"/><path d="M18 15c2.5.5 3.5 2.5 3.5 5"/></svg></span> Klanten &amp; leads</button>
         <button class="nav-item" data-view="invoices"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4"/><path d="M9 12h6M9 16h6"/></svg></span> Facturen</button>
+        <button class="nav-item" data-view="campagnes"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h3l6 4V6L7 10H4a1 1 0 0 0-1 1z"/><path d="M16.5 9a4 4 0 0 1 0 6"/><path d="M19 6.5a8 8 0 0 1 0 11"/></svg></span> Campagnes</button>
         <button class="nav-item admin-only" data-need="finance|conversie" data-view="finance"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span> Cijfers</button>
         <div class="nav-sep">Team &amp; hulp</div>
         <button class="nav-item" data-view="monteurs"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 1 5.4-5.4l-2.5 2.5-2-2 2.5-2.5z"/></svg></span> Monteurs</button>
@@ -263,6 +264,21 @@
         <div id="conversiePanel"></div>
         <div id="facturenOmzetPanel"></div>
         <div id="financePanel"></div>
+      </section>
+
+      <!-- Campagnes (stap 3, nov 2026): e-mail naar bestaande klanten. De AI stelt voor, een mens beslist. -->
+      <section id="view-campagnes" class="view" hidden>
+        <div class="view-head">
+          <div><h2>Campagnes</h2>
+            <div class="muted small">E-mail naar bestaande klanten. De AI stelt voor, jij beslist: er gaat niets uit zonder jouw klik.</div></div>
+          <div class="view-actions">
+            <button id="cmpVoorstelBtn" class="btn" title="Laat campagnes voorstellen op basis van het klantenbestand, het seizoen en wat eerder is verstuurd">Stel campagnes voor</button>
+            <button id="cmpNieuwBtn" class="btn btn-primary">+ Nieuwe campagne</button>
+          </div>
+        </div>
+        <div id="cmpInfo" class="cmp-info muted small"></div>
+        <div id="cmpVoorstellen"></div>
+        <div id="cmpLijst"></div>
       </section>
 
       <!-- Facturen -->

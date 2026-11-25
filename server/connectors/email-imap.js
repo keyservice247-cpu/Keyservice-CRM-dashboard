@@ -72,6 +72,9 @@ export function handleBounce(parsed, rawText, mid) {
     .filter((i) => String(i.sentTo || '').toLowerCase() === rcpt && i.lastSentAt && Date.now() - new Date(i.lastSentAt).getTime() < 7 * 86400000)
     .sort((a, b) => String(b.lastSentAt || '').localeCompare(String(a.lastSentAt || '')))[0] || null : null;
   if (!order && inv && inv.orderId) order = (db().orders || []).find((o) => o.id === inv.orderId) || null;
+  // Het adres kwam terug: de klant met dat adres krijgt geen campagnemails meer tot het adres
+  // is verbeterd (campagnes.js slaat `emailBounceAt` over; een nieuw adres wist de markering).
+  if (rcpt) for (const c of db().customers || []) if (String(c.email || '').trim().toLowerCase() === rcpt) c.emailBounceAt = now();
   const who = rcpt || 'de klant';
   const doc = inv ? `${inv.type === 'offerte' ? 'Offerte' : 'Factuur'} ${inv.number}` : '';
   if (inv) { inv.bounce = { at: now(), to: who, reden: reason.slice(0, 160) }; }

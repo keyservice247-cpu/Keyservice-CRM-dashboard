@@ -290,6 +290,75 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   HULP BIJ TESTEN: `scratchpad/run-snap.sh <poort>` draait de browsertest op een
   momentopname van de werkmap, zodat je intussen verder kunt werken.
 
+- **CAMPAGNES — e-mailcampagnes met AI (stap 3, 25 nov 2026; ALLEEN op de testomgeving tot de
+  eigenaar "ja" zegt):** menu **Campagnes** (Klanten & geld, onder Facturen; beheerder +
+  assistente, monteur niet → 403). server/campagnes.js, gegevens in `db().campagnes` (de oude
+  lijst `db().campaigns` is alleen het logboek van de snelle knop). VASTE AFSPRAKEN — NIET
+  VERZWAKKEN zonder akkoord van de eigenaar:
+  (1) DE AI STELT VOOR, EEN MENS BESLIST: er gaat nooit iets uit zonder klik op "Nu versturen"
+  of "Inplannen" (het scherm vraagt eerst, met het aantal ontvangers). Het scherm haalt dat
+  aantal vers op en stuurt het mee (`verwacht`); wijkt de lijst bij het starten af, dan weigert
+  de server (409) en gaat er niets uit — nooit naar meer mensen dan bevestigd.
+  (2) WIE EEN CAMPAGNE KRIJGT volgt uit VASTE REGELS, niet uit de AI: `DOELGROEPEN` = alle ·
+  oud (laatste opdracht > N maanden, standaard 12) · schuifpui · sloten · offerte (offerte
+  zonder vervolg) · zakelijk (VvE/beheer/bedrijf) · nieuw (eerste opdracht ≤ N maanden,
+  standaard 3) · plaats. `klantFeiten()` + `kiesOntvangers()` zijn pure functies (zelfde
+  bestand + zelfde doelgroep = zelfde lijst) en geven ook terug WAAROM mensen afvallen
+  (`afgevallen`: geenEmail, afgemeld, nietAangekomen, tussenpersoon, rust, dubbelAdres; `lopend`
+  alleen met `ookLopend:false` — standaard krijgt een klant met een lopende opdracht de mail wél,
+  anders valt bijna de hele doelgroep "offerte zonder vervolg" af).
+  (3) DE AI ZIET GEEN KLANTGEGEVENS: alleen `doelgroepTelling()` (aantallen per doelgroep +
+  grootste plaatsen), de maand, eerdere campagnes met hun resultaat en het bedrijfsprofiel.
+  (4) VANGRAILS BIJ HET VERSTUREN (`runCampagnes`, elke minuut): nooit naar afgemeld
+  (`campaignOptOut`), tussenpersoon/DRS (`nooitKlantMail`), een adres dat terugkwam
+  (`customer.emailBounceAt`, gezet door handleBounce; weg zodra het e-mailadres van de klant
+  wordt gewijzigd), elk adres één keer, rustperiode per klant (`settings.campagnes.rustDagen`,
+  standaard 30, via `customer.lastCampaignAt`), alleen 09–20 uur NL, hooguit `perDag` (standaard 200, min 10) per dag, 8 per ronde met 2,5 s
+  ertussen. Bij het versturen wordt elke ontvanger OPNIEUW gecontroleerd (intussen afgemeld /
+  adres gewijzigd / intussen een andere campagne gekregen → overgeslagen met reden).
+  STORING BIJ DE MAILSERVER: alleen een geweigerd ADRES (`err.rejectedRecipient`) is "mislukt"
+  voor die klant; elke andere fout laat de klant op "wacht" staan en stopt de ronde, en na 5
+  rondes op rij (`STORING_MAX`) PAUZEERT de campagne met uitleg (Hervatten zet de teller terug) —
+  een storing schrijft dus nooit een hele lijst als mislukt weg.
+  (5) Zonder mailinstelling en in de testomgeving loopt een campagne helemaal door als PROEF
+  (`echt = smtpConfigured() && !TEST`; het scherm zegt dat erbij) — er gaat dan niets echt uit.
+  VERLOOP: concept → (gepland →) bezig → verstuurd; ook gepauzeerd/gestopt. Starten legt de
+  ontvangerslijst vast (momentopname); alleen een concept is te wijzigen of te verwijderen (409).
+  AFMELDEN: onder elke mail `voetTekst(klant)` met een ondertekende link `/afmelden/<klant>/<sig>`
+  (HMAC met LINK_SECRET, geen inlog, noindex). De link OPENEN (GET) meldt niemand af — mail-
+  programma's en virusscanners openen links vanzelf; de klant bevestigt met de knop "Ja, meld mij
+  af" (POST, `meldAf`; `afmeldKlant` controleert alleen). NIET terugzetten naar afmelden op GET.
+  Antwoorden met "afmelden" werkte al.
+  `customer.campaignOptOutAt/Via` legt vast wanneer en hoe (link/kantoor).
+  RESULTAAT per campagne (`campagneResultaat`): verstuurd · wacht nog · overgeslagen · mislukt,
+  reacties binnen 14 dagen, nieuwe opdrachten binnen 30 dagen, afmeldingen; OMZET alleen met het
+  recht finance (assistente ziet geen bedragen).
+  AI (server/ai/categorizer.js, via `vraagMetTerugval`; model Opus 5.5, env
+  ANTHROPIC_CAMPAGNE_MODEL; antwoord in vaste JSON-vorm): `campagneVoorstellenAI` (max 5
+  voorstellen: doelgroep uit de vaste lijst, waarom, onderwerp, tekst met {naam}) en
+  `campagneTekstAI` (knop "Laat de AI de tekst schrijven/verbeteren" met een wens in gewone
+  taal; "Vorige tekst terug"). Valt de AI uit of ontbreekt de sleutel → `regelVoorstellen()`
+  (vaste regels per seizoen en doelgroep, min. 3 bereikbare klanten); het scherm zegt welke van
+  de twee het was. Een voorstel verstuurt niets: "Maak hier een concept van" → nalezen → klik.
+  ROUTES (admin + assistent): GET/POST /api/campagnes, GET/PATCH/DELETE /api/campagnes/:id,
+  POST /api/campagnes/voorstellen · /ai-tekst · /voorbeeld · /:id/test · /:id/start {op?} ·
+  /:id/pauze|hervat|stop|concept · /ronde; POST /api/campagnes/instellingen (alleen beheerder);
+  openbaar GET + POST /afmelden/:id/:sig. SCHERM (app.js: loadCampagnes, tekenCampagneVoorstellen,
+  openCampagneConcept, openCampagneVerloop, openCampagneInstellingen): `#cmpVoorstelBtn`,
+  `#cmpNieuwBtn`, `#cmpInfo` (bereikbaar · vandaag verstuurd · rust), `#cmpVoorstellen`,
+  `#cmpLijst`; concept `#cm-…` (live telling `#cm-wie` met de redenen van afvallen, testmail,
+  Opslaan · Inplannen · Nu versturen); voortgang met tegels (`.cmp-tegels`) en ontvangers.
+  DE OUDE SNELLE KNOP "E-mail sturen" op Klanten (POST /api/campaign/send, mail naar een
+  zoekresultaat) bestaat nog, heeft nu dezelfde uitsluitingen (teruggekomen adres,
+  tussenpersoon) en dezelfde afmeldlink, en verwijst naar het nieuwe scherm.
+  NOG NIET GEBOUWD (pas na akkoord): automatische opvolgmail aan wie niet reageerde,
+  voorstellen uit zichzelf op Start, campagnes via WhatsApp.
+  MENU: 17 onderdelen; tot 960 px hoog is de zijbalk iets compacter zodat alles in beeld blijft
+  (browser-rechten-test bewaakt dat op 900 hoog).
+  Tests: campagne-test (62; start zelf nep-SMTP 2657 + server 3157 met CAMPAGNE_TEST=1 — die
+  schakelaar werkt alleen met de demo-login en heft dan het tijdvenster op),
+  campagne-ai-test (15, zonder server, fetch onderschept), browser 493 (+13).
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)
@@ -320,6 +389,8 @@ systeem nalopen op gebruikersfouten → getest → LIVE; (2) het echte ontwerp (
 het prototype) op de testomgeving; (3) pas daarna: E-MAILCAMPAGNESYSTEEM MET AI — de AI kan een
 complete campagne uitvoeren én doet voorstellen op basis van klantenbestand en geschiedenis
 (bouwt voort op de bestaande /api/campaign/send; idee 4 hoort hierbij).
+STAND 25 nov 2026: stap 1 staat LIVE, stap 2 en stap 3 staan op de testomgeving en wachten op het
+"ja" van de eigenaar.
 
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,

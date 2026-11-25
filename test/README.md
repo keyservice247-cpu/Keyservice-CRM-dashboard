@@ -47,6 +47,13 @@ node test/ai-modellen-test.mjs
 # WhatsApp-bridge v10: media-reparatie (foto's/PDF's) in whatsapp-web.js, idempotent,
 # bibliotheek pas ná de reparatie geladen (GEEN server, GEEN whatsapp-web.js nodig)
 node test/bridge-mediafix-test.mjs
+# Campagnes (25 nov): doelgroepen en vangrails (zonder server) + een hele campagne via een nep-SMTP:
+# concept, start, rondes met pauze, afmeldlink, stoppen, dagmaximum, rechten (start zelf een server
+# op PORT=3157 en een nep-SMTP op 2657)
+node test/campagne-test.mjs
+# Campagne-AI: voorstellen en tekst — de AI ziet alleen aantallen, kiest alleen bestaande doelgroepen,
+# terugval naar vaste regels (GEEN server, GEEN echte AI-kosten — fetch wordt onderschept)
+node test/campagne-ai-test.mjs
 ```
 Poorten in de scripts (3113/3117/3119) moeten overeenkomen met de gestarte server.
 

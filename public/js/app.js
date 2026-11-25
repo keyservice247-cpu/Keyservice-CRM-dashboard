@@ -1443,7 +1443,7 @@ function showView(view, tab) {
   if (anderView && view === 'inbox') state._inboxOffset = 0;
   const active = $(`#view-${view}`);
   if (active) { active.classList.remove('fade-swap'); void active.offsetWidth; active.classList.add('fade-swap'); }
-  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance, chats: loadChats, taken: loadTaken };
+  const map = { overview: loadOverview, board: loadBoard, inbox: loadInbox, customers: loadCustomers, agenda: loadAgenda, assistant: loadAssistant, monteurs: loadMonteurs, trash: loadTrash, control: loadControl, subs: loadSubs, settings: loadSettings, users: loadUsers, invoices: loadInvoices, finance: loadFinance, chats: loadChats, taken: loadTaken, campagnes: loadCampagnes };
   // Elke laadfout ZICHTBAAR maken (audit 16 sep): voorheen bleef het scherm stil leeg.
   // De belofte gaat terug (en staat in window._viewLaad), zodat wie op het geladen
   // scherm wil wachten dat kan (bv. scrollpositie herstellen na een zelf-herlaad).
@@ -1616,6 +1616,7 @@ function nieuwPunten() {
     ['Start in twee kolommen', 'Links wat je moet doen (Eerst doen, dagoverzicht, weekrapport), rechts vandaag (taken, afspraken, wie wacht op antwoord).'],
     ['Opdrachten: snel filteren', 'Boven het bord staan knoppen: Klant reageerde, Spoed, DRS, Eigen en Ligt stil. De keuzelijsten zijn er nog. De knoppen (Status-scan, DRS-rapport, Plak opdracht …) staan rechtsboven naast "+ Nieuwe opdracht".'],
     ['Inbox: lijst en bericht', 'Links de lijst, rechts het gekozen bericht met alle velden. Het vinkje voor bulk-acties staat in de lijst. Op de telefoon staat alles nog onder elkaar.'],
+    ['Nieuw: Campagnes', 'E-mail naar bestaande klanten, onder Klanten & geld. Laat campagnes voorstellen, kies een doelgroep, lees de tekst na en verstuur of plan in. Er gaat niets uit zonder jouw klik, en je ziet daarna hoeveel reacties en opdrachten het opleverde.'],
     ['Menu', 'E-mail en WhatsApp staan niet meer los in het menu: het zijn de knoppen Alle · E-mail · WhatsApp boven het bord bij Opdrachten.'],
     ['Start: Eerst doen', 'Bovenaan staat één lijst met wat er nu moet gebeuren, het belangrijkste eerst. Een tik brengt je naar de juiste plek.'],
     ['Opdracht met tabbladen', 'Details · Gesprek · Foto\'s · Geschiedenis. Alle knoppen staan onderaan, in vaste groepjes: Klant · Werk · Planning · Meer. Opslaan bewaart alle tabbladen tegelijk.'],
@@ -4266,6 +4267,243 @@ function openImportModal() {
   };
 }
 
+// ---------- CAMPAGNES (stap 3, nov 2026) ----------
+// E-mail naar bestaande klanten. Vaste afspraken (zie server/campagnes.js): de AI stelt voor,
+// een mens beslist; WIE de mail krijgt volgt uit vaste regels; er gaat niets uit zonder een
+// klik op "Nu versturen" of "Inplannen". Dit scherm toont alleen wat de server teruggeeft.
+let _cmp = { data: null, voorstellen: null, timer: null };
+const CMP_STATUS = { concept: 'Concept', gepland: 'Ingepland', bezig: 'Bezig met versturen', gepauzeerd: 'Gepauzeerd', verstuurd: 'Verstuurd', gestopt: 'Gestopt' };
+const cmpDatum = (iso) => (iso ? new Date(iso).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
+function cmpStatusHTML(c) {
+  const extra = c.status === 'gepland' ? ` · ${esc(cmpDatum(c.geplandOp))}` : c.status === 'bezig' || c.status === 'gepauzeerd' ? ` · ${c.verstuurd} van ${c.aantal}` : '';
+  return `<span class="cmp-status cmp-${esc(c.status)}">${esc(CMP_STATUS[c.status] || c.status)}${extra}</span>`;
+}
+function cmpResultaatHTML(c) {
+  const r = c.resultaat; if (!r) return '';
+  const stuk = [`<strong>${r.verstuurd}</strong> verstuurd`];
+  if (c.mislukt) stuk.push(`<span class="cmp-fout">${c.mislukt} mislukt</span>`);
+  stuk.push(`<strong>${r.reacties}</strong> ${r.reacties === 1 ? 'reactie' : 'reacties'}`, `<strong>${r.opdrachten}</strong> nieuwe ${r.opdrachten === 1 ? 'opdracht' : 'opdrachten'}`);
+  if (r.afgemeld) stuk.push(`${r.afgemeld} afgemeld`);
+  if ('omzet' in r && r.omzet > 0) stuk.push(`<span class="cv-geld">€ ${Number(r.omzet).toFixed(2).replace('.', ',')} omzet excl. btw</span>`);
+  return `<div class="cmp-res">${stuk.join(' · ')}${c.proef ? ' <span class="cmp-proef">proef — er is niets echt verstuurd</span>' : ''}</div>`;
+}
+async function loadCampagnes() {
+  if (state.me.role === 'monteur') return;
+  clearTimeout(_cmp.timer);
+  const d = await api('/api/campagnes'); _cmp.data = d;
+  const t = d.telling;
+  $('#cmpInfo').innerHTML = `${t.metMail} klanten met een e-mailadres${t.afgemeld ? ` · ${t.afgemeld} afgemeld` : ''} · vandaag ${d.vandaagVerstuurd} van hooguit ${d.instellingen.perDag} verstuurd · een klant krijgt hooguit één campagne per ${d.instellingen.rustDagen} dagen`
+    + (d.testomgeving ? '<br><strong>Testomgeving:</strong> een campagne loopt hier helemaal door, maar er wordt niets echt verstuurd.' : !d.kanVersturen ? '<br><strong>Let op:</strong> e-mail versturen is nog niet ingesteld; een campagne telt dan alleen wat er verstuurd zou zijn.' : '')
+    + (hasPerm('settings') ? ' <button type="button" class="linkbtn" id="cmpInstBtn">Grenzen aanpassen</button>' : '');
+  if ($('#cmpInstBtn')) $('#cmpInstBtn').onclick = openCampagneInstellingen;
+  const lijst = d.campagnes || [];
+  $('#cmpLijst').innerHTML = lijst.length ? `<div class="info-card cmp-kaart"><h3>Campagnes</h3><ul class="cmp-rijen">${lijst.map((c) => `
+      <li class="cmp-rij" data-cmp="${esc(c.id)}" tabindex="0" role="button">
+        <div class="cmp-rij-hoofd"><span class="cmp-naam">${esc(c.naam)}</span>${c.bron === 'ai' ? '<span class="cmp-bron" title="Voorgesteld door de AI, nagekeken door een mens">AI-voorstel</span>' : ''}${cmpStatusHTML(c)}</div>
+        <div class="muted small">${esc(c.doelgroepNaam)}${c.onderwerp ? ` · “${esc(c.onderwerp)}”` : ''}${c.door ? ` · ${esc(c.door)}` : ''}</div>
+        ${c.melding ? `<div class="cmp-melding">${esc(c.melding)}</div>` : ''}${cmpResultaatHTML(c)}
+      </li>`).join('')}</ul></div>`
+    : '<div class="info-card cmp-leeg"><h3>Nog geen campagnes</h3><p class="muted">Klik op <strong>Stel campagnes voor</strong> om te zien welke mailing nu de moeite waard is, of begin zelf met <strong>+ Nieuwe campagne</strong>.</p></div>';
+  $$('#cmpLijst .cmp-rij').forEach((el) => { const open = () => openCampagne(el.dataset.cmp); el.onclick = open; el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }; });
+  $('#cmpNieuwBtn').onclick = () => openCampagneConcept(null);
+  $('#cmpVoorstelBtn').onclick = (ev) => eenKeer(ev.currentTarget, laadCampagneVoorstellen);
+  tekenCampagneVoorstellen();
+  // Loopt er een campagne? Dan het overzicht elke 10 seconden bijwerken zolang dit scherm open is.
+  if (lijst.some((c) => c.status === 'bezig')) _cmp.timer = setTimeout(() => { if (state.view === 'campagnes' && $('#modalRoot').hidden && !document.hidden) loadCampagnes().catch(() => {}); }, 10000);
+}
+async function laadCampagneVoorstellen() {
+  const vak = $('#cmpVoorstellen');
+  vak.innerHTML = '<div class="info-card cmp-kaart"><h3>Voorstellen</h3><p class="muted small">Het klantenbestand wordt bekeken (alleen aantallen per doelgroep, geen namen of adressen)… dit kan een halve minuut duren.</p></div>';
+  try { _cmp.voorstellen = await api('/api/campagnes/voorstellen', 'POST', {}); }
+  catch (err) { _cmp.voorstellen = null; vak.innerHTML = ''; toast(err.message, true); return; }
+  tekenCampagneVoorstellen();
+}
+function tekenCampagneVoorstellen() {
+  const vak = $('#cmpVoorstellen'); const v = _cmp.voorstellen;
+  if (!vak) return;
+  if (!v) { vak.innerHTML = ''; return; }
+  if (!v.voorstellen.length) { vak.innerHTML = '<div class="info-card cmp-kaart"><h3>Voorstellen</h3><p class="muted">Er is nu geen doelgroep die groot genoeg is voor een campagne (te weinig klanten met een e-mailadres, of iedereen kreeg onlangs al een mail).</p></div>'; return; }
+  vak.innerHTML = `<div class="info-card cmp-kaart"><div class="cmp-kop"><h3>Voorstellen</h3><span class="muted small">${v.bron === 'ai' ? 'Bedacht door de AI op basis van aantallen per doelgroep — geen klantgegevens gedeeld.' : 'Op basis van vaste regels (de AI staat uit of was niet bereikbaar).'} Een voorstel verstuurt niets: jij maakt er een concept van.</span><button type="button" class="btn btn-sm" id="cmpVoorstelWeg">Sluiten</button></div>
+    <div class="cmp-voorstellen">${v.voorstellen.map((x, i) => `
+      <div class="cmp-voorstel">
+        <div class="cmp-rij-hoofd"><span class="cmp-naam">${esc(x.titel)}</span><span class="cmp-status">${esc(x.doelgroepNaam)} · ${x.bereikbaar} ${x.bereikbaar === 1 ? 'ontvanger' : 'ontvangers'}</span></div>
+        <p class="cmp-waarom">${esc(x.waarom)}</p>
+        ${x.moment ? `<p class="muted small">Beste moment: ${esc(x.moment)}</p>` : ''}
+        <details class="cmp-tekst"><summary>Onderwerp: “${esc(x.onderwerp)}” — lees de tekst</summary><pre>${esc(x.tekst)}</pre></details>
+        <div class="cmp-knoppen"><button type="button" class="btn btn-sm" data-vst="${i}">Maak hier een concept van</button></div>
+      </div>`).join('')}</div></div>`;
+  $('#cmpVoorstelWeg').onclick = () => { _cmp.voorstellen = null; tekenCampagneVoorstellen(); };
+  $$('#cmpVoorstellen [data-vst]').forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    const x = v.voorstellen[Number(b.dataset.vst)];
+    try {
+      const c = await api('/api/campagnes', 'POST', { naam: x.titel, onderwerp: x.onderwerp, tekst: x.tekst, doelgroep: x.doelgroep, params: x.params || {}, waarom: x.waarom, bron: x.bron });
+      toast('Concept gemaakt — lees het na voordat je verstuurt');
+      await loadCampagnes(); openCampagne(c.id);
+    } catch (err) { toast(err.message, true); }
+  }));
+}
+async function openCampagne(cid) {
+  let c;
+  try { c = await api(`/api/campagnes/${cid}`); } catch (err) { toast(err.message, true); return; }
+  if (c.status === 'concept') openCampagneConcept(c); else openCampagneVerloop(c);
+}
+// CONCEPT: doelgroep, onderwerp, tekst. Hier wordt niets verstuurd tot iemand onderaan klikt.
+function openCampagneConcept(c) {
+  const d = _cmp.data || { doelgroepen: [] };
+  const dg = d.doelgroepen;
+  const nu = c || { naam: '', onderwerp: '', tekst: 'Beste {naam},\n\n', doelgroep: 'alle', params: {} };
+  modal(`
+    <h2>${c ? 'Campagne — concept' : 'Nieuwe campagne'}</h2>
+    ${nu.waarom ? `<div class="cmp-waarom-blok"><strong>${nu.bron === 'ai' ? 'Waarom de AI dit voorstelt' : 'Waarom dit voorstel'}:</strong> ${esc(nu.waarom)}</div>` : ''}
+    <label>Naam (alleen voor jullie zelf) <input id="cm-naam" value="${esc(nu.naam || '')}" placeholder="bv. Schuifpui-onderhoud voorjaar"></label>
+    <div class="form-sec">Naar wie</div>
+    <div class="row"><label>Doelgroep <select id="cm-doelgroep">${dg.map((x) => `<option value="${esc(x.key)}" ${x.key === nu.doelgroep ? 'selected' : ''}>${esc(x.naam)}</option>`).join('')}</select></label>
+      <label id="cm-maanden-wrap" hidden>Aantal maanden <input id="cm-maanden" type="number" min="1" max="120" value="${esc(String((nu.params && nu.params.maanden) || ''))}"></label>
+      <label id="cm-plaats-wrap" hidden>Plaats <input id="cm-plaats" value="${esc((nu.params && nu.params.plaats) || '')}" placeholder="bv. Rhenen"></label></div>
+    <div class="muted small" id="cm-dg-uitleg"></div>
+    <div id="cm-wie" class="cmp-wie" data-geen-wijziging><span class="muted small">Ontvangers tellen…</span></div>
+    <div class="form-sec">Het bericht</div>
+    <label>Onderwerp <input id="cm-onderwerp" value="${esc(nu.onderwerp || '')}" maxlength="200" placeholder="bv. Loopt uw schuifpui nog soepel?"></label>
+    <label>Bericht <textarea id="cm-tekst" rows="9">${esc(nu.tekst || '')}</textarea></label>
+    <div class="muted small"><code>{naam}</code> wordt de naam van de klant, <code>{plaats}</code> de woonplaats. De handtekening en een afmeldlink komen er vanzelf onder.</div>
+    <div class="cmp-ai" data-geen-wijziging>
+      <input id="cm-wens" placeholder="Wat moet de AI doen? bv. korter, of: nodig uit voor een onderhoudsbeurt" aria-label="Wens voor de AI">
+      <button type="button" class="btn btn-sm" id="cm-ai">${icon('sparkles', 13)} AI: schrijf of verbeter</button>
+    </div>
+    <div class="row cmp-test" data-geen-wijziging style="align-items:flex-end"><label>Eerst een testmail naar <input id="cm-test" type="email" value="${esc(state.me.email || '')}"></label><button type="button" class="btn" id="cm-testbtn" style="align-self:flex-end">Stuur testmail</button></div>
+    <div class="modal-actions">
+      ${c ? '<button class="btn btn-danger" id="cm-del">Verwijderen</button>' : '<span></span>'}
+      <div class="right"><button class="btn" id="cm-cancel">Sluiten</button><button class="btn" id="cm-save">Opslaan</button><button class="btn" id="cm-plan">Inplannen…</button><button class="btn btn-primary" id="cm-nu">Nu versturen…</button></div>
+    </div>`);
+  let id = c ? c.id : '';
+  const params = () => { const k = $('#cm-doelgroep').value; const x = dg.find((y) => y.key === k) || {}; return x.param === 'maanden' ? { maanden: Number($('#cm-maanden').value) || (x.standaard || {}).maanden || 12 } : x.param === 'plaats' ? { plaats: $('#cm-plaats').value.trim() } : {}; };
+  const invoer = () => ({ naam: $('#cm-naam').value.trim() || $('#cm-onderwerp').value.trim(), onderwerp: $('#cm-onderwerp').value.trim(), tekst: $('#cm-tekst').value, doelgroep: $('#cm-doelgroep').value, params: params() });
+  let telTimer = null; let aantalNu = 0;
+  const tel = () => { clearTimeout(telTimer); telTimer = setTimeout(async () => {
+    const vak = $('#cm-wie'); if (!vak) return;
+    try {
+      const v = await api('/api/campagnes/voorbeeld', 'POST', { doelgroep: $('#cm-doelgroep').value, params: params() });
+      if (!$('#cm-wie')) return;
+      aantalNu = v.aantal;
+      const af = v.afgevallen; const redenen = [[af.geenEmail, 'zonder e-mailadres'], [af.afgemeld, 'afgemeld'], [af.rust, 'kreeg onlangs al een campagne'], [af.nietAangekomen, 'adres kwam eerder terug'], [af.tussenpersoon, 'adres van een tussenpersoon'], [af.dubbelAdres, 'zelfde adres als een andere klant']].filter((x) => x[0]).map((x) => `${x[0]} ${x[1]}`);
+      vak.innerHTML = `<div><strong>${v.aantal}</strong> ${v.aantal === 1 ? 'klant krijgt' : 'klanten krijgen'} deze mail${redenen.length ? ` <span class="muted small">· niet: ${esc(redenen.join(', '))}</span>` : ''}</div>
+        ${v.aantal ? `<details><summary class="small">Bekijk wie${v.aantal > v.ontvangers.length ? ` (eerste ${v.ontvangers.length})` : ''}</summary><ul class="cmp-ontv">${v.ontvangers.map((o) => `<li>${esc(o.naam || 'Onbekende klant')} <span class="muted small">· ${esc(o.email)}${o.plaats ? ' · ' + esc(o.plaats) : ''}</span></li>`).join('')}</ul></details>` : ''}`;
+    } catch (err) { vak.innerHTML = `<span class="error small">${esc(err.message)}</span>`; }
+  }, 250); };
+  const toonParam = () => { const x = dg.find((y) => y.key === $('#cm-doelgroep').value) || {}; $('#cm-maanden-wrap').hidden = x.param !== 'maanden'; $('#cm-plaats-wrap').hidden = x.param !== 'plaats'; if (x.param === 'maanden' && !$('#cm-maanden').value) $('#cm-maanden').value = (x.standaard || {}).maanden || 12; $('#cm-dg-uitleg').textContent = x.uitleg || ''; };
+  toonParam(); tel();
+  $('#cm-doelgroep').onchange = () => { toonParam(); tel(); };
+  $('#cm-maanden').oninput = tel; $('#cm-plaats').oninput = tel;
+  // Opslaan (maakt het concept aan als het er nog niet is). Geeft true/false terug.
+  const bewaar = async (stil) => {
+    const b = invoer();
+    if (!b.onderwerp && !b.tekst.trim() && !b.naam) { toast('Vul eerst een onderwerp of een bericht in', true); return false; }
+    try {
+      if (id) await api(`/api/campagnes/${id}`, 'PATCH', b); else id = (await api('/api/campagnes', 'POST', b)).id;
+      modalSchoon();
+      if (!stil) toast('Concept opgeslagen — er is niets verstuurd');
+      return true;
+    } catch (err) { toast(err.message, true); return false; }
+  };
+  $('#cm-cancel').onclick = () => { if (sluitDoorGebruiker()) loadCampagnes().catch(() => {}); };
+  $('#cm-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => { if (await bewaar(false)) { closeModal(); loadCampagnes().catch(() => {}); } });
+  if ($('#cm-del')) $('#cm-del').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    if (!confirm('Dit concept verwijderen? Er is nog niets verstuurd.')) return;
+    try { await api(`/api/campagnes/${id}`, 'DELETE'); modalSchoon(); closeModal(); toast('Concept verwijderd'); loadCampagnes().catch(() => {}); } catch (err) { toast(err.message, true); }
+  });
+  $('#cm-ai').onclick = (ev) => { const knop = ev.currentTarget; eenKeer(knop, async () => {
+    const oud = knop.innerHTML; knop.textContent = 'De AI schrijft…';
+    try {
+      const r = await api('/api/campagnes/ai-tekst', 'POST', { wens: $('#cm-wens').value, doelgroep: $('#cm-doelgroep').value, onderwerp: $('#cm-onderwerp').value, tekst: $('#cm-tekst').value });
+      if (!$('#cm-tekst')) return;
+      // Nooit stil overschrijven: de vorige tekst kan met één klik terug.
+      const vorige = { o: $('#cm-onderwerp').value, t: $('#cm-tekst').value };
+      $('#cm-onderwerp').value = r.onderwerp; $('#cm-tekst').value = r.tekst; modalMarkeerVuil();
+      toast('Tekst van de AI ingevuld — lees hem na');
+      let terug = $('#cm-ai-terug'); if (!terug) { terug = document.createElement('button'); terug.type = 'button'; terug.className = 'btn btn-sm'; terug.id = 'cm-ai-terug'; terug.textContent = 'Vorige tekst terug'; knop.after(terug); }
+      terug.onclick = () => { $('#cm-onderwerp').value = vorige.o; $('#cm-tekst').value = vorige.t; terug.remove(); };
+    } catch (err) { toast(err.message, true); }
+    finally { if (knop.isConnected) knop.innerHTML = oud; }
+  }); };
+  $('#cm-testbtn').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    const naar = $('#cm-test').value.trim(); if (!naar) return toast('Vul een e-mailadres in voor de testmail', true);
+    if (!(await bewaar(true))) return;
+    try { await api(`/api/campagnes/${id}/test`, 'POST', { naar }); toast(`Testmail verstuurd naar ${naar}`); } catch (err) { toast(err.message, true); }
+  });
+  // VERSTUREN / INPLANNEN: eerst opslaan, dan een duidelijke laatste vraag. Pas na "ja" gaat er iets uit.
+  const start = async (op) => {
+    if (!$('#cm-onderwerp').value.trim() || !$('#cm-tekst').value.trim()) return toast('Vul eerst een onderwerp en een bericht in', true);
+    if (!(await bewaar(true))) return;
+    // Het aantal in de vraag is het aantal van DIT moment (vers opgehaald), en de server weigert
+    // als het bij het starten toch anders is: er gaat nooit meer uit dan hier is bevestigd.
+    try { aantalNu = (await api('/api/campagnes/voorbeeld', 'POST', { doelgroep: $('#cm-doelgroep').value, params: params() })).aantal; } catch (err) { return toast(err.message, true); }
+    if (!aantalNu) { tel(); return toast('Er is niemand in deze doelgroep om naar te sturen — kijk bij de ontvangers waarom', true); }
+    const wanneer = op ? `op ${cmpDatum(op)}` : 'nu';
+    if (!confirm(`Deze campagne ${wanneer} versturen naar ${aantalNu} ${aantalNu === 1 ? 'klant' : 'klanten'}?\n\nOnderwerp: ${$('#cm-onderwerp').value.trim()}\n\nDit is niet terug te draaien voor wie de mail al heeft gekregen. ${(_cmp.data || {}).testomgeving ? '(Testomgeving: er wordt niets echt verstuurd.)' : ''}\n\nOK = ja, versturen.  Annuleren = nog niet.`)) return;
+    try {
+      const r = await api(`/api/campagnes/${id}/start`, 'POST', op ? { op, verwacht: aantalNu } : { verwacht: aantalNu });
+      closeModal(); toast(r.status === 'gepland' ? `Ingepland voor ${cmpDatum(r.geplandOp)}` : `Gestart: ${r.aantal} ${r.aantal === 1 ? 'mail gaat' : 'mails gaan'} met tussenpozen de deur uit`);
+      await loadCampagnes(); openCampagne(id);
+    } catch (err) { toast(err.message, true); tel(); }
+  };
+  $('#cm-nu').onclick = (ev) => eenKeer(ev.currentTarget, () => start(null));
+  $('#cm-plan').onclick = async () => {
+    const morgen = new Date(Date.now() + 86400000); morgen.setHours(10, 0, 0, 0);
+    const pad = (n) => String(n).padStart(2, '0');
+    const std = `${morgen.getFullYear()}-${pad(morgen.getMonth() + 1)}-${pad(morgen.getDate())}T10:00`;
+    const v = await vraagTekst({ titel: 'Campagne inplannen', uitleg: 'Kies de dag en het tijdstip. Er wordt alleen tussen 09:00 en 20:00 uur verstuurd.', label: 'Versturen op', waarde: std, type: 'datetime-local', knop: 'Verder', valideer: (x) => (!x || Number.isNaN(new Date(x).getTime()) ? 'Kies een dag en een tijd' : new Date(x).getTime() < Date.now() + 60000 ? 'Kies een moment in de toekomst' : '') });
+    if (v) start(new Date(v).toISOString());
+  };
+}
+// GESTART / KLAAR: voortgang, wie hem kreeg en wat het opleverde.
+function openCampagneVerloop(c) {
+  const r = c.resultaat || {};
+  const kan = (a) => ({ pauze: ['bezig', 'gepland'].includes(c.status), hervat: c.status === 'gepauzeerd', stop: ['bezig', 'gepland', 'gepauzeerd'].includes(c.status), concept: ['gepland', 'gepauzeerd'].includes(c.status) && !c.verstuurd, ronde: c.status === 'bezig' && c.wacht > 0 })[a];
+  const lab = { wacht: 'wacht', verstuurd: 'verstuurd', mislukt: 'mislukt', overgeslagen: 'overgeslagen' };
+  modal(`
+    <h2>${esc(c.naam)}</h2>
+    <div class="cmp-rij-hoofd" style="margin-bottom:10px">${cmpStatusHTML(c)}<span class="muted small">${esc(c.doelgroepNaam)}${c.gestartDoor ? ` · gestart door ${esc(c.gestartDoor)}` : ''}${c.gestartOp ? ` · ${esc(cmpDatum(c.gestartOp))}` : ''}</span></div>
+    ${c.melding ? `<div class="cmp-melding">${esc(c.melding)}</div>` : ''}
+    ${c.proef ? '<div class="cmp-melding">Proef: er wordt hier niets echt verstuurd (testomgeving of e-mail niet ingesteld).</div>' : ''}
+    <div class="cmp-tegels">
+      <div><strong>${c.verstuurd}</strong><span>verstuurd</span></div><div><strong>${c.wacht}</strong><span>wacht nog</span></div>
+      <div><strong>${c.overgeslagen}</strong><span>overgeslagen</span></div><div><strong>${c.mislukt}</strong><span>mislukt</span></div>
+      <div><strong>${r.reacties ?? 0}</strong><span>reacties (14 d)</span></div><div><strong>${r.opdrachten ?? 0}</strong><span>nieuwe opdrachten (30 d)</span></div>
+      ${'omzet' in r ? `<div class="cv-geld"><strong>€ ${Number(r.omzet || 0).toFixed(0)}</strong><span>omzet excl. btw</span></div>` : ''}
+    </div>
+    <details class="cmp-tekst"><summary>Onderwerp: “${esc(c.onderwerp)}” — lees de tekst</summary><pre>${esc(c.tekst)}</pre></details>
+    <details class="cmp-tekst"><summary>Ontvangers (${c.aantal})</summary><ul class="cmp-ontv">${(c.ontvangers || []).map((o) => `<li><span class="cmp-o cmp-o-${esc(o.status)}">${esc(lab[o.status] || o.status)}</span> ${esc(o.naam || 'Onbekende klant')} <span class="muted small">· ${esc(o.email)}${o.fout ? ' · ' + esc(o.fout) : ''}</span></li>`).join('')}</ul></details>
+    <div class="modal-actions"><span></span><div class="right">
+      ${kan('concept') ? '<button class="btn" data-cmpa="concept" title="Terug naar concept om nog iets te wijzigen (er is nog niets verstuurd)">Terug naar concept</button>' : ''}
+      ${kan('ronde') ? '<button class="btn" data-cmpa="ronde" title="De volgende reeks nu versturen (zelfde grenzen: alleen overdag en het dagmaximum)">Volgende reeks nu</button>' : ''}
+      ${kan('pauze') ? '<button class="btn" data-cmpa="pauze">Pauzeren</button>' : ''}${kan('hervat') ? '<button class="btn btn-primary" data-cmpa="hervat">Hervatten</button>' : ''}
+      ${kan('stop') ? '<button class="btn btn-danger" data-cmpa="stop">Stoppen</button>' : ''}
+      <button class="btn" id="cv-close">Sluiten</button></div></div>`);
+  $('#cv-close').onclick = () => { closeModal(); loadCampagnes().catch(() => {}); };
+  $$('#modal [data-cmpa]').forEach((b) => b.onclick = () => eenKeer(b, async () => {
+    const a = b.dataset.cmpa;
+    if (a === 'stop' && !confirm(`Deze campagne stoppen? De ${c.wacht} ${c.wacht === 1 ? 'mail die nog wacht gaat' : 'mails die nog wachten gaan'} dan niet meer uit. Dit kan niet worden hervat.`)) return;
+    try {
+      if (a === 'ronde') { const u = await api('/api/campagnes/ronde', 'POST', {}); toast(u.reden && !u.verstuurd ? `Nu niet: ${u.reden}` : `${u.verstuurd || 0} verstuurd`); }
+      else await api(`/api/campagnes/${c.id}/${a}`, 'POST', {});
+      await loadCampagnes(); openCampagne(c.id);
+    } catch (err) { toast(err.message, true); }
+  }));
+}
+async function openCampagneInstellingen() {
+  const i = (_cmp.data || {}).instellingen || { rustDagen: 30, perDag: 200 };
+  modal(`<h2>Grenzen voor campagnes</h2>
+    <p class="muted small">Deze grenzen beschermen je klanten tegen te veel mail en je e-mailadres tegen een spamstempel.</p>
+    <div class="row"><label>Rust per klant (dagen) <input id="ci-rust" type="number" min="0" max="365" value="${esc(String(i.rustDagen))}"></label>
+      <label>Hooguit per dag <input id="ci-dag" type="number" min="10" max="1000" value="${esc(String(i.perDag))}"></label></div>
+    <div class="muted small">Rust: een klant die een campagne kreeg, krijgt de volgende pas na dit aantal dagen. Per dag: wat er meer is, gaat de volgende dag verder. Er wordt alleen tussen 09:00 en 20:00 uur verstuurd.</div>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="ci-cancel">Annuleren</button><button class="btn btn-primary" id="ci-save">Opslaan</button></div></div>`);
+  $('#ci-cancel').onclick = closeModal;
+  $('#ci-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    try { await api('/api/campagnes/instellingen', 'POST', { rustDagen: Number($('#ci-rust').value), perDag: Number($('#ci-dag').value) }); modalSchoon(); closeModal(); toast('Grenzen opgeslagen'); loadCampagnes().catch(() => {}); } catch (err) { toast(err.message, true); }
+  });
+}
+
 // ---------- E-MAILCAMPAGNE ----------
 // Selecteer klanten (huidig zoekresultaat of alle klanten met e-mail), schrijf één
 // bericht ({naam} wordt per klant ingevuld) en het CRM verstuurt netjes met
@@ -4277,6 +4515,7 @@ function openCampaignModal() {
   if (!all.length) return toast('Geen klanten met een e-mailadres gevonden', true);
   modal(`
     <h2>${icon('mail', 16)} E-mail naar klanten sturen</h2>
+    <p class="muted small cmp-tip">Nieuw: bij <strong>Campagnes</strong> in het menu kies je een doelgroep, plan je in en zie je wat het opleverde. Dit venster is voor een snelle mail naar een zoekresultaat.</p>
     <p class="muted small">Schrijf één bericht; <code>{naam}</code> wordt automatisch de klantnaam. Onderaan komt de huisstijl-handtekening + een nette afmeldregel. Verstuurd met tussenpozen (geen spam-gedrag).</p>
     <label>Naar wie
       <select id="cp-who">
@@ -8955,6 +9194,7 @@ function navItems() {
   if (!monteur) nav.push({ label: 'Taken', view: 'taken', ic: 'list' });
   if (hasPerm('customers')) nav.push({ label: 'Klanten', view: 'customers', ic: 'users' });
   nav.push({ label: 'Facturen', view: 'invoices', ic: 'file' });
+  if (!monteur) nav.push({ label: 'Campagnes', view: 'campagnes', ic: 'mail' });
   if (hasPerm('finance') || hasPerm('conversie')) nav.push({ label: 'Cijfers', view: 'finance', ic: 'activity' });
   if (hasPerm('customers')) nav.push({ label: 'Monteurs', view: 'monteurs', ic: 'wrench' });
   if (!monteur) nav.push({ label: 'AI Assistent', view: 'assistant', ic: 'sparkles' });

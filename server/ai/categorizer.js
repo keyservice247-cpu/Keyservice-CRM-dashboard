@@ -1118,3 +1118,100 @@ Begin met de kop "FILTERREGELS (op basis van werkelijk verkeer):".`;
   const text = (r.json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
   return { text, engine: `ai:${r.model}` };
 }
+
+// ---------- CAMPAGNES (stap 3, 25 nov 2026) ----------
+// De AI stelt campagnes voor en schrijft de tekst; WIE de mail krijgt bepalen de vaste regels in
+// server/campagnes.js, en er gaat niets uit zonder een klik van een mens. De AI krijgt alleen
+// TELLINGEN per doelgroep (en de namen van de grootste plaatsen) — nooit een naam, adres of
+// e-mailadres van een klant. Het antwoord komt als vaste JSON-structuur terug (structured
+// outputs), zodat een half of rommelig antwoord niet kan.
+const CAMPAGNE_MODEL = () => process.env.ANTHROPIC_CAMPAGNE_MODEL || MODELLEN.opus55;
+const campagneVorm = (m, schema) => ({ output_config: { ...(effortVoor(m, 'medium').output_config || {}), format: { type: 'json_schema', schema } } });
+const TEKST_REGELS = `Schrijfregels voor de e-mail:
+- Nederlands, u-vorm, vriendelijk en nuchter, zoals een vakman die zijn klant kent. Kort: 60 tot 120 woorden.
+- Begin met "Beste {naam}," — {naam} wordt later per klant ingevuld. Je mag {plaats} gebruiken voor de woonplaats.
+- Eén duidelijke vraag of uitnodiging aan het eind (antwoorden op de mail of bellen).
+- Verzin geen prijzen, kortingen, acties, garanties of termijnen: noem alleen wat in de bedrijfsinformatie staat.
+- Geen druk ("nog maar vandaag"), geen uitroeptekens, geen emoji, geen opmaak of kopjes.
+- Sluit NIET af met een groet, naam of afmeldregel: de handtekening en de afmeldlink zet het systeem eronder.`;
+
+/**
+ * Campagnevoorstellen op basis van de tellingen uit het klantenbestand.
+ * Geeft { voorstellen: [...], engine } of null (geen sleutel / AI niet bereikbaar / onbruikbaar antwoord):
+ * de aanroeper valt dan terug op de vaste regels.
+ */
+export async function campagneVoorstellenAI({ telling, doelgroepen = [], maand, eerdere = [], companyProfile = '' }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || !telling) return null;
+  const sleutels = doelgroepen.map((d) => d.key);
+  const schema = {
+    type: 'object', additionalProperties: false, required: ['voorstellen'],
+    properties: { voorstellen: { type: 'array', items: {
+      type: 'object', additionalProperties: false,
+      required: ['titel', 'doelgroep', 'maanden', 'plaats', 'waarom', 'onderwerp', 'tekst', 'moment'],
+      properties: {
+        titel: { type: 'string' }, doelgroep: { type: 'string', enum: sleutels },
+        maanden: { type: 'integer' }, plaats: { type: 'string' },
+        waarom: { type: 'string' }, onderwerp: { type: 'string' }, tekst: { type: 'string' }, moment: { type: 'string' },
+      } } } },
+  };
+  const system = `Je bent de commerciële rechterhand van de eigenaar van Key Service 24/7 (slotenmaker) en Schuifpuiservice (reparatie en onderhoud van schuifpuien). Hij wil e-mailcampagnes die werk opleveren bij bestaande klanten, zonder dat klanten zich lastiggevallen voelen. Jij stelt voor welke campagnes NU de moeite waard zijn; hij beslist en verstuurt zelf.
+
+Je krijgt alleen tellingen uit het klantenbestand (hoeveel klanten per doelgroep per e-mail bereikbaar zijn), de maand van het jaar, en wat er eerder is verstuurd met het resultaat. Je krijgt bewust geen namen of adressen.
+
+Zo kies je:
+- Kies per voorstel één doelgroep uit de lijst (alleen die sleutels bestaan). Bij "oud" en "nieuw" geef je het aantal maanden; bij "plaats" de plaatsnaam (alleen een plaats uit de lijst met grootste plaatsen). In alle andere gevallen maanden 0 en plaats leeg.
+- Weeg het aantal bereikbare klanten mee: een groep van een handvol mensen is zelden een campagne waard, tenzij de opbrengst per klant groot is (bijvoorbeeld zakelijke klanten).
+- Kijk naar het seizoen en naar wat past bij sloten, inbraakpreventie en schuifpuien.
+- Stel niet opnieuw voor wat pas is verstuurd naar dezelfde doelgroep; leer van wat eerder wel of niet opdrachten opleverde.
+- Geef 2 tot 4 voorstellen, het beste eerst. Liever twee goede dan vier matige.
+
+Per voorstel:
+- titel: korte naam voor intern gebruik.
+- waarom: twee zinnen in gewone taal voor de eigenaar — waarom deze groep, waarom nu, met het aantal klanten erbij. Beloof geen opbrengst die je niet kunt weten.
+- onderwerp: de onderwerpregel van de e-mail (kort, concreet, geen hoofdletters-geschreeuw).
+- tekst: de e-mail zelf.
+- moment: de beste dag en het beste tijdstip om te versturen, in woorden (bijvoorbeeld "dinsdagochtend rond 10 uur"), met in een paar woorden waarom.
+
+${TEKST_REGELS}${companyProfile ? `\n\nBedrijfsinformatie van de eigenaar:\n${String(companyProfile).slice(0, 4000)}` : ''}`;
+  const feiten = JSON.stringify({
+    maand, doelgroepen: doelgroepen.map((d) => ({ sleutel: d.key, naam: d.naam, uitleg: d.uitleg })),
+    klantenbestand: { totaal: telling.totaal, metEmail: telling.metMail, afgemeld: telling.afgemeld },
+    bereikbaarPerDoelgroep: (telling.groepen || []).map((g) => ({ sleutel: g.key, inGroep: g.inGroep, bereikbaarPerEmail: g.bereikbaar })),
+    grootstePlaatsen: telling.topPlaatsen || [],
+    eerderVerstuurd: eerdere.slice(0, 12),
+  }, null, 1);
+  try {
+    const r = await vraagMetTerugval(apiKey, CAMPAGNE_MODEL(), (m) => ({ model: m, max_tokens: 16000, ...campagneVorm(m, schema), system, messages: [{ role: 'user', content: `Gegevens uit het CRM:\n${feiten}` }] }), { timeoutMs: 240000, pogingen: 2 });
+    if (!r.ok || !r.json || r.json.stop_reason === 'refusal') return null;
+    const tekst = (r.json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
+    let parsed = null; try { parsed = JSON.parse(tekst); } catch { parsed = repairTruncatedJson(tekst); }
+    const lijst = Array.isArray(parsed && parsed.voorstellen) ? parsed.voorstellen : [];
+    const voorstellen = lijst.filter((v) => v && sleutels.includes(v.doelgroep) && v.onderwerp && v.tekst).slice(0, 4).map((v) => ({
+      titel: String(v.titel || v.onderwerp).slice(0, 120), doelgroep: v.doelgroep,
+      params: { ...(Number(v.maanden) > 0 ? { maanden: Math.min(120, Math.round(Number(v.maanden))) } : {}), ...(String(v.plaats || '').trim() ? { plaats: String(v.plaats).trim().slice(0, 80) } : {}) },
+      waarom: String(v.waarom || '').slice(0, 600), onderwerp: String(v.onderwerp).slice(0, 200), tekst: String(v.tekst).slice(0, 8000), moment: String(v.moment || '').slice(0, 160), bron: 'ai',
+    }));
+    return voorstellen.length ? { voorstellen, engine: `ai:${r.model}`, terugvalVan: r.terugvalVan || '' } : null;
+  } catch { return null; }
+}
+
+/** De AI schrijft of verbetert onderwerp + tekst van één campagne. Gooit een fout met uitleg als het niet lukt. */
+export async function campagneTekstAI({ wens = '', doelgroepNaam = '', onderwerp = '', tekst = '', companyProfile = '' }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('De AI is niet ingesteld (geen sleutel). Schrijf de tekst zelf of gebruik een voorstel.');
+  const schema = { type: 'object', additionalProperties: false, required: ['onderwerp', 'tekst'], properties: { onderwerp: { type: 'string' }, tekst: { type: 'string' } } };
+  const system = `Je schrijft een e-mail aan bestaande klanten van Key Service 24/7 (slotenmaker) en Schuifpuiservice (schuifpuien). De eigenaar leest hem na en verstuurt hem zelf. Geef een onderwerpregel en de tekst.
+
+${TEKST_REGELS}
+
+Staat er al een tekst, verbeter die dan volgens de wens van de eigenaar en behoud wat goed is. Staat er niets, schrijf dan een nieuwe.${companyProfile ? `\n\nBedrijfsinformatie van de eigenaar:\n${String(companyProfile).slice(0, 4000)}` : ''}`;
+  const vraag = `Doelgroep: ${doelgroepNaam || 'klanten'}\nWens van de eigenaar: ${String(wens || 'Maak er een goede, korte e-mail van.').slice(0, 1000)}\n\nHuidig onderwerp: ${String(onderwerp || '(nog geen)').slice(0, 200)}\nHuidige tekst:\n${String(tekst || '(nog geen)').slice(0, 6000)}`;
+  const r = await vraagMetTerugval(apiKey, CAMPAGNE_MODEL(), (m) => ({ model: m, max_tokens: 16000, ...campagneVorm(m, schema), system, messages: [{ role: 'user', content: vraag }] }), { timeoutMs: 180000, pogingen: 2 });
+  if (!r.ok) throw new Error(r.fout || 'De AI is nu niet bereikbaar. Probeer het later opnieuw.');
+  if (r.json.stop_reason === 'refusal') throw new Error('De AI wilde dit verzoek niet uitvoeren. Formuleer de wens anders of schrijf de tekst zelf.');
+  const uit = (r.json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
+  let parsed = null; try { parsed = JSON.parse(uit); } catch { parsed = repairTruncatedJson(uit); }
+  if (!parsed || !parsed.tekst) throw new Error('De AI gaf geen bruikbare tekst terug. Probeer het opnieuw.');
+  return { onderwerp: String(parsed.onderwerp || onderwerp || '').slice(0, 200), tekst: String(parsed.tekst).slice(0, 8000), engine: `ai:${r.model}` };
+}

@@ -48,14 +48,16 @@ import {
   setSessionCookie, clearSessionCookie, createUser, hashPassword,
   can, requirePerm, PERM_KEYS,
 } from './auth.js';
-import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen, MODELLEN } from './ai/categorizer.js';
+import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen, MODELLEN, campagneVoorstellenAI, campagneTekstAI } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
+import * as campagnes from './campagnes.js';
 import { ensureBeheerderUitOmgeving } from './beheerder.js';
 import { vulTestdata } from './testdata.js';
 import { amsterdamParts, amsMidnightMs, weekBounds } from './week.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
   findCustomerStrong, senderPhoneFromText, matchPhone, queueCrmWhatsappAlert,
+  nooitKlantMail,
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken, wachtOpAntwoordDagen, voorbeeldTekst } from './gesprekken.js';
@@ -1235,10 +1237,18 @@ app.patch('/api/customers/:id', requireAuth, (req, res) => {
   const c = db().customers.find((x) => x.id === req.params.id);
   if (!c) return res.status(404).json({ error: 'Niet gevonden' });
   const oudAdres = String(c.address || '').trim();
+  const oudeMail = String(c.email || '').trim().toLowerCase();
   for (const k of ['name', 'phone', 'email', 'address', 'type', 'notes']) {
     if (k in (req.body || {})) c[k] = req.body[k];
   }
-  if ('campaignOptOut' in (req.body || {})) c.campaignOptOut = !!req.body.campaignOptOut;
+  // Nieuw e-mailadres = nieuwe kans: de markering "kwam eerder terug" hoort bij het oude adres.
+  if (String(c.email || '').trim().toLowerCase() !== oudeMail) delete c.emailBounceAt;
+  if ('campaignOptOut' in (req.body || {})) {
+    const wil = !!req.body.campaignOptOut;
+    if (wil && !c.campaignOptOut) { c.campaignOptOutAt = now(); c.campaignOptOutVia = 'kantoor'; }
+    if (!wil) { delete c.campaignOptOutAt; delete c.campaignOptOutVia; }
+    c.campaignOptOut = wil;
+  }
   // ADRES VAN DE LOPENDE OPDRACHT VOLGT EEN VERBETERING (23 nov 2026). Elke opdracht draagt
   // zijn eigen adres (order.intake.address): dat gaat naar de monteur en staat als
   // reparatielocatie op de factuur. Verbetert iemand het klantadres — de monteur doet dat
@@ -1257,6 +1267,129 @@ app.patch('/api/customers/:id', requireAuth, (req, res) => {
   logActivity(req.user.name, 'klantgegevens bijgewerkt', `${c.name || c.id}${adresMee ? ` — adres ook op ${adresMee} lopende opdracht${adresMee === 1 ? '' : 'en'}` : ''}`);
   saveSoon();
   res.json(c);
+});
+
+// ---------- CAMPAGNES (stap 3, nov 2026): doelgroep op vaste regels, AI stelt voor, mens beslist ----------
+// Alles in server/campagnes.js. Kantoor (beheerder + assistente); bedragen alleen met het recht Cijfers.
+const campagneOf404 = (req, res) => { const c = campagnes.vindCampagne(req.params.id); if (!c) res.status(404).json({ error: 'Campagne niet gevonden' }); return c; };
+const campagneFout = (res, e) => res.status(e.status || 500).json({ error: e.message || 'Er ging iets mis' });
+app.get('/api/campagnes', requireRole('admin', 'assistent'), (req, res) => {
+  const inst = campagnes.campagneInstellingen();
+  const feiten = campagnes.alleFeiten();
+  const metGeld = can(req.user, 'finance');
+  res.json({
+    campagnes: (db().campagnes || []).slice(0, 100).map((c) => ({ ...campagnes.campagneUitvoer(c), resultaat: ['verstuurd', 'gestopt', 'bezig'].includes(c.status) ? campagnes.campagneResultaat(c, { metGeld }) : null })),
+    doelgroepen: campagnes.DOELGROEPEN.map((d) => ({ key: d.key, naam: d.naam, uitleg: d.uitleg, param: d.param || '', standaard: d.standaard || {} })),
+    telling: campagnes.doelgroepTelling(feiten, { rustDagen: inst.rustDagen }),
+    instellingen: inst, vandaagVerstuurd: campagnes.vandaagVerstuurd(),
+    kanVersturen: smtpConfigured() && !TEST, testomgeving: TEST, aiAan: aiMode() === 'ai',
+  });
+});
+app.post('/api/campagnes', requireRole('admin', 'assistent'), (req, res) => {
+  res.json(campagnes.campagneUitvoer(campagnes.maakCampagne(req.body || {}, req.user)));
+});
+// VOORSTELLEN: de AI kijkt naar de TELLINGEN (geen klantgegevens), het seizoen en wat eerder is
+// verstuurd. Is de AI niet bereikbaar, dan komen de voorstellen uit de vaste regels — de knop
+// levert dus altijd iets op. Een voorstel is nog geen campagne: een mens maakt er een concept van.
+app.post('/api/campagnes/voorstellen', requireRole('admin', 'assistent'), async (req, res) => {
+  const inst = campagnes.campagneInstellingen();
+  const telling = campagnes.doelgroepTelling(campagnes.alleFeiten(), { rustDagen: inst.rustDagen });
+  const maand = Number(new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }).slice(5, 7));
+  const eerdere = (db().campagnes || []).filter((c) => ['verstuurd', 'gestopt'].includes(c.status)).slice(0, 12).map((c) => {
+    const r = campagnes.campagneResultaat(c);
+    return { doelgroep: c.doelgroep, onderwerp: c.onderwerp, dagenGeleden: r.dagenGeleden, verstuurd: r.verstuurd, reacties: r.reacties, nieuweOpdrachten: r.opdrachten, afgemeld: r.afgemeld };
+  });
+  const doelgroepen = campagnes.DOELGROEPEN.map((d) => ({ key: d.key, naam: d.naam, uitleg: d.uitleg }));
+  const ai = aiMode() === 'ai' ? await campagneVoorstellenAI({ telling, doelgroepen, maand, eerdere, companyProfile: getCompanyProfile() }) : null;
+  const ruw = ai ? ai.voorstellen : campagnes.regelVoorstellen(telling, { maand, eerdere });
+  // Bij elk voorstel het ECHTE aantal ontvangers volgens de vaste regels (niet wat de AI denkt).
+  const voorstellen = ruw.map((v) => ({ ...v, doelgroepNaam: campagnes.doelgroepNaam(v.doelgroep), bereikbaar: campagnes.voorbeeldOntvangers({ doelgroep: v.doelgroep, params: v.params || {} }).ontvangers.length }))
+    .filter((v) => v.bereikbaar > 0);
+  res.json({ voorstellen, bron: ai ? 'ai' : 'regels', engine: ai ? ai.engine : 'vaste regels', aiAan: aiMode() === 'ai' });
+});
+app.post('/api/campagnes/ai-tekst', requireRole('admin', 'assistent'), async (req, res) => {
+  const b = req.body || {};
+  try {
+    res.json(await campagneTekstAI({ wens: b.wens, doelgroepNaam: campagnes.doelgroepNaam(b.doelgroep), onderwerp: b.onderwerp, tekst: b.tekst, companyProfile: getCompanyProfile() }));
+  } catch (e) { res.status(503).json({ error: e.message }); }
+});
+app.get('/api/campagnes/:id', requireRole('admin', 'assistent'), (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  res.json({ ...campagnes.campagneUitvoer(c, { metOntvangers: true }), resultaat: campagnes.campagneResultaat(c, { metGeld: can(req.user, 'finance') }) });
+});
+app.patch('/api/campagnes/:id', requireRole('admin', 'assistent'), (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  try { res.json(campagnes.campagneUitvoer(campagnes.werkCampagneBij(c, req.body || {}))); } catch (e) { campagneFout(res, e); }
+});
+app.delete('/api/campagnes/:id', requireRole('admin', 'assistent'), (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  try { campagnes.verwijderCampagne(c); res.json({ ok: true }); } catch (e) { campagneFout(res, e); }
+});
+// Wie krijgt hem? (verandert niets) — ook bruikbaar met losse keuzes, vóórdat er een concept is.
+app.post('/api/campagnes/voorbeeld', requireRole('admin', 'assistent'), (req, res) => {
+  const b = req.body || {};
+  const v = campagnes.voorbeeldOntvangers({ doelgroep: campagnes.isDoelgroep(b.doelgroep) ? b.doelgroep : 'alle', params: b.params || {} });
+  res.json({ doelgroep: v.doelgroep, params: v.params, inGroep: v.inGroep, aantal: v.ontvangers.length, afgevallen: v.afgevallen, ontvangers: v.ontvangers.slice(0, 300).map((o) => ({ naam: o.naam, email: o.email, plaats: o.plaats })) });
+});
+app.post('/api/campagnes/:id/test', requireRole('admin', 'assistent'), async (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  const naar = String(req.body?.naar || '').trim();
+  if (!naar) return res.status(400).json({ error: 'Vul een e-mailadres in voor de testmail.' });
+  if (!c.onderwerp || !c.tekst) return res.status(400).json({ error: 'Vul eerst een onderwerp en een bericht in.' });
+  if (!smtpConfigured() || TEST) return res.status(503).json({ error: TEST ? 'De testomgeving verstuurt geen e-mail. Op de live-site werkt de testmail wel.' : 'E-mail versturen (SMTP) is nog niet ingesteld.' });
+  try {
+    await sendMail({ to: naar, subject: `[TEST] ${c.onderwerp}`, text: campagnes.vulTekst(c.tekst, { naam: 'Voorbeeldklant', plaats: 'Voorbeeldstad' }) + '\n\n(Dit is een testmail. Onder de echte mail staat een afmeldlink.)', afzender: afzenderVan(req) });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// VERSTUREN OF INPLANNEN: het enige moment waarop een campagne "aan" gaat — een klik van een mens.
+app.post('/api/campagnes/:id/start', requireRole('admin', 'assistent'), (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  try {
+    campagnes.startCampagne(c, { op: req.body?.op || null, gebruiker: req.user, verwacht: req.body && req.body.verwacht != null ? req.body.verwacht : null });
+    // Meteen de eerste reeks (anders wacht hij tot de volgende minuut); de rest volgt vanzelf.
+    if (c.status === 'bezig') campagnes.runCampagnes().catch((e) => console.error('[campagnes]', e.message));
+    res.json(campagnes.campagneUitvoer(c));
+  } catch (e) { campagneFout(res, e); }
+});
+// De volgende reeks nu versturen (zelfde vangrails: alleen overdag, dagmaximum, tussenpozen).
+app.post('/api/campagnes/ronde', requireRole('admin', 'assistent'), async (req, res) => {
+  res.json(await campagnes.runCampagnes());
+});
+app.post('/api/campagnes/:id/:actie(pauze|hervat|stop|concept)', requireRole('admin', 'assistent'), (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  try {
+    const a = req.params.actie;
+    if (a === 'pauze') campagnes.pauzeerCampagne(c); else if (a === 'hervat') campagnes.hervatCampagne(c); else if (a === 'stop') campagnes.stopCampagne(c, req.user); else campagnes.naarConcept(c);
+    res.json(campagnes.campagneUitvoer(c));
+  } catch (e) { campagneFout(res, e); }
+});
+app.post('/api/campagnes/instellingen', requireRole('admin'), (req, res) => {
+  res.json(campagnes.zetCampagneInstellingen({ rustDagen: req.body?.rustDagen, perDag: req.body?.perDag }));
+});
+// AFMELDEN via de link onder de mail: geen login, ondertekende link. De link OPENEN meldt nog
+// niemand af — mailprogramma's en virusscanners openen links in een mail vaak uit zichzelf, en
+// dan zou een klant zijn afgemeld zonder dat hij iets deed. De klant bevestigt met één knop.
+const afmeldPagina = (titel, tekst, knop = '') => `<!doctype html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${titel}</title><style>body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f6f7f9;color:#1b2330;margin:0;padding:40px 20px}main{max-width:460px;margin:0 auto;background:#fff;border:1px solid #e1e5eb;border-radius:12px;padding:28px}h1{font-size:20px;margin:0 0 10px}p{margin:0;line-height:1.5;color:#4a5466}button{margin-top:18px;font:inherit;font-weight:600;color:#fff;background:#1f4e9c;border:0;border-radius:8px;padding:12px 20px;cursor:pointer}</style></head><body><main><h1>${titel}</h1><p>${tekst}</p>${knop}</main></body></html>`;
+const afmeldKop = (res) => {
+  res.set('X-Robots-Tag', 'noindex, nofollow'); res.set('Referrer-Policy', 'no-referrer'); res.set('Cache-Control', 'no-store');
+  res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'");
+};
+const afmeldGeldig = (req) => /^[\w-]{3,80}$/.test(String(req.params.id || '')) && /^[0-9a-f]{24}$/.test(String(req.params.sig || ''));
+const AFMELD_FOUT = ['Deze link werkt niet', 'De afmeldlink is niet geldig of niet compleet. Antwoord op de e-mail met het woord "afmelden", dan regelen wij het voor u.'];
+app.get('/afmelden/:id/:sig', (req, res) => {
+  afmeldKop(res);
+  const k = afmeldGeldig(req) ? campagnes.afmeldKlant(String(req.params.id), String(req.params.sig)) : null;
+  if (!k) return res.status(404).send(afmeldPagina(...AFMELD_FOUT));
+  if (k.campaignOptOut) return res.send(afmeldPagina('U bent afgemeld', 'U ontvangt van ons geen nieuws- of actiemails meer. Berichten over een lopende opdracht, afspraak of factuur krijgt u nog wel.'));
+  res.send(afmeldPagina('Afmelden voor onze e-mails', 'Wilt u geen nieuws- of actiemails meer van ons ontvangen? Bevestig dat hieronder. Berichten over een lopende opdracht, afspraak of factuur krijgt u nog wel.',
+    `<form method="post" action="/afmelden/${encodeURIComponent(req.params.id)}/${req.params.sig}"><button type="submit">Ja, meld mij af</button></form>`));
+});
+app.post('/afmelden/:id/:sig', (req, res) => {
+  afmeldKop(res);
+  const k = afmeldGeldig(req) ? campagnes.meldAf(String(req.params.id), String(req.params.sig)) : null;
+  if (!k) return res.status(404).send(afmeldPagina(...AFMELD_FOUT));
+  res.send(afmeldPagina('U bent afgemeld', 'U ontvangt van ons geen nieuws- of actiemails meer. Berichten over een lopende opdracht, afspraak of factuur krijgt u nog wel.'));
 });
 
 // ---------- E-MAILCAMPAGNE (klantselectie -> mailing) ----------
@@ -1283,13 +1416,15 @@ app.post('/api/campaign/send', requireRole('admin', 'assistent'), async (req, re
   for (const cid of ids) {
     const c = db().customers.find((x) => x.id === cid);
     const em = String(c?.email || '').toLowerCase().trim();
-    if (!c || !em || c.campaignOptOut || seenAddr.has(em)) { skipped++; continue; }
+    // Zelfde vangrails als het scherm Campagnes: niet naar een adres dat eerder terugkwam of
+    // naar het adres van een tussenpersoon/DRS.
+    if (!c || !em || c.campaignOptOut || c.emailBounceAt || nooitKlantMail(em) || seenAddr.has(em)) { skipped++; continue; }
     // HERVATBAAR (punt 16): dezelfde campagne (zelfde onderwerp) binnen 24 uur nogmaals
     // draaien slaat wie hem al kreeg over — een afgebroken batch kan dus gewoon opnieuw.
     if (c.lastCampaignSubject === subj && c.lastCampaignAt && Date.now() - new Date(c.lastCampaignAt).getTime() < 86400000) { skipped++; continue; }
     seenAddr.add(em);
     try {
-      await sendMail({ to: c.email, subject: subj, text: tpl.replace(/\{naam\}/g, c.name || 'klant') + CAMPAIGN_FOOTER });
+      await sendMail({ to: c.email, subject: subj, text: tpl.replace(/\{naam\}/g, c.name || 'klant') + campagnes.voetTekst(c.id) });
       c.lastCampaignAt = now();
       c.lastCampaignSubject = subj;
       sent++;
@@ -7169,6 +7304,8 @@ app.listen(PORT, () => {
   // 24 okt 2026: Offerte en Afspraken eenmalig bij de kopjes (labels op het bord).
   try { drsKopjesMigratie(); } catch (e) { console.error('[drs-rapport] kopjes:', e.message); }
   setInterval(() => { runDrsHerinnering().catch((e) => console.error('[drs-rapport] herinnering:', e.message)); }, 5 * 60 * 1000);
+  // Campagnes: elke minuut een paar mails van de campagne die loopt (alleen na een klik van een mens gestart).
+  setInterval(() => { campagnes.runCampagnes().catch((e) => console.error('[campagnes]', e.message)); }, 60 * 1000);
   // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.
   setInterval(() => { runCloudOutbox().catch((e) => console.error('[wa-cloud]', e.message)); }, 20 * 1000);
   // Wachtrij-onderhoud: vervallen, ongeldig nummer, verouderde "wacht op bevestiging".
