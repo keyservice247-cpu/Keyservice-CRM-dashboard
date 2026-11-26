@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { db, id, now, save, saveSoon, logActivity } from './db.js';
 import { UPLOAD_DIR } from './storage.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
-import { getEmailSignature, appointmentStatusKey } from './settings.js';
+import crypto from 'node:crypto';
+import { getEmailSignature, appointmentStatusKey, whatsappAutoAan } from './settings.js';
 import { syncAutoIncomeForInvoice } from './finance.js';
 
 const LOGO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'img', 'logo-factuur.png');
@@ -243,6 +244,33 @@ const eersteGeldigeMail = (...kandidaten) => kandidaten.map((x) => String(x || '
 // zelfde nette mail met de PDF opnieuw als bijlage; teller en tijdstip worden
 // bijgehouden zodat er nooit te vaak herinnerd wordt.
 // `afzender` = wie op de knop drukt (persoonlijke handtekening); automatisch = bedrijf.
+// Ondertekende link naar de factuur/offerte (pagina /bon in index.js; geen inlog nodig).
+// Hier gedefinieerd zodat ook een herinnering via WhatsApp ernaar kan verwijzen.
+const linkGeheim = () => process.env.LINK_SECRET || process.env.SESSION_SECRET || 'ks-upload';
+export const bonSig = (invId) => crypto.createHmac('sha256', linkGeheim()).update(`bon:${invId}`).digest('hex').slice(0, 24);
+export const bonLinkVan = (inv) => `${(process.env.APP_URL || 'https://keyservice-crm.onrender.com').replace(/\/+$/, '')}/bon/${inv.id}/${bonSig(inv.id)}`;
+/** Het nummer waarop de klant een appje over dit document krijgt: eerder gebruikt → opdracht → klant. */
+function klantNummerVoor(inv, order, customer) {
+  const ruw = String(inv.sentToPhone || (order && order.intake && order.intake.phone) || (customer && customer.phone) || '').trim();
+  return ruw.replace(/\D/g, '').length >= 10 ? ruw : '';
+}
+function zetKlantAppKlaar({ phone, text, inv, order, by, afzenderLabel }) {
+  db().outbox = db().outbox || [];
+  db().outbox.unshift({
+    id: id('out'), kind: 'whatsapp_customer', phone, group: '__klant_dm__', text,
+    orderId: inv.orderId || undefined, invoiceRef: inv.id, status: 'queued', createdAt: now(), by,
+  });
+  if (order && order.id) {
+    order.thread = order.thread || [];
+    order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: afzenderLabel, body: text, at: now() });
+    order.updatedAt = now();
+  }
+}
+
+// BETAALHERINNERING. Per e-mail (met de factuur als PDF) en — sinds 27 nov 2026, als de knop
+// "Betaalherinnering" bij de automatische WhatsApp-berichten aan staat — ook als appje met een
+// link naar de factuur. Heeft de klant alleen een telefoonnummer, dan gaat alleen het appje.
+// Het appje gaat via de gewone wachtrij en dus altijd via het officiële nummer.
 export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'systeem', afzender = null } = {}) {
   if (inv.type === 'offerte') return { error: 'Herinnering is voor facturen. Verstuur de offerte desnoods opnieuw.' };
   if (inv.status !== 'verzonden') return { error: 'Alleen voor verzonden (nog niet betaalde) facturen.' };
@@ -254,24 +282,45 @@ export async function sendInvoiceReminder(inv, { to: toOverride = '', by = 'syst
   // Een handmatig opgegeven adres blijft leidend zoals het is ingetypt (typefout →
   // nette foutmelding, nooit stilletjes naar een ander adres).
   const to = String(toOverride || '').trim() || eersteGeldigeMail(customer.email, inv.sentTo);
-  if (!EMAIL_RE.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
-  if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
-  const cfg = getInvoiceSettings();
   const order = inv.orderId ? (db().orders.find((o) => o.id === inv.orderId) || {}) : {};
-  const pdf = await buildInvoicePdf(inv, order, customer);
-  const sig = getEmailSignature(afzender);
-  const body = `Beste ${customer.name || 'klant'},\n\nVolgens onze administratie staat factuur ${inv.number} (€ ${inv.totalIncl.toFixed(2).replace('.', ',')}) nog open. Mogelijk is het aan uw aandacht ontsnapt — dat kan gebeuren.\n\nWilt u het bedrag overmaken${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer? De factuur zit nogmaals in de bijlage.\n\nHeeft u al betaald of heeft u een vraag? Reageer gerust op deze e-mail.`;
-  await sendMail({
-    to, subject: `Betaalherinnering: factuur ${inv.number} — ${cfg.companyName}`,
-    text: sig ? `${body}\n\n${sig}` : body,
-    automatisch: true, afzender,
-    attachments: [{ filename: `factuur-${inv.number}.pdf`, content: pdf }],
-  });
+  const phone = whatsappAutoAan('betaal') ? klantNummerVoor(inv, order, customer) : '';
+  const mailKan = EMAIL_RE.test(to) && smtpConfigured();
+  // Een zelf ingetypt adres dat niet klopt is altijd een fout (nooit stil alleen een appje).
+  if (String(toOverride || '').trim() && !EMAIL_RE.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
+  if (!mailKan && !phone) {
+    if (!EMAIL_RE.test(to)) return { error: 'Geen geldig e-mailadres bekend.' };
+    return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
+  }
+  const cfg = getInvoiceSettings();
+  const bedrag = `€ ${inv.totalIncl.toFixed(2).replace('.', ',')}`;
+  const via = [];
+  if (mailKan) {
+    try {
+      const pdf = await buildInvoicePdf(inv, order, customer);
+      const sig = getEmailSignature(afzender);
+      const body = `Beste ${customer.name || 'klant'},\n\nVolgens onze administratie staat factuur ${inv.number} (€ ${inv.totalIncl.toFixed(2).replace('.', ',')}) nog open. Mogelijk is het aan uw aandacht ontsnapt — dat kan gebeuren.\n\nWilt u het bedrag overmaken${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer? De factuur zit nogmaals in de bijlage.\n\nHeeft u al betaald of heeft u een vraag? Reageer gerust op deze e-mail.`;
+      await sendMail({
+        to, subject: `Betaalherinnering: factuur ${inv.number} — ${cfg.companyName}`,
+        text: sig ? `${body}\n\n${sig}` : body,
+        automatisch: true, afzender,
+        attachments: [{ filename: `factuur-${inv.number}.pdf`, content: pdf }],
+      });
+      via.push('e-mail');
+    } catch (e) {
+      if (!phone) throw e; // geen ander kanaal: de fout hoort bij de gebruiker te komen
+      console.error('[betaalherinnering] e-mail mislukt, het appje gaat wel:', e.message);
+    }
+  }
+  if (phone) {
+    const text = `Beste ${customer.name || 'klant'}, volgens onze administratie staat factuur ${inv.number} (${bedrag}) nog open. Mogelijk is het aan uw aandacht ontsnapt. U kunt de factuur hier bekijken: ${bonLinkVan(inv)} — Heeft u al betaald? Dan kunt u dit bericht negeren. (Automatisch bericht van ${cfg.companyName}.)`;
+    zetKlantAppKlaar({ phone, text, inv, order, by: 'betaalherinnering', afzenderLabel: 'Keyservice (betaalherinnering)' });
+    via.push('WhatsApp');
+  }
   inv.remindedAt = now();
   inv.remindCount = (inv.remindCount || 0) + 1;
   saveSoon();
-  logActivity(by, 'betaalherinnering verstuurd', `${inv.number} → ${to}`);
-  return { ok: true, to };
+  logActivity(by, 'betaalherinnering verstuurd', `${inv.number} → ${[via.includes('e-mail') ? to : '', via.includes('WhatsApp') ? phone : ''].filter(Boolean).join(' + ')}`);
+  return { ok: true, to: via.includes('e-mail') ? to : phone, via };
 }
 
 // Offerte goedgekeurd -> automatisch een factuur-concept aanmaken (kopie van de
@@ -441,47 +490,47 @@ export async function sendQuoteFollowup(inv, { by = 'systeem', handmatig = false
     inv.quoteFollowupCount = (inv.quoteFollowupCount || 0) + 1;
   };
 
-  // 1) E-mail (voorkeur: nette mail mét de offerte-PDF opnieuw).
+  // Sinds 27 nov 2026 (wens eigenaar): per e-mail (met de offerte als PDF) én — als de knop
+  // "Offerte-herinnering" bij de automatische WhatsApp-berichten aan staat — ook als appje.
+  // Voorheen ging het appje alleen als de klant geen e-mailadres had.
   // Zelfde volgorde als bij de betaalherinnering: het huidige klantadres wint van
   // inv.sentTo (dat is alleen het laatst gebruikte adres, bv. een kopie naar de
   // boekhouder). inv.sentTo blijft de vangnet-optie als de klant geen adres heeft.
   const to = eersteGeldigeMail(customer.email, inv.sentTo);
-  if (EMAIL_RE.test(to) && smtpConfigured()) {
-    const pdf = await buildInvoicePdf(inv, order || {}, customer);
-    const sig = getEmailSignature(afzender);
-    const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (${bedrag} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!`;
-    await sendMail({
-      to, subject: `Nog vragen over offerte ${inv.number}? — ${cfg.companyName}`,
-      text: sig ? `${body}\n\n${sig}` : body,
-      automatisch: true, afzender,
-      attachments: [{ filename: `offerte-${inv.number}.pdf`, content: pdf }],
-    });
-    markFollowedUp();
-    saveSoon();
-    logActivity(by, 'offerte-opvolging verstuurd (e-mail)', `${inv.number} → ${to}`);
-    return { ok: true, to, via: 'e-mail' };
+  const mailKan = EMAIL_RE.test(to) && smtpConfigured();
+  const nummer = klantNummerVoor(inv, order, customer);
+  const phone = whatsappAutoAan('offerte') ? nummer : '';
+  if (!mailKan && !phone) {
+    if (nummer) return { error: 'Deze klant heeft alleen een telefoonnummer en de offerte-herinnering via WhatsApp staat uit (Instellingen → Berichten aan klanten → Automatische WhatsApp-berichten).' };
+    return { error: 'Geen geldig e-mailadres én geen telefoonnummer bekend bij deze klant.' };
   }
-
-  // 2) WhatsApp-pad: klant heeft alleen een telefoonnummer (of e-mail/SMTP werkt niet).
-  const phone = String(customer.phone || (order && order.intake && order.intake.phone) || '').trim();
-  if (phone.replace(/\D/g, '').length >= 10) {
-    const text = `Beste ${customer.name || 'klant'}, een tijdje geleden stuurden wij u offerte ${inv.number} (${bedrag} incl. btw). Heeft u nog vragen, of wilt u dat we de werkzaamheden inplannen? Reageer gerust op dit bericht — we helpen u graag verder. — ${cfg.companyName}`;
-    db().outbox.unshift({
-      id: id('out'), kind: 'whatsapp_customer', phone, group: '__klant_dm__', text,
-      orderId: inv.orderId || undefined, status: 'queued', createdAt: now(), by: 'offerte-opvolging',
-    });
-    if (order) {
-      order.thread = order.thread || [];
-      order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (offerte-opvolging)', body: text, at: now() });
-      order.updatedAt = now();
+  const via = [];
+  if (mailKan) {
+    try {
+      const pdf = await buildInvoicePdf(inv, order || {}, customer);
+      const sig = getEmailSignature(afzender);
+      const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (${bedrag} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!`;
+      await sendMail({
+        to, subject: `Nog vragen over offerte ${inv.number}? — ${cfg.companyName}`,
+        text: sig ? `${body}\n\n${sig}` : body,
+        automatisch: true, afzender,
+        attachments: [{ filename: `offerte-${inv.number}.pdf`, content: pdf }],
+      });
+      via.push('e-mail');
+    } catch (e) {
+      if (!phone) throw e;
+      console.error('[offerte-opvolging] e-mail mislukt, het appje gaat wel:', e.message);
     }
-    markFollowedUp();
-    saveSoon();
-    logActivity(by, 'offerte-opvolging via WhatsApp in wachtrij', `${inv.number} → ${phone}`);
-    return { ok: true, to: phone, via: 'whatsapp' };
   }
-
-  return { error: 'Geen geldig e-mailadres én geen telefoonnummer bekend bij deze klant.' };
+  if (phone) {
+    const text = `Beste ${customer.name || 'klant'}, een tijdje geleden stuurden wij u offerte ${inv.number} (${bedrag} incl. btw). Heeft u nog vragen, of wilt u dat we de werkzaamheden inplannen? Reageer gerust op dit bericht — we helpen u graag verder. — ${cfg.companyName}`;
+    zetKlantAppKlaar({ phone, text, inv, order, by: 'offerte-opvolging', afzenderLabel: 'Keyservice (offerte-opvolging)' });
+    via.push('whatsapp');
+  }
+  markFollowedUp();
+  saveSoon();
+  logActivity(by, via.length === 2 ? 'offerte-opvolging verstuurd (e-mail + WhatsApp)' : via[0] === 'e-mail' ? 'offerte-opvolging verstuurd (e-mail)' : 'offerte-opvolging via WhatsApp in wachtrij', `${inv.number} → ${[via.includes('e-mail') ? to : '', via.includes('whatsapp') ? phone : ''].filter(Boolean).join(' + ')}`);
+  return { ok: true, to: via.includes('e-mail') ? to : phone, via: via.length === 2 ? 'e-mail + WhatsApp' : via[0] };
 }
 
 export function upsertInvoice(order, body, actorName, opts = {}) {

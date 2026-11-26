@@ -33,7 +33,7 @@ export const sjabloonVan = (key) => OP_KEY.get(key) || OP_KEY.get('tekst');
 export const KNOP_SOORTEN = ['bel', 'whatsapp', 'mail', 'site', 'geen'];
 
 /** Welk sjabloon past bij een doelgroep (voor de voorstellen uit vaste regels). */
-export const sjabloonVoorDoelgroep = (doelgroep) => (doelgroep === 'schuifpui' ? 'schuifpui' : doelgroep === 'sloten' ? 'sloten' : 'tekst');
+export const sjabloonVoorDoelgroep = (doelgroep) => (['schuifpui', 'onderhoud'].includes(doelgroep) ? 'schuifpui' : doelgroep === 'sloten' ? 'sloten' : 'tekst');
 
 const schoon = (v, max) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim().slice(0, max);
 /** Opmaak uit invoer: alleen bekende keuzes, korte teksten. */
@@ -71,10 +71,12 @@ export function knopDoel(soort, bedrijf = {}, onderwerp = '') {
  * telefoon hetzelfde uit. `tekst` is al ingevuld ({naam} vervangen) en bevat GEEN afmeldregel:
  * die komt onderaan als link.
  * @param {object} in_ { opmaak, onderwerp, tekst, bedrijf:{naam,telefoon,email,website,whatsapp},
- *                       afmeldUrl, logoSrc, fotoSrc }
+ *                       afmeldUrl, logoSrc, fotoSrc, knopUrl }
+ * `knopUrl` (optioneel): de knop gaat dan via dit adres (de klikteller), dat doorstuurt naar het
+ * echte doel. Zonder doel (bv. geen telefoonnummer ingesteld) is er geen knop, ook niet met knopUrl.
  */
 export function bouwCampagneHtml(in_) {
-  const { opmaak = {}, onderwerp = '', tekst = '', bedrijf = {}, afmeldUrl = '', logoSrc = '', fotoSrc = '' } = in_ || {};
+  const { opmaak = {}, onderwerp = '', tekst = '', bedrijf = {}, afmeldUrl = '', logoSrc = '', fotoSrc = '', knopUrl = '' } = in_ || {};
   const sj = sjabloonVan(opmaak.sjabloon);
   if (sj.key === 'tekst') return '';
   const kop = esc(opmaak.kop || sj.kop);
@@ -84,7 +86,7 @@ export function bouwCampagneHtml(in_) {
   const knop = doel && (opmaak.knopSoort || sj.knopSoort) !== 'geen' ? `
         <tr><td style="padding:4px 32px 28px" align="left">
           <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-radius:8px;background:${knopKleur}">
-            <a href="${esc(doel)}" style="display:inline-block;padding:14px 26px;font-family:Arial,Helvetica,sans-serif;font-size:16px;font-weight:bold;color:${knopInkt};text-decoration:none;border-radius:8px">${knopTekst}</a>
+            <a href="${esc(knopUrl || doel)}" style="display:inline-block;padding:14px 26px;font-family:Arial,Helvetica,sans-serif;font-size:16px;font-weight:bold;color:${knopInkt};text-decoration:none;border-radius:8px">${knopTekst}</a>
           </td></tr></table>
         </td></tr>` : '';
   const contact = [bedrijf.telefoon ? `Bel ${esc(bedrijf.telefoon)}` : '', bedrijf.email ? esc(bedrijf.email) : '', bedrijf.website ? esc(bedrijf.website) : ''].filter(Boolean).join(' &nbsp;·&nbsp; ');

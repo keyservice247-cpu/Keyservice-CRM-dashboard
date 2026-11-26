@@ -35,8 +35,12 @@ ok('briefing markeert onbevestigde afspraak', /NIET bevestigd/.test(t1.json.text
 ok('briefing heeft de vaste onderdelen', /Ochtendbriefing/.test(t1.json.text || '') && /VRAAGT OM ACTIE/.test(t1.json.text || '') && /GELD DEZE WEEK/.test(t1.json.text || ''));
 
 console.log('\n== WhatsApp-wachtrij: item naar het meldingen-nummer ==');
-const ob = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+// Sinds 27 nov 2026 krijgt de bridge geen 1-op-1-berichten meer (alleen groepen): een bericht
+// naar een telefoonnummer gaat via het officiële nummer. We kijken daarom in de hele wachtrij.
+const ob = (await api('GET', '/api/whatsapp/outbox-status?full=1')).json || [];
 ok('briefing in wachtrij naar 0687654321', ob.some((x) => x.by === 'ochtendbriefing' && x.phone === '0687654321'), JSON.stringify(ob.map((x) => x.by)));
+const obBridge = await (await fetch(`${BASE}/api/outbox`, { headers: { 'x-ingest-token': 'test123' } })).json();
+ok('de bridge (wegwerpnummer) krijgt dat 1-op-1-bericht NIET', Array.isArray(obBridge) && !obBridge.some((x) => x.by === 'ochtendbriefing'), JSON.stringify(obBridge.map((x) => x.by)));
 
 console.log('\n== Geen kanaal beschikbaar -> nette fout ==');
 await api('PATCH', '/api/settings', { morningBriefing: { enabled: true, hour: 7, channel: 'email', email: '', tone: 'coachend' } });

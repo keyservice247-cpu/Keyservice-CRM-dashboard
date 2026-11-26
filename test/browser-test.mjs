@@ -440,7 +440,7 @@ clear();
   const nv = await page.evaluate(() => ({ open: !document.querySelector('#modalRoot').hidden, punten: document.querySelectorAll('.nieuw-lijst li').length, tekst: document.querySelector('#modal').innerText }));
   ok('uitleg voor kantoor: waar E-mail/WhatsApp, Eerst doen, tabbladen en Instellingen nu staan', nv.open && nv.punten >= 7 && /Alle · E-mail · WhatsApp/.test(nv.tekst) && /Eerst doen/.test(nv.tekst) && /Details · Gesprek/.test(nv.tekst) && /Instellingen/.test(nv.tekst), String(nv.punten));
   await page.click('#nw-ok'); await page.waitForTimeout(300);
-  ok('na "Duidelijk" is de balk weg en blijft hij weg (per toestel onthouden)', await page.evaluate(() => !document.querySelector('#nieuwBalk') && /^\d{4}-\d{2}$/.test(localStorage.getItem('ksNieuwGezien') || '')));
+  ok('na "Duidelijk" is de balk weg en blijft hij weg (per toestel onthouden)', await page.evaluate(() => !document.querySelector('#nieuwBalk') && /^\d{4}-\d{2}(-\d+)?$/.test(localStorage.getItem('ksNieuwGezien') || '')));
   await page.evaluate(() => openAccountModal()); await page.waitForTimeout(400);
   await page.click('#acc-nieuw'); await page.waitForTimeout(300);
   ok('Account → "Wat is er veranderd?" toont de uitleg opnieuw', await page.evaluate(() => document.querySelectorAll('.nieuw-lijst li').length >= 7));
@@ -1467,7 +1467,7 @@ await page.setViewportSize({ width: 390, height: 844 });
   ok('Instellingen: geen enkel blok is verdwenen (minstens 37) en elk blok hoort bij één van de 8 onderwerpen', inst0.totaal >= 37 && instG.zonder.length === 0 && instG.buiten === 0, JSON.stringify({ totaal: inst0.totaal, ...instG }));
   await page.click('#settingsPanel .sg-chip[data-g="bericht"]'); await page.waitForTimeout(400);
   const inst1 = await page.evaluate(() => ({ lijst: !!document.querySelector('.inst-nav')?.offsetParent, terug: !!document.querySelector('#instTerug')?.offsetParent, kop: document.querySelector('#instKop')?.textContent, titels: [...document.querySelectorAll('#settingsPanel .inst-inhoud > [data-sg]')].filter((e) => e.offsetParent).map((e) => (e.querySelector('h3')?.textContent || '').trim().slice(0, 22)) }));
-  ok('mobiel: een onderwerp openen toont alleen dat onderwerp, met een terugknop', !inst1.lijst && inst1.terug && inst1.kop === 'Berichten aan klanten' && inst1.titels.length === 8 && /ontvangst/i.test(inst1.titels[0]), JSON.stringify(inst1));
+  ok('mobiel: een onderwerp openen toont alleen dat onderwerp, met een terugknop', !inst1.lijst && inst1.terug && inst1.kop === 'Berichten aan klanten' && inst1.titels.length === 10 && /WhatsApp/i.test(inst1.titels[0]) && inst1.titels.some((t) => /ontvangst/i.test(t)), JSON.stringify(inst1));
   await page.evaluate(() => loadSettings()); await page.waitForTimeout(1200);
   ok('mobiel: na opnieuw opbouwen (zoals na Opslaan) blijf je in het onderwerp', await page.evaluate(() => !document.querySelector('.inst-nav')?.offsetParent && document.querySelector('#instKop')?.textContent === 'Berichten aan klanten'));
   await page.click('#instTerug'); await page.waitForTimeout(300);
@@ -2941,6 +2941,45 @@ clear();
   if (await page.$('#sluitVraag #sv-weg')) await page.click('#sluitVraag #sv-weg');
 }
 noErr('Ontvangstbevestiging via WhatsApp');
+
+// ============================================================================================
+// 27 NOV 2026 (besluit eigenaar): klanten alleen via het officiële WhatsApp-nummer, een knop per
+// automatisch WhatsApp-bericht, en Campagnes aan/uit (op de live-site uit tot hij ze aanzet).
+clear();
+{
+  await page.evaluate(() => { try { localStorage.setItem('ksInstellingenGroep', 'bericht'); } catch { /* geen opslag */ } return goView('settings'); });
+  await page.waitForSelector('#waAutoKaart [data-wa-auto]', { timeout: 10000 }).catch(() => {}); await page.waitForTimeout(500);
+  const wk = await page.evaluate(() => { const k = document.querySelector('#waAutoKaart'); const kn = [...document.querySelectorAll('#waAutoKaart [data-wa-auto]')];
+    return { er: !!k, binnen: !!k && !!k.closest('.inst-inhoud'), zichtbaar: !!k && k.offsetParent !== null, sleutels: kn.map((x) => x.dataset.waAuto).join(','), betaal: kn.find((x) => x.dataset.waAuto === 'betaal')?.checked, review: kn.find((x) => x.dataset.waAuto === 'review')?.checked, breed: kn.every((x) => x.getBoundingClientRect().width >= 40) }; });
+  ok('WhatsApp-knoppen: één kaart met een knop per automatisch bericht (8), nieuw staat uit en wat al ging staat aan', wk.er && wk.binnen && wk.zichtbaar && wk.sleutels === 'ontvangst,afspraak,annulering,herinnering,review,opvolging,offerte,betaal' && wk.betaal === false && wk.review === true && wk.breed, JSON.stringify(wk));
+  await page.evaluate(() => document.querySelector('#waAutoKaart').scrollIntoView({ block: 'center' }));
+  await page.check('[data-wa-auto="betaal"]'); await page.check('[data-wa-auto="ontvangst"]'); await page.waitForTimeout(1200);
+  const na = await page.evaluate(async () => ({ stand: (await (await fetch('/api/whatsapp/automatisch')).json()).stand, vink: document.querySelector('#ar-wa-enabled')?.checked, open: instellingenGewijzigd().length }));
+  ok('WhatsApp-knoppen: omzetten wordt meteen bewaard (geen Opslaan nodig, geen "niet opgeslagen"), en het vinkje in de kaart eronder loopt mee', na.stand.betaal === true && na.stand.ontvangst === true && na.vink === true && na.open === 0, JSON.stringify(na));
+  await page.evaluate(async () => { for (const soort of ['betaal', 'ontvangst']) await fetch('/api/whatsapp/automatisch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ soort, aan: false }) }); });
+
+  // Campagnes aan/uit + proefmail
+  const ck = await page.evaluate(() => { const k = document.querySelector('#campagneAanKaart'); return { er: !!k, binnen: !!k && !!k.closest('.inst-inhoud'), aan: document.querySelector('#cmp-aan')?.checked, proef: !!document.querySelector('#cmp-proef-btn'), naar: document.querySelector('#cmp-proef-naar')?.value || '', menu: [...document.querySelectorAll('.sidebar [data-view="campagnes"]')].some((el) => el.offsetParent !== null) }; });
+  ok('Campagnes aan/uit: kaart voor de beheerder met de knop "Stuur mij een proefmail" (eigen adres vooringevuld) en de schakelaar', ck.er && ck.binnen && ck.aan === true && ck.proef && /@/.test(ck.naar) && ck.menu, JSON.stringify(ck));
+  await page.evaluate(() => document.querySelector('#campagneAanKaart').scrollIntoView({ block: 'center' }));
+  await page.uncheck('#cmp-aan'); await page.waitForTimeout(1000);
+  const uit = await page.evaluate(async () => { const zichtbaar = [...document.querySelectorAll('[data-view="campagnes"]')].some((el) => el.offsetParent !== null); showView('campagnes'); await new Promise((r) => setTimeout(r, 300));
+    return { zichtbaar, view: state.view, server: (await (await fetch('/api/me')).json()).meta.campagnes, uitleg: document.querySelector('#cmp-aan-uitleg')?.textContent || '', nieuw: nieuwPunten().some((p) => /campagne/i.test(p[0])) }; });
+  ok('Campagnes UIT: het menu-item is weg, het scherm is niet te openen en de uitleg "Wat is er veranderd?" noemt het niet', uit.zichtbaar === false && uit.view === 'settings' && uit.server === false && /Uit:/.test(uit.uitleg) && uit.nieuw === false, JSON.stringify(uit));
+  page.once('dialog', (d) => d.accept());
+  await page.check('#cmp-aan'); await page.waitForTimeout(1000);
+  const aan = await page.evaluate(async () => ({ zichtbaar: [...document.querySelectorAll('.sidebar [data-view="campagnes"]')].some((el) => el.offsetParent !== null), server: (await (await fetch('/api/me')).json()).meta.campagnes }));
+  ok('Campagnes weer AAN (na een bevestiging): het menu-item is terug', aan.zichtbaar === true && aan.server === true, JSON.stringify(aan));
+
+  // Koppelingen: de vaste regel staat erbij, de oude schakelaar is weg
+  await page.evaluate(() => { try { localStorage.setItem('ksInstellingenGroep', 'koppel'); } catch { /* geen opslag */ } return goView('overview').then(() => goView('settings')); });
+  await page.waitForSelector('#koppelOverzichtKaart', { timeout: 10000 }).catch(() => {}); await page.waitForTimeout(600);
+  const vr = await page.evaluate(() => ({ schakelaar: !!document.querySelector('#wa-bridge-groepen'), tekst: [...document.querySelectorAll('#settingsPanel .info-card')].map((k) => k.textContent).find((t) => /Officiële WhatsApp \(Meta\)/.test(t)) || '' }));
+  ok('Koppelingen: "klanten alleen via het officiële nummer" staat er als vaste regel; de oude schakelaar is weg', vr.schakelaar === false && /alleen via dit officiële nummer/.test(vr.tekst) && /nooit een klantbericht/.test(vr.tekst), vr.tekst.slice(0, 200));
+  await page.evaluate(() => goView('overview')); await page.waitForTimeout(600);
+  if (await page.$('#sluitVraag #sv-weg')) await page.click('#sluitVraag #sv-weg');
+}
+noErr('WhatsApp-knoppen en Campagnes aan/uit');
 
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();

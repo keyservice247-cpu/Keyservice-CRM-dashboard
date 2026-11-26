@@ -23,7 +23,7 @@ const ERNST_VOLGORDE = { rood: 0, oranje: 1, grijs: 2 };
 //  - een kapotte koppeling is NOOIT af te vinken: die verdwijnt pas als hij weer werkt.
 // Een onderdeel heet `afId` (anders `id`); een kaal getal telt als zoveel naamloze onderdelen.
 /** De sleutels die af te vinken zijn (de route controleert hiertegen). */
-export const AFVINKBAAR = ['inbox', 'wacht', 'reactie', 'afspraakGeweest', 'offertes', 'factureren', 'verlopen', 'drs', 'onvolledig'];
+export const AFVINKBAAR = ['inbox', 'wacht', 'reactie', 'afspraakGeweest', 'offertes', 'factureren', 'verlopen', 'drs', 'onvolledig', 'campagne'];
 export const afIdVan = (x, i = 0) => String((x && (x.afId || x.id)) || `#${i}`);
 const alsLijst = (v) => (Array.isArray(v) ? v : Array.from({ length: Math.max(0, Number(v) || 0) }, () => ({})));
 const isAf = (afgevinkt, sleutel, id) => { const set = afgevinkt && afgevinkt[sleutel]; return !!set && (set instanceof Set ? set.has(id) : Array.isArray(set) ? set.includes(id) : Object.prototype.hasOwnProperty.call(set, id)); };
@@ -45,6 +45,7 @@ export function zonderAfgevinkt(lijst, afgevinkt, sleutel, alleenAf = false) {
  * @param {number}  in_.verlopenFacturen   aantal facturen over de betaaltermijn
  * @param {number}  in_.drsTeMelden        aantal DRS-opdrachten dat nog gemeld moet worden
  * @param {Array}   in_.onvolledig         opdrachten zonder klantnaam [{id, title}]
+ * @param {Array}   in_.campagneConcepten  automatisch klaargezette campagne-concepten [{id, naam, aantal}]
  * @param {object}  in_.bridge             {ingesteld, stilMin} van de WhatsApp-bridge
  * @param {Array}   in_.koppelFouten       andere koppelingen die niet werken [{sleutel, naam, uitleg}]
  * @param {object}  in_.afgevinkt          {sleutel: id's} — wat is afgevinkt (zie AFVINKEN hierboven)
@@ -62,8 +63,9 @@ export function eerstDoenLijst(in_) {
   const verlopen = kies('verlopen', (in_ || {}).verlopenFacturen || 0);
   const drs = kies('drs', (in_ || {}).drsTeMelden || 0);
   const onvolledig = kies('onvolledig', (in_ || {}).onvolledig || []);
+  const campagne = kies('campagne', (in_ || {}).campagneConcepten || []);
   const verlopenFacturen = verlopen.length; const drsTeMelden = drs.length;
-  const onderdelen = { inbox: pending, wacht, reactie: reacties, afspraakGeweest, offertes: offertesStil, factureren: teFactureren, verlopen, drs, onvolledig };
+  const onderdelen = { inbox: pending, wacht, reactie: reacties, afspraakGeweest, offertes: offertesStil, factureren: teFactureren, verlopen, drs, onvolledig, campagne };
   const uit = [];
   const zet = (p) => {
     if (!(p.aantal > 0)) return;
@@ -124,6 +126,11 @@ export function eerstDoenLijst(in_) {
     zet({ sleutel: 'onvolledig', ernst: 'grijs', aantal: onvolledig.length,
       titel: mv(onvolledig.length, '1 opdracht zonder klantnaam', '{n} opdrachten zonder klantnaam'),
       uitleg: 'Klantgegevens aanvullen', knop: 'Aanvullen', ga: naar(onvolledig, { view: 'board' }) });
+    // Een concept dat het CRM zelf heeft klaargezet (jaarlijks onderhoud). Er gaat niets uit
+    // zonder dat iemand het naleest en zelf op versturen klikt.
+    zet({ sleutel: 'campagne', ernst: 'grijs', aantal: campagne.length,
+      titel: campagne.length === 1 ? `Campagne staat klaar om na te lezen: ${campagne[0].naam || 'concept'}` : `${campagne.length} campagnes staan klaar om na te lezen`,
+      uitleg: campagne.length === 1 && campagne[0].aantal ? `${campagne[0].aantal} klanten · er gaat niets uit zonder jouw klik` : 'Er gaat niets uit zonder jouw klik', knop: 'Nalezen', ga: { view: 'campagnes' } });
   }
   // Belangrijkste eerst; binnen dezelfde ernst blijft de vaste volgorde hierboven staan.
   return uit.map((p, i) => ({ ...p, _i: i })).sort((a, b) => (ERNST_VOLGORDE[a.ernst] - ERNST_VOLGORDE[b.ernst]) || (a._i - b._i)).map(({ _i, ...p }) => p);

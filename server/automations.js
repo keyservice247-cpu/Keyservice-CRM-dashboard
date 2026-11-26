@@ -10,8 +10,7 @@ import {
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getEmailSignature,
   getStatusLabels, isWhatsappOrderGroup, getBackupMail, groupIdForName,
   getAttachmentCleanup, getMorningBriefing, getCrmAlerts, getCompanyProfile,
-  getWeeklyAiCheck,
-} from './settings.js';
+  getWeeklyAiCheck, whatsappAutoAan } from './settings.js';
 import { morningInsight, askAssistant, dayOverview, MODELLEN } from './ai/categorizer.js';
 import { syncOrderToGoogle, isConnected as googleIsConnected, calendarAlarmDecision, testingModusVermoeden } from './google.js';
 import { deleteFile } from './storage.js';
@@ -197,7 +196,7 @@ export async function maybeSendAppointmentCancel(order, prevAppt, opts = {}) {
     // ALTIJD óók WhatsApp (audit 18 aug): dit was een 'else if' — bij een mailfout ging
     // er helemaal niets uit en stond de klant voor niets thuis. Zelfde regel als de
     // bevestiging en de herinnering.
-    if ((opts.notify || cfg.whatsappEnabled) && c.phone) {
+    if ((opts.notify || whatsappAutoAan('annulering')) && c.phone) {
       trekAfspraakberichtenIn(order.id, 'afspraak geannuleerd');
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: body, orderId: order.id, status: 'queued', createdAt: now(), by: 'afspraak-annulering' });
       order.thread = order.thread || [];
@@ -237,7 +236,7 @@ async function runAppointmentReminders() {
         sent = true;
       } catch (e) { console.error('[herinnering] e-mail mislukt:', e.message); }
     }
-    if (cfg.whatsappEnabled && c.phone) {  // altijd óók WhatsApp — zie bevestiging hierboven
+    if (whatsappAutoAan('herinnering') && c.phone) {  // eigen knop (27 nov 2026); liep voorheen mee met de bevestiging
       const body = fill(cfg.reminderBody, vars);
       db().outbox.unshift({ id: id('out'), kind: 'whatsapp_customer', phone: c.phone, group: '__klant_dm__', text: body, orderId: o.id, status: 'queued', createdAt: now(), by: 'afspraakherinnering' });
       o.thread = o.thread || []; o.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, sender: 'Keyservice (herinnering)', body, at: now() });
@@ -277,7 +276,6 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   const merk = order ? merkVan(order) : merkVanFactuur(invoice);
   const reviewLink = reviewLinkVoor(merk.key, cfg);
   if (!reviewLink) return { error: 'Er staat nog geen review-link ingesteld (Instellingen → Berichten aan klanten → Review-verzoek).' };
-  if (!smtpConfigured()) return { error: 'E-mail versturen (SMTP) is niet ingesteld.' };
   // Alleen een échte DATUM betekent "al gevraagd" (audit 3 okt): de automatische ronde zet
   // ook markeringen als 'te-oud'/'voor-aanzetten'/'geen-contact' zonder iets te sturen —
   // die blokkeerden de handmatige knop met "al gevraagd op te-oud".
@@ -291,6 +289,9 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   // Het telefoonnummer van DEZE aanvraag gaat voor op het klantrecord (Regel 3).
   const tel = ((order && order.intake && order.intake.phone) || c.phone || '').trim();
   if (!c.email && !tel) return { error: 'Deze klant heeft geen e-mailadres én geen telefoonnummer.' };
+  // Zonder mailinstelling kan het verzoek nog wel als appje (27 nov 2026) — mits die knop aan staat.
+  const waKan = !!tel && whatsappAutoAan('review');
+  if (!smtpConfigured() && !waKan) return { error: tel && !whatsappAutoAan('review') ? 'E-mail versturen (SMTP) is niet ingesteld en het review-verzoek via WhatsApp staat uit.' : 'E-mail versturen (SMTP) is niet ingesteld.' };
   const vars = { naam: c.name || 'klant', link: reviewLink, bedrijf: merkNaam(merk.key) };
   const body = fill(cfg.body, vars);
   if (order) order.thread = order.thread || [];
@@ -298,7 +299,7 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   const noteer = (entry) => { if (order) order.thread.push(entry); };
 
   // 1) E-mail
-  if (c.email) {
+  if (c.email && smtpConfigured()) {
     try {
       const sig = getEmailSignature(afzender);
       await sendMail({ to: c.email, subject: fill(cfg.subject, vars), text: sig ? `${body}\n\n${sig}` : body, automatisch: true, afzender });
@@ -308,7 +309,8 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
   }
 
   // 2) WhatsApp — TEGELIJK met de mail, want daar reageren klanten het snelst op.
-  if (tel) {
+  //    Eigen knop (27 nov 2026); staat hij uit, dan gaat het verzoek alleen per mail.
+  if (waKan) {
     db().outbox.unshift({
       id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
       text: body, orderId: order ? order.id : undefined, invoiceRef: invoice ? invoice.id : undefined, status: 'queued', createdAt: now(), by: 'review-verzoek',
@@ -317,7 +319,7 @@ export async function sendReviewRequest(order, { actorName = 'systeem', force = 
     via.push('WhatsApp');
   }
 
-  if (!via.length) return { error: 'Versturen lukte niet — controleer de e-mailinstellingen.' };
+  if (!via.length) return { error: tel && !c.email && !whatsappAutoAan('review') ? 'Deze klant heeft alleen een telefoonnummer en het review-verzoek via WhatsApp staat uit (Instellingen → Berichten aan klanten).' : 'Versturen lukte niet — controleer de e-mailinstellingen.' };
   if (order) { order.reviewRequested = now(); order.updatedAt = now(); }
   logActivity(actorName, 'review-verzoek verstuurd', `${order ? order.title : `factuur ${invoice.number || ''} (${c.name || 'klant'})`} -> ${via.join(' + ')} · reviewpagina ${merkNaam(merk.key)}`);
   saveSoon();

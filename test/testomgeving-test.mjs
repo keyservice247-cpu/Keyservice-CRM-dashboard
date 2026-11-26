@@ -103,8 +103,16 @@ try {
   const b = await login('baas@voorbeeld.test', WW);
   ok('beheerder aangemaakt (e-mail in kleine letters)', b.status === 200 && b.json?.user?.role === 'admin');
   ok('geen proefaccounts buiten de testomgeving', (await login('assistente@keyservice.test', WW)).status === 401);
+  // Campagnes staan op een echte installatie UIT tot de beheerder ze zelf aanzet (27 nov 2026).
+  const meB = await api('GET', '/api/me', null, b.cookie);
+  const cmpB = await api('GET', '/api/campagnes', null, b.cookie);
+  ok('echte installatie: Campagnes staan standaard UIT (menu weg, route weigert)', meB.json?.meta?.campagnes === false && cmpB.status === 403 && cmpB.json?.uit === true, JSON.stringify([meB.json?.meta?.campagnes, cmpB.status]));
+  const aanB = await api('POST', '/api/campagnes/aan', { aan: true }, b.cookie);
+  ok('de beheerder zet ze zelf aan; daarna werkt het scherm', aanB.status === 200 && aanB.json.aan === true && (await api('GET', '/api/campagnes', null, b.cookie)).status === 200 && (await api('GET', '/api/me', null, b.cookie)).json.meta.campagnes === true);
+  await api('POST', '/api/campagnes/aan', { aan: false }, b.cookie);
   await stop();
   await start(D2, { SESSION_SECRET: 'een-echt-geheim-van-de-server', INGEST_TOKEN: 'x'.repeat(30), ADMIN_EMAIL: 'baas@voorbeeld.test', ADMIN_PASSWORD: 'heel-ander-wachtwoord-1' });
+  ok('de keuze "Campagnes uit" overleeft een herstart', (await api('GET', '/api/me', null, (await login('baas@voorbeeld.test', WW)).cookie)).json?.meta?.campagnes === false);
   ok('ander ADMIN_PASSWORD na herstart verandert het bestaande wachtwoord NIET', (await login('baas@voorbeeld.test', WW)).status === 200 && (await login('baas@voorbeeld.test', 'heel-ander-wachtwoord-1')).status === 401);
   await stop();
   log = await start(D3, { SESSION_SECRET: 'een-echt-geheim-van-de-server', INGEST_TOKEN: 'x'.repeat(30), ADMIN_EMAIL: 'baas@voorbeeld.test', ADMIN_PASSWORD: 'kort' });

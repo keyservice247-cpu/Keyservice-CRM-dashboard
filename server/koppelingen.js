@@ -61,8 +61,10 @@ export function beoordeelKoppelingen(f = {}) {
 
   // 4. WhatsApp-klantberichten via het officiële nummer
   const o = f.officieel || {};
-  if (!o.ingesteld) zet('waOfficieel', 'WhatsApp officieel nummer', 'uit', 'Niet ingesteld: klantberichten gaan via het wegwerpnummer.');
-  else if (!o.aan) zet('waOfficieel', 'WhatsApp officieel nummer', 'uit', 'Ingesteld, maar versturen staat uit. Ontvangen werkt wel.');
+  // Sinds 27 nov 2026 is dit de ENIGE weg naar een klant: het wegwerpnummer verstuurt nooit
+  // meer klantberichten. Uit of niet ingesteld = klanten krijgen geen WhatsApp van het CRM.
+  if (!o.ingesteld) zet('waOfficieel', 'WhatsApp officieel nummer', 'uit', 'Niet ingesteld: klanten krijgen geen WhatsApp van het CRM (wel e-mail).');
+  else if (!o.aan) zet('waOfficieel', 'WhatsApp officieel nummer', f.test ? 'uit' : 'let', 'Versturen staat uit: klanten krijgen nu geen WhatsApp van het CRM. Ontvangen werkt wel.', 'Zet het aan in Instellingen → Koppelingen.');
   else if ((f.outboxMislukt24u || 0) > 0) zet('waOfficieel', 'WhatsApp officieel nummer', 'let', `${f.outboxMislukt24u} WhatsApp-${f.outboxMislukt24u === 1 ? 'bericht is' : 'berichten zijn'} in 24 uur niet verstuurd.`, 'Open Berichten: bij het bericht staat de reden.');
   else zet('waOfficieel', 'WhatsApp officieel nummer', 'goed', 'Versturen staat aan.');
 
@@ -161,7 +163,7 @@ export function koppelFeiten() {
       herstartRecent: !!s.whatsappRestartAt && nu - new Date(s.whatsappRestartAt).getTime() < 25 * 60000,
     },
     opdrachtGroepen: !!String(Array.isArray(s.whatsappOrderGroups) ? s.whatsappOrderGroups.join('') : (s.whatsappOrderGroups || '')).trim(),
-    officieel: { ingesteld: cloudConfigured(), aan: !!(cloudConfigured() && s.whatsappCloudSend) },
+    officieel: { ingesteld: cloudConfigured(), aan: !!(cloudConfigured() && s.whatsappCloudSend !== false) },
     agenda: {
       ingesteld: !!agenda.configured, verbonden: !!agenda.connected, reden: agenda.disconnectReason || '',
       fouten: (db().orders || []).filter((o) => !o.archivedWeek && !o.deletedAt && o.appointmentAt && o.googleSyncError && new Date(o.appointmentAt).getTime() > nu).length,

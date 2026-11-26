@@ -563,6 +563,54 @@ export function getAutoReply() {
 }
 export const getAutoMailDisclaimer = () => getAutoReply().disclaimer;
 
+// EEN KNOP PER AUTOMATISCH WHATSAPP-BERICHT (27 nov 2026, wens eigenaar: "voor elk automatisch
+// WhatsApp-bericht moeten er knoppen komen welke we aan willen zetten"). Dit is het overzicht;
+// de drie knoppen die al bestonden houden hun eigen plek in de instellingen (ontvangst →
+// autoReply.whatsappEnabled, afspraak → appointmentMsg.whatsappEnabled, opvolging →
+// followUp.whatsappEnabled), de nieuwe staan in settings.whatsappAuto. Zo is er per bericht
+// precies ÉÉN waarheid, en blijft een ouder scherm gewoon werken.
+// Standaard: wat al via WhatsApp ging blijft zo; wat nieuw is staat uit tot iemand het aanzet.
+export const WHATSAPP_AUTO = [
+  { key: 'ontvangst', naam: 'Ontvangstbevestiging', uitleg: 'Het automatische antwoord op een nieuwe aanvraag (eigen appje of websiteformulier).' },
+  { key: 'afspraak', naam: 'Afspraakbevestiging', uitleg: 'Zodra een afspraak wordt ingepland of verzet.' },
+  { key: 'annulering', naam: 'Afspraak geannuleerd', uitleg: 'Als een afspraak wordt geannuleerd.' },
+  { key: 'herinnering', naam: 'Afspraakherinnering', uitleg: 'Een dag (of het ingestelde aantal uren) voor de afspraak.' },
+  { key: 'review', naam: 'Review-verzoek', uitleg: 'De vraag om een review na een afgeronde opdracht (automatisch én met de knop Review).' },
+  { key: 'opvolging', naam: 'Opvolging na een offerte (bord)', uitleg: 'Als een opdracht een paar dagen in "Offerte verzonden" stilstaat.' },
+  { key: 'offerte', naam: 'Offerte-herinnering (Facturen)', uitleg: 'De herinnering bij een verstuurde offerte zonder reactie (automatisch én met de knop Herinnering).' },
+  { key: 'betaal', naam: 'Betaalherinnering', uitleg: 'De herinnering bij een factuur die over de betaaltermijn is (automatisch én met de knop Herinnering).' },
+];
+export function getWhatsappAuto() {
+  const s = db().settings || {}; const w = s.whatsappAuto || {};
+  const afspraak = !!(s.appointmentMsg || {}).whatsappEnabled;
+  const eigen = (k, std) => (typeof w[k] === 'boolean' ? w[k] : std);
+  return {
+    ontvangst: !!(s.autoReply || {}).whatsappEnabled,
+    afspraak,
+    annulering: eigen('annulering', afspraak),
+    herinnering: eigen('herinnering', afspraak),
+    review: eigen('review', true),
+    opvolging: getFollowUp().whatsappEnabled,
+    offerte: eigen('offerte', true),
+    betaal: eigen('betaal', false),
+  };
+}
+export const whatsappAutoAan = (soort) => !!getWhatsappAuto()[soort];
+/** Eén knop omzetten. Geeft de nieuwe stand van alle knoppen terug, of null bij een onbekende soort. */
+export function zetWhatsappAuto(soort, aan) {
+  if (!WHATSAPP_AUTO.some((x) => x.key === soort)) return null;
+  const s = db().settings; const v = !!aan;
+  if (soort === 'ontvangst') s.autoReply = { ...(s.autoReply || {}), whatsappEnabled: v };
+  else if (soort === 'afspraak') {
+    // De twee knoppen die tot nu toe meeliepen met de afspraakbevestiging houden hun stand.
+    const nu = getWhatsappAuto();
+    s.whatsappAuto = { ...(s.whatsappAuto || {}), annulering: nu.annulering, herinnering: nu.herinnering };
+    s.appointmentMsg = { ...(s.appointmentMsg || {}), whatsappEnabled: v };
+  } else if (soort === 'opvolging') s.followUp = { ...(s.followUp || {}), whatsappEnabled: v };
+  else s.whatsappAuto = { ...(s.whatsappAuto || {}), [soort]: v };
+  return getWhatsappAuto();
+}
+
 // LEAD-INSTROOM WET (Regel 4): patronen (afzender/onderwerp) waarmee bestellingen,
 // orderbevestigingen, facturen, verzend-/bezorgberichten en no-reply-post van
 // leveranciers/webshops STIL naar Overige gaan — nooit een pending lead, nooit een

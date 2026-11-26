@@ -69,7 +69,9 @@ console.log('\n== Vangrails ==');
 const pauze = await api('PATCH', '/api/settings', { whatsappPaused: true });
 ok('pauzeknop aan te zetten', pauze.status === 200);
 const stuur2 = await api('POST', `/api/chats/${gesprek.id}/send`, { text: 'Tweede bericht tijdens de pauze' });
-ok('tijdens pauze: bericht in wachtrij, mét duidelijke pauze-vlag', stuur2.json?.ok && stuur2.json?.paused === true, JSON.stringify(stuur2.json));
+// De pauzeknop legt alleen het wegwerpnummer (groepen) stil. Een klantbericht gaat via het
+// officiële nummer; het scherm krijgt te horen als dát nu niet kan (hier: niet ingesteld).
+ok('pauze van het wegwerpnummer raakt een klantbericht niet; het scherm hoort wél of het uit kan', stuur2.json?.ok && stuur2.json?.paused === false && /officiële WhatsApp-nummer/.test(stuur2.json?.nietVerstuurbaar || ''), JSON.stringify(stuur2.json));
 await api('PATCH', '/api/settings', { whatsappPaused: false });
 const leeg = await api('POST', `/api/chats/${gesprek.id}/send`, { text: '   ' });
 ok('leeg bericht wordt geweigerd', leeg.status === 400);

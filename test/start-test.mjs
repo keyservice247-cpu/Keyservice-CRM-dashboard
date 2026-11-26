@@ -107,5 +107,14 @@ console.log('\n== Afvinken: weg van Start, tot er iets nieuws bij komt ==');
   ok('dagoverzicht: een vinkje van langer dan 14 dagen geleden wordt opgeruimd', Object.keys(opslag.kantoor.dag.items).join() === 'dag:actie:nieuw1');
 }
 
+// ---- Campagne-concept dat het CRM zelf klaarzette (27 nov 2026) ----
+{
+  const metConcept = eerstDoenLijst({ nu: NU, campagneConcepten: [{ id: 'cmp1', naam: 'Jaarlijks onderhoud schuifpui — december 2026', aantal: 7 }] });
+  const punt = metConcept.find((p) => p.sleutel === 'campagne');
+  ok('campagne-concept: grijs punt "klaar om na te lezen" met de naam en het aantal klanten, af te vinken, gaat naar Campagnes', !!punt && punt.ernst === 'grijs' && /klaar om na te lezen: Jaarlijks onderhoud/.test(punt.titel) && /7 klanten/.test(punt.uitleg) && /niets uit zonder jouw klik/.test(punt.uitleg) && punt.afvinkbaar === true && punt.ids.join() === 'cmp1' && punt.ga.view === 'campagnes', JSON.stringify(punt));
+  ok('campagne-concept: nooit bij de monteur, en weg zodra het is afgevinkt', !eerstDoenLijst({ monteur: true, nu: NU, campagneConcepten: [{ id: 'cmp1', naam: 'x', aantal: 3 }] }).some((p) => p.sleutel === 'campagne')
+    && !eerstDoenLijst({ nu: NU, campagneConcepten: [{ id: 'cmp1', naam: 'x', aantal: 3 }], afgevinkt: { campagne: new Set(['cmp1']) } }).some((p) => p.sleutel === 'campagne'));
+}
+
 console.log(`\n========== START: ${pass} geslaagd, ${fail} gefaald ==========`);
 process.exit(fail ? 1 : 0);

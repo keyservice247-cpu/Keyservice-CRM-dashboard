@@ -22,6 +22,10 @@ node test/opslag-test.mjs    # SQLite-opslag + bijlage-opslag (hash-hergebruik, 
 #   DATA_DIR=/tmp/crm-watest INGEST_TOKEN=test123 SESSION_SECRET=test \
 #     WHATSAPP_APP_SECRET=appsecret123 PORT=3125 node server/index.js &
 node test/whatsapp-cloud-test.mjs
+# Vaste regel 27 nov: klanten ALLEEN via het officiële nummer, nooit via de bridge; eigen
+# herkansing en eerlijke mislukking; een knop per automatisch WhatsApp-bericht; betaal- en
+# offerteherinnering via WhatsApp (start zelf een nep-Meta op 2659 en een server op PORT=3159)
+node test/whatsapp-route-test.mjs
 # Berichten-scherm: gesprekkenlijst, versturen via de wachtrij, kaart-koppeling,
 # gelezen-teller, monteur-weigering (PORT=3127)
 node test/chat-test.mjs

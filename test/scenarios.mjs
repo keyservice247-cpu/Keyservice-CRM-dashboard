@@ -596,20 +596,30 @@ ok('na de pauze staat de wachtrij er nog (niets kwijt)',
 // dubbelen ertussen. Dat is precies het patroon waarvoor WhatsApp een nummer blokkeert.
 // Deze assertions bewaken dat de rem er nooit stilletjes uitloopt.
 console.log('\n== Snelheidsrem: wachtrij mag nooit in één stortvloed leeglopen ==');
-// Twee identieke berichten naar hetzelfde nummer + drie verschillende.
-await api('POST', '/api/whatsapp/test', { phone: '0612000001', text: 'Zelfde bericht' });
-await api('POST', '/api/whatsapp/test', { phone: '0612000001', text: 'Zelfde bericht' });
-for (let i = 2; i <= 4; i++) await api('POST', '/api/whatsapp/test', { phone: `061200000${i}`, text: `Bericht ${i}` });
+// Sinds 27 nov 2026 krijgt de bridge alleen nog GROEPSBERICHTEN (klanten gaan via het officiële
+// nummer). De rem wordt daarom getest met opdrachten naar een monteursgroep: twee keer dezelfde
+// opdracht (identiek bericht) + drie verschillende, en één klantbericht dat er niet bij mag zitten.
+const remMont = (await api('POST', '/api/monteurs', { name: 'Rem Monteur', waGroup: 'Remgroep monteur' })).json;
+const remKlant = (await api('POST', '/api/customers', { name: 'Rem Klant', phone: '0612000001' })).json;
+const remIds = [];
+for (let i = 1; i <= 4; i++) remIds.push((await api('POST', '/api/orders', { customerId: remKlant.id, title: `Remdorp — klus ${i}`, status: 'open' })).json.id);
+await api('POST', `/api/orders/${remIds[0]}/send-monteur`, { monteurId: remMont.id });
+await api('POST', `/api/orders/${remIds[0]}/send-monteur`, { monteurId: remMont.id });
+for (const oid of remIds.slice(1)) await api('POST', `/api/orders/${oid}/send-monteur`, { monteurId: remMont.id });
+await api('POST', '/api/whatsapp/test', { phone: '0612000009', text: 'Klantbericht: nooit via de bridge' });
 // Even wachten tot de rem (20s tussen rondes) een nieuwe ronde toestaat.
 await new Promise((r) => setTimeout(r, 21000));
 const ronde1 = await outboxQ();
-ok('hooguit 2 berichten per ronde naar de bridge', ronde1.length <= 2, `kreeg ${ronde1.length}`);
+ok('hooguit 2 berichten per ronde naar de bridge', ronde1.length >= 1 && ronde1.length <= 2, `kreeg ${ronde1.length}`);
+ok('de bridge krijgt alleen groepsberichten, nooit een klantbericht', ronde1.every((o) => o.group && o.group !== '__klant_dm__'), JSON.stringify(ronde1.map((o) => o.group)));
 const ronde2 = await outboxQ();
 ok('direct daarna komt er niets bij (20 seconden ertussen)', ronde2.length === 0, `kreeg ${ronde2.length}`);
 const naRem = (await api('GET', '/api/whatsapp/outbox-status')).json || [];
 ok('identiek dubbel bericht wordt niet verstuurd',
   naRem.some((o) => String(o.lastResult || '').startsWith('dubbel')),
   JSON.stringify(naRem.slice(0, 6).map((o) => `${o.status}:${o.lastResult}`)));
+ok('het klantbericht staat nog klaar voor het officiële nummer (niet weggegeven aan de bridge)',
+  ((await outboxAll()).find((o) => o.text === 'Klantbericht: nooit via de bridge') || {}).status === 'queued');
 
 // ---------- Foto's uploaden (6 aug 2026) ----------
 // Bijlages gaan als base64 door een JSON-body, en base64 maakt een bestand ~33% groter.

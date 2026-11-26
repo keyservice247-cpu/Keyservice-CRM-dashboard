@@ -52,7 +52,7 @@ import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules,
 import { ensureSeed } from './seed.js';
 import * as campagnes from './campagnes.js';
 import * as mededelingen from './mededelingen.js';
-import { SJABLONEN, sjabloonVoorDoelgroep, isSjabloon } from './campagne-sjablonen.js';
+import { SJABLONEN, sjabloonVoorDoelgroep, isSjabloon, esc as escHtml } from './campagne-sjablonen.js';
 import { ensureBeheerderUitOmgeving } from './beheerder.js';
 import { vulTestdata } from './testdata.js';
 import { amsterdamParts, amsMidnightMs, weekBounds } from './week.js';
@@ -76,7 +76,7 @@ import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMo
 import { startAutomations, haalDagoverzicht, zelfdeTijd, maybeSendTerugkoppeling, maybeSendAppointmentConfirm, maybeSendAppointmentCancel, sendWeeklyCeoReport, sendMorningBriefing, morningBriefingData, sendWeeklyAiCheck, weeklyCheckData, sendReviewRequest, bridgeAlarmGrens, runAttachmentCleanup } from './automations.js';
 import { formulierStatus, markeerActivatieAfgehandeld } from './formulieren.js';
 import { isDrsOrder, rapportVoorstel, rapportTekst, markeerGemeld, legRapportVast, maakOngedaan, drsStartMigratie, drsKopjesMigratie, runDrsHerinnering, getDrsRapportInstellingen, sanitizeDrsRapportInstellingen, drsMaandOverzicht, rapportenLijst, KOPJE_LABEL, catVanStatus, nogTeMelden, korteDatum, regelVoor, zoekMogelijkDubbel, alAfgerondGemeldOpAdres, nlDatum as drsVandaag } from './drs-rapport.js';
-import { getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn, reparatieLocatieVan, isCorrigeerbaar, CORRECTIE_REDEN_MIN, CORRECTIE_REDEN_MAX } from './invoices.js';
+import { bonSig, getInvoiceSettings, isVergrendeld, betaalTermijnStart, upsertInvoice, buildInvoicePdf, computeTotals, saveInvoiceFields, createStandaloneInvoice, copyInvoice, sendInvoiceReminder, autoConvertQuoteToInvoice, sendQuoteFollowup, trekOpvolgingenIn, reparatieLocatieVan, isCorrigeerbaar, CORRECTIE_REDEN_MIN, CORRECTIE_REDEN_MAX } from './invoices.js';
 import { addEntry, updateEntry, deleteEntry, monthReport, trend, INCOME_CATEGORIES, EXPENSE_CATEGORIES, QUICK_EXPENSES, getFinanceSettings, saveFinanceSettings, bookRecurringDue, suggestIncomeFromReports, importIncome, weeklyReportData, runFinanceAutoSync, removeAutoIncomeForInvoice, collectAutoSyncEntries, bookAutoSyncEntries, dismissIncomeSuggestions, removeAutoFeeForOrder, herkoppelDrsFee, facturenOmzet } from './finance.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { conversieData, maakConversieBriefing, omzetVan, factuurPerOpdracht, conversieZonderGeld } from './conversie.js';
@@ -97,6 +97,7 @@ import {
   isValidStatus, normalizeStatus, firstStatusKey, sanitizeStatuses, sanitizeSources,
   getTemplates, sanitizeTemplates, appointmentStatusKey, getCompanyProfile,
   getEmailSignature, afzenderProfiel, isWhatsappOrderGroup, resolveGroupAlias, getAutoReply, getFollowUp, getBackupMail, getOnderweg,
+  getWhatsappAuto, WHATSAPP_AUTO, zetWhatsappAuto, whatsappAutoAan,
   getTerugkoppeling, getAppointmentMsg, getReviewRequest, getTrustpilot, trustpilotBccVoor, TRUSTPILOT_BCC_RE, getCrmAlerts, getPriceList,
   groupIdForName, healGroupIdNames, learnGroupAlias, DEFAULT_EMAIL_FILTERS, getAttachmentCleanup,
   getPriceBundles, sanitizeBundles, sanitizeBundleLines, getMorningBriefing, getAutoMergeWindowHours,
@@ -249,6 +250,8 @@ app.get('/api/me', (req, res) => {
       drsRapport: req.user && req.user.role !== 'monteur' ? { kopjes: getDrsRapportInstellingen().kopjes } : null,
       // Testomgeving (23 nov): het scherm toont dan een duidelijke balk.
       omgeving: TEST ? 'test' : '',
+      // Campagnes staan op de live-site uit tot de beheerder ze aanzet (27 nov 2026).
+      campagnes: campagnes.campagnesAan(),
     },
   });
 });
@@ -740,7 +743,7 @@ app.post('/api/chats/nummer/:phone/send', requireRole('admin', 'assistent'), (re
   saveSoon();
   // "paused" alleen melden als dit bericht ook écht blijft liggen: met de officiële
   // route aan gaat een klant-DM gewoon uit, ook al staat de bridge-noodrem aan.
-  res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused && !cloudSendAan(), orderId: null });
+  res.json({ ok: true, id: item.id, paused: false, nietVerstuurbaar: klantWhatsappBlokkade(), orderId: null });
 });
 
 // MONTEUR IN BERICHTEN (15 aug, verzoek eigenaar): een monteur mag het scherm nu wél
@@ -859,7 +862,7 @@ app.post('/api/chats/:id/send', requireRole('admin', 'assistent', 'monteur'), as
   }
   logActivity(req.user.name, 'WhatsApp-bericht via Berichten', `${customer.name || phoneRaw}: ${text.slice(0, 60)}`);
   saveSoon();
-  res.json({ ok: true, id: item.id, paused: !!db().settings.whatsappPaused && !cloudSendAan(), orderId: open ? open.id : null });
+  res.json({ ok: true, id: item.id, paused: false, nietVerstuurbaar: klantWhatsappBlokkade(), orderId: open ? open.id : null });
 });
 
 // Gesprek gelezen: zet de leesmarkering van dít gesprek (customerId of "tel:<nummer>")
@@ -1276,6 +1279,43 @@ app.patch('/api/customers/:id', requireAuth, (req, res) => {
 // Alles in server/campagnes.js. Kantoor (beheerder + assistente); bedragen alleen met het recht Cijfers.
 const campagneOf404 = (req, res) => { const c = campagnes.vindCampagne(req.params.id); if (!c) res.status(404).json({ error: 'Campagne niet gevonden' }); return c; };
 const campagneFout = (res, e) => res.status(e.status || 500).json({ error: e.message || 'Er ging iets mis' });
+// AAN/UIT (27 nov 2026): op de live-site staan Campagnes uit tot de beheerder ze zelf aanzet.
+// Deze drie routes werken ook als Campagnes uit staan (anders kan hij ze nooit aanzetten).
+const campagneStand = () => ({ aan: campagnes.campagnesAan(), kanVersturen: smtpConfigured() && !TEST, testomgeving: TEST });
+app.get('/api/campagnes/stand', requireRole('admin'), (req, res) => res.json(campagneStand()));
+app.post('/api/campagnes/aan', requireRole('admin'), (req, res) => {
+  if (typeof req.body?.aan !== 'boolean') return res.status(400).json({ error: 'Geef aan of Campagnes aan of uit moeten.' });
+  campagnes.zetCampagnesAan(req.body.aan, req.user);
+  res.json({ ok: true, ...campagneStand() });
+});
+// Proefmail aan jezelf: een voorbeeld van een opgemaakte campagnemail, zodat de beheerder ziet
+// hoe hij bij een klant aankomt vóór hij Campagnes aanzet. Gaat alleen naar het opgegeven adres.
+app.post('/api/campagnes/proefmail', requireRole('admin'), async (req, res) => {
+  const naar = String(req.body?.naar || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(naar)) return res.status(400).json({ error: 'Vul een geldig e-mailadres in.' });
+  if (!smtpConfigured() || TEST) return res.status(503).json({ error: TEST ? 'De testomgeving verstuurt geen e-mail. Op de live-site werkt de proefmail wel.' : 'E-mail versturen (SMTP) is nog niet ingesteld.' });
+  const sj = SJABLONEN.find((x) => x.key === (isSjabloon(req.body?.sjabloon) && req.body.sjabloon !== 'tekst' ? req.body.sjabloon : 'schuifpui'));
+  try {
+    const proef = { id: '', onderwerp: sj.onderwerp, tekst: sj.tekst, opmaak: { sjabloon: sj.key } };
+    const m = campagnes.mailVoor(proef, { naam: String(req.user.name || 'klant').split(' ')[0], plaats: '' });
+    await sendMail({ to: naar, subject: `[PROEF] ${sj.onderwerp}`, text: m.text + '\n\n(Dit is een proefmail aan uzelf. Er is niets naar klanten verstuurd. Onder een echte mail staat een afmeldlink.)', html: m.html || '', attachments: m.attachments || [], afzender: afzenderVan(req) });
+    logActivity(req.user.name, 'campagne-proefmail verstuurd', naar);
+    res.json({ ok: true, naar });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Staan Campagnes uit, dan weigert elke andere campagne-route (ook voor wie het adres kent).
+app.use('/api/campagnes', (req, res, next) => {
+  if (campagnes.campagnesAan()) return next();
+  res.status(403).json({ error: 'Campagnes staan nog uit. De beheerder zet ze aan in Instellingen → Berichten aan klanten → E-mailcampagnes.', uit: true });
+});
+// Alleen in de eigen test: de maandelijkse onderhoudsronde nu draaien, met "vandaag" een aantal
+// dagen vooruit (opdrachten zijn via de routes niet terug te dateren).
+if (process.env.CAMPAGNE_TEST === '1' && demoLoginToegestaan()) {
+  app.post('/api/campagnes/onderhoud-ronde', requireRole('admin'), (req, res) => {
+    const r = campagnes.maakOnderhoudConcept({ force: true, nu: new Date(Date.now() + (Number(req.body?.dagenVooruit) || 0) * 86400000) });
+    res.json({ ...r, concept: r.concept ? campagnes.campagneUitvoer(r.concept) : undefined });
+  });
+}
 app.get('/api/campagnes', requireRole('admin', 'assistent'), (req, res) => {
   const inst = campagnes.campagneInstellingen();
   const feiten = campagnes.alleFeiten();
@@ -1408,13 +1448,27 @@ app.post('/api/campagnes/instellingen', requireRole('admin'), (req, res) => {
 // AFMELDEN via de link onder de mail: geen login, ondertekende link. De link OPENEN meldt nog
 // niemand af — mailprogramma's en virusscanners openen links in een mail vaak uit zichzelf, en
 // dan zou een klant zijn afgemeld zonder dat hij iets deed. De klant bevestigt met één knop.
-const afmeldPagina = (titel, tekst, knop = '') => `<!doctype html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${titel}</title><style>body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f6f7f9;color:#1b2330;margin:0;padding:40px 20px}main{max-width:460px;margin:0 auto;background:#fff;border:1px solid #e1e5eb;border-radius:12px;padding:28px}h1{font-size:20px;margin:0 0 10px}p{margin:0;line-height:1.5;color:#4a5466}button{margin-top:18px;font:inherit;font-weight:600;color:#fff;background:#1f4e9c;border:0;border-radius:8px;padding:12px 20px;cursor:pointer}</style></head><body><main><h1>${titel}</h1><p>${tekst}</p>${knop}</main></body></html>`;
+const afmeldPagina = (titel, tekst, knop = '') => `<!doctype html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${titel}</title><style>body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f6f7f9;color:#1b2330;margin:0;padding:40px 20px}main{max-width:460px;margin:0 auto;background:#fff;border:1px solid #e1e5eb;border-radius:12px;padding:28px}h1{font-size:20px;margin:0 0 10px}p{margin:0;line-height:1.5;color:#4a5466}button{margin-top:18px;font:inherit;font-weight:600;color:#fff;background:#1f4e9c;border:0;border-radius:8px;padding:12px 20px;cursor:pointer}a.knop{display:inline-block;margin-top:18px;font-weight:600;color:#fff;background:#1f4e9c;border-radius:8px;padding:12px 20px;text-decoration:none}</style></head><body><main><h1>${titel}</h1><p>${tekst}</p>${knop}</main></body></html>`;
 const afmeldKop = (res) => {
   res.set('X-Robots-Tag', 'noindex, nofollow'); res.set('Referrer-Policy', 'no-referrer'); res.set('Cache-Control', 'no-store');
   res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'");
 };
 const afmeldGeldig = (req) => /^[\w-]{3,80}$/.test(String(req.params.id || '')) && /^[0-9a-f]{24}$/.test(String(req.params.sig || ''));
 const AFMELD_FOUT = ['Deze link werkt niet', 'De afmeldlink is niet geldig of niet compleet. Antwoord op de e-mail met het woord "afmelden", dan regelen wij het voor u.'];
+// KLIKTELLER (27 nov 2026): de knop in een campagnemail komt hier langs. De klik wordt bij die
+// ontvanger genoteerd en de klant gaat meteen door naar het echte doel (bellen, WhatsApp, mail
+// of de website). Geen inlog; de link is ondertekend. Werkt ook als Campagnes later uit staan.
+app.all('/k/:cid/:kid/:sig', (req, res) => {
+  afmeldKop(res);
+  const geldig = /^[\w-]{3,80}$/.test(String(req.params.cid || '')) && /^[\w-]{3,80}$/.test(String(req.params.kid || '')) && /^[0-9a-f]{24}$/.test(String(req.params.sig || ''));
+  // Alleen in de eigen test: doen alsof de klik een minuut later komt (anders 61 s wachten).
+  const later = process.env.CAMPAGNE_TEST === '1' && demoLoginToegestaan() && req.get('x-test-later') ? 61000 : 0;
+  const r = geldig ? campagnes.registreerKlik(String(req.params.cid), String(req.params.kid), String(req.params.sig), { methode: req.method, agent: req.get('user-agent') || '', nu: Date.now() + later }) : null;
+  if (!r || !r.doel) return res.status(r ? 200 : 404).send(afmeldPagina(r ? 'Neem contact met ons op' : 'Deze link werkt niet', r ? `Bel ons op ${escHtml(r.bedrijf.telefoon || '')} of antwoord op de e-mail, dan helpen wij u verder.` : 'De link is niet geldig of niet compleet. Antwoord op de e-mail, dan helpen wij u verder.'));
+  if (req.method !== 'GET') return res.status(204).end();
+  const doel = escHtml(r.doel);
+  res.send(afmeldPagina('Een ogenblik…', 'U wordt doorgestuurd. Gebeurt er niets? Tik dan op de knop.', `<a class="knop" href="${doel}">${escHtml(r.knopTekst)}</a>`).replace('<head>', `<head><meta http-equiv="refresh" content="0;url=${doel}">`));
+});
 app.get('/afmelden/:id/:sig', (req, res) => {
   afmeldKop(res);
   const k = afmeldGeldig(req) ? campagnes.afmeldKlant(String(req.params.id), String(req.params.sig)) : null;
@@ -3074,11 +3128,12 @@ function startOnderdelen(user) {
     teFactureren: nogTeFacturerenOrders(user).list.map(kort),
     drs: monteur ? [] : drsTeMeldenLijst(),
     onvolledig: active.filter((o) => o.customerIncomplete && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status)).map(kort),
+    campagneConcepten: monteur ? [] : campagnes.wachtendeAutoConcepten(),
   };
 }
 // Welke lijst hoort bij welke afvink-sleutel.
 const startLijstVan = (o, sleutel) => ({ inbox: o.pending, wacht: o.wacht, reactie: o.repliedList, afspraakGeweest: o.afspraakGeweest, offertes: o.staleQuotes,
-  factureren: o.teFactureren, verlopen: o.verlopen, drs: o.drs, onvolledig: o.onvolledig, afspraakVandaag: o.apptToday })[sleutel] || null;
+  factureren: o.teFactureren, verlopen: o.verlopen, drs: o.drs, onvolledig: o.onvolledig, campagne: o.campagneConcepten, afspraakVandaag: o.apptToday })[sleutel] || null;
 
 app.get('/api/overview', requireAuth, (req, res) => {
   const od = startOnderdelen(req.user);
@@ -3103,7 +3158,7 @@ app.get('/api/overview', requireAuth, (req, res) => {
       monteur, nu: Date.now(),
       pending: od.pending, wacht: od.wacht,
       reacties: od.repliedList, afspraakGeweest: od.afspraakGeweest, offertesStil: od.staleQuotes,
-      teFactureren: od.teFactureren, verlopenFacturen: od.verlopen, drsTeMelden: od.drs, onvolledig: od.onvolledig,
+      teFactureren: od.teFactureren, verlopenFacturen: od.verlopen, drsTeMelden: od.drs, onvolledig: od.onvolledig, campagneConcepten: od.campagneConcepten,
       bridge: { ingesteld: !!last && !TEST, stilMin: ageSec == null ? 0 : Math.floor(ageSec / 60) },
       koppelFouten: monteur ? [] : (() => { try { return koppelingenOverzicht().regels.filter((r) => r.stand === 'fout' && r.sleutel !== 'waGroep').map((r) => ({ sleutel: r.sleutel, naam: r.naam, uitleg: r.uitleg })); } catch { return []; } })(),
       afgevinkt,
@@ -3141,7 +3196,7 @@ app.get('/api/overview', requireAuth, (req, res) => {
 // factuur of het gesprek zelf verandert niets. Het scherm stuurt de id's mee van wat het liet
 // zien; alleen wat er NU echt is wordt onthouden (iets dat intussen binnenkwam blijft staan).
 const START_NAAM = { inbox: 'nieuwe aanvragen', wacht: 'klanten die wachten op antwoord', reactie: 'klantreacties', afspraakGeweest: 'afspraken die zijn geweest', offertes: 'offertes die stilliggen',
-  factureren: 'afgeronde opdrachten zonder factuur', verlopen: 'facturen over de betaaltermijn', drs: 'DRS-opdrachten nog te melden', onvolledig: 'opdrachten zonder klantnaam', afspraakVandaag: 'afspraken van vandaag', dag: 'regels uit het dagoverzicht' };
+  factureren: 'afgeronde opdrachten zonder factuur', verlopen: 'facturen over de betaaltermijn', drs: 'DRS-opdrachten nog te melden', onvolledig: 'opdrachten zonder klantnaam', campagne: 'campagne-concepten om na te lezen', afspraakVandaag: 'afspraken van vandaag', dag: 'regels uit het dagoverzicht' };
 app.post('/api/start/afvinken', requireAuth, (req, res) => {
   const sleutel = String(req.body?.sleutel || '');
   if (!magSleutel(req.user, sleutel)) return res.status(sleutel.startsWith('koppeling:') || sleutel === 'bridge' ? 400 : 403).json({ error: sleutel.startsWith('koppeling:') || sleutel === 'bridge' ? 'Een koppeling die niet werkt kun je niet afvinken: de melding verdwijnt vanzelf zodra hij weer werkt.' : 'Dit onderdeel kun je niet afvinken.' });
@@ -3216,6 +3271,35 @@ app.post('/api/whatsapp/pause', requireRole('admin', 'assistent'), (req, res) =>
   logActivity(req.user.name, db().settings.whatsappPaused ? 'WhatsApp-pauze AAN' : 'WhatsApp-pauze UIT', 'via Berichten');
   saveSoon();
   res.json({ ok: true, paused: db().settings.whatsappPaused });
+});
+// EEN KNOP PER AUTOMATISCH WHATSAPP-BERICHT (27 nov 2026). Lezen: wie de instellingen mag zien;
+// omzetten: alleen wie de instellingen mag wijzigen. `kan` zegt of er op dit moment überhaupt
+// een appje naar een klant weg kan (het officiële nummer is de enige weg).
+// Alleen voor de eigen test (test/whatsapp-route-test.mjs): een verzendronde en de
+// onderhoudsronde direct draaien i.p.v. 20 s / 5 min wachten. Bestaat niet op productie.
+if (process.env.WA_ROUTE_TEST === '1' && demoLoginToegestaan()) {
+  app.post('/api/whatsapp/test-ronde', requireRole('admin'), async (req, res) => {
+    for (const it of db().outbox || []) {
+      if (it.status !== 'queued' || (it.group && it.group !== '__klant_dm__')) continue;
+      if (req.body?.nu) delete it.nextTryAt;
+      if ((req.body?.oud || []).includes(it.id)) it.createdAt = new Date(Date.now() - 11 * 60000).toISOString();
+    }
+    await runCloudOutbox();
+    outboxOnderhoud();
+    res.json({ ok: true });
+  });
+}
+const whatsappAutoUit = () => ({ lijst: WHATSAPP_AUTO, stand: getWhatsappAuto(), kan: !klantWhatsappBlokkade(), blokkade: klantWhatsappBlokkade() });
+app.get('/api/whatsapp/automatisch', requirePerm('settings'), (req, res) => res.json(whatsappAutoUit()));
+app.post('/api/whatsapp/automatisch', requirePerm('settings'), (req, res) => {
+  const soort = String(req.body?.soort || '');
+  if (typeof req.body?.aan !== 'boolean') return res.status(400).json({ error: 'Geef aan of het bericht aan of uit moet.' });
+  const stand = zetWhatsappAuto(soort, req.body.aan);
+  if (!stand) return res.status(400).json({ error: 'Onbekend bericht.' });
+  const naam = (WHATSAPP_AUTO.find((x) => x.key === soort) || {}).naam || soort;
+  logActivity(req.user.name, `automatisch WhatsApp-bericht ${req.body.aan ? 'AAN' : 'UIT'}`, naam);
+  saveSoon();
+  res.json({ ok: true, ...whatsappAutoUit() });
 });
 // ---------- TAKEN (8 sep 2026) — handmatig, deterministisch, geen AI, geen lead-koppeling ----------
 // Alleen kantoor (admin + assistent). Privé-taken ziet uitsluitend de eigenaar.
@@ -3746,19 +3830,13 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
           // nog open voor klant-DM's (bridgeGroupsOnly uit) en is het bericht jonger
           // dan 24 uur, dan terug in de wachtrij; cloudTried staat al, dus alleen de
           // bridge pakt hem op. Anders eerlijk mislukt.
-          const jong = Date.now() - new Date(item.createdAt || 0).getTime() < 24 * 3600000;
+          // 27 nov 2026: een weigering van Meta is definitief. Het bericht gaat NOOIT alsnog
+          // via het wegwerpnummer (vaste regel eigenaar) — de reden staat bij het bericht.
           const reden = st.detail || (st.code ? `Meta-code ${st.code}` : 'onbekende reden');
-          if (!db().settings.bridgeGroupsOnly && jong && (!item.group || item.group === '__klant_dm__') && String(item.phone || '').replace(/\D/g, '').length >= 6) {
-            item.status = 'queued';
-            delete item.doneAt;
-            delete item.nextTryAt;
-            item.lastResult = `Meta weigerde (${reden}) — de bridge probeert het alsnog`;
-          } else {
-            item.status = 'failed';
-            item.doneAt = now();
-            item.lastResult = `niet bezorgd: ${reden}`;
-            factuurVerzendingMislukt(item, reden);
-          }
+          item.status = 'failed';
+          item.doneAt = now();
+          item.lastResult = `niet bezorgd: ${reden}`;
+          factuurVerzendingMislukt(item, reden);
           saveSoon();
         }
       }
@@ -3856,9 +3934,12 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     weeklyAiCheck: getWeeklyAiCheck(),
     googleSync: getGoogleSync(),
     whatsappPaused: !!db().settings.whatsappPaused,
-    whatsappCloudSend: !!db().settings.whatsappCloudSend,
+    whatsappCloudSend: db().settings.whatsappCloudSend !== false,
+    whatsappAuto: getWhatsappAuto(),
+    whatsappAutoLijst: WHATSAPP_AUTO,
+    campagnesAan: campagnes.campagnesAan(), campagnesKanVersturen: smtpConfigured() && !TEST,
     whatsappCloudTemplate: String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht'),
-    bridgeGroupsOnly: !!db().settings.bridgeGroupsOnly,
+    bridgeGroupsOnly: true, // vaste regel sinds 27 nov 2026 (oude schermen lezen dit nog)
     whatsappCloudReady: cloudConfigured(),
     autoMergeWindowHours: getAutoMergeWindowHours(),
     wachtOpAntwoordDagen: wachtOpAntwoordDagen(),
@@ -4125,7 +4206,7 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
   if ('whatsappCloudSend' in b) db().settings.whatsappCloudSend = !!b.whatsappCloudSend;
   // Sjabloonnaam voor buiten het 24-uursvenster. Leeg = sjabloon-terugval uit.
   if ('whatsappCloudTemplate' in b) db().settings.whatsappCloudTemplate = String(b.whatsappCloudTemplate || '').trim().slice(0, 100);
-  if ('bridgeGroupsOnly' in b) db().settings.bridgeGroupsOnly = !!b.bridgeGroupsOnly;
+  // bridgeGroupsOnly is geen instelling meer: de bridge krijgt nooit klantberichten.
   if ('weeklyAiCheck' in b) {
     const w = b.weeklyAiCheck || {};
     db().settings.weeklyAiCheck = {
@@ -4538,7 +4619,34 @@ function cloudSendAan() {
   // (16 aug, verzoek eigenaar): die knop bestaat voor een blokkade van dat nummer.
   // De officiële Meta-route heeft daar niets mee te maken en loopt gewoon door —
   // anders staan ook facturen en afspraakbevestigingen stil terwijl er niets mis is.
-  return !!(cloudConfigured() && db().settings.whatsappCloudSend);
+  // VASTE REGEL (27 nov 2026, eigenaar): klanten worden ALLEEN via het officiële Meta-nummer
+  // benaderd; het wegwerpnummer leest groepen en stuurt opdrachten door. De officiële route
+  // staat daarom aan zodra hij is ingesteld. De schakelaar in Instellingen → Koppelingen is
+  // alleen nog een noodknop: uit = er gaat GEEN WhatsApp naar klanten (nooit via de bridge).
+  return !!(cloudConfigured() && db().settings.whatsappCloudSend !== false);
+}
+/** Waarom een klantbericht nu niet via WhatsApp weg kan ('' = het kan). */
+function klantWhatsappBlokkade() {
+  if (cloudSendAan()) return '';
+  if (TEST) return 'Testomgeving: er gaat geen WhatsApp naar buiten.';
+  if (!cloudConfigured()) return 'Het officiële WhatsApp-nummer (Meta) is niet ingesteld. Klantberichten gaan nooit via het wegwerpnummer.';
+  return 'Het officiële WhatsApp-nummer staat uit (Instellingen → Koppelingen). Klantberichten gaan nooit via het wegwerpnummer.';
+}
+const CLOUD_MAX_POGINGEN = 3;
+const CLOUD_WACHT_MS = [60 * 1000, 5 * 60 * 1000];
+/** Een poging via Meta mislukte: later nog eens (zelf, nooit via de bridge) of eerlijk mislukt. */
+function cloudPogingMislukt(it, reden) {
+  it.cloudPogingen = (it.cloudPogingen || 0) + 1;
+  if (it.cloudPogingen >= CLOUD_MAX_POGINGEN) {
+    it.status = 'failed';
+    it.doneAt = now();
+    delete it.nextTryAt;
+    it.lastResult = `niet verstuurd via het officiële nummer (${it.cloudPogingen}x geprobeerd): ${reden}`;
+    factuurVerzendingMislukt(it, reden);
+    return;
+  }
+  it.nextTryAt = new Date(Date.now() + CLOUD_WACHT_MS[Math.min(it.cloudPogingen - 1, CLOUD_WACHT_MS.length - 1)]).toISOString();
+  it.lastResult = `officiële WhatsApp: ${reden} — wordt zo opnieuw geprobeerd (${it.cloudPogingen}/${CLOUD_MAX_POGINGEN})`;
 }
 
 
@@ -4608,7 +4716,7 @@ async function runCloudOutbox() {
   let items = (db().outbox || []).filter((o) => o.status === 'queued'
     && (!o.group || o.group === '__klant_dm__')     // alleen klant-DM, nooit een groep
     && o.phone
-    && !o.cloudTried);                              // één poging; daarna is de bridge aan de beurt
+    && (!o.nextTryAt || o.nextTryAt <= now()));     // eigen herkansing (max 3); NOOIT via de bridge
   // Zelfde vangrails als de bridge-wachtrij (audit 12 aug): verlopen klant-DM's
   // vervallen, dubbelen gaan er niet twee keer uit, en hooguit 2 per ronde.
   items = vervalOudeKlantItems(items);
@@ -4620,6 +4728,8 @@ async function runCloudOutbox() {
     // keer (bridge + officieel). /api/outbox respecteert nextTryAt al; lukt onze
     // poging niet, dan halen we de claim er in het catch-pad direct weer af.
     it.nextTryAt = new Date(Date.now() + 90 * 1000).toISOString();
+    // Wat al bij Meta is afgeleverd gaat bij een herkansing niet nogmaals mee.
+    let mediaNr = 0;
     try {
       // NIET GOKKEN OF HET VENSTER OPEN STAAT (10 aug 2026). Meta laat een vrij bericht
       // alleen toe binnen 24 uur na het LAATSTE bericht van die klant. Stuurden we het
@@ -4637,6 +4747,7 @@ async function runCloudOutbox() {
         await sjabloonMetReserve(it, platteTekst);
         it.status = 'sent';
         it.doneAt = now();
+        delete it.nextTryAt;
         continue;
       }
       // ALLE bericht-id's bewaren (15 aug): tekst én elke bijlage krijgen bij Meta een
@@ -4644,14 +4755,17 @@ async function runCloudOutbox() {
       // ✓" op de tekst terwijl de factuur-PDF stilletjes faalde, en kreeg een item
       // zonder tekst (alleen media) nooit ook maar één status.
       const ids = [];
-      if (it.text) {
+      if (it.text && !it.cloudTekstKlaar) {
         const antwoordMeta = await sendCloudText(it.phone, it.text);
         const mid = antwoordMeta?.messages?.[0]?.id;
-        if (mid) ids.push(mid);
+        if (mid) { ids.push(mid); it.cloudMsgIds = [...new Set([...(it.cloudMsgIds || []), mid])]; }
+        it.cloudTekstKlaar = true;
       }
       for (const m of (it.media || []).slice(0, 6)) {
+        mediaNr++;
+        if (mediaNr <= (it.cloudMediaKlaar || 0)) continue;
         const bestand = mediaBestand(m);
-        if (!bestand) continue;
+        if (!bestand) { it.cloudMediaKlaar = mediaNr; continue; }
         // Ondertekende link (geen ingest-token in de URL): geldig voor precies dit bestand.
         const url = `${CLOUD_UIT_ADRES()}/uploads/${bestand}?sig=${uploadSig(bestand)}`;
         const isFoto = /^image\//i.test(m.mime || '');
@@ -4659,10 +4773,12 @@ async function runCloudOutbox() {
           url, filename: m.filename || m.name || 'bestand.pdf', soort: isFoto ? 'image' : 'document',
         });
         const mid = mediaMeta?.messages?.[0]?.id;
-        if (mid) ids.push(mid);
+        if (mid) { ids.push(mid); it.cloudMsgIds = [...new Set([...(it.cloudMsgIds || []), mid])]; }
+        it.cloudMediaKlaar = mediaNr;
       }
       it.status = 'sent';
       it.doneAt = now();
+      delete it.nextTryAt;
       it.cloudMsgId = ids[0] || it.cloudMsgId;
       it.cloudMsgIds = [...new Set([...(it.cloudMsgIds || []), ...ids])];
       it.lastResult = 'aangenomen door Meta — wacht op bezorgbevestiging';
@@ -4688,20 +4804,20 @@ async function runCloudOutbox() {
           const sjabloonAntwoord = await sendCloudTemplate(it.phone, sjabloon, [platteTekst], 'nl');
           it.status = 'sent';
           it.doneAt = now();
+          delete it.nextTryAt;
           it.cloudMsgId = sjabloonAntwoord?.messages?.[0]?.id || it.cloudMsgId;
           if (it.cloudMsgId) it.cloudMsgIds = [...new Set([...(it.cloudMsgIds || []), it.cloudMsgId])];
           it.lastResult = 'verzonden als sjabloon (klant zat buiten het 24-uursvenster) — wacht op bezorgbevestiging';
           continue;
         } catch (e2) {
-          it.lastResult = `officiële WhatsApp: buiten 24-uursvenster én sjabloon mislukt: ${String(e2.message || '').slice(0, 120)}`;
+          cloudPogingMislukt(it, `buiten het 24-uursvenster én het sjabloon mislukte: ${String(e2.message || '').slice(0, 120)}`);
           console.error('[wa-cloud] sjabloon-terugval mislukt:', e2.message);
           continue;
         }
       }
-      // Blijft 'queued': de bridge pakt het op. Claim opheffen zodat dat direct kan.
-      delete it.nextTryAt;
-      it.lastResult = `officiële WhatsApp: ${String(e.message || '').slice(0, 140)}`;
-      console.error('[wa-cloud] versturen mislukt, valt terug op de bridge:', e.message);
+      // GEEN terugval op de bridge (27 nov 2026): zelf opnieuw proberen, daarna eerlijk mislukt.
+      cloudPogingMislukt(it, String(e.message || 'onbekende fout').slice(0, 140));
+      console.error('[wa-cloud] versturen mislukt:', e.message);
     }
   }
   if (items.length) { void db().outbox; saveSoon(); } // lijst aanraken: awaits kunnen de dirty-markering hebben gewist
@@ -4767,6 +4883,14 @@ function outboxOnderhoud() {
           it.doneAt = now();
           it.lastResult = 'geen geldig telefoonnummer bij dit bericht — vul een 06-nummer in bij de klant en verstuur opnieuw';
           factuurVerzendingMislukt(it, 'geen geldig telefoonnummer');
+          statusGewijzigd++;
+        } else if (ouderdom > 10 * 60000 && klantWhatsappBlokkade()) {
+          // Het officiële nummer is de ENIGE weg naar een klant. Kan dat nu niet, dan blijft
+          // het bericht niet een etmaal op "wachtrij" hangen maar staat er meteen waarom.
+          it.status = 'failed';
+          it.doneAt = now();
+          it.lastResult = `niet verstuurd — ${klantWhatsappBlokkade()}`;
+          factuurVerzendingMislukt(it, 'het officiële WhatsApp-nummer is niet beschikbaar');
           statusGewijzigd++;
         }
       } else if (it.status === 'queued' && it.group && it.group !== '__klant_dm__') {
@@ -4958,9 +5082,9 @@ app.get('/api/outbox', checkIngestToken, (req, res) => {
   // de bridge GEEN klant-DM's meer — die gaan uitsluitend via de officiële route. Zo
   // gedraagt het wegwerpnummer zich als stille groepslezer (minimaal verzendgedrag =
   // minimale kans op blokkade) en loopt al het klantverkeer netjes officieel.
-  if (db().settings.bridgeGroupsOnly) {
-    items = items.filter((o) => o.group && o.group !== '__klant_dm__');
-  }
+  // VASTE REGEL sinds 27 nov 2026 (eigenaar): dit was een schakelaar, nu geldt het altijd.
+  // Een klant krijgt nooit meer een appje vanaf het wegwerpnummer, wat er ook is ingesteld.
+  items = items.filter((o) => o.group && o.group !== '__klant_dm__');
 
   // ---- VERLOPEN BERICHTEN NIET ALSNOG VERSTUREN (6 aug 2026) ----
   // Na de storing stond de wachtrij dagen vol. Zodra de bridge terugkwam ging ALLES in
@@ -5291,9 +5415,9 @@ app.post('/api/orders/:id/onderweg', requireAuth, async (req, res) => {
   saveSoon();
   // Eerlijk: een WhatsApp-appje staat in de WACHTRIJ; staat de bridge-pauze aan zonder
   // officiële route, dan gaat er nu niets uit — dat moet de monteur weten.
-  const blijftLiggen = sent.includes('WhatsApp') && db().settings.whatsappPaused && !cloudSendAan();
+  const blijftLiggen = sent.includes('WhatsApp') ? klantWhatsappBlokkade() : '';
   res.json({ ok: true, sent, summary: blijftLiggen
-    ? `E-mail verstuurd; het appje staat in de wachtrij maar de PAUZEKNOP staat aan — de klant krijgt het appje nu NIET`
+    ? `${sent.includes('e-mail') ? 'E-mail verstuurd; het' : 'Het'} appje gaat NIET uit: ${blijftLiggen}`
     : `Klant geïnformeerd via ${sent.join(' + ')}` });
 });
 
@@ -5627,8 +5751,7 @@ app.get('/api/invoices/:id/pdf', requireAuth, async (req, res) => {
 // blijven verstuurde factuurlinks werken. Valt terug op SESSION_SECRET zodat
 // bestaande links geldig blijven tot LINK_SECRET bewust wordt gezet.
 const LINK_SECRET = () => process.env.LINK_SECRET || process.env.SESSION_SECRET || 'ks-upload';
-const bonSig = (invId) => crypto.createHmac('sha256', LINK_SECRET())
-  .update(`bon:${invId}`).digest('hex').slice(0, 24);
+// bonSig staat in invoices.js (ook een herinnering via WhatsApp verwijst naar /bon).
 function bonToegang(req) {
   const inv = (db().invoices || []).find((i) => i.id === req.params.id);
   if (!inv) return null;
@@ -5933,7 +6056,7 @@ app.post('/api/invoices/:id/remind', requireAuth, async (req, res) => {
   try {
     const r = await sendInvoiceReminder(inv, { to: req.body?.to || '', by: req.user.name, afzender: afzenderVan(req) });
     if (r.error) return res.status(400).json({ error: r.error });
-    res.json({ ok: true, invoice: inv });
+    res.json({ ok: true, via: r.via, invoice: inv });
   } catch (e) { res.status(500).json({ error: 'Versturen mislukt: ' + e.message }); }
 });
 
@@ -6429,7 +6552,7 @@ app.post('/api/orders/:id/whatsapp-antwoord', requireRole('admin', 'assistent'),
   order.updatedAt = now();
   logActivity(req.user.name, 'WhatsApp-antwoord via Snel antwoord', `${order.title}: ${text.slice(0, 60)}`);
   saveSoon();
-  res.json({ ok: true, id: item.id, phone, paused: !!db().settings.whatsappPaused && !cloudSendAan() });
+  res.json({ ok: true, id: item.id, phone, paused: false, nietVerstuurbaar: klantWhatsappBlokkade() });
 });
 
 app.post('/api/send-reply', requireRole('admin', 'assistent'), async (req, res) => {
@@ -6572,25 +6695,27 @@ app.get('/api/pulse', requireAuth, (req, res) => {
 // ---------- MEDEDELINGEN AAN HET TEAM (26 nov 2026, zie mededelingen.js) ----------
 const mededelingOf404 = (req, res) => { const m = mededelingen.vind(String(req.params.id || '')); if (!m) res.status(404).json({ error: 'Mededeling niet gevonden' }); return m; };
 app.get('/api/mededelingen', requireAuth, (req, res) => {
-  res.json({ mijn: mededelingen.mijnOngelezen(req.user), ...(req.user.role === 'admin' ? { alle: mededelingen.voorBeheer() } : {}) });
+  res.json({ mijn: mededelingen.mijnOngelezen(req.user), ...(['admin', 'assistent'].includes(req.user.role) ? { alle: mededelingen.voorBeheer(req.user) } : {}) });
 });
-app.post('/api/mededelingen', requireRole('admin'), (req, res) => {
+// Plaatsen: beheerder én assistente (27 nov 2026, akkoord eigenaar) — zij is er elke dag.
+app.post('/api/mededelingen', requireRole('admin', 'assistent'), (req, res) => {
   try {
     const m = mededelingen.plaats(req.body || {}, req.user);
     // Ook als melding op de telefoon van wie het aangaat (wie meldingen aan heeft staan).
     const aan = m.voor === 'monteurs' ? { userIds: (db().users || []).filter((u) => u.role === 'monteur').map((u) => u.id) } : m.voor === 'kantoor' ? 'kantoor' : 'iedereen';
     sendPush({ title: `Mededeling: ${m.titel}`, body: (m.tekst || `Van ${m.door}`).slice(0, 160), url: '/', tag: `med-${m.id}`, aan }).catch(() => {});
-    res.json({ ok: true, id: m.id, alle: mededelingen.voorBeheer() });
+    res.json({ ok: true, id: m.id, alle: mededelingen.voorBeheer(req.user) });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.post('/api/mededelingen/:id/gelezen', requireAuth, (req, res) => {
   const m = mededelingOf404(req, res); if (!m) return;
   try { mededelingen.markeerGelezen(m, req.user); res.json({ ok: true, mijn: mededelingen.mijnOngelezen(req.user) }); } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
-app.delete('/api/mededelingen/:id', requireRole('admin'), (req, res) => {
+app.delete('/api/mededelingen/:id', requireRole('admin', 'assistent'), (req, res) => {
   const m = mededelingOf404(req, res); if (!m) return;
+  if (!mededelingen.magIntrekken(m, req.user)) return res.status(403).json({ error: 'Deze mededeling is door iemand anders geplaatst; alleen de beheerder kan hem intrekken.' });
   mededelingen.trekIn(m, req.user);
-  res.json({ ok: true, alle: mededelingen.voorBeheer() });
+  res.json({ ok: true, alle: mededelingen.voorBeheer(req.user) });
 });
 let _drsTellerCache = { sleutel: '', lijst: [] };
 // De DRS-opdrachten die nog gemeld moeten worden (als onderdelen, voor Start); de teller is de lengte.
@@ -7448,7 +7573,30 @@ app.listen(PORT, () => {
   setInterval(() => { runDrsHerinnering().catch((e) => console.error('[drs-rapport] herinnering:', e.message)); }, 5 * 60 * 1000);
   // Campagnes: elke minuut een paar mails van de campagne die loopt (alleen na een klik van een mens gestart).
   setInterval(() => { campagnes.runCampagnes().catch((e) => console.error('[campagnes]', e.message)); }, 60 * 1000);
+  // Jaarlijkse onderhoudsherinnering: één keer per maand een CONCEPT klaarzetten (overdag).
+  // Er wordt niets verstuurd; kantoor krijgt een melding dat er iets klaarstaat om na te lezen.
+  const onderhoudRonde = () => {
+    try {
+      const uur = Number(new Intl.DateTimeFormat('nl-NL', { hour: 'numeric', hour12: false, timeZone: 'Europe/Amsterdam' }).format(new Date()));
+      if (uur < 8 || uur >= 18) return;
+      const r = campagnes.maakOnderhoudConcept();
+      if (r && r.concept) sendPush({ title: 'Campagne staat klaar om na te lezen', body: `${r.aantal} klanten zijn toe aan onderhoud van hun schuifpui. Er gaat niets uit zonder jouw klik.`, url: '/', tag: 'campagne-onderhoud' }).catch(() => {});
+    } catch (e) { console.error('[campagne-onderhoud]', e.message); }
+  };
+  setTimeout(onderhoudRonde, 90 * 1000);
+  setInterval(onderhoudRonde, 60 * 60 * 1000);
   // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.
+  // EENMALIG (27 nov 2026): de officiële route is de enige weg naar klanten, dus hij gaat aan
+  // waar hij is ingesteld — ook als de oude schakelaar nog uit stond. Daarna is "uit" een
+  // bewuste keuze van de beheerder (noodknop) en blijft die staan.
+  if (!db().settings._waOfficieelV1) {
+    const stondUit = cloudConfigured() && db().settings.whatsappCloudSend === false;
+    if (cloudConfigured()) db().settings.whatsappCloudSend = true;
+    else delete db().settings.whatsappCloudSend;
+    db().settings._waOfficieelV1 = now();
+    if (stondUit) logActivity('systeem', 'officiële WhatsApp aangezet', 'klantberichten gaan voortaan alleen via het officiële nummer');
+    saveSoon();
+  }
   setInterval(() => { runCloudOutbox().catch((e) => console.error('[wa-cloud]', e.message)); }, 20 * 1000);
   // Wachtrij-onderhoud: vervallen, ongeldig nummer, verouderde "wacht op bevestiging".
   outboxOnderhoud();
@@ -7463,7 +7611,7 @@ app.listen(PORT, () => {
     cloudSelftest().then((r) => console.log('[wa-cloud] zelftest bij start:', r.uitleg || JSON.stringify(r)))
       .catch((e) => console.error('[wa-cloud] zelftest bij start mislukt:', e.message));
   }
-  if (cloudConfigured()) console.log(`  Officiële WhatsApp (Meta): ingesteld — versturen staat ${db().settings.whatsappCloudSend ? 'AAN' : 'UIT'}`);
+  if (cloudConfigured()) console.log(`  Officiële WhatsApp (Meta): ingesteld — versturen staat ${cloudSendAan() ? 'AAN' : 'UIT'}`);
   if (TEST) {
     console.log('  TESTOMGEVING: alle koppelingen staan uit (mail, WhatsApp, Google, AI). Alleen verzonnen gegevens.');
     vulTestdata(PORT).catch((e) => console.error('[testdata]', e.message));

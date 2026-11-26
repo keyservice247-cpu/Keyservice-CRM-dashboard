@@ -19,7 +19,10 @@
 // zijn (betaald). Deze module ondersteunt beide; de keuze maakt de aanroeper.
 import crypto from 'node:crypto';
 
-const API = 'https://graph.facebook.com/v21.0';
+// Alleen voor de eigen tests: een nep-Meta op de eigen machine. Werkt uitsluitend met de
+// demo-login (SESSION_SECRET=test) en alleen naar 127.0.0.1 — op productie dus nooit.
+const TEST_API = process.env.SESSION_SECRET === 'test' && /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.WHATSAPP_CLOUD_API_TEST || '') ? process.env.WHATSAPP_CLOUD_API_TEST : '';
+const API = TEST_API || 'https://graph.facebook.com/v21.0';
 
 export function cloudConfigured() {
   return !!(process.env.WHATSAPP_CLOUD_TOKEN && process.env.WHATSAPP_PHONE_ID);

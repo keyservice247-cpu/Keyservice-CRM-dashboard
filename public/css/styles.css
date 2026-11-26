@@ -2119,3 +2119,15 @@ table th { font-size: 12px; font-weight: 500; letter-spacing: .03em; color: var(
   .meded-kaart .btn { min-height: 40px; align-self: stretch; }
   body[data-view="chats"] .meded-balk { display: none; }
 }
+
+/* ---- Automatische WhatsApp-berichten: een knop per bericht (27 nov 2026) ---- */
+.wa-auto-lijst { display: grid; gap: 2px; }
+.wa-auto-rij { display: flex !important; flex-direction: row !important; align-items: flex-start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); margin: 0; cursor: pointer; }
+.wa-auto-rij:first-child { border-top: 0; }
+.wa-auto-rij > span { display: grid; gap: 2px; min-width: 0; }
+.wa-auto-rij input[type="checkbox"] { appearance: none; -webkit-appearance: none; flex: 0 0 auto; width: 44px !important; height: 26px; border-radius: 999px; background: #c9d0db; position: relative; margin: 2px 0 0; cursor: pointer; transition: background .15s; border: 0; }
+.wa-auto-rij input[type="checkbox"]::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.wa-auto-rij input[type="checkbox"]:checked { background: #1faa59; }
+.wa-auto-rij input[type="checkbox"]:checked::after { transform: translateX(18px); }
+.wa-auto-rij input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent, #1f4e9c); outline-offset: 2px; }
+

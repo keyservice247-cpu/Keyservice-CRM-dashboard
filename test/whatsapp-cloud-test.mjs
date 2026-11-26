@@ -138,21 +138,17 @@ if (bereikbaar) {
   const msgs = await fetch(BASE + '/api/whatsapp/outbox-status?full=1', { headers: { cookie: (await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) })).headers.get('set-cookie').split(';')[0] } }).then((r) => r.json()).catch(() => []);
   ok('binnenkomend bericht is opgeslagen (basis voor de venster-check)', Array.isArray(msgs));
 
-  console.log('\n== Gescheiden routes: bridge alleen voor groepen ==');
+  console.log('\n== Vaste regel (27 nov 2026): de bridge krijgt NOOIT een klantbericht ==');
   const loginS = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admin@keyservice.nl', password: 'admin123' }) });
   const ckS = (loginS.headers.get('set-cookie') || '').split(';')[0];
   const instS = (p2) => fetch(BASE + '/api/settings', { method: 'PATCH', headers: { 'content-type': 'application/json', cookie: ckS }, body: JSON.stringify(p2) }).then((r) => r.json());
-  // Eén klant-DM en één groepsitem in de wachtrij.
   await fetch(BASE + '/api/whatsapp/test', { method: 'POST', headers: { 'content-type': 'application/json', cookie: ckS }, body: JSON.stringify({ phone: '0612349999', text: 'DM-testbericht routes' }) });
-  await fetch(BASE + '/api/outbox-group-test', { method: 'POST' }).catch(() => {}); // bestaat niet — groepsitem komt via dispatch elders
-  await instS({ bridgeGroupsOnly: true });
+  await instS({ bridgeGroupsOnly: false }); // de oude schakelaar: heeft geen effect meer
   await new Promise((r) => setTimeout(r, 21000)); // snelheidsrem-ronde afwachten
   const obG = await fetch(BASE + '/api/outbox', { headers: { 'x-ingest-token': 'test123' } }).then((r) => r.json());
-  ok('met de scheiding AAN krijgt de bridge geen klant-DM', !obG.some((o) => (o.text || '').includes('DM-testbericht routes')), JSON.stringify(obG.map((o) => o.text)));
-  await instS({ bridgeGroupsOnly: false });
-  await new Promise((r) => setTimeout(r, 21000));
-  const obG2 = await fetch(BASE + '/api/outbox', { headers: { 'x-ingest-token': 'test123' } }).then((r) => r.json());
-  ok('met de scheiding UIT komt de klant-DM weer bij de bridge', obG2.some((o) => (o.text || '').includes('DM-testbericht routes')), JSON.stringify(obG2.map((o) => o.text)));
+  ok('de bridge krijgt geen klant-DM, ook niet met de oude schakelaar uit', Array.isArray(obG) && !obG.some((o) => (o.text || '').includes('DM-testbericht routes')), JSON.stringify(obG.map((o) => o.text)));
+  const heel = await fetch(BASE + '/api/whatsapp/outbox-status?full=1', { headers: { cookie: ckS } }).then((r) => r.json());
+  ok('het klantbericht staat wel klaar (voor het officiële nummer)', heel.some((o) => (o.text || '').includes('DM-testbericht routes') && o.status === 'queued'), JSON.stringify(heel.map((o) => [o.status, o.by])));
 
   console.log('\n== Status-webhook: geen crash op onbekende ids ==');
   const stBody = JSON.stringify({ entry: [{ changes: [{ value: { statuses: [{ id: 'wamid.onbekend', status: 'failed', errors: [{ code: 131047 }] }] } }] }] });

@@ -470,8 +470,92 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   dubbelfilter, pauzeknop, officiële route) — geen eigen verzendpad. `message.autoRepliedWa` →
   bij goedkeuren komt de bevestiging in het gesprek van de opdracht (`order.autoRepliedWa`).
   Aangeroepen vanuit maybeSendAutoReply (mail/formulier/IMAP) en de twee WhatsApp-routes
-  (bridge + officiële webhook). NIET GEBOUWD (pas op verzoek): betaalherinnering via WhatsApp,
-  offerte-opvolging altijd óók via WhatsApp. Tests: scenarios 133 (+10), browser +3.
+  (bridge + officiële webhook). Tests: scenarios 133 (+10), browser +3.
+
+- **KLANTEN ALLEEN VIA HET OFFICIËLE WHATSAPP-NUMMER — VASTE REGEL (27 nov 2026, eigenaar
+  letterlijk: "het moet via de officiële weg en niet via het wegwerpnummer; het wegwerpnummer
+  wordt alleen gebruikt om groepen uit te lezen en opdrachten automatisch door te sturen").
+  NIET VERZWAKKEN, ook niet "tijdelijk als vangnet":**
+  (1) `GET /api/outbox` (de wachtrij van de bridge) geeft ALLEEN groepsberichten terug
+  (`o.group && o.group !== '__klant_dm__'`): monteur-dispatch, terugkoppeling, CRM-meldingen
+  naar een groep, "oké" naar de opdrachtgroep. Geen enkel 1-op-1-bericht meer — ook geen
+  CRM-melding/ochtendbriefing die op een telefoonnummer staat ingesteld (die gaat officieel).
+  `settings.bridgeGroupsOnly` bestaat niet meer als instelling (GET /api/settings geeft altijd
+  true; PATCH negeert hem; het vinkje `#wa-bridge-groepen` is weg, tekst `#wa-vaste-regel`).
+  (2) `runCloudOutbox()` is de ENIGE verzender van klantberichten. Mislukt een poging, dan
+  probeert het CRM het ZELF opnieuw (`cloudPogingMislukt`: 3 pogingen, wachttijd 1 en 5 min via
+  `nextTryAt`), daarna status failed met de reden + `factuurVerzendingMislukt`. Wat al bij Meta
+  is afgeleverd gaat bij een herkansing niet nogmaals mee (`cloudTekstKlaar`, `cloudMediaKlaar`).
+  Een weigering die later via de status-webhook binnenkomt is definitief (nooit terug in de
+  wachtrij).
+  (3) `cloudSendAan()` = ingesteld én `whatsappCloudSend !== false`: de officiële route staat
+  AAN zodra de sleutels er zijn. Eenmalig bij het opstarten (`settings._waOfficieelV1`) wordt
+  een oude "uit" omgezet naar aan. Het vinkje `#wa-cloud-send` is alleen nog een NOODKNOP (uit =
+  geen enkel WhatsApp-bericht naar klanten; het scherm vraagt eerst om bevestiging).
+  (4) Kan het officiële nummer niet (uit, niet ingesteld, testomgeving), dan zegt
+  `klantWhatsappBlokkade()` waarom: de verstuur-routes geven `nietVerstuurbaar` mee (het scherm
+  meldt het meteen) en `outboxOnderhoud` zet het bericht na 10 minuten op failed met die reden
+  (stond voorheen 24 uur op "wachtrij"). Koppelingen-overzicht: ingesteld maar uit = "let op".
+  (5) De PAUZEKNOP legt alleen het wegwerpnummer (groepen) stil; `paused` is bij een
+  klantbericht altijd false.
+  Testhaken (bestaan alleen met de demo-login): `WHATSAPP_CLOUD_API_TEST=http://127.0.0.1:<poort>`
+  (nep-Meta, whatsapp-cloud.js) en `WA_ROUTE_TEST=1` → POST /api/whatsapp/test-ronde.
+  Test: test/whatsapp-route-test.mjs (38; start zelf een nep-Meta op 2659 en de server op 3159).
+  Aangepast aan de regel: scenarios 135 (snelheidsrem nu met groepsberichten), chat-test,
+  briefing-test 22, whatsapp-cloud-test.
+- **EEN KNOP PER AUTOMATISCH WHATSAPP-BERICHT (27 nov 2026, wens eigenaar):** Instellingen →
+  Berichten aan klanten → kaart "Automatische WhatsApp-berichten: wat staat aan?"
+  (`#waAutoKaart`, in INDELING; knoppen `[data-wa-auto]` bewaren zichzelf via POST
+  /api/whatsapp/automatisch {soort, aan}; GET idem; recht settings). `WHATSAPP_AUTO` +
+  `getWhatsappAuto()`/`whatsappAutoAan(soort)`/`zetWhatsappAuto()` in settings.js. Acht
+  berichten, per bericht precies ÉÉN waarheid: ontvangst (= `autoReply.whatsappEnabled`),
+  afspraak (= `appointmentMsg.whatsappEnabled`), opvolging (= `followUp.whatsappEnabled`) —
+  die drie vinkjes in hun eigen kaart blijven bestaan en lopen gelijk (`waAutoToon`,
+  `waAutoVerversen`) — en nieuw in `settings.whatsappAuto`: annulering en herinnering
+  (standaard = de afspraakbevestiging; de afspraak-knop omzetten laat ze staan), review
+  (standaard aan), offerte (standaard aan), betaal (standaard UIT). Standaard: wat al via
+  WhatsApp ging blijft zo, wat nieuw is staat uit. NIET in de lijst (geen automatisch bericht
+  maar een knop waar iemand op drukt): factuur/offerte via WhatsApp, onderweg-bericht, een
+  getypt antwoord. De knop geldt voor de automatische ronde ÉN de handmatige knop (Review,
+  Herinnering).
+  BETAALHERINNERING VIA WHATSAPP (`sendInvoiceReminder`): mail met PDF zoals altijd (tekst
+  ongewijzigd) en — knop "betaal" aan — ook een appje met een link naar de factuur
+  (`bonLinkVan(inv)`; `bonSig` staat nu in invoices.js); klant met alleen een telefoonnummer
+  krijgt alleen het appje; antwoord `via: ['e-mail','WhatsApp']`. OFFERTE-HERINNERING
+  (`sendQuoteFollowup`): mail én (knop "offerte" aan) appje — voorheen alleen een appje als er
+  geen e-mailadres was; `via` = 'e-mail' | 'whatsapp' | 'e-mail + WhatsApp'. Nummer:
+  `klantNummerVoor` (eerder gebruikt → opdracht-intake → klantrecord). REVIEW-VERZOEK: gaat ook
+  zonder mailinstelling als appje (mits de knop aan staat).
+- **DRIE VOORSTELLEN GEBOUWD (27 nov 2026, akkoord eigenaar "alle voorstellen"):**
+  (1) ASSISTENTE MAG MEDEDELINGEN PLAATSEN: POST /api/mededelingen en het overzicht `alle` ook
+  voor de assistente (`#mededelingBtn` is `kantoor-only`); intrekken: beheerder alles, de
+  assistente alleen haar eigen (`magIntrekken`, `magWeg` per rij, anders 403).
+  (2) KLIKTELLER IN CAMPAGNEMAILS: de knop in een opgemaakte mail gaat via `/k/<campagne>/
+  <klant>/<sig>` (`klikLink`, HMAC; openbaar, noindex) — die noteert de klik bij DIE ontvanger
+  (`o.klikAt`, `o.klikken`) en stuurt meteen door naar het echte doel (meta-refresh + knop als
+  reserve). Telt NIET: binnen 60 s na versturen, bekende scanners (`SCANNER_RE`), alles behalve
+  GET. Geen "geopend"-pixel. `campagneResultaat.kliks` (null bij een tekstmail zonder knop),
+  tegel "klikten op de knop", `ontvangers[].klik`. Niet in het voorbeeld, een testmail of de
+  proefmail.
+  (3) JAARLIJKSE ONDERHOUDSHERINNERING: doelgroep `onderhoud` (laatste AFGERONDE schuifpui-
+  opdracht 11–14 maanden geleden, `laatsteSchuifpuiMs`); één keer per maand (overdag, uurlijkse
+  `onderhoudRonde`, `settings._campagneOnderhoudMaand`) zet `maakOnderhoudConcept()` een CONCEPT
+  klaar als er ≥ 3 bereikbaar zijn en er geen onderhoudscampagne openstaat (`bron
+  'automatisch'`, label "Automatisch klaargezet", push naar kantoor, werkpunt `campagne` op
+  Start — af te vinken). ER GAAT NIETS UIT: een mens leest na en klikt zelf.
+- **CAMPAGNES AAN/UIT (27 nov 2026, besluit eigenaar: "alles live behalve Campagnes"):**
+  `campagnesAan()` = `settings.campagnesAan` als die is gezet, anders alleen aan in de
+  testomgeving en bij de demo-login → OP DE LIVE-SITE STANDAARD UIT. Uit = menu-item verborgen
+  (`meta.campagnes`, `toonCampagnesMenu`), elke /api/campagnes-route 403 `{uit:true}`,
+  `runCampagnes` en het onderhoudsconcept doen niets, "Wat is er veranderd?" noemt Campagnes
+  niet. Afmeldlinks en klik-links van al verstuurde mails blijven werken. De beheerder zet het
+  zelf aan: Instellingen → Berichten aan klanten → kaart "E-mailcampagnes: aan of uit"
+  (`#campagneAanKaart`, in INDELING): eerst "Stuur mij een proefmail" (POST
+  /api/campagnes/proefmail {naar}, een opgemaakte voorbeeldmail aan zichzelf) en dan de
+  schakelaar `#cmp-aan` (POST /api/campagnes/aan; GET /api/campagnes/stand) — alle drie alleen
+  beheerder en ook bereikbaar als Campagnes uit staan. Tests: campagne-test 104 (+24),
+  testomgeving-test 35 (+3: echte installatie = uit, keuze overleeft herstart), start-test 34,
+  rollen-test 142, browser +6.
 
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
@@ -503,8 +587,14 @@ systeem nalopen op gebruikersfouten → getest → LIVE; (2) het echte ontwerp (
 het prototype) op de testomgeving; (3) pas daarna: E-MAILCAMPAGNESYSTEEM MET AI — de AI kan een
 complete campagne uitvoeren én doet voorstellen op basis van klantenbestand en geschiedenis
 (bouwt voort op de bestaande /api/campaign/send; idee 4 hoort hierbij).
-STAND 26 nov 2026: stap 1 staat LIVE; stap 2, stap 3, het afvinken op Start, de campagnesjablonen
-en de mededelingen staan op de testomgeving en wachten op het "ja" van de eigenaar.
+STAND 27 nov 2026 (akkoord eigenaar): LIVE = stap 1, stap 2 (ontwerp), het afvinken op Start, de
+mededelingen, de WhatsApp-regel + knoppen per bericht, betaal-/offerteherinnering via WhatsApp.
+Campagnes (stap 3, sjablonen, klikteller, onderhoudsherinnering) staat ook in de code op live
+maar is daar UIT tot de eigenaar het zelf aanzet (na een proefmail aan zichzelf).
+STAND WHATSAPP-KNOPPEN bij livegang: aan = afspraakbevestiging/annulering/herinnering (zoals
+ingesteld), review, offerte-herinnering, opvolging (zoals ingesteld); UIT = ontvangstbevestiging
+en betaalherinnering (nieuw, de eigenaar zet ze zelf aan).
+Tests bij deze stand: 33 serversuites 1.755 + browser 537 + browser-rechten 23 = 2.315, 0 fouten.
 
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,
@@ -1966,7 +2056,10 @@ is niet genoeg; de browser-test meet nu de x-positie binnen 390 px.
 LET OP: md-bestanden zijn dev-documentatie; de runtime-regels staan in code +
 settings. Wijzig je het één, houd BEIDE synchroon.
 
-## OFFICIËLE WHATSAPP (Meta Cloud API) — klaargezet 3 aug, staat UIT
+## OFFICIËLE WHATSAPP (Meta Cloud API) — sinds 27 nov 2026 de ENIGE weg naar klanten
+LET OP: het stuk hieronder beschrijft de opbouw van 3 aug. De schakelaar en het "vangnet via de
+bridge" zijn op 27 nov 2026 VERVALLEN: zie "KLANTEN ALLEEN VIA HET OFFICIËLE WHATSAPP-NUMMER"
+bovenaan (de bridge krijgt nooit meer een klantbericht; eigen herkansing, daarna mislukt).
 Aanleiding: 2 aug blokkeerde WhatsApp het wegwerpnummer wegens "geautomatiseerde
 berichten". `server/connectors/whatsapp-cloud.js` praat met Meta's officiële platform.
 - **Alles staat standaard uit.** Zonder `WHATSAPP_CLOUD_TOKEN` + `WHATSAPP_PHONE_ID`

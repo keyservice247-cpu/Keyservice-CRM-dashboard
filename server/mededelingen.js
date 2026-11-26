@@ -47,9 +47,12 @@ const alle = () => { if (!Array.isArray(db().mededelingen)) db().mededelingen = 
 const lees = () => (Array.isArray(db().mededelingen) ? db().mededelingen : []);
 export const vind = (mid) => lees().find((m) => m.id === mid) || null;
 export const mijnOngelezen = (user) => ongelezenVoor(lees(), user);
-export function voorBeheer() {
+// Het overzicht voor wie mag plaatsen (beheerder + assistente, 27 nov 2026). `magWeg`: de
+// beheerder mag alles intrekken, de assistente alleen wat ze zelf plaatste.
+export const magIntrekken = (m, user) => !user || user.role === 'admin' || (user.role === 'assistent' && !!m.doorId && m.doorId === user.id);
+export function voorBeheer(user = null) {
   const users = db().users || [];
-  return lees().slice(0, 50).map((m) => ({ id: m.id, titel: m.titel, tekst: m.tekst, voor: m.voor, voorNaam: VOOR_NAAM[m.voor] || m.voor, belangrijk: !!m.belangrijk,
+  return lees().slice(0, 50).map((m) => ({ id: m.id, magWeg: magIntrekken(m, user), titel: m.titel, tekst: m.tekst, voor: m.voor, voorNaam: VOOR_NAAM[m.voor] || m.voor, belangrijk: !!m.belangrijk,
     totEnMet: m.totEnMet || '', door: m.door || '', at: m.at, ingetrokkenAt: m.ingetrokkenAt || null, actief: isActief(m), lezers: leesOverzicht(m, users) }));
 }
 export function plaats(body, user) {

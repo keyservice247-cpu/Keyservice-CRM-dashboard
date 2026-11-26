@@ -104,6 +104,10 @@ async function api(path, method = 'GET', body) {
   if (state.view === 'settings' && (method === 'PATCH' || method === 'PUT' || (method === 'POST' && /instellingen|settings/.test(path)))) {
     try { if (instKaart) instellingenBewaard(instKaart); } catch { /* bewaking mag een opslag nooit breken */ }
   }
+  // De knoppen "automatische WhatsApp-berichten" volgen de drie kaarten die hetzelfde regelen.
+  if (state.view === 'settings' && method === 'PATCH' && path === '/api/settings' && body && (body.autoReply || body.appointmentMsg || body.followUp)) {
+    try { waAutoVerversen(); } catch { /* alleen weergave */ }
+  }
   return data ?? {};
 }
 
@@ -341,6 +345,8 @@ function hasPerm(key) {
   // Admin-onderdelen: weg voor wie het recht niet heeft. Een element met
   // data-need="finance" (enz.) blijft staan als dat recht per gebruiker aanstaat.
   if (me.user.role !== 'admin') $$('.admin-only').forEach((el) => { const need = el.dataset.need; if (!need || !need.split('|').some(hasPerm)) el.remove(); });
+  if (me.user.role === 'monteur') $$('.kantoor-only').forEach((el) => el.remove());
+  toonCampagnesMenu();
   // Zijbalk volgt dezelfde rechten als het mobiele menu (navItems): geen menu-item
   // dat op een 403 uitkomt (audit 16 sep).
   if (me.user.role !== 'admin') {
@@ -1406,7 +1412,7 @@ async function renderChatPane(scrollDown) {
       if (veldNu && _chatActive === cidVerstuurd) veldNu.value = '';
       delete _chatConcept[cidVerstuurd]; bewaarChatConcept();
       if (r.kanaal === 'email') toast('E-mail verstuurd');
-      else if (r.paused) toast('In de wachtrij gezet — LET OP: de pauzeknop staat aan, er gaat nu niets uit', true);
+      else if (r.nietVerstuurbaar) toast(`Dit appje gaat NIET uit: ${r.nietVerstuurbaar}`, true);
       await renderChatPane(true);
     } catch (err) { toast(err.message, true); }
     finally { const k = $('#cpSend'); if (k) k.disabled = false; }
@@ -1415,8 +1421,12 @@ async function renderChatPane(scrollDown) {
   if (veld) veld.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !('ontouchstart' in window)) { e.preventDefault(); $('#cpSend')?.click(); } });
 }
 
+// Campagnes staan op de live-site uit tot de beheerder ze aanzet: zolang is het menu-item weg.
+function campagnesAan() { return !state.meta || state.meta.campagnes !== false; }
+function toonCampagnesMenu() { $$('[data-view="campagnes"]').forEach((el) => { el.style.display = campagnesAan() ? '' : 'none'; }); }
 function showView(view, tab) {
   if (view === 'settings' && !hasPerm('settings')) { toast('Instellingen zijn alleen voor de beheerder', true); return; }
+  if (view === 'campagnes' && !campagnesAan()) { toast('Campagnes staan nog uit. De beheerder zet ze aan in Instellingen → Berichten aan klanten.', true); return; }
   // Weg uit Instellingen terwijl er iets is ingevuld dat niet is opgeslagen? Eerst vragen
   // (24 nov 2026): elk blok heeft zijn eigen Opslaan-knop en dat vergeet je makkelijk.
   if (state.view === 'settings' && view !== 'settings') {
@@ -1609,7 +1619,7 @@ function zetOvDeel(id, html) {
 // korte, wegklikbare uitleg per rol: op Start (kantoor) en boven het bord (monteur), en altijd
 // terug te vinden via Account. Het is een gewone kaart in de pagina — geen venster dat je werk
 // blokkeert. "Gezien" wordt per toestel onthouden (localStorage).
-const NIEUW_VERSIE = '2026-12';   // ontwerp 2 (bovenbalk, Start in twee kolommen, bord, inbox)
+const NIEUW_VERSIE = '2026-12-2';   // ontwerp 2 (bovenbalk, Start in twee kolommen, bord, inbox)
 function nieuwGezien() { try { return localStorage.getItem('ksNieuwGezien') === NIEUW_VERSIE; } catch { return false; } }
 function nieuwPunten() {
   if (state.me && state.me.role === 'monteur') return [
@@ -1627,7 +1637,7 @@ function nieuwPunten() {
     ['Start in twee kolommen', 'Links wat je moet doen (Eerst doen, dagoverzicht, weekrapport), rechts vandaag (taken, afspraken, wie wacht op antwoord).'],
     ['Opdrachten: snel filteren', 'Boven het bord staan knoppen: Klant reageerde, Spoed, DRS, Eigen en Ligt stil. De keuzelijsten zijn er nog. De knoppen (Status-scan, DRS-rapport, Plak opdracht …) staan rechtsboven naast "+ Nieuwe opdracht".'],
     ['Inbox: lijst en bericht', 'Links de lijst, rechts het gekozen bericht met alle velden. Het vinkje voor bulk-acties staat in de lijst. Op de telefoon staat alles nog onder elkaar.'],
-    ['Nieuw: mededeling aan het team', 'Alleen de beheerder: op Start de knop "Mededeling aan team". Het bericht staat bij de gekozen mensen bovenaan tot ze op Gelezen tikken; je ziet wie het gelezen heeft.'],
+    ['Nieuw: mededeling aan het team', 'Beheerder en assistente: op Start de knop "Mededeling aan team". Het bericht staat bij de gekozen mensen bovenaan tot ze op Gelezen tikken; je ziet wie het gelezen heeft.'],
     ['Nieuw: campagne met opmaak', 'Bij een campagne kies je een van de drie vaste sjablonen (Schuifpuien, Kozijnonderhoud, Sloten & cilinders) of alleen tekst. Je kunt een eigen foto toevoegen en het voorbeeld bekijken op computer- en telefoonbreedte.'],
     ['Nieuw: afvinken op Start', 'Elke regel op Start heeft een vinkje (op de telefoon: wegvegen). Afgevinkt is weg van Start tot er iets nieuws bij komt; de opdracht of factuur zelf verandert niet. Terugzetten kan via "Ongedaan maken" of "afgevinkt · bekijken".'],
     ['Nieuw: Campagnes', 'E-mail naar bestaande klanten, onder Klanten & geld. Laat campagnes voorstellen, kies een doelgroep, lees de tekst na en verstuur of plan in. Er gaat niets uit zonder jouw klik, en je ziet daarna hoeveel reacties en opdrachten het opleverde.'],
@@ -1638,9 +1648,12 @@ function nieuwPunten() {
     ['Annuleren met reden', 'Kies bij annuleren een reden. Op Cijfers zie je daarna waarom klanten afhaken.'],
     ['Factuur', 'Reparatielocatie is in te vullen in de factuur. Een verstuurde, betaalde factuur kun je corrigeren binnen hetzelfde nummer (knop Corrigeren, met reden).'],
   ];
+  punten.unshift(['WhatsApp naar klanten', 'Klanten krijgen WhatsApp alleen nog via het officiële nummer. Het wegwerpnummer leest de groepen en stuurt opdrachten door naar de monteur. Lukt een appje niet, dan staat in Berichten de reden erbij.']);
+  if (hasPerm('settings')) punten.splice(1, 0, ['Een knop per automatisch WhatsApp-bericht', 'Instellingen → Berichten aan klanten → "Automatische WhatsApp-berichten": per bericht (ontvangstbevestiging, afspraak, herinnering, review, offerte, betaalherinnering) kies je of de klant het ook via WhatsApp krijgt.']);
   if (hasPerm('settings')) punten.push(['Instellingen', 'Kies links een onderwerp of zoek een instelling op een woord. Er is niets verdwenen.']);
   if (hasPerm('settings')) punten.push(['Twee merken', 'Elke opdracht hoort bij Key Service 24/7 of Schuifpuiservice. Vul bij Instellingen → Berichten aan klanten de reviewlink van Schuifpuiservice in.']);
-  return punten;
+  // Campagnes staan op de live-site nog uit: dan er ook niet over vertellen.
+  return campagnesAan() ? punten : punten.filter((p) => !/campagne/i.test(p[0]));
 }
 function nieuwBalkHTML() {
   if (nieuwGezien()) return '';
@@ -4429,7 +4442,7 @@ async function loadCampagnes() {
   const lijst = d.campagnes || [];
   $('#cmpLijst').innerHTML = lijst.length ? `<div class="info-card cmp-kaart"><h3>Campagnes</h3><ul class="cmp-rijen">${lijst.map((c) => `
       <li class="cmp-rij" data-cmp="${esc(c.id)}" tabindex="0" role="button">
-        <div class="cmp-rij-hoofd"><span class="cmp-naam">${esc(c.naam)}</span>${c.bron === 'ai' ? '<span class="cmp-bron" title="Voorgesteld door de AI, nagekeken door een mens">AI-voorstel</span>' : ''}${cmpStatusHTML(c)}</div>
+        <div class="cmp-rij-hoofd"><span class="cmp-naam">${esc(c.naam)}</span>${c.bron === 'ai' ? '<span class="cmp-bron" title="Voorgesteld door de AI, nagekeken door een mens">AI-voorstel</span>' : c.bron === 'automatisch' ? '<span class="cmp-bron" title="Door het CRM klaargezet op vaste regels. Er gaat niets uit zonder dat iemand hem naleest en verstuurt.">Automatisch klaargezet</span>' : ''}${cmpStatusHTML(c)}</div>
         <div class="muted small">${esc(c.doelgroepNaam)}${c.onderwerp ? ` · “${esc(c.onderwerp)}”` : ''}${c.door ? ` · ${esc(c.door)}` : ''}</div>
         ${c.melding ? `<div class="cmp-melding">${esc(c.melding)}</div>` : ''}${cmpResultaatHTML(c)}
       </li>`).join('')}</ul></div>`
@@ -4685,6 +4698,7 @@ function openCampagneVerloop(c) {
     <div class="cmp-tegels">
       <div><strong>${c.verstuurd}</strong><span>verstuurd</span></div><div><strong>${c.wacht}</strong><span>wacht nog</span></div>
       <div><strong>${c.overgeslagen}</strong><span>overgeslagen</span></div><div><strong>${c.mislukt}</strong><span>mislukt</span></div>
+      ${r.kliks != null ? `<div title="Hoeveel ontvangers op de knop in de mail tikten. Bij benadering: een virusscanner die de link uit zichzelf opent telt niet mee."><strong id="cv-kliks">${r.kliks}</strong><span>klikten op de knop</span></div>` : ''}
       <div><strong>${r.reacties ?? 0}</strong><span>reacties (14 d)</span></div><div><strong>${r.opdrachten ?? 0}</strong><span>nieuwe opdrachten (30 d)</span></div>
       ${'omzet' in r ? `<div class="cv-geld"><strong>€ ${Number(r.omzet || 0).toFixed(0)}</strong><span>omzet excl. btw</span></div>` : ''}
     </div>
@@ -5540,15 +5554,15 @@ function renderInvoiceEditor(ctx) {
   });
   if ($('#inv-remind')) $('#inv-remind').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     if (!confirm(`Vriendelijke betaalherinnering sturen naar ${inv.sentTo || customer.email}?`)) return;
-    try { if (!await bewaarEerst()) return; await api(`/api/invoices/${inv.id}/remind`, 'POST', {}); done('Herinnering verstuurd'); } catch (err) { toast(err.message, true); }
+    try { if (!await bewaarEerst()) return; const rh = await api(`/api/invoices/${inv.id}/remind`, 'POST', {}); done(`Herinnering verstuurd${Array.isArray(rh.via) && rh.via.length ? ` via ${rh.via.join(' en ')}` : ''}`); } catch (err) { toast(err.message, true); }
   });
   if ($('#inv-qremind')) $('#inv-qremind').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
     const doel = customer.email || customer.phone || 'de klant';
-    if (!confirm(`Vriendelijke offerte-herinnering sturen naar ${doel}? (E-mail met PDF, of WhatsApp als er alleen een 06 is.)`)) return;
+    if (!confirm(`Vriendelijke offerte-herinnering sturen naar ${doel}? (E-mail met PDF; staat de offerte-herinnering via WhatsApp aan, dan ook een appje.)`)) return;
     try {
       if (!await bewaarEerst()) return;
       const r = await api(`/api/invoices/${inv.id}/quote-followup`, 'POST', {});
-      done(`Herinnering verstuurd via ${r.via === 'whatsapp' ? 'WhatsApp' : 'e-mail'}`);
+      done(`Herinnering verstuurd via ${r.via === 'whatsapp' ? 'WhatsApp' : r.via === 'e-mail + WhatsApp' ? 'e-mail en WhatsApp' : 'e-mail'}`);
     } catch (err) { toast(err.message, true); }
   });
   if ($('#inv-copy')) $('#inv-copy').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
@@ -6867,15 +6881,15 @@ async function loadSettingsHtml(s) {
       <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-pause" style="width:auto" ${s.whatsappPaused ? 'checked' : ''}> Uitgaande berichten via het wegwerpnummer pauzeren</label>
     </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} Officiële WhatsApp (Meta) voor klantberichten</h3>
-      <p class="muted small">Stuurt facturen, offertes, review-verzoeken en bevestigingen naar de <strong>klant</strong> via het officiële WhatsApp Business-platform van Meta, in plaats van via het wegwerpnummer. Groepsberichten (DRS, monteurs) blijven altijd via de bridge lopen — de officiële route kan geen bestaande groepen binnen. Weigert Meta een bericht (bijvoorbeeld omdat de klant langer dan 24 uur niets stuurde), dan blijft het gewoon in de wachtrij staan en verstuurt de bridge het alsnog: er kan niets verloren gaan.</p>
+      <p class="muted small"><strong>Vaste regel:</strong> een klant krijgt WhatsApp-berichten van het CRM <strong>alleen via dit officiële nummer</strong> (facturen, offertes, bevestigingen, herinneringen, antwoorden). Het wegwerpnummer leest alleen de groepen en stuurt opdrachten door naar de monteur — daar gaat nooit een klantbericht meer vanaf. Lukt een bericht niet via Meta, dan probeert het CRM het nog twee keer en zet het daarna op <strong>mislukt</strong> met de reden erbij (te zien in Berichten).</p>
       ${s.whatsappCloudReady
-        ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-cloud-send" style="width:auto" ${s.whatsappCloudSend ? 'checked' : ''}> Klantberichten via de officiële WhatsApp versturen</label>
+        ? `<label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="wa-cloud-send" style="width:auto" ${s.whatsappCloudSend ? 'checked' : ''}> WhatsApp naar klanten versturen (officieel nummer)</label>
+        <p class="muted small" style="margin:4px 0 0">Laat dit aan staan. Uit = er gaat <strong>geen enkel</strong> WhatsApp-bericht naar klanten (e-mail werkt wel). Alleen bedoeld als noodknop.</p>
         <label style="margin-top:10px">Sjabloon voor klanten buiten het 24-uursvenster
           <input id="wa-cloud-template" value="${esc(s.whatsappCloudTemplate ?? 'keyservice_bericht')}" placeholder="keyservice_bericht" style="max-width:280px">
         </label>
         <p class="muted small" style="margin:4px 0 0">Heeft een klant langer dan 24 uur niets gestuurd, dan eist Meta een vooraf goedgekeurd sjabloon. Het CRM verpakt je bericht dan automatisch in dit sjabloon. Maak het aan in WhatsApp-beheer → Berichtsjablonen (naam exact gelijk); leeg laten = uit.</p>
-        <label style="display:flex;align-items:center;gap:8px;flex-direction:row;margin-top:10px"><input type="checkbox" id="wa-bridge-groepen" style="width:auto" ${s.bridgeGroupsOnly ? 'checked' : ''}> Wegwerpnummer (bridge) alleen voor groepen — klantberichten gaan uitsluitend via de officiële route</label>
-        <p class="muted small" style="margin:4px 0 0">Aanbevolen zodra de officiële route werkt: de bridge leest dan alleen nog de DRS- en monteursgroepen en verstuurt vrijwel niets meer. Minder verzendgedrag = veel kleinere kans dat WhatsApp het wegwerpnummer nog eens blokkeert.</p>`
+        <p class="muted small" id="wa-vaste-regel" style="margin:10px 0 0">${icon('check', 13)} Wegwerpnummer: alleen groepen lezen en opdrachten doorsturen. Dit is geen instelling meer maar staat vast.</p>`
         : `<p class="muted small" style="margin:0"><strong>Nog niet ingesteld.</strong> Vul op de server eerst <code>WHATSAPP_CLOUD_TOKEN</code>, <code>WHATSAPP_PHONE_ID</code> en <code>WHATSAPP_APP_SECRET</code> in; daarna verschijnt hier de aan/uit-knop.</p>`}
       <div style="margin-top:12px"><button class="btn btn-sm" id="wa-cloud-test">Koppeling testen</button></div>
       <div id="wa-cloud-testout" style="margin-top:8px"></div>
@@ -7027,6 +7041,21 @@ async function loadSettingsHtml(s) {
         <button class="btn btn-sm tm-send" data-type="review">Review-verzoek</button>
         <button class="btn btn-sm tm-send" data-type="annulering">Annulering</button>
       </div>
+    </div>
+    <div data-sg="bericht" class="info-card" id="waAutoKaart" style="margin-bottom:18px" data-geen-wijziging> <h3>${icon('whatsapp', 15)} Automatische WhatsApp-berichten: wat staat aan?</h3>
+      <p class="muted small">Per bericht kies je hier of de klant het <strong>ook via WhatsApp</strong> krijgt. Een knop omzetten wordt meteen bewaard. Alles gaat via het officiële nummer, nooit via het wegwerpnummer. De teksten zelf pas je aan in de kaarten hieronder.</p>
+      ${(s.whatsappCloudReady && s.whatsappCloudSend) ? '' : `<p class="small" id="waAutoWaarschuwing" style="color:var(--danger);margin:0 0 8px">${state.meta?.omgeving === 'test' ? 'Testomgeving: er gaat hier geen WhatsApp naar buiten. Je kunt de knoppen wel instellen.' : 'Let op: het officiële WhatsApp-nummer staat uit of is niet ingesteld (Instellingen → Koppelingen). Zolang dat zo is gaat er geen WhatsApp naar klanten.'}</p>`}
+      <div class="wa-auto-lijst">${(s.whatsappAutoLijst || []).map((x) => `<label class="wa-auto-rij"><input type="checkbox" class="schakel" data-wa-auto="${esc(x.key)}" ${(s.whatsappAuto || {})[x.key] ? 'checked' : ''}><span><strong>${esc(x.naam)}</strong><span class="muted small">${esc(x.uitleg)}</span></span></label>`).join('')}</div>
+      <p class="muted small" style="margin:10px 0 0">Niet in deze lijst (dat zijn geen automatische berichten, maar een knop waar iemand zelf op drukt): factuur of offerte via WhatsApp, het onderweg-bericht en een getypt antwoord.</p>
+    </div>
+    <div data-sg="bericht" class="info-card admin-only" id="campagneAanKaart" style="margin-bottom:18px" data-geen-wijziging> <h3>${icon('mail', 15)} E-mailcampagnes: aan of uit</h3>
+      <p class="muted small">Met Campagnes mail je bestaande klanten (onderhoud, actie, herinnering). Zolang dit uit staat is het menu <strong>Campagnes</strong> er niet en gaat er niets uit. Stuur eerst een proefmail aan jezelf om te zien hoe zo'n mail bij een klant aankomt. Ook als het aan staat geldt: er gaat nooit iets uit zonder dat iemand zelf op versturen klikt.</p>
+      <div class="row" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
+        <label style="flex:1;min-width:220px;margin:0">Proefmail naar <input id="cmp-proef-naar" type="email" value="${esc(state.me?.email || '')}" placeholder="jouw e-mailadres" data-geen-wijziging></label>
+        <button type="button" class="btn" id="cmp-proef-btn">Stuur mij een proefmail</button>
+      </div>
+      ${s.campagnesKanVersturen ? '' : `<p class="muted small" style="margin:6px 0 0">${state.meta?.omgeving === 'test' ? 'De testomgeving verstuurt geen e-mail; op de live-site werkt de proefmail wel. Het voorbeeld van een mail zie je hier in het scherm bij Campagnes.' : 'E-mail versturen is nog niet ingesteld; de proefmail kan nu niet uit.'}</p>`}
+      <div class="wa-auto-lijst" style="margin-top:10px"><label class="wa-auto-rij"><input type="checkbox" id="cmp-aan" ${s.campagnesAan ? 'checked' : ''}><span><strong>Campagnes aanzetten</strong><span class="muted small" id="cmp-aan-uitleg">${s.campagnesAan ? 'Aan: het menu Campagnes staat onder Klanten & geld (beheerder en assistente).' : 'Uit: het menu Campagnes is verborgen en er wordt niets verstuurd.'}</span></span></label></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Automatische ontvangstbevestiging (e-mail)</h3>
       <p class="muted small">Stuurt automatisch een mailtje naar een nieuwe klant die per e-mail een aanvraag doet — bv. met het verzoek alvast foto's en adres te sturen. Alleen bij echte aanvragen, max. 1x per klant. (Handtekening wordt eronder gezet.)</p>
@@ -7219,7 +7248,7 @@ async function loadSettingsHtml(s) {
     const INDELING = {
       werk: ['Kolommen (statussen)', 'Opdrachten naar monteur', 'Zelfde-moment-aanvragen', 'Wacht op antwoord', 'Snelle standaardantwoorden', 'DRS-rapport'],
       inbox: ['uit welke groep', 'E-mailfilter', 'Opdrachtgevers en tussenpersonen', 'Website-formulieren'],
-      bericht: ['ontvangstbevestiging', 'Afspraakbevestiging', 'Monteur onderweg', 'follow-up op offertes', 'Review-verzoek', 'Trustpilot', 'E-mail handtekening', 'Testmail'],
+      bericht: ['Automatische WhatsApp-berichten', 'E-mailcampagnes', 'ontvangstbevestiging', 'Afspraakbevestiging', 'Monteur onderweg', 'follow-up op offertes', 'Review-verzoek', 'Trustpilot', 'E-mail handtekening', 'Testmail'],
       facturen: ['Factuurgegevens', 'Prijslijst', 'Pakketten'],
       team: ['Meldingen op je telefoon', 'WhatsApp-melding bij nieuwe aanvragen', 'ochtendbriefing', 'Wekelijkse AI-controle'],
       ai: ['Bedrijfsprofiel', 'Verkeer analyseren', 'AI laten leren filteren', 'AI-dagoverzicht'],
@@ -7602,7 +7631,8 @@ async function loadSettingsHtml(s) {
   };
   if ($('#wa-cloud-send')) $('#wa-cloud-send').onchange = async () => {
     const aan = $('#wa-cloud-send').checked;
-    try { await api('/api/settings', 'PATCH', { whatsappCloudSend: aan }); toast(aan ? 'Klantberichten gaan nu via de officiële WhatsApp' : 'Klantberichten gaan weer via de bridge'); }
+    if (!aan && !confirm('WhatsApp naar klanten uitzetten?\n\nEr gaat dan geen enkel WhatsApp-bericht meer naar klanten: geen facturen, bevestigingen, herinneringen of antwoorden. Het wegwerpnummer neemt dit NIET over. E-mail blijft werken.')) { $('#wa-cloud-send').checked = true; return; }
+    try { await api('/api/settings', 'PATCH', { whatsappCloudSend: aan }); toast(aan ? 'Klanten krijgen weer WhatsApp via het officiële nummer' : 'UIT: er gaat nu geen WhatsApp naar klanten', !aan); }
     catch (err) { toast(`NIET opgeslagen: ${err.message}`, true); const el = $('#wa-cloud-send'); if (el) el.checked = !aan; }
   };
   if ($('#wa-cloud-test')) $('#wa-cloud-test').onclick = async () => {
@@ -7622,11 +7652,33 @@ async function loadSettingsHtml(s) {
       </div>`;
     } catch (err) { uit.innerHTML = `<span class="error small">${esc(err.message)}</span>`; }
   };
-  if ($('#wa-bridge-groepen')) $('#wa-bridge-groepen').onchange = async () => {
-    const aan = $('#wa-bridge-groepen').checked;
-    try { await api('/api/settings', 'PATCH', { bridgeGroupsOnly: aan }); toast(aan ? 'Bridge doet alleen nog groepen — klantberichten gaan officieel' : 'Bridge mag ook weer klantberichten versturen'); }
-    catch (err) { toast(`NIET opgeslagen: ${err.message}`, true); const el = $('#wa-bridge-groepen'); if (el) el.checked = !aan; }
+  // E-mailcampagnes: proefmail aan jezelf en de aan/uit-knop (alleen de beheerder).
+  if ($('#cmp-proef-btn')) $('#cmp-proef-btn').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    const naar = ($('#cmp-proef-naar').value || '').trim();
+    if (!naar) { toast('Vul het e-mailadres in waar de proefmail naartoe moet', true); $('#cmp-proef-naar').focus(); return; }
+    try { await api('/api/campagnes/proefmail', 'POST', { naar }); toast(`Proefmail verstuurd naar ${naar} — kijk in je mailbox (ook op je telefoon)`); }
+    catch (err) { toast(err.message, true); }
+  });
+  if ($('#cmp-aan')) $('#cmp-aan').onchange = async () => {
+    const el = $('#cmp-aan'); const aan = el.checked;
+    if (aan && !confirm('Campagnes aanzetten?\n\nHet menu Campagnes verschijnt bij de beheerder en de assistente. Er gaat nog steeds niets uit zonder dat iemand zelf op versturen klikt.')) { el.checked = false; return; }
+    try {
+      const r = await api('/api/campagnes/aan', 'POST', { aan });
+      if (state.meta) state.meta.campagnes = !!r.aan;
+      toonCampagnesMenu();
+      const u = $('#cmp-aan-uitleg'); if (u) u.textContent = r.aan ? 'Aan: het menu Campagnes staat onder Klanten & geld (beheerder en assistente).' : 'Uit: het menu Campagnes is verborgen en er wordt niets verstuurd.';
+      toast(r.aan ? 'Campagnes staan aan' : 'Campagnes staan uit');
+    } catch (err) { toast(`NIET opgeslagen: ${err.message}`, true); el.checked = !aan; }
   };
+  // Een knop per automatisch WhatsApp-bericht: omzetten = meteen bewaard; mislukt = knop terug.
+  $$('[data-wa-auto]').forEach((el) => { el.onchange = async () => {
+    const soort = el.dataset.waAuto; const aan = el.checked;
+    try {
+      const r = await api('/api/whatsapp/automatisch', 'POST', { soort, aan });
+      waAutoToon(r.stand);
+      toast(`${el.closest('label')?.querySelector('strong')?.textContent || 'Bericht'} via WhatsApp: ${aan ? 'aan' : 'uit'}`);
+    } catch (err) { toast(`NIET opgeslagen: ${err.message}`, true); el.checked = !aan; }
+  }; });
   if ($('#wa-cloud-template')) $('#wa-cloud-template').onchange = async () => {
     try { await api('/api/settings', 'PATCH', { whatsappCloudTemplate: $('#wa-cloud-template').value.trim() }); toast('Sjabloonnaam opgeslagen'); }
     catch (err) { toast(err.message, true); }
@@ -8221,13 +8273,13 @@ function tekenMededelingen(lijst) {
     try { const r = await api(`/api/mededelingen/${encodeURIComponent(k.dataset.mededGelezen)}/gelezen`, 'POST', {}); tekenMededelingen(r.mijn || []); } catch (err) { toast(err.message, true); }
   })));
 }
-// Beheerder: een mededeling plaatsen en zien wie eerdere berichten heeft gelezen.
+// Kantoor (beheerder + assistente): een mededeling plaatsen en zien wie eerdere berichten las.
 async function openMededelingen() {
   let d; try { d = await api('/api/mededelingen'); } catch (err) { toast(err.message, true); return; }
   const rij = (m) => `<li class="mdl-rij${m.actief ? '' : ' uit'}"><div class="mdl-rij-kop"><strong>${esc(m.titel)}</strong><span class="muted small">voor ${esc(m.voorNaam)} · ${esc(fmtDateShort(m.at))}${m.totEnMet ? ` · t/m ${esc(m.totEnMet.split('-').reverse().join('-'))}` : ''}${m.ingetrokkenAt ? ' · ingetrokken' : (m.actief ? '' : ' · verlopen')}</span></div>
       ${m.tekst ? `<div class="mdl-rij-tekst">${esc(m.tekst)}</div>` : ''}
       <div class="muted small">Gelezen door ${m.lezers.gelezen.length} van ${m.lezers.aantal}${m.lezers.gelezen.length ? `: ${esc(m.lezers.gelezen.join(', '))}` : ''}${m.lezers.nogNiet.length ? ` · nog niet: ${esc(m.lezers.nogNiet.join(', '))}` : ''}</div>
-      ${m.actief ? `<button type="button" class="btn btn-sm" data-mdl-weg="${esc(m.id)}">Intrekken</button>` : ''}</li>`;
+      ${m.actief && m.magWeg !== false ? `<button type="button" class="btn btn-sm" data-mdl-weg="${esc(m.id)}">Intrekken</button>` : ''}</li>`;
   modal(`<h2>Mededeling aan het team</h2>
     <p class="muted small">Het bericht staat bij de gekozen mensen bovenaan het scherm tot ze op <strong>Gelezen</strong> tikken. Wie meldingen aan heeft staan, krijgt het ook op de telefoon.</p>
     <label>Titel <input id="mdl-titel" maxlength="120" placeholder="bv. Vrijdag 5 december zijn we om 15:00 dicht"></label>
@@ -8577,7 +8629,8 @@ function openReplyModal(ctx = {}) {
         ? await api(`/api/orders/${ctx.orderId}/whatsapp-antwoord`, 'POST', { text, phone })
         : await api(`/api/chats/nummer/${encodeURIComponent(phone)}/send`, 'POST', { text });
       modalSchoon(); closeModal();
-      toast(out.paused ? 'Klaargezet — de WhatsApp-pauze staat aan, het appje gaat pas uit als die eraf is' : 'In de WhatsApp-wachtrij gezet — wordt zo verstuurd');
+      if (out.nietVerstuurbaar) toast(`Dit appje gaat NIET uit: ${out.nietVerstuurbaar}`, true);
+      else toast('In de WhatsApp-wachtrij gezet — wordt zo verstuurd');
       if (ctx.orderId) loadBoard();
     } catch (err) { toast(err.message, true); }
   });
@@ -9172,6 +9225,15 @@ const _instBegin = new Map();     // veld → waarde vóór de eerste aanraking 
 const instWaarde = (el) => (el.type === 'checkbox' || el.type === 'radio' ? String(el.checked) : el.value);
 // Geen instelling die je moet opslaan: testadres/-nummer, keuzelijst van een actie, kopieerveld,
 // en schakelaars die zichzelf meteen opslaan.
+// De knoppen "automatische WhatsApp-berichten" en de drie vinkjes die hetzelfde regelen
+// (ontvangstbevestiging, afspraakbevestiging, opvolging) lopen gelijk met de server.
+function waAutoToon(stand) {
+  if (!stand) return;
+  $$('[data-wa-auto]').forEach((el) => { if (el.dataset.waAuto in stand) el.checked = !!stand[el.dataset.waAuto]; });
+  const koppel = { ontvangst: '#ar-wa-enabled', afspraak: '#ab-whatsapp', opvolging: '#fu-whatsapp' };
+  for (const [k, sel] of Object.entries(koppel)) { const el = $(sel); if (el && k in stand) { if (_instBegin.has(el) && _instBegin.get(el) !== instWaarde(el)) continue; el.checked = !!stand[k]; _instBegin.delete(el); } }
+}
+async function waAutoVerversen() { if (!$('[data-wa-auto]')) return; try { waAutoToon((await api('/api/whatsapp/automatisch')).stand); } catch { /* volgende keer */ } }
 const INST_GEEN = new Set(['instZoek', 'tm-to', 'wt-phone', 'analyzeDays', 'learnDays', 'calUrl', 'wa-pause', 'wa-cloud-send', 'wa-bridge-groepen', 'wa-cloud-template', 'fsAlleenFormulieren']);
 const instTelt = (el) => !!el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && !['search', 'file', 'button', 'submit', 'hidden'].includes(el.type) && !el.readOnly && !INST_GEEN.has(el.id) && !el.hasAttribute('data-geen-wijziging') && !el.closest('[data-geen-wijziging]');
 // Vaste plek van een veld binnen Instellingen: zijn id, of (rijen zonder id, zoals kolommen en

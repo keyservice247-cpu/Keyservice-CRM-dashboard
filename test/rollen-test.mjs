@@ -480,9 +480,12 @@ console.log('\n== Mededelingen aan het team (26 nov 2026) ==');
   ok('wie hem plaatst ziet hem niet zelf als ongelezen, wel in het overzicht met wie hem nog moet lezen', bijAdmin.json.mijn.length === 0 && bijAdmin.json.alle.length >= 3 && bijAdmin.json.alle.find((x) => x.id === m1.json.id).lezers.nogNiet.length >= 1 && bijAdmin.json.alle.find((x) => x.id === m1.json.id).lezers.gelezen.length === 1, JSON.stringify(bijAdmin.json.alle.find((x) => x.id === m1.json.id)?.lezers));
   await login('assistente@keyservice.nl', 'assist123');
   const bijAss = await api('GET', '/api/mededelingen');
-  const assPlaatst = await api('POST', '/api/mededelingen', { titel: 'Mag niet' });
+  // Sinds 27 nov 2026 mag de assistente zelf plaatsen, en alleen haar EIGEN mededeling intrekken.
+  const assPlaatst = await api('POST', '/api/mededelingen', { titel: 'Van de assistente', voor: 'monteurs' });
   const assTrektIn = await api('DELETE', `/api/mededelingen/${m1.json.id}`);
-  ok('assistente: ziet de berichten voor iedereen en voor kantoor (niet die voor monteurs), geen overzicht; plaatsen en intrekken mag ze niet (403)', bijAss.json.mijn.map((x) => x.titel).sort().join('|') === 'Alleen voor kantoor|Vrijdag om 15:00 dicht' && !('alle' in bijAss.json) && assPlaatst.status === 403 && assTrektIn.status === 403, JSON.stringify({ t: bijAss.json.mijn.map((x) => x.titel), p: assPlaatst.status }));
+  const assEigenWeg = await api('DELETE', `/api/mededelingen/${assPlaatst.json?.id}`);
+  ok('assistente plaatst zelf een mededeling en trekt haar eigen weer in; die van de beheerder niet (403)', assPlaatst.status === 200 && !!assPlaatst.json.id && assTrektIn.status === 403 && assEigenWeg.status === 200 && assEigenWeg.json.alle.find((x) => x.id === m1.json.id).magWeg === false && assEigenWeg.json.alle.find((x) => x.id === assPlaatst.json.id).magWeg === true, JSON.stringify({ p: assPlaatst.status, t: assTrektIn.status, e: assEigenWeg.status }));
+  ok('assistente: ziet als ongelezen de berichten voor iedereen en voor kantoor (niet die voor monteurs), en heeft het overzicht', bijAss.json.mijn.map((x) => x.titel).sort().join('|') === 'Alleen voor kantoor|Vrijdag om 15:00 dicht' && Array.isArray(bijAss.json.alle) && bijAss.json.alle.length >= 3, JSON.stringify({ t: bijAss.json.mijn.map((x) => x.titel), a: (bijAss.json.alle || []).length }));
   ok('de pulse meldt de ongelezen mededelingen (zo verschijnt de balk vanzelf)', ((await api('GET', '/api/pulse')).json.meded || '').split(',').filter(Boolean).length === 2);
   const gelezen = await api('POST', `/api/mededelingen/${m1.json.id}/gelezen`, {});
   const nietVoorHaar = await api('POST', `/api/mededelingen/${m2.json.id}/gelezen`, {});

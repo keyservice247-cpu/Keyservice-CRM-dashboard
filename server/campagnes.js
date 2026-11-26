@@ -29,12 +29,14 @@ import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { nooitKlantMail } from './pipeline.js';
 import { TEST, demoLoginToegestaan } from './omgeving.js';
 import { getHtmlSignature } from './settings.js';
-import { leesOpmaak, bouwCampagneHtml, sjabloonVan } from './campagne-sjablonen.js';
+import { leesOpmaak, bouwCampagneHtml, sjabloonVan, knopDoel, SJABLONEN } from './campagne-sjablonen.js';
 
 export const STANDAARD_INSTELLINGEN = { rustDagen: 30, perDag: 200, perRonde: 8, pauzeMs: 2500 };
 const STORING_MAX = 5; // zoveel rondes op rij een storing bij het versturen → campagne pauzeert
 const DAG = 86400000;
 const AFGEHANDELD = new Set(['afgerond', 'geannuleerd']);
+const ONDERHOUD_VAN = 11; const ONDERHOUD_TOT = 14; // maanden na de laatste schuifpui-opdracht
+const ONDERHOUD_MIN = 3;                              // pas een concept bij minstens zoveel bereikbare klanten
 const ZAKELIJK_RE = /\b(b\.?v\.?|n\.?v\.?|v\.?o\.?f\.?|vve|v\.v\.e\.?|vereniging van eigenaren|stichting|beheer|vastgoed|makelaar|makelaardij|woningcorporatie|woonstichting|bouw|aannem|installatie|holding|groep|group|hotel|restaurant|school|gemeente|kantoor)\b/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
 
@@ -74,6 +76,8 @@ export function klantFeiten({ customers = [], orders = [], invoices = [], nooitM
     const laatste = eigen.orders.reduce((m, o) => Math.max(m, ms(o.completedAt) || ms(o.createdAt)), 0);
     const eerste = eigen.orders.reduce((m, o) => { const t = ms(o.createdAt); return t && (!m || t < m) ? t : m; }, 0);
     const merken = new Set(eigen.orders.map((o) => merkVan(o).key));
+    // Laatste AFGERONDE schuifpui-opdracht (voor de jaarlijkse onderhoudsherinnering).
+    const laatsteSchuifpui = eigen.orders.reduce((m, o) => (o.status === 'afgerond' && merkVan(o).key === 'schuifpui' ? Math.max(m, ms(o.completedAt) || ms(o.createdAt)) : m), 0);
     const afgerond = eigen.orders.filter((o) => o.status === 'afgerond').length;
     const lopend = eigen.orders.some((o) => !AFGEHANDELD.has(o.status) && !o.archivedWeek);
     // Offerte gekregen maar niet doorgegaan: een verstuurde/afgekeurde offerte zonder factuur
@@ -91,7 +95,7 @@ export function klantFeiten({ customers = [], orders = [], invoices = [], nooitM
       onbekend: /^onbekende klant$/i.test(String(c.name || '').trim()) || !String(c.name || '').trim(),
       aantalOpdrachten: eigen.orders.length, afgerond, lopend,
       laatsteOpdrachtMs: laatste, eersteOpdrachtMs: eerste,
-      schuifpui: merken.has('schuifpui'), sloten: merken.has('keyservice'),
+      schuifpui: merken.has('schuifpui'), sloten: merken.has('keyservice'), laatsteSchuifpuiMs: laatsteSchuifpui,
       offerteNietDoor,
       zakelijk: ZAKELIJK_RE.test(String(c.name || '')) || (!!email && ZAKELIJK_RE.test(email.split('@')[1] || '')),
       laatsteCampagneMs: ms(c.lastCampaignAt),
@@ -107,6 +111,10 @@ export const DOELGROEPEN = [
   { key: 'alle', naam: 'Alle klanten met een e-mailadres', uitleg: 'Iedereen die ooit klant was en een e-mailadres heeft.', test: () => true },
   { key: 'oud', naam: 'Lang niet gezien', uitleg: 'Klanten van wie de laatste opdracht langer dan het gekozen aantal maanden geleden is. Goed voor onderhoud of een controle.', param: 'maanden', standaard: { maanden: 12 },
     test: (f, p, nu) => f.afgerond > 0 && !!f.laatsteOpdrachtMs && nu - f.laatsteOpdrachtMs > (Number(p.maanden) || 12) * 30.4 * DAG },
+  // Jaarlijks onderhoud (27 nov 2026): wie 11 tot 14 maanden geleden voor het laatst een schuifpui
+  // liet maken. Wie intussen een nieuwere schuifpui-opdracht had, valt er vanzelf weer uit.
+  { key: 'onderhoud', naam: 'Toe aan jaarlijks onderhoud (schuifpui)', uitleg: 'Klanten van wie de laatste afgeronde schuifpui-opdracht 11 tot 14 maanden geleden is: het moment voor een onderhoudsbeurt.',
+    test: (f, p, nu) => { if (!f.laatsteSchuifpuiMs) return false; const m = (nu - f.laatsteSchuifpuiMs) / (30.4 * DAG); return m >= ONDERHOUD_VAN && m < ONDERHOUD_TOT; } },
   { key: 'schuifpui', naam: 'Schuifpui-klanten', uitleg: 'Klanten met minstens één opdracht voor een schuifpui of schuifdeur.', test: (f) => f.schuifpui },
   { key: 'sloten', naam: 'Slot- en sleutelklanten', uitleg: 'Klanten met minstens één opdracht voor sloten, cilinders of buitensluiting.', test: (f) => f.sloten },
   { key: 'offerte', naam: 'Offerte gekregen, niet doorgegaan', uitleg: 'Klanten met een offerte van meer dan twee weken oud waar geen factuur op volgde.', test: (f) => f.offerteNietDoor },
@@ -240,6 +248,61 @@ export function afmeldLink(customerId) {
   const basis = String(process.env.APP_URL || 'https://keyservice-crm.onrender.com').replace(/\/+$/, '');
   return `${basis}/afmelden/${encodeURIComponent(customerId)}/${afmeldSig(customerId)}`;
 }
+// ---------- CAMPAGNES AAN/UIT (27 nov 2026) ----------
+// Op de live-site staan Campagnes UIT tot de beheerder ze zelf aanzet (Instellingen → Berichten
+// aan klanten → E-mailcampagnes), nadat hij een proefmail aan zichzelf heeft gezien. In de
+// testomgeving en bij de eigen tests staan ze standaard aan. Uit = menu weg, routes weigeren,
+// er wordt niets verstuurd en er ontstaan geen automatische concepten. Afmeldlinks en de
+// klikteller van al verstuurde mails blijven altijd werken.
+export function campagnesAan() {
+  const v = db().settings ? db().settings.campagnesAan : undefined;
+  return typeof v === 'boolean' ? v : !!(TEST || demoLoginToegestaan());
+}
+export function zetCampagnesAan(aan, gebruiker) {
+  db().settings.campagnesAan = !!aan;
+  logActivity((gebruiker && gebruiker.name) || 'systeem', aan ? 'Campagnes AAN gezet' : 'Campagnes UIT gezet', '');
+  saveSoon();
+  return campagnesAan();
+}
+
+// ---------- KLIKTELLER (27 nov 2026) ----------
+// De knop in een opgemaakte mail gaat via een ondertekende link langs het CRM: die noteert de
+// klik bij DIE ontvanger en stuurt meteen door naar het echte doel (bellen, WhatsApp, mail, site).
+// Er wordt niets anders bijgehouden (geen "geopend"-pixel). Het getal is bij benadering:
+// virusscanners openen links soms uit zichzelf — daarom telt een klik binnen een minuut na het
+// versturen niet, net als bekende scanners en verzoeken die geen gewone paginaweergave zijn.
+const SCANNER_RE = /bot|crawl|spider|scan|preview|proofpoint|barracuda|mimecast|safelinks|symantec|trendmicro|forcepoint|urldefense|google-safety|googleimageproxy|curl|wget|python|headless/i;
+export const klikSig = (campagneId, customerId) => crypto.createHmac('sha256', LINK_SECRET()).update(`klik:${campagneId}:${customerId}`).digest('hex').slice(0, 24);
+export function klikLink(campagneId, customerId) {
+  const basis = String(process.env.APP_URL || 'https://keyservice-crm.onrender.com').replace(/\/+$/, '');
+  return `${basis}/k/${encodeURIComponent(campagneId)}/${encodeURIComponent(customerId)}/${klikSig(campagneId, customerId)}`;
+}
+/** Waar de knop van deze campagne echt naartoe gaat ('' = geen knop). */
+export function knopDoelVan(c) {
+  const opmaak = leesOpmaak(c.opmaak);
+  if (opmaak.sjabloon === 'tekst' || opmaak.knopSoort === 'geen') return '';
+  return knopDoel(opmaak.knopSoort, bedrijfVoorMail(), c.onderwerp);
+}
+/**
+ * Een klik op de knop. Geeft { doel, knopTekst } terug (ook als de klik niet meetelt), of null
+ * bij een ongeldige link. `telt` = of deze klik is genoteerd.
+ */
+export function registreerKlik(campagneId, customerId, sig, { nu = Date.now(), methode = 'GET', agent = '' } = {}) {
+  const goed = klikSig(campagneId, customerId);
+  const a = Buffer.from(String(sig || '')); const b = Buffer.from(goed);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const c = vindCampagne(campagneId);
+  if (!c) return null;
+  const doel = knopDoelVan(c);
+  const o = (c.ontvangers || []).find((x) => x.customerId === customerId && x.status === 'verstuurd');
+  let telt = false;
+  if (o && methode === 'GET' && !SCANNER_RE.test(String(agent || '')) && nu - ms(o.at) > 60 * 1000) {
+    if (!o.klikAt) o.klikAt = new Date(nu).toISOString();
+    o.klikken = (o.klikken || 0) + 1; telt = true; saveSoonQuiet();
+  }
+  return { doel, knopTekst: leesOpmaak(c.opmaak).knopTekst || 'Verder', telt, bedrijf: bedrijfVoorMail() };
+}
+
 export const voetTekst = (customerId) => `\n\nU ontvangt deze e-mail omdat u klant bent (geweest) van Key Service 24/7. Liever geen e-mails meer? Meld u af via ${afmeldLink(customerId)} of antwoord met "afmelden".`;
 
 /** Wat het scherm van een campagne te zien krijgt (zonder de hele ontvangerslijst). */
@@ -254,7 +317,7 @@ export function campagneUitvoer(c, { metOntvangers = false } = {}) {
     proef: !!c.proef, melding: c.melding || '',
     opmaak: leesOpmaak(c.opmaak), foto: !!(c.foto && c.foto.file),
   };
-  if (metOntvangers) uit.ontvangers = o.map((x) => ({ naam: x.naam, email: x.email, plaats: x.plaats || '', status: x.status, at: x.at || null, fout: x.fout || '' }));
+  if (metOntvangers) uit.ontvangers = o.map((x) => ({ naam: x.naam, email: x.email, plaats: x.plaats || '', status: x.status, at: x.at || null, fout: x.fout || '', klik: !!x.klikAt }));
   return uit;
 }
 
@@ -336,6 +399,8 @@ export function mailVoor(c, o, { voorbeeld = false } = {}) {
     opmaak, onderwerp: c.onderwerp, tekst: gevuld, bedrijf: bedrijfVoorMail(),
     afmeldUrl: o.customerId ? afmeldLink(o.customerId) : (voorbeeld ? '#' : ''),
     logoSrc: voorbeeld ? '/img/logo-factuur.png' : 'cid:kslogo',
+    // Klikteller: alleen in de echte mail aan een klant, niet in het voorbeeld of een testmail.
+    knopUrl: !voorbeeld && o.customerId && c.id ? klikLink(c.id, o.customerId) : '',
     fotoSrc: heeftFoto ? (voorbeeld ? `/api/campagnes/${c.id}/foto?v=${encodeURIComponent((c.foto && c.foto.at) || '')}` : 'cid:kopfoto') : '',
   });
   const attachments = heeftFoto && !voorbeeld ? [{ filename: `foto.${path.extname(pad).slice(1) || 'jpg'}`, path: pad, cid: 'kopfoto', contentDisposition: 'inline' }] : [];
@@ -406,6 +471,7 @@ let _bezig = false;
  */
 export async function runCampagnes({ altijd = false, nu = new Date(), verstuur = sendMail, pauzeMs = STANDAARD_INSTELLINGEN.pauzeMs, perRonde = STANDAARD_INSTELLINGEN.perRonde } = {}) {
   if (_bezig) return { bezig: true };
+  if (!campagnesAan()) return { uit: true, reden: 'campagnes staan uit' };
   // Alleen in een testopstelling (nooit op de echte site): geen tijdvenster en geen pauzes,
   // zodat de test niet tot 09:00 uur hoeft te wachten.
   if (process.env.CAMPAGNE_TEST === '1' && demoLoginToegestaan()) { altijd = true; pauzeMs = 0; }
@@ -465,6 +531,40 @@ export async function runCampagnes({ altijd = false, nu = new Date(), verstuur =
   } finally { _bezig = false; }
 }
 
+// ---------- JAARLIJKSE ONDERHOUDSHERINNERING (27 nov 2026) ----------
+// Eén keer per maand kijkt het CRM wie toe is aan een onderhoudsbeurt voor de schuifpui (laatste
+// afgeronde schuifpui-opdracht 11–14 maanden geleden). Zijn dat er minstens drie die bereikbaar
+// zijn, dan zet het een CONCEPT klaar. Er wordt NIETS verstuurd: een mens leest het na en klikt
+// zelf op versturen (vaste afspraak 1). Geen concept als er al een onderhoudscampagne openstaat.
+export const maandSleutel = (nu = new Date()) => nlDag(nu).slice(0, 7);
+export function maakOnderhoudConcept({ nu = new Date(), force = false } = {}) {
+  if (!campagnesAan()) return { uit: true };
+  const s = db().settings; const maand = maandSleutel(nu);
+  if (!force && s._campagneOnderhoudMaand === maand) return { al: true };
+  if (lijst().some((c) => c.doelgroep === 'onderhoud' && ['concept', 'gepland', 'bezig', 'gepauzeerd'].includes(c.status))) { s._campagneOnderhoudMaand = maand; saveSoonQuiet(); return { openstaand: true }; }
+  const inst = campagneInstellingen();
+  const r = kiesOntvangers(alleFeiten(nu.getTime()), { doelgroep: 'onderhoud', rustDagen: inst.rustDagen, nu: nu.getTime() });
+  s._campagneOnderhoudMaand = maand;
+  if (r.ontvangers.length < ONDERHOUD_MIN) { saveSoonQuiet(); return { teWeinig: r.ontvangers.length }; }
+  const sj = SJABLONEN.find((x) => x.key === 'schuifpui');
+  const maandNaam = new Intl.DateTimeFormat('nl-NL', { month: 'long', year: 'numeric', timeZone: 'Europe/Amsterdam' }).format(nu);
+  const c = {
+    id: id('cmp'), naam: `Jaarlijks onderhoud schuifpui — ${maandNaam}`, doelgroep: 'onderhoud', params: {},
+    onderwerp: 'Tijd voor de jaarlijkse onderhoudsbeurt van uw schuifpui',
+    tekst: 'Beste {naam},\n\nOngeveer een jaar geleden zijn wij bij u geweest voor uw schuifpui. Een schuifpui die elk jaar even wordt nagekeken, schoongemaakt en gesmeerd, blijft licht lopen en goed sluiten — en dat voorkomt slijtage en duurdere reparaties.\n\nZullen wij een onderhoudsbeurt voor u inplannen? Bel ons of antwoord op deze e-mail, dan zoeken we een moment dat u past.',
+    opmaak: leesOpmaak({ sjabloon: 'schuifpui', kop: 'Tijd voor de jaarlijkse onderhoudsbeurt', knopTekst: sj ? sj.knopTekst : '', knopSoort: 'bel' }),
+    status: 'concept', bron: 'automatisch', automatisch: 'onderhoud',
+    waarom: `${r.ontvangers.length} klanten lieten 11 tot 14 maanden geleden hun schuifpui maken en zijn per e-mail bereikbaar. Lees de tekst na en verstuur hem zelf — er gaat niets vanzelf uit.`,
+    verwachtAantal: r.ontvangers.length, createdAt: now(), door: 'systeem', ontvangers: [],
+  };
+  lijst().unshift(c);
+  logActivity('systeem', 'campagne-concept klaargezet', `"${c.naam}" — ${r.ontvangers.length} klanten toe aan onderhoud`);
+  saveSoon();
+  return { concept: c, aantal: r.ontvangers.length };
+}
+/** Automatisch klaargezette concepten die nog op een mens wachten (voor "Eerst doen" op Start). */
+export const wachtendeAutoConcepten = () => (campagnesAan() ? lijst().filter((c) => c.status === 'concept' && c.automatisch).map((c) => ({ id: c.id, naam: c.naam, aantal: c.verwachtAantal || 0 })) : []);
+
 /**
  * WAT LEVERDE HET OP? Van de mensen die de campagne kregen: wie reageerde (bericht binnen
  * 14 dagen), wie een nieuwe opdracht kreeg (binnen 30 dagen) en wie zich afmeldde. Bedragen
@@ -492,7 +592,9 @@ export function campagneResultaat(c, { metGeld = false, nu = Date.now() } = {}) 
   }
   const klantOp = new Map((db().customers || []).map((k) => [k.id, k]));
   const afgemeld = verstuurd.filter((o) => { const k = klantOp.get(o.customerId); return k && k.campaignOptOut && ms(k.campaignOptOutAt) >= ms(o.at); }).length;
-  const uit = { verstuurd: verstuurd.length, reacties: reageerders.size, opdrachten, afgemeld, dagenGeleden: c.klaarOp ? Math.floor((nu - ms(c.klaarOp)) / DAG) : null };
+  // Kliks op de knop (alleen bij een opgemaakte mail mét knop; anders null = niet te meten).
+  const kliks = knopDoelVan(c) ? verstuurd.filter((o) => o.klikAt).length : null;
+  const uit = { verstuurd: verstuurd.length, reacties: reageerders.size, opdrachten, afgemeld, kliks, dagenGeleden: c.klaarOp ? Math.floor((nu - ms(c.klaarOp)) / DAG) : null };
   if (metGeld) uit.omzet = Math.round(omzet * 100) / 100;
   return uit;
 }
