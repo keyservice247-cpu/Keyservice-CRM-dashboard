@@ -122,7 +122,10 @@ export function wrapHtmlMail(text, afzender = null) {
   const paras = escHtml(t).split(/\n{2,}/)
     .map((p) => (discl && p.trim() === discl)
       ? `<p style="margin:14px 0;padding-top:10px;border-top:1px solid #e3e7ec;font-size:12.5px;color:#6b7580">${p.replace(/\n/g, '<br>')}</p>`
-      : `<p style="margin:0 0 14px">${p.replace(/\n/g, '<br>')}</p>`).join('');
+      : /^https?:\/\/\S+\/akkoord\/[\w-]+\/[0-9a-f]{24}$/.test(p.trim())
+        // Akkoordlink van een offerte (27 nov 2026): een duidelijke knop, de link eronder klein.
+        ? `<p style="margin:4px 0 18px"><a href="${p.trim()}" style="display:inline-block;background:#1a7f4b;color:#ffffff;text-decoration:none;font-weight:bold;padding:13px 24px;border-radius:8px">Ja, ik ga akkoord met de offerte</a><br><span style="font-size:12px;color:#6b7580">Werkt de knop niet? Open deze link: ${p.trim()}</span></p>`
+        : `<p style="margin:0 0 14px">${p.replace(/\n/g, '<br>')}</p>`).join('');
   return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14.5px;color:#1f2530;line-height:1.6;max-width:640px">${paras}${signatureHtml(sig)}${citaat}</div>`;
 }
 

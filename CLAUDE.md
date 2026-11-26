@@ -557,6 +557,34 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   testomgeving-test 35 (+3: echte installatie = uit, keuze overleeft herstart), start-test 34,
   rollen-test 142, browser +6.
 
+- **OFFERTE ONLINE GOEDKEUREN — AKKOORDKNOP (27 nov 2026, voorstel 2, akkoord eigenaar; hij wil
+  het zelf testen "door een offerte goed te keuren via mail"):** server/offerte-akkoord.js +
+  routes in index.js. Ondertekende link `/akkoord/<offerte>/<sig>` (HMAC 'akkoord:'+id met
+  LINK_SECRET; openbaar, noindex, strikte CSP). VASTE AFSPRAKEN — NIET VERZWAKKEN:
+  (1) GET toont nummer, bedrag incl. btw, "geldig tot" (`geldigTot` = zelfde datum als de PDF),
+  PDF-link en één knop; alleen de KNOP (POST, optioneel naam) keurt goed — mailscanners openen
+  links uit zichzelf. (2) Alleen een VERSTUURDE offerte binnen de geldigheid (`akkoordStaat`:
+  open | al | verlopen | gesloten); een factuur nooit (404). Al goedgekeurd = bevestiging,
+  niets dubbel. (3) Goedkeuren = status goedgekeurd + `acceptedAt` + `inv.akkoordKlant {at, via:
+  'link', naam}` + factuur-concept als `autoInvoiceOnAccept` aan staat (zelfde functie als de knop
+  in het CRM) + regel in de opdracht + `customerReplied`/`unreadReplies`/`lastCustomerReplyAt`
+  (bord-badge, "Klant heeft gereageerd" op Start) + push kantoor en monteur + logboek +
+  klaarstaande offerte-herinneringen (`by` offerte-opvolging/follow-up, op `invoiceRef` of
+  `orderId`) ingetrokken. De opdrachtstatus verandert NIET: een mens plant de afspraak in.
+  (4) SCHAKELAAR `settings.offerteAkkoord.aan`, STANDAARD UIT (Instellingen → Facturen & prijzen
+  → `#akkoordKaart`, `#akkoord-aan`, bewaart zichzelf via POST /api/offerte-akkoord/instelling,
+  recht settings). Uit = de link staat nergens in; een al verstuurde link blijft werken. Aan =
+  `akkoordRegel(inv)` in: de offerte-mail (vervangt "Gaat u akkoord? Reageer…"), offerte via
+  WhatsApp (ook onder een zelf getypte tekst), offerte-herinnering per mail en WhatsApp, en de
+  downloadpagina /bon (groene knop). In de HTML-mail wordt een alinea die alleen uit de
+  akkoordlink bestaat een groene knop (wrapHtmlMail, email-smtp.js). Facturen-lijst: label
+  "online akkoord door klant" (`.inv-akkoord`). Meegenomen: /bon toonde nooit het telefoonnummer
+  (`cfg.companyPhone` bestond niet → `cfg.phone`); de WhatsApp-testkaart in Koppelingen legt nu
+  uit dat het testbericht via het officiële nummer gaat en zo het sjabloon test. Tests:
+  test/offerte-akkoord-test.mjs (30; start zelf nep-SMTP 2661 + server 3161), browser +4.
+  Live gezet 27 nov 2026 met de schakelaar UIT. Tests: 34 serversuites 1.785 + browser 542 +
+  browser-rechten 23 = 2.350, 0 fouten.
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)

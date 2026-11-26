@@ -6162,7 +6162,7 @@ function renderInvoices() {
       <div>
         ${vast ? `<div class="inv-vast-kop">${icon('punaise', 12)} Vastgepind${vast.notitie ? `: <span class="inv-vast-notitie">${esc(vast.notitie)}</span>` : ''} <span class="muted small">— ${esc(vast.door || '')}${vast.at ? ', ' + esc(fmtDateShort(vast.at)) : ''}</span></div>` : ''}
         <div>${quote ? `<span class="chip" style="font-size:11px">OFFERTE</span> ` : ''}<strong>${esc(i.number)}</strong> · ${esc(i.customerName || 'klant')} <span class="muted small">${i.orderTitle ? '— ' + esc(i.orderTitle) : '(losstaand)'}</span></div>
-        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span class="inv-st ${overdue ? 'verlopen' : esc(i.status)}">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}${i.gecorrigeerdAt ? ` · <span class="inv-gecorr" title="Gecorrigeerd op ${esc(fmtDateShort(i.gecorrigeerdAt))}${(i.correcties || []).length ? ' — ' + esc(i.correcties[i.correcties.length - 1].reden || '') : ''}. Het factuurnummer is hetzelfde gebleven.">gecorrigeerd</span>` : ''}${i.bounce ? ` · <span class="inv-bounce" title="${esc(i.bounce.reden || '')}">mail NIET aangekomen — adres controleren</span>` : ''}${i.oninbaar ? ` · <span class="muted">afgeschreven ${esc(fmtDateShort(i.oninbaar.at))}${i.oninbaar.door ? ' door ' + esc(i.oninbaar.door) : ''}${i.oninbaar.reden ? ' — ' + esc(i.oninbaar.reden) : ''}</span>` : ''}</div>
+        <div class="muted small">${esc(new Date(i.sentAt || i.createdAt).toLocaleDateString('nl-NL'))} · <span class="inv-st ${overdue ? 'verlopen' : esc(i.status)}">${esc(stLabel)}</span>${i.sentTo ? ` · naar ${esc(i.sentTo)}` : ''}${i.remindCount ? ` · ${i.remindCount}× herinnerd` : ''}${i.akkoordKlant ? ` · <span class="inv-akkoord" title="De klant tikte op ${esc(fmtDateShort(i.akkoordKlant.at))} op de akkoordknop${i.akkoordKlant.naam ? ` (${esc(i.akkoordKlant.naam)})` : ''}">online akkoord door klant</span>` : ''}${i.gecorrigeerdAt ? ` · <span class="inv-gecorr" title="Gecorrigeerd op ${esc(fmtDateShort(i.gecorrigeerdAt))}${(i.correcties || []).length ? ' — ' + esc(i.correcties[i.correcties.length - 1].reden || '') : ''}. Het factuurnummer is hetzelfde gebleven.">gecorrigeerd</span>` : ''}${i.bounce ? ` · <span class="inv-bounce" title="${esc(i.bounce.reden || '')}">mail NIET aangekomen — adres controleren</span>` : ''}${i.oninbaar ? ` · <span class="muted">afgeschreven ${esc(fmtDateShort(i.oninbaar.at))}${i.oninbaar.door ? ' door ' + esc(i.oninbaar.door) : ''}${i.oninbaar.reden ? ' — ' + esc(i.oninbaar.reden) : ''}</span>` : ''}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <strong style="font-size:15px">${eur(i.totalIncl)}</strong>
@@ -6896,7 +6896,7 @@ async function loadSettingsHtml(s) {
     </div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px" id="wa-pair-card"></div>
     <div data-sg="koppel" class="info-card" style="margin-bottom:18px"> <h3>${icon('whatsapp', 15)} WhatsApp-verbinding testen</h3>
-      <p class="muted small">Stuur een testbericht naar een nummer en zie hieronder of de bridge het écht verstuurt. Blijft een bericht op <strong>wachtrij</strong> staan of wordt het <strong>mislukt</strong>? Dan moet de bridge op de VPS worden bijgewerkt/herstart.</p>
+      <p class="muted small">Stuur een testbericht naar je <strong>eigen 06-nummer</strong>. Het gaat via het officiële nummer, net als elk bericht aan een klant. Heb je de laatste 24 uur zelf <strong>niet</strong> naar het bedrijfsnummer geappt, dan gaat het als <strong>sjabloon</strong> — zo test je meteen of het sjabloon bij Meta is goedgekeurd. Hieronder zie je wat er gebeurde: <em>verzonden als sjabloon</em> en daarna <em>afgeleverd</em> = goed; <strong>MISLUKT</strong> met de reden = niet goed.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
         <label style="margin:0;flex:1;min-width:180px">Telefoonnummer <input id="wt-phone" placeholder="bv. 0612345678"></label>
         <button class="btn btn-primary" id="wt-send" style="align-self:flex-end">Stuur testbericht</button>
@@ -6994,6 +6994,11 @@ async function loadSettingsHtml(s) {
       <label>Juridische tekst (kleine lettertjes onderaan) <textarea id="is-legal" rows="3">${esc(s.invoiceSettings?.legal || '')}</textarea></label>
       <label>Voettekst op de factuur <input id="is-footer" value="${esc(s.invoiceSettings?.footer || '')}"></label>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveInvoiceSettings">Factuurgegevens opslaan</button></div>
+    </div>
+    <div data-sg="facturen" class="info-card" id="akkoordKaart" style="margin-bottom:18px" data-geen-wijziging> <h3>${icon('check', 15)} Offerte online goedkeuren (akkoordknop)</h3>
+      <p class="muted small">Staat dit aan, dan krijgt de klant bij elke offerte (mail, WhatsApp, herinnering en de downloadpagina) een knop <strong>"Ja, ik ga akkoord"</strong>. Tikt hij daarop, dan staat de offerte op <strong>Goedgekeurd</strong>, staat het factuur-concept klaar (als dat hierboven aan staat), krijgt de opdracht "Klant reageerde" en krijg je een melding. Daarna plan je zelf de afspraak in. De link openen keurt nog niets goed; alleen de knop op die pagina. Een verlopen of afgekeurde offerte kan niet meer online worden goedgekeurd.</p>
+      <p class="muted small"><strong>Zelf testen:</strong> zet dit aan, maak een offerte voor jezelf (met je eigen e-mailadres), verstuur hem en tik in de mail op de groene knop.</p>
+      <div class="wa-auto-lijst"><label class="wa-auto-rij"><input type="checkbox" id="akkoord-aan" ${s.offerteAkkoord?.aan ? 'checked' : ''}><span><strong>Akkoordknop in offertes</strong><span class="muted small" id="akkoord-uitleg">${s.offerteAkkoord?.aan ? 'Aan: nieuwe offertes en herinneringen krijgen de knop.' : 'Uit: offertes gaan zonder knop, zoals altijd.'}</span></span></label></div>
     </div>
     <div data-sg="facturen" class="info-card" style="margin-bottom:18px"> <h3>${icon('tag', 15)} Prijslijst — vaste producten &amp; werkzaamheden</h3>
       <p class="muted small">Vul hier je vaste producten en werkzaamheden in mét prijs (<strong>excl. btw</strong>). De monteur klikt ze in de factuur met één tik aan — geen getyp meer. Bijvoorbeeld: "Voorrijkosten", "Afstellen sluitingen", "ROTO sluitingsmechanisme". <strong>Deze lijst is de baas:</strong> wijzig je hier een prijs, dan gaan pakketten met exact dezelfde omschrijving automatisch mee. Facturen en offertes die al bestaan blijven staan zoals ze zijn — die werk je bij met de knop <strong>"Prijzen bijwerken"</strong> in de editor.</p>
@@ -7249,7 +7254,7 @@ async function loadSettingsHtml(s) {
       werk: ['Kolommen (statussen)', 'Opdrachten naar monteur', 'Zelfde-moment-aanvragen', 'Wacht op antwoord', 'Snelle standaardantwoorden', 'DRS-rapport'],
       inbox: ['uit welke groep', 'E-mailfilter', 'Opdrachtgevers en tussenpersonen', 'Website-formulieren'],
       bericht: ['Automatische WhatsApp-berichten', 'E-mailcampagnes', 'ontvangstbevestiging', 'Afspraakbevestiging', 'Monteur onderweg', 'follow-up op offertes', 'Review-verzoek', 'Trustpilot', 'E-mail handtekening', 'Testmail'],
-      facturen: ['Factuurgegevens', 'Prijslijst', 'Pakketten'],
+      facturen: ['Factuurgegevens', 'Offerte online goedkeuren', 'Prijslijst', 'Pakketten'],
       team: ['Meldingen op je telefoon', 'WhatsApp-melding bij nieuwe aanvragen', 'ochtendbriefing', 'Wekelijkse AI-controle'],
       ai: ['Bedrijfsprofiel', 'Verkeer analyseren', 'AI laten leren filteren', 'AI-dagoverzicht'],
       koppel: ['Alle koppelingen in één oogopslag', 'Officiële WhatsApp', 'Wegwerpnummer pauzeren', '#wa-pair-card', 'WhatsApp-verbinding testen', 'WhatsApp-groepen koppelen', 'Google Agenda', 'abonnementslink'],
@@ -7437,9 +7442,9 @@ async function loadSettingsHtml(s) {
     if (!phone) return toast('Vul eerst een telefoonnummer in', true);
     try {
       await api('/api/whatsapp/test', 'POST', { phone });
-      toast('Testbericht in de wachtrij — de bridge verstuurt binnen ~10 sec');
+      toast('Testbericht klaargezet — het gaat binnen ~20 sec via het officiële nummer');
       await wtLoad();
-      setTimeout(wtLoad, 12000); // na de bridge-poll nog eens verversen
+      setTimeout(wtLoad, 25000); setTimeout(wtLoad, 60000); // na de verzendronde (elke 20 s) nog eens verversen
     } catch (err) { toast(err.message, true); }
   };
   $('#saveOnderweg').onclick = async () => {
@@ -7651,6 +7656,15 @@ async function loadSettingsHtml(s) {
         ${r.kwaliteit ? `<div class="muted small" style="margin-top:4px">Kwaliteitsscore bij Meta: ${esc(r.kwaliteit)}</div>` : ''}
       </div>`;
     } catch (err) { uit.innerHTML = `<span class="error small">${esc(err.message)}</span>`; }
+  };
+  // Akkoordknop in offertes (27 nov 2026): de schakelaar bewaart zichzelf.
+  if ($('#akkoord-aan')) $('#akkoord-aan').onchange = async () => {
+    const el = $('#akkoord-aan'); const aan = el.checked;
+    try {
+      const r = await api('/api/offerte-akkoord/instelling', 'POST', { aan });
+      const u = $('#akkoord-uitleg'); if (u) u.textContent = r.aan ? 'Aan: nieuwe offertes en herinneringen krijgen de knop.' : 'Uit: offertes gaan zonder knop, zoals altijd.';
+      toast(r.aan ? 'Akkoordknop staat aan' : 'Akkoordknop staat uit');
+    } catch (err) { toast(`NIET opgeslagen: ${err.message}`, true); el.checked = !aan; }
   };
   // E-mailcampagnes: proefmail aan jezelf en de aan/uit-knop (alleen de beheerder).
   if ($('#cmp-proef-btn')) $('#cmp-proef-btn').onclick = (ev) => eenKeer(ev.currentTarget, async () => {

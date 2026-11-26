@@ -26,6 +26,10 @@ node test/whatsapp-cloud-test.mjs
 # herkansing en eerlijke mislukking; een knop per automatisch WhatsApp-bericht; betaal- en
 # offerteherinnering via WhatsApp (start zelf een nep-Meta op 2659 en een server op PORT=3159)
 node test/whatsapp-route-test.mjs
+# Akkoordknop in offertes (27 nov): link in mail/WhatsApp/herinnering, openen keurt niets goed,
+# de knop wel (factuur-concept, regel in de opdracht, herinnering ingetrokken); start zelf een
+# nep-SMTP op 2661 en een server op PORT=3161
+node test/offerte-akkoord-test.mjs
 # Berichten-scherm: gesprekkenlijst, versturen via de wachtrij, kaart-koppeling,
 # gelezen-teller, monteur-weigering (PORT=3127)
 node test/chat-test.mjs

@@ -2981,6 +2981,31 @@ clear();
 }
 noErr('WhatsApp-knoppen en Campagnes aan/uit');
 
+// 27 NOV 2026 (voorstel 2): akkoordknop in offertes — schakelaar in Instellingen → Facturen & prijzen.
+clear();
+{
+  await page.evaluate(() => { try { localStorage.setItem('ksInstellingenGroep', 'facturen'); } catch { /* geen opslag */ } return goView('settings'); });
+  await page.waitForSelector('#akkoordKaart', { timeout: 10000, state: 'attached' }).catch(() => {}); await page.waitForTimeout(500);
+  // Het laatst gekozen onderwerp blijft binnen dezelfde sessie onthouden: kies Facturen & prijzen zelf.
+  await page.click('#settingsPanel .inst-item[data-g="facturen"]').catch(() => {}); await page.waitForTimeout(400);
+  const ak = await page.evaluate(() => { const k = document.querySelector('#akkoordKaart'); return { er: !!k, binnen: !!k && !!k.closest('.inst-inhoud'), zichtbaar: !!k && k.offsetParent !== null, aan: document.querySelector('#akkoord-aan')?.checked, testen: /Zelf testen/.test(k ? k.textContent : '') }; });
+  ok('akkoordknop: kaart in Facturen & prijzen, standaard UIT, met uitleg hoe je het zelf test', ak.er && ak.binnen && ak.zichtbaar && ak.aan === false && ak.testen, JSON.stringify(ak));
+  await page.evaluate(() => document.querySelector('#akkoordKaart').scrollIntoView({ block: 'center' }));
+  await page.check('#akkoord-aan'); await page.waitForTimeout(900);
+  const na = await page.evaluate(async () => ({ server: (await (await fetch('/api/settings')).json()).offerteAkkoord?.aan, uitleg: document.querySelector('#akkoord-uitleg')?.textContent || '', open: instellingenGewijzigd().length }));
+  ok('akkoordknop: aanzetten wordt meteen bewaard (geen "niet opgeslagen")', na.server === true && /^Aan:/.test(na.uitleg) && na.open === 0, JSON.stringify(na));
+  await page.uncheck('#akkoord-aan'); await page.waitForTimeout(900);
+  ok('akkoordknop: weer uit', (await page.evaluate(async () => (await (await fetch('/api/settings')).json()).offerteAkkoord?.aan)) === false);
+  // WhatsApp-test in Koppelingen legt nu uit hoe je het sjabloon test
+  await page.evaluate(() => { try { localStorage.setItem('ksInstellingenGroep', 'koppel'); } catch { /* geen opslag */ } return goView('overview').then(() => goView('settings')); });
+  await page.waitForSelector('#wt-phone', { timeout: 10000, state: 'attached' }).catch(() => {}); await page.waitForTimeout(400);
+  const wt = await page.evaluate(() => (document.querySelector('#wt-phone')?.closest('.info-card')?.textContent || ''));
+  ok('WhatsApp-test: legt uit dat het via het officiële nummer gaat en zo het sjabloon test', /officiële nummer/.test(wt) && /sjabloon/.test(wt) && !/bridge het écht verstuurt/.test(wt), wt.slice(0, 160));
+  await page.evaluate(() => goView('overview')); await page.waitForTimeout(600);
+  if (await page.$('#sluitVraag #sv-weg')) await page.click('#sluitVraag #sv-weg');
+}
+noErr('Akkoordknop in offertes');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

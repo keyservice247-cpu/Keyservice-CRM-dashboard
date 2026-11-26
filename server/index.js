@@ -51,6 +51,7 @@ import {
 import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen, MODELLEN, campagneVoorstellenAI, campagneTekstAI } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import * as campagnes from './campagnes.js';
+import { akkoordAan, zetAkkoordAan, akkoordToegang, akkoordStaat, akkoordLink, akkoordSig, akkoordRegel, geldigTot } from './offerte-akkoord.js';
 import * as mededelingen from './mededelingen.js';
 import { SJABLONEN, sjabloonVoorDoelgroep, isSjabloon, esc as escHtml } from './campagne-sjablonen.js';
 import { ensureBeheerderUitOmgeving } from './beheerder.js';
@@ -1468,6 +1469,76 @@ app.all('/k/:cid/:kid/:sig', (req, res) => {
   if (req.method !== 'GET') return res.status(204).end();
   const doel = escHtml(r.doel);
   res.send(afmeldPagina('Een ogenblik…', 'U wordt doorgestuurd. Gebeurt er niets? Tik dan op de knop.', `<a class="knop" href="${doel}">${escHtml(r.knopTekst)}</a>`).replace('<head>', `<head><meta http-equiv="refresh" content="0;url=${doel}">`));
+});
+// ---------- OFFERTE ONLINE GOEDKEUREN (27 nov 2026, zie server/offerte-akkoord.js) ----------
+// GET toont de offerte met één knop; alleen de knop (POST) keurt goed. Geen inlog; de link is
+// ondertekend. Werkt ook als de schakelaar later uit gaat (een verstuurde link blijft geldig).
+const AKKOORD_FOUT = ['Deze link werkt niet', 'De link is niet geldig of niet compleet. Reageer op de e-mail of het WhatsApp-bericht, dan helpen wij u verder.'];
+const euroTekst = (n) => `€ ${Number(n || 0).toFixed(2).replace('.', ',')}`;
+const nlDatumTekst = (d) => new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Amsterdam' }).format(new Date(d));
+function akkoordPaginaVoor(inv, staat, cfg) {
+  const kop = `Offerte ${escHtml(inv.number)}`;
+  const contact = cfg.phone ? ` of bel ${escHtml(cfg.phone)}` : '';
+  if (staat === 'al') return afmeldPagina('Bedankt, u bent akkoord', `U ging op ${escHtml(nlDatumTekst((inv.akkoordKlant && inv.akkoordKlant.at) || inv.acceptedAt || Date.now()))} akkoord met ${kop}. Wij nemen contact met u op om de werkzaamheden in te plannen.`);
+  if (staat === 'verlopen') return afmeldPagina(`${kop} is verlopen`, `Deze offerte was geldig tot ${escHtml(nlDatumTekst(geldigTot(inv, cfg.quoteValidDays)))}. Reageer op ons bericht${contact}, dan sturen wij u graag een nieuwe.`);
+  if (staat !== 'open') return afmeldPagina(`${kop}`, `Deze offerte kan niet meer online worden goedgekeurd. Reageer op ons bericht${contact}, dan helpen wij u verder.`);
+  return afmeldPagina(`${kop} goedkeuren`, `Van ${escHtml(cfg.companyName || 'Key Service 24/7')} · totaal <strong>${escHtml(euroTekst(inv.totalIncl))}</strong> incl. btw · geldig tot ${escHtml(nlDatumTekst(geldigTot(inv, cfg.quoteValidDays)))}.<br><br><a href="/bon/${encodeURIComponent(inv.id)}/${bonSig(inv.id)}/pdf" style="color:#1f4e9c">Bekijk de offerte (PDF)</a>`,
+    `<form method="post" action="/akkoord/${encodeURIComponent(inv.id)}/${akkoordSig(inv.id)}">
+      <label style="display:block;margin-top:18px;font-size:14px;color:#4a5466">Uw naam (optioneel)<input name="naam" maxlength="80" autocomplete="name" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;font:inherit;padding:10px;border:1px solid #c9d0db;border-radius:8px"></label>
+      <button type="submit" style="background:#1a7f4b;width:100%">Ja, ik ga akkoord met deze offerte</button>
+      <p style="margin-top:12px;font-size:13px">Vragen of iets aanpassen? Reageer op ons bericht${contact}.</p></form>`);
+}
+app.get('/akkoord/:id/:sig', (req, res) => {
+  afmeldKop(res);
+  const inv = akkoordToegang(String(req.params.id), String(req.params.sig));
+  if (!inv) return res.status(404).send(afmeldPagina(...AKKOORD_FOUT));
+  const cfg = getInvoiceSettings();
+  res.send(akkoordPaginaVoor(inv, akkoordStaat(inv, { quoteValidDays: cfg.quoteValidDays }), cfg));
+});
+app.post('/akkoord/:id/:sig', express.urlencoded({ extended: false, limit: '4kb' }), (req, res) => {
+  afmeldKop(res);
+  const inv = akkoordToegang(String(req.params.id), String(req.params.sig));
+  if (!inv) return res.status(404).send(afmeldPagina(...AKKOORD_FOUT));
+  const cfg = getInvoiceSettings();
+  const staat = akkoordStaat(inv, { quoteValidDays: cfg.quoteValidDays });
+  if (staat !== 'open') return res.send(akkoordPaginaVoor(inv, staat, cfg)); // al akkoord = gewoon de bevestiging
+  const naam = String((req.body && req.body.naam) || '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 80);
+  const customer = (db().customers || []).find((c) => c.id === inv.customerId) || {};
+  inv.status = 'goedgekeurd';
+  inv.acceptedAt = now();
+  inv.akkoordKlant = { at: inv.acceptedAt, via: 'link', naam };
+  const wie = naam || customer.name || 'de klant';
+  logActivity('klant', 'offerte goedgekeurd via de akkoordknop', `${inv.number} — ${wie}`);
+  let autoInvoice = null;
+  if (cfg.autoInvoiceOnAccept !== false) {
+    try { autoInvoice = autoConvertQuoteToInvoice(inv, 'klant (akkoordknop)'); } catch (e) { console.error('[akkoord-factuur]', e.message); }
+  }
+  // Klaarstaande herinneringen voor deze offerte zijn nu overbodig.
+  for (const it of db().outbox || []) {
+    if (it.status !== 'queued' || !['offerte-opvolging', 'follow-up'].includes(it.by)) continue;
+    if (it.invoiceRef !== inv.id && !(inv.orderId && it.orderId === inv.orderId)) continue;
+    it.status = 'failed'; it.lastResult = 'ingetrokken: klant ging online akkoord met de offerte'; it.ingetrokken = true;
+  }
+  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+  if (order) {
+    order.thread = order.thread || [];
+    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: false, sender: 'Systeem', body: `${wie} ging online akkoord met offerte ${inv.number} (${euroTekst(inv.totalIncl)} incl. btw).${autoInvoice ? ` Factuur-concept ${autoInvoice.number} staat klaar.` : ''} Neem contact op om in te plannen.`, at: now() });
+    order.customerReplied = true;
+    order.unreadReplies = (order.unreadReplies || 0) + 1;
+    order.lastCustomerReplyAt = now();
+    order.updatedAt = now();
+    if (order.monteurId) pushNaarMonteur(order, { title: 'Offerte goedgekeurd', body: `${order.title} — ${wie} ging akkoord` });
+  }
+  sendPush({ title: `Offerte ${inv.number} goedgekeurd`, body: `${wie} ging online akkoord (${euroTekst(inv.totalIncl)} incl. btw). Plan de werkzaamheden in.`, url: order ? `/?open=${order.id}` : '/', tag: `akkoord-${inv.id}` }).catch(() => {});
+  saveSoon();
+  res.send(afmeldPagina('Bedankt, u bent akkoord!', `Wij hebben uw akkoord op offerte ${escHtml(inv.number)} ontvangen. Wij nemen zo snel mogelijk contact met u op om de werkzaamheden in te plannen.`));
+});
+// De schakelaar (Instellingen → Facturen & prijzen). Uit = de link komt nergens in te staan.
+app.post('/api/offerte-akkoord/instelling', requirePerm('settings'), (req, res) => {
+  if (typeof req.body?.aan !== 'boolean') return res.status(400).json({ error: 'Geef aan of de akkoordknop aan of uit moet.' });
+  const aan = zetAkkoordAan(req.body.aan);
+  logActivity(req.user.name, `akkoordknop in offertes ${aan ? 'AAN' : 'UIT'}`, '');
+  res.json({ ok: true, aan });
 });
 app.get('/afmelden/:id/:sig', (req, res) => {
   afmeldKop(res);
@@ -3937,6 +4008,7 @@ app.get('/api/settings', requirePerm('settings'), (req, res) => {
     whatsappCloudSend: db().settings.whatsappCloudSend !== false,
     whatsappAuto: getWhatsappAuto(),
     whatsappAutoLijst: WHATSAPP_AUTO,
+    offerteAkkoord: { aan: akkoordAan() },
     campagnesAan: campagnes.campagnesAan(), campagnesKanVersturen: smtpConfigured() && !TEST,
     whatsappCloudTemplate: String(db().settings.whatsappCloudTemplate ?? 'keyservice_bericht'),
     bridgeGroupsOnly: true, // vaste regel sinds 27 nov 2026 (oude schermen lezen dit nog)
@@ -5777,7 +5849,8 @@ a.dl{display:block;background:#1d4f9c;color:#fff;text-decoration:none;padding:15
 <h1>${titel}</h1>
 <p>van ${cfg.companyName || 'Key Service 24/7'}</p>
 <a class="dl" href="/bon/${inv.id}/${req.params.sig}/pdf">Download ${isQuote ? 'offerte' : 'factuur'} (PDF)</a>
-<div class="voet">Vragen? Reageer gerust op ons WhatsApp-bericht${cfg.companyPhone ? ` of bel ${cfg.companyPhone}` : ''}.</div>
+${isQuote && akkoordAan() && akkoordStaat(inv, { quoteValidDays: cfg.quoteValidDays }) === 'open' ? `<a class="dl" style="margin-top:12px;background:#1a7f4b" href="/akkoord/${inv.id}/${akkoordSig(inv.id)}">Ja, ik ga akkoord met de offerte</a>` : ''}
+<div class="voet">Vragen? Reageer gerust op ons WhatsApp-bericht${cfg.phone ? ` of bel ${cfg.phone}` : ''}.</div>
 </div></body></html>`);
 });
 app.get('/bon/:id/:sig/pdf', async (req, res) => {
@@ -5922,9 +5995,13 @@ app.post('/api/invoices/:id/send-whatsapp', requireAuth, async (req, res) => {
     if (!saved) { herstelBetaaldKeuze(inv, vorigBetaald); return res.status(500).json({ error: 'PDF klaarzetten mislukt.' }); }
     inv.waPdfFile = saved.file;
     const cfg = getInvoiceSettings();
-    const tekst = String(req.body?.text || '').trim()
+    let tekst = String(req.body?.text || '').trim()
       || `Beste ${customer.name || 'klant'},\n\nHierbij ${isQuote ? 'de offerte' : 'de factuur'} ${inv.number} van ${cfg.companyName || 'Keyservice'}.${!isQuote && inv.status === 'betaald' ? ' Deze is al voldaan — bedankt voor uw betaling; u ontvangt hem voor uw administratie.' : ''}\n\nMet vriendelijke groet,\n${cfg.companyName || 'Keyservice'}`;
     const bonLink = `${CLOUD_UIT_ADRES()}/bon/${inv.id}/${bonSig(inv.id)}`;
+    // Akkoordknop (27 nov 2026): de link gaat mee als de schakelaar aan staat — ook onder een
+    // zelf getypte tekst, tenzij die hem al bevat.
+    const akkoordZin = isQuote ? akkoordRegel(inv, { kort: true }) : '';
+    if (akkoordZin && !tekst.includes('/akkoord/')) tekst = `${tekst}\n\n${akkoordZin}`;
     db().outbox.unshift({
       id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__',
       text: tekst, orderId: inv.orderId || undefined, status: 'queued', createdAt: now(),
@@ -6003,7 +6080,7 @@ app.post('/api/invoices/:id/send', requireAuth, async (req, res) => {
     const bedrag = `€ ${inv.totalIncl.toFixed(2).replace('.', ',')}`;
     // Geen interne opdrachttitel in de mail aan de klant (12 okt 2026, wens eigenaar).
     const body = isQuote
-      ? `Beste ${customer.name || 'klant'},\n\nBedankt voor uw aanvraag. In de bijlage vindt u onze offerte ${inv.number}.\nTotaalbedrag: ${bedrag} incl. btw. Deze offerte is ${cfg.quoteValidDays || 30} dagen geldig.\n\nGaat u akkoord? Reageer op deze e-mail of bel ons — dan plannen we de werkzaamheden direct in.`
+      ? `Beste ${customer.name || 'klant'},\n\nBedankt voor uw aanvraag. In de bijlage vindt u onze offerte ${inv.number}.\nTotaalbedrag: ${bedrag} incl. btw. Deze offerte is ${cfg.quoteValidDays || 30} dagen geldig.\n\n${akkoordRegel(inv) ? `${akkoordRegel(inv)}\n\nVragen of iets aanpassen? Reageer op deze e-mail of bel ons.` : 'Gaat u akkoord? Reageer op deze e-mail of bel ons — dan plannen we de werkzaamheden direct in.'}`
       : inv.status === 'betaald'
         ? `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ' voor de uitgevoerde werkzaamheden' : ''}.\nTotaalbedrag: ${bedrag} — deze factuur is al voldaan. Bedankt voor uw betaling; u ontvangt hem voor uw administratie.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`
         : `Beste ${customer.name || 'klant'},\n\nIn de bijlage vindt u factuur ${inv.number}${order ? ' voor de uitgevoerde werkzaamheden' : ''}.\nTotaalbedrag: ${bedrag} — graag betalen binnen ${cfg.paymentDays} dagen${cfg.iban ? ` op ${cfg.iban}` : ''} o.v.v. het factuurnummer.\n\nVragen over deze factuur? Reageer gerust op deze e-mail.`;

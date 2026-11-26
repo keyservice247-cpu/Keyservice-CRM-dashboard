@@ -2131,3 +2131,5 @@ table th { font-size: 12px; font-weight: 500; letter-spacing: .03em; color: var(
 .wa-auto-rij input[type="checkbox"]:checked::after { transform: translateX(18px); }
 .wa-auto-rij input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent, #1f4e9c); outline-offset: 2px; }
 
+/* Offerte online goedgekeurd door de klant (27 nov 2026) */
+.inv-akkoord { color: #1a7f4b; font-weight: 600; }

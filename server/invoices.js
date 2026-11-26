@@ -15,6 +15,7 @@ import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import crypto from 'node:crypto';
 import { getEmailSignature, appointmentStatusKey, whatsappAutoAan } from './settings.js';
 import { syncAutoIncomeForInvoice } from './finance.js';
+import { akkoordRegel } from './offerte-akkoord.js';
 
 const LOGO_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'img', 'logo-factuur.png');
 
@@ -509,7 +510,7 @@ export async function sendQuoteFollowup(inv, { by = 'systeem', handmatig = false
     try {
       const pdf = await buildInvoicePdf(inv, order || {}, customer);
       const sig = getEmailSignature(afzender);
-      const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (${bedrag} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!`;
+      const body = `Beste ${customer.name || 'klant'},\n\nEen tijdje geleden stuurden wij u onze offerte ${inv.number} (${bedrag} incl. btw). We horen graag of u nog vragen heeft of dat u verder wilt — dan plannen we de werkzaamheden graag voor u in.\n\nDe offerte zit voor het gemak nogmaals in de bijlage. Laat gerust weten hoe u erover denkt!${akkoordRegel(inv) ? `\n\n${akkoordRegel(inv)}` : ''}`;
       await sendMail({
         to, subject: `Nog vragen over offerte ${inv.number}? — ${cfg.companyName}`,
         text: sig ? `${body}\n\n${sig}` : body,
@@ -523,7 +524,7 @@ export async function sendQuoteFollowup(inv, { by = 'systeem', handmatig = false
     }
   }
   if (phone) {
-    const text = `Beste ${customer.name || 'klant'}, een tijdje geleden stuurden wij u offerte ${inv.number} (${bedrag} incl. btw). Heeft u nog vragen, of wilt u dat we de werkzaamheden inplannen? Reageer gerust op dit bericht — we helpen u graag verder. — ${cfg.companyName}`;
+    const text = `Beste ${customer.name || 'klant'}, een tijdje geleden stuurden wij u offerte ${inv.number} (${bedrag} incl. btw). Heeft u nog vragen, of wilt u dat we de werkzaamheden inplannen? Reageer gerust op dit bericht — we helpen u graag verder.${akkoordRegel(inv, { kort: true }) ? ` ${akkoordRegel(inv, { kort: true })}` : ''} — ${cfg.companyName}`;
     zetKlantAppKlaar({ phone, text, inv, order, by: 'offerte-opvolging', afzenderLabel: 'Keyservice (offerte-opvolging)' });
     via.push('whatsapp');
   }
