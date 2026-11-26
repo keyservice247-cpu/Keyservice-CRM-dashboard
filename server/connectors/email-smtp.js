@@ -173,7 +173,7 @@ export function emailAdresProbleem(to) {
   return '';
 }
 
-export async function sendMail({ to, subject, text, attachments, inReplyTo, references, afzender = null, automatisch = false, bcc = '' }) {
+export async function sendMail({ to, subject, text, attachments, inReplyTo, references, afzender = null, automatisch = false, bcc = '', html: eigenHtml = '' }) {
   const tx = await getTransporter();
   if (!tx) throw new Error('SMTP niet geconfigureerd op de server');
   if (!to) throw new Error('Geen ontvanger (e-mailadres) opgegeven');
@@ -194,10 +194,12 @@ export async function sendMail({ to, subject, text, attachments, inReplyTo, refe
     if (bcc) mail.bcc = bcc;
     if (attachments && attachments.length) mail.attachments = attachments;
     // Nette HTML-versie met de huisstijl-handtekening (tekst blijft als fallback).
-    const html = wrapHtmlMail(text || '', afzender);
+    // `html` meegegeven (campagne met een sjabloon, 26 nov 2026)? Dan is dát de opmaak; de platte
+    // tekst blijft de terugval voor mailprogramma's zonder HTML.
+    const html = eigenHtml || wrapHtmlMail(text || '', afzender);
     if (html) {
       mail.html = html;
-      if (fs.existsSync(LOGO_PATH)) {
+      if (fs.existsSync(LOGO_PATH) && (!eigenHtml || eigenHtml.includes('cid:kslogo'))) {
         mail.attachments = [...(mail.attachments || []), { filename: 'logo.png', path: LOGO_PATH, cid: 'kslogo', contentDisposition: 'inline' }];
       }
     }

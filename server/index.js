@@ -51,6 +51,8 @@ import {
 import { aiMode, suggestReply, scoreRelevance, analyzeTraffic, learnFilterRules, askAssistant, suggestStatusChanges, dayOverview, extractDetails, testAiModellen, MODELLEN, campagneVoorstellenAI, campagneTekstAI } from './ai/categorizer.js';
 import { ensureSeed } from './seed.js';
 import * as campagnes from './campagnes.js';
+import * as mededelingen from './mededelingen.js';
+import { SJABLONEN, sjabloonVoorDoelgroep, isSjabloon } from './campagne-sjablonen.js';
 import { ensureBeheerderUitOmgeving } from './beheerder.js';
 import { vulTestdata } from './testdata.js';
 import { amsterdamParts, amsMidnightMs, weekBounds } from './week.js';
@@ -151,7 +153,7 @@ const ruweBody = (req, res, buf) => { req.rawBody = buf; };
 // anders — met name op /api/ingest/form, dat zonder token bereikbaar is.
 const jsonKlein = express.json({ limit: '2mb', verify: ruweBody });
 const jsonGroot = express.json({ limit: '40mb', verify: ruweBody });
-const UPLOAD_PADEN = /\/(attachments|werkbon|import-preview|import)$/;
+const UPLOAD_PADEN = /\/(attachments|werkbon|import-preview|import|foto)$/;
 // Kaart-bijlage (foto/video vanaf de telefoon): eigen, snelle lezer die de base64 niet
 // in één ruk op de hoofdthread omzet (28 sep 2026, audit server GEMIST 1; zie
 // server/upload-body.js). Valt bij alles wat afwijkt terug op jsonGroot.
@@ -1283,6 +1285,9 @@ app.get('/api/campagnes', requireRole('admin', 'assistent'), (req, res) => {
     doelgroepen: campagnes.DOELGROEPEN.map((d) => ({ key: d.key, naam: d.naam, uitleg: d.uitleg, param: d.param || '', standaard: d.standaard || {} })),
     telling: campagnes.doelgroepTelling(feiten, { rustDagen: inst.rustDagen }),
     instellingen: inst, vandaagVerstuurd: campagnes.vandaagVerstuurd(),
+    // Opmaak: de vaste sjablonen (met hun standaardteksten) en wat er onder de mail komt te staan.
+    sjablonen: SJABLONEN.map((x) => ({ key: x.key, naam: x.naam, uitleg: x.uitleg, kleur: x.kleur || '', kop: x.kop || '', onderwerp: x.onderwerp || '', tekst: x.tekst || '', knopTekst: x.knopTekst || '', knopSoort: x.knopSoort || '' })),
+    bedrijf: campagnes.bedrijfVoorMail(),
     kanVersturen: smtpConfigured() && !TEST, testomgeving: TEST, aiAan: aiMode() === 'ai',
   });
 });
@@ -1301,17 +1306,20 @@ app.post('/api/campagnes/voorstellen', requireRole('admin', 'assistent'), async 
     return { doelgroep: c.doelgroep, onderwerp: c.onderwerp, dagenGeleden: r.dagenGeleden, verstuurd: r.verstuurd, reacties: r.reacties, nieuweOpdrachten: r.opdrachten, afgemeld: r.afgemeld };
   });
   const doelgroepen = campagnes.DOELGROEPEN.map((d) => ({ key: d.key, naam: d.naam, uitleg: d.uitleg }));
-  const ai = aiMode() === 'ai' ? await campagneVoorstellenAI({ telling, doelgroepen, maand, eerdere, companyProfile: getCompanyProfile() }) : null;
+  const ai = aiMode() === 'ai' ? await campagneVoorstellenAI({ telling, doelgroepen, maand, eerdere, companyProfile: getCompanyProfile(), sjablonen: SJABLONEN.map((x) => ({ key: x.key, naam: x.naam, uitleg: x.uitleg })) }) : null;
   const ruw = ai ? ai.voorstellen : campagnes.regelVoorstellen(telling, { maand, eerdere });
   // Bij elk voorstel het ECHTE aantal ontvangers volgens de vaste regels (niet wat de AI denkt).
-  const voorstellen = ruw.map((v) => ({ ...v, doelgroepNaam: campagnes.doelgroepNaam(v.doelgroep), bereikbaar: campagnes.voorbeeldOntvangers({ doelgroep: v.doelgroep, params: v.params || {} }).ontvangers.length }))
+  // Het sjabloon: wat de AI koos (alleen een bestaand), anders wat bij de doelgroep past.
+  const voorstellen = ruw.map((v) => ({ ...v, sjabloon: isSjabloon(v.sjabloon) ? v.sjabloon : sjabloonVoorDoelgroep(v.doelgroep), doelgroepNaam: campagnes.doelgroepNaam(v.doelgroep), bereikbaar: campagnes.voorbeeldOntvangers({ doelgroep: v.doelgroep, params: v.params || {} }).ontvangers.length }))
     .filter((v) => v.bereikbaar > 0);
   res.json({ voorstellen, bron: ai ? 'ai' : 'regels', engine: ai ? ai.engine : 'vaste regels', aiAan: aiMode() === 'ai' });
 });
 app.post('/api/campagnes/ai-tekst', requireRole('admin', 'assistent'), async (req, res) => {
   const b = req.body || {};
   try {
-    res.json(await campagneTekstAI({ wens: b.wens, doelgroepNaam: campagnes.doelgroepNaam(b.doelgroep), onderwerp: b.onderwerp, tekst: b.tekst, companyProfile: getCompanyProfile() }));
+    const sj = campagnes.sjabloonVan(b.opmaak && b.opmaak.sjabloon);
+    res.json(await campagneTekstAI({ wens: b.wens, doelgroepNaam: campagnes.doelgroepNaam(b.doelgroep), onderwerp: b.onderwerp, tekst: b.tekst, companyProfile: getCompanyProfile(),
+      sjabloon: sj.key === 'tekst' ? null : { naam: sj.naam, kop: (b.opmaak && b.opmaak.kop) || sj.kop, knopTekst: (b.opmaak && b.opmaak.knopTekst) || sj.knopTekst } }));
   } catch (e) { res.status(503).json({ error: e.message }); }
 });
 app.get('/api/campagnes/:id', requireRole('admin', 'assistent'), (req, res) => {
@@ -1339,9 +1347,36 @@ app.post('/api/campagnes/:id/test', requireRole('admin', 'assistent'), async (re
   if (!c.onderwerp || !c.tekst) return res.status(400).json({ error: 'Vul eerst een onderwerp en een bericht in.' });
   if (!smtpConfigured() || TEST) return res.status(503).json({ error: TEST ? 'De testomgeving verstuurt geen e-mail. Op de live-site werkt de testmail wel.' : 'E-mail versturen (SMTP) is nog niet ingesteld.' });
   try {
-    await sendMail({ to: naar, subject: `[TEST] ${c.onderwerp}`, text: campagnes.vulTekst(c.tekst, { naam: 'Voorbeeldklant', plaats: 'Voorbeeldstad' }) + '\n\n(Dit is een testmail. Onder de echte mail staat een afmeldlink.)', afzender: afzenderVan(req) });
+    const m = campagnes.mailVoor(c, { naam: 'Voorbeeldklant', plaats: 'Voorbeeldstad' });
+    await sendMail({ to: naar, subject: `[TEST] ${c.onderwerp}`, text: m.text + '\n\n(Dit is een testmail. Onder de echte mail staat een afmeldlink.)', html: m.html || '', attachments: m.attachments || [], afzender: afzenderVan(req) });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// OPMAAK (26 nov 2026): voorbeeld van de mail zoals de klant hem ziet, en de eigen foto bovenaan.
+app.post('/api/campagnes/voorbeeld-html', requireRole('admin', 'assistent'), (req, res) => {
+  const b = req.body || {};
+  const c = b.id ? campagnes.vindCampagne(String(b.id)) : null;
+  const proef = { id: c ? c.id : 'nieuw', onderwerp: String(b.onderwerp || '').slice(0, 200), tekst: String(b.tekst || '').slice(0, 8000), opmaak: b.opmaak, foto: c ? c.foto : null };
+  const m = campagnes.mailVoor(proef, { naam: 'Voorbeeldklant', plaats: 'Voorbeeldstad' }, { voorbeeld: true });
+  res.json({ html: m.html || '', tekst: m.text });
+});
+app.post('/api/campagnes/:id/foto', requireRole('admin', 'assistent'), (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  try {
+    const ruw = String(req.body?.dataBase64 || '').replace(/^data:[^,]*,/, '');
+    campagnes.zetFoto(c, Buffer.from(ruw, 'base64'), req.body?.mime);
+    res.json(campagnes.campagneUitvoer(c));
+  } catch (e) { campagneFout(res, e); }
+});
+app.get('/api/campagnes/:id/foto', requireRole('admin', 'assistent'), (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  const pad = campagnes.fotoPad(c);
+  if (!pad || !fs.existsSync(pad)) return res.status(404).json({ error: 'Geen foto' });
+  res.set('Cache-Control', 'private, max-age=3600'); res.type(c.foto.mime || 'image/jpeg'); res.sendFile(pad);
+});
+app.delete('/api/campagnes/:id/foto', requireRole('admin', 'assistent'), (req, res) => {
+  const c = campagneOf404(req, res); if (!c) return;
+  try { campagnes.haalFotoWeg(c); res.json(campagnes.campagneUitvoer(c)); } catch (e) { campagneFout(res, e); }
 });
 // VERSTUREN OF INPLANNEN: het enige moment waarop een campagne "aan" gaat — een klik van een mens.
 app.post('/api/campagnes/:id/start', requireRole('admin', 'assistent'), (req, res) => {
@@ -1366,7 +1401,9 @@ app.post('/api/campagnes/:id/:actie(pauze|hervat|stop|concept)', requireRole('ad
   } catch (e) { campagneFout(res, e); }
 });
 app.post('/api/campagnes/instellingen', requireRole('admin'), (req, res) => {
-  res.json(campagnes.zetCampagneInstellingen({ rustDagen: req.body?.rustDagen, perDag: req.body?.perDag }));
+  const b = req.body || {}; const invoer = {};
+  for (const k of ['rustDagen', 'perDag', 'whatsapp']) if (b[k] !== undefined) invoer[k] = b[k];
+  res.json(campagnes.zetCampagneInstellingen(invoer));
 });
 // AFMELDEN via de link onder de mail: geen login, ondertekende link. De link OPENEN meldt nog
 // niemand af — mailprogramma's en virusscanners openen links in een mail vaak uit zichzelf, en
@@ -6520,7 +6557,33 @@ app.get('/api/pulse', requireAuth, (req, res) => {
       : (req.user.role === 'monteur' ? monteurChatsOngelezen(req) : 0),
     // DRS-opdrachten die nog niet aan DRS gemeld zijn (badge op de knop DRS-rapport).
     drsTeMelden: ['admin', 'assistent'].includes(req.user.role) ? drsTeMeldenTeller() : 0,
+    // Ongelezen mededelingen van de beheerder voor deze gebruiker (balk bovenaan het scherm).
+    meded: mededelingen.mijnOngelezen(req.user).map((m) => m.id).join(','),
   });
+});
+
+// ---------- MEDEDELINGEN AAN HET TEAM (26 nov 2026, zie mededelingen.js) ----------
+const mededelingOf404 = (req, res) => { const m = mededelingen.vind(String(req.params.id || '')); if (!m) res.status(404).json({ error: 'Mededeling niet gevonden' }); return m; };
+app.get('/api/mededelingen', requireAuth, (req, res) => {
+  res.json({ mijn: mededelingen.mijnOngelezen(req.user), ...(req.user.role === 'admin' ? { alle: mededelingen.voorBeheer() } : {}) });
+});
+app.post('/api/mededelingen', requireRole('admin'), (req, res) => {
+  try {
+    const m = mededelingen.plaats(req.body || {}, req.user);
+    // Ook als melding op de telefoon van wie het aangaat (wie meldingen aan heeft staan).
+    const aan = m.voor === 'monteurs' ? { userIds: (db().users || []).filter((u) => u.role === 'monteur').map((u) => u.id) } : m.voor === 'kantoor' ? 'kantoor' : 'iedereen';
+    sendPush({ title: `Mededeling: ${m.titel}`, body: (m.tekst || `Van ${m.door}`).slice(0, 160), url: '/', tag: `med-${m.id}`, aan }).catch(() => {});
+    res.json({ ok: true, id: m.id, alle: mededelingen.voorBeheer() });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.post('/api/mededelingen/:id/gelezen', requireAuth, (req, res) => {
+  const m = mededelingOf404(req, res); if (!m) return;
+  try { mededelingen.markeerGelezen(m, req.user); res.json({ ok: true, mijn: mededelingen.mijnOngelezen(req.user) }); } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.delete('/api/mededelingen/:id', requireRole('admin'), (req, res) => {
+  const m = mededelingOf404(req, res); if (!m) return;
+  mededelingen.trekIn(m, req.user);
+  res.json({ ok: true, alle: mededelingen.voorBeheer() });
 });
 let _drsTellerCache = { sleutel: '', lijst: [] };
 // De DRS-opdrachten die nog gemeld moeten worden (als onderdelen, voor Start); de teller is de lengte.

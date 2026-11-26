@@ -376,6 +376,7 @@ function hasPerm(key) {
   // Meldingen nog niet aan op dit toestel? Balk met één knop (alle rollen). Start wacht
   // er kort op (max 300 ms) zodat de balk niet ná de eerste tekening alles omlaag duwt.
   window._pushHintKlaar = checkPushHint();
+  laadMededelingen().catch(() => {});
   await refreshAll();
   // Na een zelf-herlaad (nieuwe versie) terug naar hetzelfde scherm (28 sep 2026).
   await herstelPlekNaHerlaad();
@@ -564,6 +565,8 @@ async function startLiveUpdates() {
       if (bnc) { bnc.textContent = ong; bnc.hidden = !ong; }
       const drsB = $('#drsReportBadge');
       if (drsB) { const n = p.drsTeMelden || 0; drsB.textContent = n; drsB.hidden = !n; }
+      // Nieuwe (of door de beheerder ingetrokken) mededeling → de balk bovenaan bijwerken.
+      if ((p.meded || '') !== (window._mededSleutel ?? '')) laadMededelingen().catch(() => {});
       // Mailbox bijna vol? Rood lampje in de zijbalk (verdwijnt vanzelf na opruimen).
       const mw = $('#mailboxWarn');
       if (mw) {
@@ -1624,6 +1627,8 @@ function nieuwPunten() {
     ['Start in twee kolommen', 'Links wat je moet doen (Eerst doen, dagoverzicht, weekrapport), rechts vandaag (taken, afspraken, wie wacht op antwoord).'],
     ['Opdrachten: snel filteren', 'Boven het bord staan knoppen: Klant reageerde, Spoed, DRS, Eigen en Ligt stil. De keuzelijsten zijn er nog. De knoppen (Status-scan, DRS-rapport, Plak opdracht …) staan rechtsboven naast "+ Nieuwe opdracht".'],
     ['Inbox: lijst en bericht', 'Links de lijst, rechts het gekozen bericht met alle velden. Het vinkje voor bulk-acties staat in de lijst. Op de telefoon staat alles nog onder elkaar.'],
+    ['Nieuw: mededeling aan het team', 'Alleen de beheerder: op Start de knop "Mededeling aan team". Het bericht staat bij de gekozen mensen bovenaan tot ze op Gelezen tikken; je ziet wie het gelezen heeft.'],
+    ['Nieuw: campagne met opmaak', 'Bij een campagne kies je een van de drie vaste sjablonen (Schuifpuien, Kozijnonderhoud, Sloten & cilinders) of alleen tekst. Je kunt een eigen foto toevoegen en het voorbeeld bekijken op computer- en telefoonbreedte.'],
     ['Nieuw: afvinken op Start', 'Elke regel op Start heeft een vinkje (op de telefoon: wegvegen). Afgevinkt is weg van Start tot er iets nieuws bij komt; de opdracht of factuur zelf verandert niet. Terugzetten kan via "Ongedaan maken" of "afgevinkt · bekijken".'],
     ['Nieuw: Campagnes', 'E-mail naar bestaande klanten, onder Klanten & geld. Laat campagnes voorstellen, kies een doelgroep, lees de tekst na en verstuur of plan in. Er gaat niets uit zonder jouw klik, en je ziet daarna hoeveel reacties en opdrachten het opleverde.'],
     ['Menu', 'E-mail en WhatsApp staan niet meer los in het menu: het zijn de knoppen Alle · E-mail · WhatsApp boven het bord bij Opdrachten.'],
@@ -1999,7 +2004,7 @@ async function laadWeekrapport(stil = false) {
           <div class="wr-kpi" title="Afgeronde opdrachten deze week gedeeld door nieuwe opdrachten deze week. Geen echte conversie (kan boven 100% komen) — die staat op Cijfers."><span class="wr-num">${r.conversie === null ? '—' : r.conversie + '%'}</span><span>afgerond t.o.v. nieuw</span></div>
         </div>
         <div class="wr-tabel"><table style="margin-top:12px"><thead><tr><th>Monteur</th><th>Afgerond</th>${r.zonderGeld ? '' : '<th>Omzet</th>'}<th>Afspraken</th><th>Nu actief</th></tr></thead>
-        <tbody>${(r.perMonteur || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.afgerond}</td>${r.zonderGeld ? '' : `<td>${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td>`}<td>${m.afspraken}</td><td>${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table></div>
+        <tbody>${(r.perMonteur || []).map((m) => `<tr><td data-l="Monteur">${esc(m.name)}</td><td data-l="Afgerond">${m.afgerond}</td>${r.zonderGeld ? '' : `<td data-l="Omzet">${euro(m.omzet)}${m.zonderBedrag ? `<div class="muted small wr-zonder" title="Afgerond zonder factuur én zonder prijsveld">${m.zonderBedrag} zonder bedrag</div>` : ''}</td>`}<td data-l="Afspraken">${m.afspraken}</td><td data-l="Nu actief">${m.actief}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nog geen monteurs</td></tr>'}</tbody></table></div>
         ${r.zonderGeld ? '' : `<p class="muted small" style="margin-top:8px">Omzet = de <strong>factuur</strong> van de afgeronde opdracht (excl. btw); zonder factuur telt het <strong>prijsveld</strong> zoals het is ingevuld (dat kan incl. btw zijn).${r.zonderBedrag ? ` <strong>${r.zonderBedrag} afgeronde opdracht(en) hebben nog geen factuur en geen prijs</strong> — die tellen als € 0. Maak de factuur of vul de prijs in.` : ''}</p>`}`;
     box.classList.remove('wr-laden');
     if (html === window._lastWeekHtml && box.childNodes.length) return;
@@ -4451,7 +4456,7 @@ function tekenCampagneVoorstellen() {
   vak.innerHTML = `<div class="info-card cmp-kaart"><div class="cmp-kop"><h3>Voorstellen</h3><span class="muted small">${v.bron === 'ai' ? 'Bedacht door de AI op basis van aantallen per doelgroep — geen klantgegevens gedeeld.' : 'Op basis van vaste regels (de AI staat uit of was niet bereikbaar).'} Een voorstel verstuurt niets: jij maakt er een concept van.</span><button type="button" class="btn btn-sm" id="cmpVoorstelWeg">Sluiten</button></div>
     <div class="cmp-voorstellen">${v.voorstellen.map((x, i) => `
       <div class="cmp-voorstel">
-        <div class="cmp-rij-hoofd"><span class="cmp-naam">${esc(x.titel)}</span><span class="cmp-status">${esc(x.doelgroepNaam)} · ${x.bereikbaar} ${x.bereikbaar === 1 ? 'ontvanger' : 'ontvangers'}</span></div>
+        <div class="cmp-rij-hoofd"><span class="cmp-naam">${esc(x.titel)}</span><span class="cmp-status">${esc(x.doelgroepNaam)} · ${x.bereikbaar} ${x.bereikbaar === 1 ? 'ontvanger' : 'ontvangers'}${x.sjabloon && x.sjabloon !== 'tekst' ? ` · sjabloon ${esc((((_cmp.data || {}).sjablonen || []).find((y) => y.key === x.sjabloon) || {}).naam || x.sjabloon)}` : ''}</span></div>
         <p class="cmp-waarom">${esc(x.waarom)}</p>
         ${x.moment ? `<p class="muted small">Beste moment: ${esc(x.moment)}</p>` : ''}
         <details class="cmp-tekst"><summary>Onderwerp: “${esc(x.onderwerp)}” — lees de tekst</summary><pre>${esc(x.tekst)}</pre></details>
@@ -4461,11 +4466,27 @@ function tekenCampagneVoorstellen() {
   $$('#cmpVoorstellen [data-vst]').forEach((b) => b.onclick = () => eenKeer(b, async () => {
     const x = v.voorstellen[Number(b.dataset.vst)];
     try {
-      const c = await api('/api/campagnes', 'POST', { naam: x.titel, onderwerp: x.onderwerp, tekst: x.tekst, doelgroep: x.doelgroep, params: x.params || {}, waarom: x.waarom, bron: x.bron });
+      const c = await api('/api/campagnes', 'POST', { naam: x.titel, onderwerp: x.onderwerp, tekst: x.tekst, doelgroep: x.doelgroep, params: x.params || {}, waarom: x.waarom, bron: x.bron, opmaak: { sjabloon: x.sjabloon || 'tekst', kop: x.kop || '', knopTekst: x.knopTekst || '' } });
       toast('Concept gemaakt — lees het na voordat je verstuurt');
       await loadCampagnes(); openCampagne(c.id);
     } catch (err) { toast(err.message, true); }
   }));
+}
+// Een foto verkleinen in de browser (max. breedte, JPEG) → base64 zonder voorvoegsel.
+function verkleinFoto(bestand, maxBreed = 1200, kwaliteit = 0.82) {
+  return new Promise((klaar, fout) => {
+    const url = URL.createObjectURL(bestand); const img = new Image();
+    img.onload = () => {
+      try {
+        const schaal = Math.min(1, maxBreed / (img.naturalWidth || 1));
+        const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(img.naturalWidth * schaal)); cv.height = Math.max(1, Math.round(img.naturalHeight * schaal));
+        const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height); ctx.drawImage(img, 0, 0, cv.width, cv.height);
+        klaar(cv.toDataURL('image/jpeg', kwaliteit).replace(/^data:[^,]*,/, ''));
+      } catch (e) { fout(new Error('Deze foto kan niet worden verwerkt. Kies een JPG of PNG.')); } finally { URL.revokeObjectURL(url); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); fout(new Error('Deze foto kan niet worden gelezen. Kies een JPG of PNG.')); };
+    img.src = url;
+  });
 }
 async function openCampagne(cid) {
   let c;
@@ -4491,6 +4512,20 @@ function openCampagneConcept(c) {
     <label>Onderwerp <input id="cm-onderwerp" value="${esc(nu.onderwerp || '')}" maxlength="200" placeholder="bv. Loopt uw schuifpui nog soepel?"></label>
     <label>Bericht <textarea id="cm-tekst" rows="9">${esc(nu.tekst || '')}</textarea></label>
     <div class="muted small"><code>{naam}</code> wordt de naam van de klant, <code>{plaats}</code> de woonplaats. De handtekening en een afmeldlink komen er vanzelf onder.</div>
+    <div class="form-sec">Opmaak</div>
+    <div class="cmp-sj" id="cm-sjablonen">${(d.sjablonen || []).map((x) => `<button type="button" class="cmp-sj-knop${x.key === ((nu.opmaak || {}).sjabloon || 'tekst') ? ' aan' : ''}" data-sj="${esc(x.key)}" title="${esc(x.uitleg)}"><span class="cmp-sj-kleur" style="background:${esc(x.kleur || '#c9cfd9')}"></span>${esc(x.naam)}</button>`).join('')}</div>
+    <div id="cm-opmaak" hidden>
+      <label>Kop bovenaan de mail <input id="cm-kop" maxlength="90" value="${esc((nu.opmaak || {}).kop || '')}" placeholder="bv. Loopt uw schuifpui nog soepel?"></label>
+      <div class="row"><label>Tekst op de knop <input id="cm-knoptekst" maxlength="40" value="${esc((nu.opmaak || {}).knopTekst || '')}"></label>
+        <label>Wat doet de knop <select id="cm-knopsoort">${[['bel', `Belt ons${(d.bedrijf || {}).telefoon ? ` (${(d.bedrijf || {}).telefoon})` : ''}`], ...((d.bedrijf || {}).whatsapp ? [['whatsapp', 'Stuurt ons een WhatsApp']] : []), ['mail', 'Mailt ons'], ['site', 'Opent de website'], ['geen', 'Geen knop']].map(([k, l]) => `<option value="${k}" ${k === ((nu.opmaak || {}).knopSoort || 'bel') ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
+      <div class="cmp-foto" data-geen-wijziging><input type="file" id="cm-foto" accept="image/jpeg,image/png,image/webp,image/*" hidden>
+        <button type="button" class="btn btn-sm" id="cm-fotobtn">${icon('image', 13)} Eigen foto bovenaan…</button>
+        <span class="muted small" id="cm-fotostatus">${c && c.foto ? 'Er staat een foto bovenaan de mail.' : 'Optioneel. Bijvoorbeeld een foto van jullie werk.'}</span>
+        <button type="button" class="btn btn-sm" id="cm-fotoweg" ${c && c.foto ? '' : 'hidden'}>Foto weghalen</button></div>
+    </div>
+    <div class="cmp-vb-balk" data-geen-wijziging><button type="button" class="btn btn-sm" id="cm-vb-knop">Voorbeeld bekijken</button>
+      <span class="cmp-vb-maat" id="cm-vb-maat" hidden><button type="button" class="btn btn-sm aan" data-vbm="pc">Computer</button><button type="button" class="btn btn-sm" data-vbm="tel">Telefoon</button></span></div>
+    <div id="cm-vb" class="cmp-vb" hidden></div>
     <div class="cmp-ai" data-geen-wijziging>
       <input id="cm-wens" placeholder="Wat moet de AI doen? bv. korter, of: nodig uit voor een onderhoudsbeurt" aria-label="Wens voor de AI">
       <button type="button" class="btn btn-sm" id="cm-ai">${icon('sparkles', 13)} AI: schrijf of verbeter</button>
@@ -4502,7 +4537,39 @@ function openCampagneConcept(c) {
     </div>`);
   let id = c ? c.id : '';
   const params = () => { const k = $('#cm-doelgroep').value; const x = dg.find((y) => y.key === k) || {}; return x.param === 'maanden' ? { maanden: Number($('#cm-maanden').value) || (x.standaard || {}).maanden || 12 } : x.param === 'plaats' ? { plaats: $('#cm-plaats').value.trim() } : {}; };
-  const invoer = () => ({ naam: $('#cm-naam').value.trim() || $('#cm-onderwerp').value.trim(), onderwerp: $('#cm-onderwerp').value.trim(), tekst: $('#cm-tekst').value, doelgroep: $('#cm-doelgroep').value, params: params() });
+  // OPMAAK: één van de vaste sjablonen (of alleen tekst). Kiezen vult de standaardteksten van dat
+  // sjabloon in — maar alleen waar nog niets eigens staat.
+  const sjLijst = d.sjablonen || [];
+  const sjNu = () => ($('#cm-sjablonen .cmp-sj-knop.aan') || {}).dataset?.sj || 'tekst';
+  const opmaak = () => (sjNu() === 'tekst' ? { sjabloon: 'tekst' } : { sjabloon: sjNu(), kop: $('#cm-kop').value.trim(), knopTekst: $('#cm-knoptekst').value.trim(), knopSoort: $('#cm-knopsoort').value });
+  const isStandaard = (veld, waarde) => { const w = String(waarde || '').trim(); return !w || w === 'Beste {naam},' || sjLijst.some((x) => String(x[veld] || '').trim() === w); };
+  const kiesSjabloon = (key, vullen) => {
+    const sj = sjLijst.find((x) => x.key === key) || { key: 'tekst' };
+    $$('#cm-sjablonen .cmp-sj-knop').forEach((k) => k.classList.toggle('aan', k.dataset.sj === sj.key));
+    $('#cm-opmaak').hidden = sj.key === 'tekst';
+    if (vullen && sj.key !== 'tekst') {
+      if (isStandaard('onderwerp', $('#cm-onderwerp').value)) $('#cm-onderwerp').value = sj.onderwerp;
+      if (isStandaard('tekst', $('#cm-tekst').value)) $('#cm-tekst').value = sj.tekst;
+      if (isStandaard('kop', $('#cm-kop').value)) $('#cm-kop').value = sj.kop;
+      if (isStandaard('knopTekst', $('#cm-knoptekst').value)) $('#cm-knoptekst').value = sj.knopTekst;
+    }
+    if (!$('#cm-vb').hidden) toonVoorbeeld();
+  };
+  const invoer = () => ({ naam: $('#cm-naam').value.trim() || $('#cm-onderwerp').value.trim(), onderwerp: $('#cm-onderwerp').value.trim(), tekst: $('#cm-tekst').value, doelgroep: $('#cm-doelgroep').value, params: params(), opmaak: opmaak() });
+  // VOORBEELD: de mail zoals de klant hem ziet (met een voorbeeldnaam), op computer- of telefoonbreedte.
+  let vbMaat = 'pc';
+  const toonVoorbeeld = async () => {
+    const vak = $('#cm-vb'); if (!vak) return;
+    vak.hidden = false; $('#cm-vb-maat').hidden = false; $('#cm-vb-knop').textContent = 'Voorbeeld vernieuwen';
+    try {
+      const v = await api('/api/campagnes/voorbeeld-html', 'POST', { id, onderwerp: $('#cm-onderwerp').value, tekst: $('#cm-tekst').value, opmaak: opmaak() });
+      if (!$('#cm-vb')) return;
+      if (v.html) {
+        vak.innerHTML = `<iframe title="Voorbeeld van de mail" sandbox="allow-same-origin" style="width:${vbMaat === 'tel' ? '375px' : '100%'}"></iframe>`;
+        vak.querySelector('iframe').srcdoc = v.html;
+      } else vak.innerHTML = `<div class="cmp-vb-tekst">${esc(v.tekst || '')}</div><div class="muted small" style="margin-top:6px">Een gewone mail: jullie handtekening komt er nog onder.</div>`;
+    } catch (err) { vak.innerHTML = `<span class="error small">${esc(err.message)}</span>`; }
+  };
   let telTimer = null; let aantalNu = 0;
   const tel = () => { clearTimeout(telTimer); telTimer = setTimeout(async () => {
     const vak = $('#cm-wie'); if (!vak) return;
@@ -4517,6 +4584,28 @@ function openCampagneConcept(c) {
   }, 250); };
   const toonParam = () => { const x = dg.find((y) => y.key === $('#cm-doelgroep').value) || {}; $('#cm-maanden-wrap').hidden = x.param !== 'maanden'; $('#cm-plaats-wrap').hidden = x.param !== 'plaats'; if (x.param === 'maanden' && !$('#cm-maanden').value) $('#cm-maanden').value = (x.standaard || {}).maanden || 12; $('#cm-dg-uitleg').textContent = x.uitleg || ''; };
   toonParam(); tel();
+  kiesSjabloon(sjNu(), false);
+  $$('#cm-sjablonen .cmp-sj-knop').forEach((k) => (k.onclick = () => { if (k.classList.contains('aan')) return; kiesSjabloon(k.dataset.sj, true); modalMarkeerVuil(); }));
+  $('#cm-vb-knop').onclick = () => toonVoorbeeld();
+  $$('#cm-vb-maat [data-vbm]').forEach((k) => (k.onclick = () => { vbMaat = k.dataset.vbm; $$('#cm-vb-maat [data-vbm]').forEach((x) => x.classList.toggle('aan', x === k)); const fr = $('#cm-vb iframe'); if (fr) fr.style.width = vbMaat === 'tel' ? '375px' : '100%'; }));
+  // EIGEN FOTO bovenaan: het scherm verkleint hem eerst (max 1200 px breed), zodat de mail licht blijft.
+  $('#cm-fotobtn').onclick = () => $('#cm-foto').click();
+  $('#cm-foto').onchange = async () => {
+    const bestand = $('#cm-foto').files && $('#cm-foto').files[0]; $('#cm-foto').value = '';
+    if (!bestand) return;
+    const st = $('#cm-fotostatus'); st.textContent = 'Foto wordt klaargemaakt…';
+    try {
+      const data = await verkleinFoto(bestand, 1200, 0.82);
+      if (!(await bewaar(true))) { st.textContent = 'Vul eerst een onderwerp of bericht in.'; return; }
+      await api(`/api/campagnes/${id}/foto`, 'POST', { mime: 'image/jpeg', dataBase64: data });
+      if (!$('#cm-fotostatus')) return;
+      $('#cm-fotostatus').textContent = 'Er staat een foto bovenaan de mail.'; $('#cm-fotoweg').hidden = false; toast('Foto toegevoegd');
+      toonVoorbeeld();
+    } catch (err) { if ($('#cm-fotostatus')) $('#cm-fotostatus').textContent = 'De foto is niet toegevoegd.'; toast(err.message, true); }
+  };
+  $('#cm-fotoweg').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    try { await api(`/api/campagnes/${id}/foto`, 'DELETE'); $('#cm-fotostatus').textContent = 'Optioneel. Bijvoorbeeld een foto van jullie werk.'; $('#cm-fotoweg').hidden = true; toast('Foto weggehaald'); if (!$('#cm-vb').hidden) toonVoorbeeld(); } catch (err) { toast(err.message, true); }
+  });
   $('#cm-doelgroep').onchange = () => { toonParam(); tel(); };
   $('#cm-maanden').oninput = tel; $('#cm-plaats').oninput = tel;
   // Opslaan (maakt het concept aan als het er nog niet is). Geeft true/false terug.
@@ -4539,14 +4628,17 @@ function openCampagneConcept(c) {
   $('#cm-ai').onclick = (ev) => { const knop = ev.currentTarget; eenKeer(knop, async () => {
     const oud = knop.innerHTML; knop.textContent = 'De AI schrijft…';
     try {
-      const r = await api('/api/campagnes/ai-tekst', 'POST', { wens: $('#cm-wens').value, doelgroep: $('#cm-doelgroep').value, onderwerp: $('#cm-onderwerp').value, tekst: $('#cm-tekst').value });
+      const r = await api('/api/campagnes/ai-tekst', 'POST', { wens: $('#cm-wens').value, doelgroep: $('#cm-doelgroep').value, onderwerp: $('#cm-onderwerp').value, tekst: $('#cm-tekst').value, opmaak: opmaak() });
       if (!$('#cm-tekst')) return;
       // Nooit stil overschrijven: de vorige tekst kan met één klik terug.
-      const vorige = { o: $('#cm-onderwerp').value, t: $('#cm-tekst').value };
+      const vorige = { o: $('#cm-onderwerp').value, t: $('#cm-tekst').value, k: $('#cm-kop').value, kn: $('#cm-knoptekst').value };
       $('#cm-onderwerp').value = r.onderwerp; $('#cm-tekst').value = r.tekst; modalMarkeerVuil();
+      if (r.kop) $('#cm-kop').value = r.kop;
+      if (r.knopTekst) $('#cm-knoptekst').value = r.knopTekst;
+      if (!$('#cm-vb').hidden) toonVoorbeeld();
       toast('Tekst van de AI ingevuld — lees hem na');
       let terug = $('#cm-ai-terug'); if (!terug) { terug = document.createElement('button'); terug.type = 'button'; terug.className = 'btn btn-sm'; terug.id = 'cm-ai-terug'; terug.textContent = 'Vorige tekst terug'; knop.after(terug); }
-      terug.onclick = () => { $('#cm-onderwerp').value = vorige.o; $('#cm-tekst').value = vorige.t; terug.remove(); };
+      terug.onclick = () => { $('#cm-onderwerp').value = vorige.o; $('#cm-tekst').value = vorige.t; $('#cm-kop').value = vorige.k; $('#cm-knoptekst').value = vorige.kn; terug.remove(); if (!$('#cm-vb').hidden) toonVoorbeeld(); };
     } catch (err) { toast(err.message, true); }
     finally { if (knop.isConnected) knop.innerHTML = oud; }
   }); };
@@ -4622,10 +4714,12 @@ async function openCampagneInstellingen() {
     <div class="row"><label>Rust per klant (dagen) <input id="ci-rust" type="number" min="0" max="365" value="${esc(String(i.rustDagen))}"></label>
       <label>Hooguit per dag <input id="ci-dag" type="number" min="10" max="1000" value="${esc(String(i.perDag))}"></label></div>
     <div class="muted small">Rust: een klant die een campagne kreeg, krijgt de volgende pas na dit aantal dagen. Per dag: wat er meer is, gaat de volgende dag verder. Er wordt alleen tussen 09:00 en 20:00 uur verstuurd.</div>
+    <label style="margin-top:12px">WhatsApp-nummer voor de knop in een sjabloon <input id="ci-wa" inputmode="tel" value="${esc(i.whatsapp || '')}" placeholder="bv. 06 12345678 — leeg = geen WhatsApp-knop"></label>
+    <div class="muted small">Vul je hier een nummer in, dan kun je bij een sjabloon kiezen voor de knop "Stuurt ons een WhatsApp".</div>
     <div class="modal-actions"><span></span><div class="right"><button class="btn" id="ci-cancel">Annuleren</button><button class="btn btn-primary" id="ci-save">Opslaan</button></div></div>`);
   $('#ci-cancel').onclick = closeModal;
   $('#ci-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
-    try { await api('/api/campagnes/instellingen', 'POST', { rustDagen: Number($('#ci-rust').value), perDag: Number($('#ci-dag').value) }); modalSchoon(); closeModal(); toast('Grenzen opgeslagen'); loadCampagnes().catch(() => {}); } catch (err) { toast(err.message, true); }
+    try { await api('/api/campagnes/instellingen', 'POST', { rustDagen: Number($('#ci-rust').value), perDag: Number($('#ci-dag').value), whatsapp: $('#ci-wa').value.trim() }); modalSchoon(); closeModal(); toast('Grenzen opgeslagen'); loadCampagnes().catch(() => {}); } catch (err) { toast(err.message, true); }
   });
 }
 
@@ -8102,6 +8196,58 @@ function toonTestBalk() {
   document.title = 'TEST — ' + document.title;
 }
 
+// ---------- MEDEDELINGEN AAN HET TEAM (26 nov 2026, wens eigenaar) ----------
+// De beheerder zet een bericht bovenaan bij het team (zoals "Wat is er veranderd?"); het blijft
+// staan tot je op Gelezen tikt. De balk staat boven elk scherm, zodat ook de monteur (die op zijn
+// opdrachten begint) het ziet.
+async function laadMededelingen() {
+  const d = await api('/api/mededelingen');
+  tekenMededelingen(d.mijn || []);
+  return d;
+}
+function tekenMededelingen(lijst) {
+  const vak = $('#mededelingBalk'); if (!vak) return;
+  window._mededSleutel = lijst.map((m) => m.id).join(',');
+  if (!lijst.length) { vak.hidden = true; vak.innerHTML = ''; return; }
+  vak.innerHTML = lijst.map((m) => `<div class="meded-kaart${m.belangrijk ? ' belangrijk' : ''}" data-meded="${esc(m.id)}">
+      <div class="meded-inhoud"><strong>${esc(m.titel)}</strong>${m.tekst ? `<div class="meded-tekst">${esc(m.tekst)}</div>` : ''}<span class="muted small">${esc([m.door, fmtDateShort(m.at)].filter(Boolean).join(' · '))}</span></div>
+      <button type="button" class="btn btn-sm btn-primary" data-meded-gelezen="${esc(m.id)}">Gelezen</button></div>`).join('');
+  vak.hidden = false;
+  $$('[data-meded-gelezen]', vak).forEach((k) => (k.onclick = () => eenKeer(k, async () => {
+    try { const r = await api(`/api/mededelingen/${encodeURIComponent(k.dataset.mededGelezen)}/gelezen`, 'POST', {}); tekenMededelingen(r.mijn || []); } catch (err) { toast(err.message, true); }
+  })));
+}
+// Beheerder: een mededeling plaatsen en zien wie eerdere berichten heeft gelezen.
+async function openMededelingen() {
+  let d; try { d = await api('/api/mededelingen'); } catch (err) { toast(err.message, true); return; }
+  const rij = (m) => `<li class="mdl-rij${m.actief ? '' : ' uit'}"><div class="mdl-rij-kop"><strong>${esc(m.titel)}</strong><span class="muted small">voor ${esc(m.voorNaam)} · ${esc(fmtDateShort(m.at))}${m.totEnMet ? ` · t/m ${esc(m.totEnMet.split('-').reverse().join('-'))}` : ''}${m.ingetrokkenAt ? ' · ingetrokken' : (m.actief ? '' : ' · verlopen')}</span></div>
+      ${m.tekst ? `<div class="mdl-rij-tekst">${esc(m.tekst)}</div>` : ''}
+      <div class="muted small">Gelezen door ${m.lezers.gelezen.length} van ${m.lezers.aantal}${m.lezers.gelezen.length ? `: ${esc(m.lezers.gelezen.join(', '))}` : ''}${m.lezers.nogNiet.length ? ` · nog niet: ${esc(m.lezers.nogNiet.join(', '))}` : ''}</div>
+      ${m.actief ? `<button type="button" class="btn btn-sm" data-mdl-weg="${esc(m.id)}">Intrekken</button>` : ''}</li>`;
+  modal(`<h2>Mededeling aan het team</h2>
+    <p class="muted small">Het bericht staat bij de gekozen mensen bovenaan het scherm tot ze op <strong>Gelezen</strong> tikken. Wie meldingen aan heeft staan, krijgt het ook op de telefoon.</p>
+    <label>Titel <input id="mdl-titel" maxlength="120" placeholder="bv. Vrijdag 5 december zijn we om 15:00 dicht"></label>
+    <label>Bericht (optioneel) <textarea id="mdl-tekst" rows="3" maxlength="2000" placeholder="Een korte toelichting"></textarea></label>
+    <div class="row"><label>Voor wie <select id="mdl-voor"><option value="iedereen">Iedereen</option><option value="kantoor">Alleen kantoor</option><option value="monteurs">Alleen de monteurs</option></select></label>
+      <label>Zichtbaar t/m (optioneel) <input id="mdl-tot" type="date"></label></div>
+    <label class="check"><input type="checkbox" id="mdl-belangrijk" data-bewaak> Belangrijk (rood gemarkeerd)</label>
+    <div class="modal-actions"><span></span><div class="right"><button class="btn" id="mdl-cancel">Sluiten</button><button class="btn btn-primary" id="mdl-save">Plaatsen</button></div></div>
+    <div class="form-sec">Eerder geplaatst</div>
+    <ul class="mdl-lijst" id="mdl-lijst">${(d.alle || []).map(rij).join('') || '<li class="muted small">Nog geen mededelingen.</li>'}</ul>`);
+  const bindWeg = () => $$('#mdl-lijst [data-mdl-weg]').forEach((k) => (k.onclick = () => eenKeer(k, async () => {
+    if (!confirm('Deze mededeling intrekken? Hij verdwijnt bij iedereen die hem nog niet las.')) return;
+    try { const r = await api(`/api/mededelingen/${encodeURIComponent(k.dataset.mdlWeg)}`, 'DELETE'); $('#mdl-lijst').innerHTML = (r.alle || []).map(rij).join(''); bindWeg(); toast('Mededeling ingetrokken'); laadMededelingen().catch(() => {}); } catch (err) { toast(err.message, true); }
+  })));
+  bindWeg();
+  $('#mdl-cancel').onclick = () => sluitDoorGebruiker();
+  $('#mdl-save').onclick = (ev) => eenKeer(ev.currentTarget, async () => {
+    const titel = $('#mdl-titel').value.trim(); if (!titel) { toast('Vul een korte titel in', true); $('#mdl-titel').focus(); return; }
+    try {
+      await api('/api/mededelingen', 'POST', { titel, tekst: $('#mdl-tekst').value, voor: $('#mdl-voor').value, totEnMet: $('#mdl-tot').value, belangrijk: $('#mdl-belangrijk').checked });
+      modalSchoon(); closeModal(); toast('Mededeling geplaatst'); laadMededelingen().catch(() => {});
+    } catch (err) { toast(err.message, true); }
+  });
+}
 async function checkPushHint() {
   try {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
@@ -8843,6 +8989,7 @@ function bindButtons() {
   $('#digestBtn')?.addEventListener('click', openDigestModal);
   $('#ovDigestBtn')?.addEventListener('click', openDigestModal);
   $('#ovDailyCheck')?.addEventListener('click', openDailyCheck);
+  $('#mededelingBtn')?.addEventListener('click', () => openMededelingen());
   $('#collapseBtnFoot')?.addEventListener('click', () => $('#collapseBtn')?.click()); // mobiel: onderaan het bord
   $('#collapseBtn')?.addEventListener('click', async () => {
     const naam = state.channel === 'email' ? 'E-mail' : state.channel === 'whatsapp' ? 'WhatsApp' : 'Alle';

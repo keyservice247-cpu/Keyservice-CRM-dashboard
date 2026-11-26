@@ -19,6 +19,8 @@
 // De reken-functies bovenaan lezen de database niet (los te testen); de functies eronder wel.
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { db, id, now, saveSoon, saveSoonQuiet, logActivity } from './db.js';
 import { merkVan } from './merk.js';
 import { omzetVan, factuurPerOpdracht } from './conversie.js';
@@ -26,6 +28,8 @@ import { klantvriendelijkMoment, nlDag } from './tijdvenster.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { nooitKlantMail } from './pipeline.js';
 import { TEST, demoLoginToegestaan } from './omgeving.js';
+import { getHtmlSignature } from './settings.js';
+import { leesOpmaak, bouwCampagneHtml, sjabloonVan } from './campagne-sjablonen.js';
 
 export const STANDAARD_INSTELLINGEN = { rustDagen: 30, perDag: 200, perRonde: 8, pauzeMs: 2500 };
 const STORING_MAX = 5; // zoveel rondes op rij een storing bij het versturen → campagne pauzeert
@@ -214,6 +218,8 @@ export function campagneInstellingen() {
   return {
     rustDagen: getal(s.rustDagen, STANDAARD_INSTELLINGEN.rustDagen, 0, 365),
     perDag: getal(s.perDag, STANDAARD_INSTELLINGEN.perDag, 10, 1000),
+    // Nummer voor de knop "Stuur een WhatsApp" in een sjabloon (leeg = die knop is er niet).
+    whatsapp: String(s.whatsapp || '').replace(/[^\d+ ]/g, '').trim().slice(0, 20),
   };
 }
 export function zetCampagneInstellingen(invoer) {
@@ -246,6 +252,7 @@ export function campagneUitvoer(c, { metOntvangers = false } = {}) {
     gestartOp: c.gestartOp || null, klaarOp: c.klaarOp || null, gestartDoor: c.gestartDoor || '',
     aantal: o.length, verstuurd: tel('verstuurd'), wacht: tel('wacht'), mislukt: tel('mislukt'), overgeslagen: tel('overgeslagen'),
     proef: !!c.proef, melding: c.melding || '',
+    opmaak: leesOpmaak(c.opmaak), foto: !!(c.foto && c.foto.file),
   };
   if (metOntvangers) uit.ontvangers = o.map((x) => ({ naam: x.naam, email: x.email, plaats: x.plaats || '', status: x.status, at: x.at || null, fout: x.fout || '' }));
   return uit;
@@ -265,13 +272,14 @@ function leesInvoer(body = {}) {
   }
   if ('waarom' in body) uit.waarom = schoon(body.waarom, 600);
   if ('bron' in body) uit.bron = body.bron === 'ai' ? 'ai' : body.bron === 'regels' ? 'regels' : 'mens';
+  if ('opmaak' in body) uit.opmaak = leesOpmaak(body.opmaak);
   return uit;
 }
 
 export function maakCampagne(body, gebruiker) {
   const inv = leesInvoer(body);
   const c = { id: id('cmp'), naam: inv.naam || inv.onderwerp || 'Nieuwe campagne', onderwerp: inv.onderwerp || '', tekst: inv.tekst || '', doelgroep: inv.doelgroep || 'alle', params: inv.params || {},
-    waarom: inv.waarom || '', bron: inv.bron || 'mens', status: 'concept', createdAt: now(), door: (gebruiker && gebruiker.name) || '', ontvangers: [] };
+    waarom: inv.waarom || '', bron: inv.bron || 'mens', opmaak: inv.opmaak || { sjabloon: 'tekst' }, status: 'concept', createdAt: now(), door: (gebruiker && gebruiker.name) || '', ontvangers: [] };
   lijst().unshift(c); saveSoon();
   return c;
 }
@@ -280,6 +288,61 @@ export function werkCampagneBij(c, body) {
   Object.assign(c, leesInvoer(body)); c.updatedAt = now(); saveSoon();
   return c;
 }
+// ---------- OPMAAK: sjabloon + eigen foto (26 nov 2026, zie campagne-sjablonen.js) ----------
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+const FOTO_DIR = path.join(DATA_DIR, 'campagne-fotos');
+const FOTO_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+export const FOTO_MAX_BYTES = 1500 * 1024;
+export const fotoPad = (c) => (c && c.foto && c.foto.file ? path.join(FOTO_DIR, path.basename(c.foto.file)) : '');
+/** Eigen foto bovenaan de mail. Alleen bij een concept; het scherm verkleint hem vooraf. */
+export function zetFoto(c, buffer, mime) {
+  if (c.status !== 'concept') { const e = new Error('Alleen bij een concept kun je de foto nog wijzigen.'); e.status = 409; throw e; }
+  const ext = FOTO_MIME[String(mime || '').toLowerCase()];
+  if (!ext) { const e = new Error('Kies een foto als JPG, PNG of WebP.'); e.status = 400; throw e; }
+  if (!buffer || !buffer.length) { const e = new Error('De foto is leeg.'); e.status = 400; throw e; }
+  if (buffer.length > FOTO_MAX_BYTES) { const e = new Error('De foto is te groot (maximaal 1,5 MB). Kies een kleinere foto.'); e.status = 413; throw e; }
+  fs.mkdirSync(FOTO_DIR, { recursive: true });
+  haalFotoWeg(c, true);
+  const file = `${c.id}-${Date.now().toString(36)}.${ext}`;
+  fs.writeFileSync(path.join(FOTO_DIR, file), buffer);
+  c.foto = { file, mime: String(mime).toLowerCase(), bytes: buffer.length, at: now() }; c.updatedAt = now(); saveSoon();
+  return c;
+}
+export function haalFotoWeg(c, stil = false) {
+  if (!stil && c.status !== 'concept') { const e = new Error('Alleen bij een concept kun je de foto nog weghalen.'); e.status = 409; throw e; }
+  const pad = fotoPad(c);
+  if (pad) { try { fs.unlinkSync(pad); } catch { /* al weg */ } }
+  if (c.foto) { delete c.foto; if (!stil) { c.updatedAt = now(); saveSoon(); } }
+  return c;
+}
+/** De gegevens van het bedrijf onder de mail en achter de knop. */
+export function bedrijfVoorMail() {
+  let sig = {}; try { sig = getHtmlSignature(); } catch { /* standaard */ }
+  const naam = String(sig.role || '').split('|').pop().trim() || 'Key Service 24/7';
+  return { naam, telefoon: sig.phone || '', email: sig.email || '', website: sig.website || '', whatsapp: campagneInstellingen().whatsapp };
+}
+/**
+ * De mail voor één ontvanger: platte tekst (altijd, met de afmeldregel) en — bij een sjabloon —
+ * de opgemaakte versie met de afmeldlink onderaan. `voorbeeld` = voor in het scherm (foto en logo
+ * als gewone adressen in plaats van bijlagen).
+ */
+export function mailVoor(c, o, { voorbeeld = false } = {}) {
+  const gevuld = vulTekst(c.tekst, o);
+  const text = gevuld + (o.customerId ? voetTekst(o.customerId) : '');
+  const opmaak = leesOpmaak(c.opmaak);
+  if (opmaak.sjabloon === 'tekst') return { text };
+  const pad = fotoPad(c); const heeftFoto = !!pad && fs.existsSync(pad);
+  const html = bouwCampagneHtml({
+    opmaak, onderwerp: c.onderwerp, tekst: gevuld, bedrijf: bedrijfVoorMail(),
+    afmeldUrl: o.customerId ? afmeldLink(o.customerId) : (voorbeeld ? '#' : ''),
+    logoSrc: voorbeeld ? '/img/logo-factuur.png' : 'cid:kslogo',
+    fotoSrc: heeftFoto ? (voorbeeld ? `/api/campagnes/${c.id}/foto?v=${encodeURIComponent((c.foto && c.foto.at) || '')}` : 'cid:kopfoto') : '',
+  });
+  const attachments = heeftFoto && !voorbeeld ? [{ filename: `foto.${path.extname(pad).slice(1) || 'jpg'}`, path: pad, cid: 'kopfoto', contentDisposition: 'inline' }] : [];
+  return { text, html, attachments };
+}
+export { sjabloonVan };
+
 /** Voorbeeld: wie krijgt hem NU, en wie valt waarom af. Verandert niets. */
 export function voorbeeldOntvangers(c, nu = Date.now()) {
   return kiesOntvangers(alleFeiten(nu), { doelgroep: c.doelgroep, params: c.params, rustDagen: campagneInstellingen().rustDagen, nu });
@@ -324,6 +387,7 @@ export function naarConcept(c) {
 }
 export function verwijderCampagne(c) {
   if (c.status !== 'concept') { const e = new Error('Alleen een concept kan worden verwijderd.'); e.status = 409; throw e; }
+  haalFotoWeg(c, true);
   db().campagnes = lijst().filter((x) => x.id !== c.id); saveSoon();
 }
 
@@ -367,7 +431,7 @@ export async function runCampagnes({ altijd = false, nu = new Date(), verstuur =
       const reden = !klant ? 'klant bestaat niet meer' : klant.campaignOptOut ? 'afgemeld' : klant.emailBounceAt ? 'adres kwam eerder terug' : kleineMail(klant.email) !== o.email ? 'e-mailadres is gewijzigd' : nooitKlantMail(o.email) ? 'adres van een tussenpersoon' : netGehad ? 'kreeg intussen een andere campagne' : '';
       if (reden) { o.status = 'overgeslagen'; o.fout = reden; o.at = now(); uit.overgeslagen++; continue; }
       try {
-        if (echt) await verstuur({ to: o.email, subject: c.onderwerp, text: vulTekst(c.tekst, o) + voetTekst(o.customerId) });
+        if (echt) await verstuur({ to: o.email, subject: c.onderwerp, ...mailVoor(c, o) });
         o.status = 'verstuurd'; o.at = now(); o.proef = !echt || undefined;
         klant.lastCampaignAt = o.at; klant.lastCampaignSubject = c.onderwerp; klant.lastCampaignId = c.id;
         uit.verstuurd++; c.storingen = 0;

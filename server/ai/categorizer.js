@@ -1140,19 +1140,22 @@ const TEKST_REGELS = `Schrijfregels voor de e-mail:
  * Geeft { voorstellen: [...], engine } of null (geen sleutel / AI niet bereikbaar / onbruikbaar antwoord):
  * de aanroeper valt dan terug op de vaste regels.
  */
-export async function campagneVoorstellenAI({ telling, doelgroepen = [], maand, eerdere = [], companyProfile = '' }) {
+export async function campagneVoorstellenAI({ telling, doelgroepen = [], maand, eerdere = [], companyProfile = '', sjablonen = [] }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || !telling) return null;
   const sleutels = doelgroepen.map((d) => d.key);
+  // De vaste sjablonen (opmaak). De AI kiest er één; hij ontwerpt niets zelf en maakt geen afbeeldingen.
+  const sjKeys = sjablonen.length ? sjablonen.map((x) => x.key) : ['tekst'];
   const schema = {
     type: 'object', additionalProperties: false, required: ['voorstellen'],
     properties: { voorstellen: { type: 'array', items: {
       type: 'object', additionalProperties: false,
-      required: ['titel', 'doelgroep', 'maanden', 'plaats', 'waarom', 'onderwerp', 'tekst', 'moment'],
+      required: ['titel', 'doelgroep', 'maanden', 'plaats', 'waarom', 'onderwerp', 'tekst', 'moment', 'sjabloon', 'kop', 'knopTekst'],
       properties: {
         titel: { type: 'string' }, doelgroep: { type: 'string', enum: sleutels },
         maanden: { type: 'integer' }, plaats: { type: 'string' },
         waarom: { type: 'string' }, onderwerp: { type: 'string' }, tekst: { type: 'string' }, moment: { type: 'string' },
+        sjabloon: { type: 'string', enum: sjKeys }, kop: { type: 'string' }, knopTekst: { type: 'string' },
       } } } },
   };
   const system = `Je bent de commerciële rechterhand van de eigenaar van Key Service 24/7 (slotenmaker) en Schuifpuiservice (reparatie en onderhoud van schuifpuien). Hij wil e-mailcampagnes die werk opleveren bij bestaande klanten, zonder dat klanten zich lastiggevallen voelen. Jij stelt voor welke campagnes NU de moeite waard zijn; hij beslist en verstuurt zelf.
@@ -1172,10 +1175,14 @@ Per voorstel:
 - onderwerp: de onderwerpregel van de e-mail (kort, concreet, geen hoofdletters-geschreeuw).
 - tekst: de e-mail zelf.
 - moment: de beste dag en het beste tijdstip om te versturen, in woorden (bijvoorbeeld "dinsdagochtend rond 10 uur"), met in een paar woorden waarom.
+- sjabloon: de opmaak van de mail. Kies uit de lijst met sjablonen het sjabloon dat bij het onderwerp past; past er geen, kies dan "tekst" (een gewone mail zonder opmaak). Je ontwerpt zelf niets en je maakt geen afbeeldingen: de opmaak ligt vast.
+- kop: de grote regel bovenaan de opgemaakte mail (hooguit 8 woorden, een vraag of een concreet voordeel). Leeg bij sjabloon "tekst".
+- knopTekst: de tekst op de knop (2 tot 4 woorden, een handeling zoals "Plan een onderhoudsbeurt"). De knop belt het bedrijf. Leeg bij sjabloon "tekst".
 
 ${TEKST_REGELS}${companyProfile ? `\n\nBedrijfsinformatie van de eigenaar:\n${String(companyProfile).slice(0, 4000)}` : ''}`;
   const feiten = JSON.stringify({
     maand, doelgroepen: doelgroepen.map((d) => ({ sleutel: d.key, naam: d.naam, uitleg: d.uitleg })),
+    sjablonen: sjablonen.map((x) => ({ sleutel: x.key, naam: x.naam, uitleg: x.uitleg })),
     klantenbestand: { totaal: telling.totaal, metEmail: telling.metMail, afgemeld: telling.afgemeld },
     bereikbaarPerDoelgroep: (telling.groepen || []).map((g) => ({ sleutel: g.key, inGroep: g.inGroep, bereikbaarPerEmail: g.bereikbaar })),
     grootstePlaatsen: telling.topPlaatsen || [],
@@ -1191,27 +1198,32 @@ ${TEKST_REGELS}${companyProfile ? `\n\nBedrijfsinformatie van de eigenaar:\n${St
       titel: String(v.titel || v.onderwerp).slice(0, 120), doelgroep: v.doelgroep,
       params: { ...(Number(v.maanden) > 0 ? { maanden: Math.min(120, Math.round(Number(v.maanden))) } : {}), ...(String(v.plaats || '').trim() ? { plaats: String(v.plaats).trim().slice(0, 80) } : {}) },
       waarom: String(v.waarom || '').slice(0, 600), onderwerp: String(v.onderwerp).slice(0, 200), tekst: String(v.tekst).slice(0, 8000), moment: String(v.moment || '').slice(0, 160), bron: 'ai',
+      sjabloon: sjKeys.includes(v.sjabloon) ? v.sjabloon : 'tekst', kop: String(v.kop || '').replace(/\s+/g, ' ').trim().slice(0, 90), knopTekst: String(v.knopTekst || '').replace(/\s+/g, ' ').trim().slice(0, 40),
     }));
     return voorstellen.length ? { voorstellen, engine: `ai:${r.model}`, terugvalVan: r.terugvalVan || '' } : null;
   } catch { return null; }
 }
 
 /** De AI schrijft of verbetert onderwerp + tekst van één campagne. Gooit een fout met uitleg als het niet lukt. */
-export async function campagneTekstAI({ wens = '', doelgroepNaam = '', onderwerp = '', tekst = '', companyProfile = '' }) {
+export async function campagneTekstAI({ wens = '', doelgroepNaam = '', onderwerp = '', tekst = '', companyProfile = '', sjabloon = null }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('De AI is niet ingesteld (geen sleutel). Schrijf de tekst zelf of gebruik een voorstel.');
-  const schema = { type: 'object', additionalProperties: false, required: ['onderwerp', 'tekst'], properties: { onderwerp: { type: 'string' }, tekst: { type: 'string' } } };
+  const schema = { type: 'object', additionalProperties: false, required: ['onderwerp', 'tekst', 'kop', 'knopTekst'], properties: { onderwerp: { type: 'string' }, tekst: { type: 'string' }, kop: { type: 'string' }, knopTekst: { type: 'string' } } };
+  const opmaakUitleg = sjabloon
+    ? `\n\nDe mail wordt verstuurd in het vaste sjabloon "${sjabloon.naam}": bovenaan een grote kop, dan de tekst, dan één knop die het bedrijf belt. Geef daarom ook:\n- kop: de grote regel bovenaan (hooguit 8 woorden, een vraag of een concreet voordeel; herhaal niet letterlijk de onderwerpregel).\n- knopTekst: de tekst op de knop (2 tot 4 woorden, een handeling).\nNoem de knop of de opmaak niet in de tekst zelf, en eindig de tekst niet met een losse oproep die de knop al doet.`
+    : `\n\nDit wordt een gewone e-mail zonder opmaak: laat kop en knopTekst leeg.`;
   const system = `Je schrijft een e-mail aan bestaande klanten van Key Service 24/7 (slotenmaker) en Schuifpuiservice (schuifpuien). De eigenaar leest hem na en verstuurt hem zelf. Geef een onderwerpregel en de tekst.
 
 ${TEKST_REGELS}
 
-Staat er al een tekst, verbeter die dan volgens de wens van de eigenaar en behoud wat goed is. Staat er niets, schrijf dan een nieuwe.${companyProfile ? `\n\nBedrijfsinformatie van de eigenaar:\n${String(companyProfile).slice(0, 4000)}` : ''}`;
-  const vraag = `Doelgroep: ${doelgroepNaam || 'klanten'}\nWens van de eigenaar: ${String(wens || 'Maak er een goede, korte e-mail van.').slice(0, 1000)}\n\nHuidig onderwerp: ${String(onderwerp || '(nog geen)').slice(0, 200)}\nHuidige tekst:\n${String(tekst || '(nog geen)').slice(0, 6000)}`;
+Staat er al een tekst, verbeter die dan volgens de wens van de eigenaar en behoud wat goed is. Staat er niets, schrijf dan een nieuwe.${opmaakUitleg}${companyProfile ? `\n\nBedrijfsinformatie van de eigenaar:\n${String(companyProfile).slice(0, 4000)}` : ''}`;
+  const vraag = `Doelgroep: ${doelgroepNaam || 'klanten'}${sjabloon ? `\nHuidige kop: ${String(sjabloon.kop || '(nog geen)').slice(0, 90)}\nHuidige knoptekst: ${String(sjabloon.knopTekst || '(nog geen)').slice(0, 40)}` : ''}\nWens van de eigenaar: ${String(wens || 'Maak er een goede, korte e-mail van.').slice(0, 1000)}\n\nHuidig onderwerp: ${String(onderwerp || '(nog geen)').slice(0, 200)}\nHuidige tekst:\n${String(tekst || '(nog geen)').slice(0, 6000)}`;
   const r = await vraagMetTerugval(apiKey, CAMPAGNE_MODEL(), (m) => ({ model: m, max_tokens: 16000, ...campagneVorm(m, schema), system, messages: [{ role: 'user', content: vraag }] }), { timeoutMs: 180000, pogingen: 2 });
   if (!r.ok) throw new Error(r.fout || 'De AI is nu niet bereikbaar. Probeer het later opnieuw.');
   if (r.json.stop_reason === 'refusal') throw new Error('De AI wilde dit verzoek niet uitvoeren. Formuleer de wens anders of schrijf de tekst zelf.');
   const uit = (r.json.content || []).map((c) => (c.type === 'text' ? c.text || '' : '')).join('').trim();
   let parsed = null; try { parsed = JSON.parse(uit); } catch { parsed = repairTruncatedJson(uit); }
   if (!parsed || !parsed.tekst) throw new Error('De AI gaf geen bruikbare tekst terug. Probeer het opnieuw.');
-  return { onderwerp: String(parsed.onderwerp || onderwerp || '').slice(0, 200), tekst: String(parsed.tekst).slice(0, 8000), engine: `ai:${r.model}` };
+  const kort = (v, max) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, max);
+  return { onderwerp: String(parsed.onderwerp || onderwerp || '').slice(0, 200), tekst: String(parsed.tekst).slice(0, 8000), kop: sjabloon ? kort(parsed.kop, 90) : '', knopTekst: sjabloon ? kort(parsed.knopTekst, 40) : '', engine: `ai:${r.model}` };
 }

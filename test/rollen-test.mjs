@@ -467,6 +467,43 @@ console.log('\n== Start: werklijst "Eerst doen" per rol (24 nov 2026) ==');
   if (oE.json?.id) await api('PATCH', `/api/orders/${oE.json.id}`, { status: 'afgerond', note: 'klaar' });
 }
 
+console.log('\n== Mededelingen aan het team (26 nov 2026) ==');
+{
+  cookie = adminCookie;
+  const leeg = await api('POST', '/api/mededelingen', { titel: '   ' });
+  const verleden = await api('POST', '/api/mededelingen', { titel: 'Oud', totEnMet: '2020-01-01' });
+  const m1 = await api('POST', '/api/mededelingen', { titel: 'Vrijdag om 15:00 dicht', tekst: 'Graag de bus <b>op tijd</b> terug.', voor: 'iedereen', belangrijk: true });
+  const m2 = await api('POST', '/api/mededelingen', { titel: 'Alleen voor de monteurs', voor: 'monteurs' });
+  const m3 = await api('POST', '/api/mededelingen', { titel: 'Alleen voor kantoor', voor: 'kantoor' });
+  ok('beheerder plaatst een mededeling; zonder titel of met een einddatum in het verleden kan het niet (400)', leeg.status === 400 && verleden.status === 400 && m1.status === 200 && !!m1.json.id && m2.status === 200 && m3.status === 200, JSON.stringify({ l: leeg.status, v: verleden.status, m: m1.status }));
+  const bijAdmin = await api('GET', '/api/mededelingen');
+  ok('wie hem plaatst ziet hem niet zelf als ongelezen, wel in het overzicht met wie hem nog moet lezen', bijAdmin.json.mijn.length === 0 && bijAdmin.json.alle.length >= 3 && bijAdmin.json.alle.find((x) => x.id === m1.json.id).lezers.nogNiet.length >= 1 && bijAdmin.json.alle.find((x) => x.id === m1.json.id).lezers.gelezen.length === 1, JSON.stringify(bijAdmin.json.alle.find((x) => x.id === m1.json.id)?.lezers));
+  await login('assistente@keyservice.nl', 'assist123');
+  const bijAss = await api('GET', '/api/mededelingen');
+  const assPlaatst = await api('POST', '/api/mededelingen', { titel: 'Mag niet' });
+  const assTrektIn = await api('DELETE', `/api/mededelingen/${m1.json.id}`);
+  ok('assistente: ziet de berichten voor iedereen en voor kantoor (niet die voor monteurs), geen overzicht; plaatsen en intrekken mag ze niet (403)', bijAss.json.mijn.map((x) => x.titel).sort().join('|') === 'Alleen voor kantoor|Vrijdag om 15:00 dicht' && !('alle' in bijAss.json) && assPlaatst.status === 403 && assTrektIn.status === 403, JSON.stringify({ t: bijAss.json.mijn.map((x) => x.titel), p: assPlaatst.status }));
+  ok('de pulse meldt de ongelezen mededelingen (zo verschijnt de balk vanzelf)', ((await api('GET', '/api/pulse')).json.meded || '').split(',').filter(Boolean).length === 2);
+  const gelezen = await api('POST', `/api/mededelingen/${m1.json.id}/gelezen`, {});
+  const nietVoorHaar = await api('POST', `/api/mededelingen/${m2.json.id}/gelezen`, {});
+  ok('"Gelezen" haalt het bericht bij haar weg; een bericht dat niet voor haar is kan ze niet afvinken (403)', gelezen.status === 200 && gelezen.json.mijn.length === 1 && nietVoorHaar.status === 403, JSON.stringify({ g: gelezen.json, n: nietVoorHaar.status }));
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  const bijMont = await api('GET', '/api/mededelingen');
+  ok('monteur: ziet de berichten voor iedereen en voor de monteurs (niet die voor kantoor) — haar "Gelezen" geldt niet voor hem', bijMont.json.mijn.map((x) => x.titel).sort().join('|') === 'Alleen voor de monteurs|Vrijdag om 15:00 dicht' && !('alle' in bijMont.json) && bijMont.json.mijn.find((x) => x.id === m1.json.id).belangrijk === true, JSON.stringify(bijMont.json.mijn.map((x) => x.titel)));
+  cookie = adminCookie;
+  const lezers = (await api('GET', '/api/mededelingen')).json.alle.find((x) => x.id === m1.json.id).lezers;
+  ok('beheerder ziet wie het gelezen heeft (hijzelf en de assistente) en wie nog niet', lezers.gelezen.length === 2 && lezers.nogNiet.length === lezers.aantal - 2 && lezers.nogNiet.length >= 1, JSON.stringify(lezers));
+  const weg = await api('DELETE', `/api/mededelingen/${m1.json.id}`);
+  await login('monteurzelf@keyservice.nl', 'monteur123');
+  const naIntrekken = (await api('GET', '/api/mededelingen')).json.mijn;
+  ok('intrekken: het bericht verdwijnt bij wie het nog niet las; het blijft in het overzicht staan als ingetrokken', weg.status === 200 && !naIntrekken.some((x) => x.id === m1.json.id) && !!weg.json.alle.find((x) => x.id === m1.json.id).ingetrokkenAt, JSON.stringify(naIntrekken.map((x) => x.titel)));
+  cookie = adminCookie;
+  for (const m of [m2, m3]) await api('DELETE', `/api/mededelingen/${m.json.id}`);
+  cookie = '';
+  ok('zonder inlog: geen mededelingen (401)', (await api('GET', '/api/mededelingen')).status === 401);
+  cookie = adminCookie;
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

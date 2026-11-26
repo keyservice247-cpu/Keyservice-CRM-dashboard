@@ -13,6 +13,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { klantFeiten, kiesOntvangers, doelgroepTelling, regelVoorstellen, vulTekst, plaatsUit, DOELGROEPEN } from '../server/campagnes.js';
+import { SJABLONEN, leesOpmaak, bouwCampagneHtml, knopDoel, sjabloonVoorDoelgroep } from '../server/campagne-sjablonen.js';
 
 let passed = 0, failed = 0; const bad = [];
 function ok(name, cond, extra = '') { if (cond) { passed++; console.log(`  ✓ ${name}`); } else { failed++; bad.push(name); console.log(`  ✗ FAIL: ${name}${extra ? ' — ' + extra : ''}`); } }
@@ -80,6 +81,20 @@ ok('voorstellen: een doelgroep die net een campagne kreeg komt achteraan', regel
 const schoneOmgeving = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(SMTP_|IMAP_|SENT_IMAP_|WHATSAPP_|GOOGLE_|ANTHROPIC_|DATA_DIR$|OMGEVING$)/.test(k)));
 const PORT = 3157; const SMTP_PORT = 2657; const BASE = `http://localhost:${PORT}`; const TOKEN = 'test123';
 const DIR = mkdtempSync(join(tmpdir(), 'crm-campagne-'));
+// OPMAAK (26 nov 2026): drie vaste sjablonen. Puur: geen database, geen mail.
+{
+  const bedrijf = { naam: 'Key Service 24/7', telefoon: '085 060 2359', email: 'info@voorbeeld.test', website: 'www.voorbeeld.test', whatsapp: '' };
+  ok('opmaak: vier keuzes — alleen tekst en de drie vaste sjablonen (schuifpuien, kozijnonderhoud, sloten & cilinders), elk met kop, tekst en knop', SJABLONEN.map((x) => x.key).join() === 'tekst,schuifpui,kozijn,sloten' && SJABLONEN.slice(1).every((x) => x.kop && x.onderwerp && /\{naam\}/.test(x.tekst) && x.knopTekst && x.kleur));
+  ok('opmaak: een onbekend sjabloon wordt "alleen tekst"; lege kop/knop krijgen de standaard van het sjabloon', leesOpmaak({ sjabloon: 'iets-anders', kop: 'x' }).sjabloon === 'tekst' && !('kop' in leesOpmaak({ sjabloon: 'tekst', kop: 'x' })) && leesOpmaak({ sjabloon: 'kozijn' }).kop === SJABLONEN[2].kop && leesOpmaak({ sjabloon: 'sloten', knopSoort: 'raar' }).knopSoort === 'bel');
+  const html = bouwCampagneHtml({ opmaak: leesOpmaak({ sjabloon: 'schuifpui', kop: 'Kop <b>met</b> haakjes' }), onderwerp: 'Proef', tekst: 'Beste Jan,\n\nRegel één\nregel twee <script>alert(1)</script>', bedrijf, afmeldUrl: 'https://voorbeeld.test/afmelden/k1/abc', logoSrc: 'cid:kslogo', fotoSrc: 'cid:kopfoto' });
+  ok('opmaak: de mail heeft logo, kop, foto, tekst in alinea\'s, een bel-knop, de bedrijfsgegevens en de afmeldlink', /cid:kslogo/.test(html) && /<h1[^>]*>Kop/.test(html) && /cid:kopfoto/.test(html) && /Regel één<br>regel twee/.test(html) && /href="tel:0850602359"/.test(html) && /085 060 2359/.test(html) && /href="https:\/\/voorbeeld\.test\/afmelden\/k1\/abc"/.test(html));
+  ok('opmaak: wat de gebruiker typt kan nooit opmaak of code worden (alles ge-escaped)', !/<script>/.test(html) && /&lt;script&gt;/.test(html) && !/<b>met<\/b>/.test(html));
+  ok('opmaak: "alleen tekst" geeft geen HTML (de gewone mail met handtekening)', bouwCampagneHtml({ opmaak: { sjabloon: 'tekst' }, tekst: 'x', bedrijf }) === '');
+  ok('opmaak: de knop — bellen, mailen, website; WhatsApp alleen met een ingesteld nummer (06 → 316…); zonder doel geen knop', knopDoel('bel', bedrijf) === 'tel:0850602359' && /^mailto:info@voorbeeld\.test\?subject=/.test(knopDoel('mail', bedrijf, 'Proef')) && knopDoel('site', bedrijf) === 'https://www.voorbeeld.test' && knopDoel('whatsapp', bedrijf) === '' && knopDoel('whatsapp', { whatsapp: '06 12345678' }) === 'https://wa.me/31612345678'
+    && !/<a href/.test(bouwCampagneHtml({ opmaak: leesOpmaak({ sjabloon: 'sloten', knopSoort: 'geen' }), tekst: 'x', bedrijf }).replace(/<a href="[^"]*afmelden[^"]*"/, '')) && !/wa\.me/.test(bouwCampagneHtml({ opmaak: leesOpmaak({ sjabloon: 'sloten', knopSoort: 'whatsapp' }), tekst: 'x', bedrijf })));
+  ok('opmaak: bij een voorstel uit vaste regels past het sjabloon bij de doelgroep', sjabloonVoorDoelgroep('schuifpui') === 'schuifpui' && sjabloonVoorDoelgroep('sloten') === 'sloten' && sjabloonVoorDoelgroep('oud') === 'tekst');
+}
+
 const mails = []; const enveloppen = []; let smtpStuk = false;
 const smtp = createServer((sock) => {
   let data = false; let buf = ''; let huidig = ''; let rcpt = [];
@@ -312,6 +327,46 @@ try {
   await api('POST', '/api/campagnes/ronde', {}, admin); await slaap(400);
   const bNa = (await api('GET', `/api/campagnes/${dB.id}`, null, ass)).json;
   ok('wie intussen een andere campagne kreeg, krijgt de tweede niet meer: overgeslagen met de reden erbij, geen tweede mail', mails.length === 2 && bNa.verstuurd === 0 && bNa.overgeslagen === 2 && bNa.ontvangers.every((o) => /andere campagne/.test(o.fout)), JSON.stringify({ m: mails.length, v: bNa.verstuurd, o: bNa.overgeslagen, f: bNa.ontvangers.map((o) => o.fout) }));
+
+  // OPMAAK via de server: sjabloon + eigen foto → de klant krijgt een opgemaakte mail (met de platte tekst als terugval).
+  {
+    await api('POST', '/api/campagnes/instellingen', { rustDagen: 0, perDag: 500 }, admin);
+    const overzicht = (await api('GET', '/api/campagnes', null, ass)).json;
+    ok('het scherm krijgt de sjablonen en de bedrijfsgegevens voor onder de mail', (overzicht.sjablonen || []).length === 4 && !!overzicht.bedrijf && !!overzicht.bedrijf.naam, JSON.stringify((overzicht.sjablonen || []).map((x) => x.key)));
+    for (let i = 1; i <= 2; i++) await api('POST', '/api/customers', { name: `Opmaak Klant ${i}`, email: `opmaak${i}@campagne.test`, address: `Singel ${i}, 3701 AA Zeist` }, admin);
+    const co = (await api('POST', '/api/campagnes', { naam: 'Opmaak', onderwerp: 'Een onderhoudsbeurt voor uw schuifpui', tekst: 'Beste {naam},\n\nUw schuifpui in {plaats} verdient onderhoud.', doelgroep: 'plaats', params: { plaats: 'Zeist' }, opmaak: { sjabloon: 'schuifpui', kop: 'Loopt uw pui nog licht?', knopTekst: 'Bel voor onderhoud' } }, ass)).json;
+    ok('een campagne onthoudt het sjabloon, de kop en de knoptekst', co.opmaak && co.opmaak.sjabloon === 'schuifpui' && co.opmaak.kop === 'Loopt uw pui nog licht?' && co.opmaak.knopTekst === 'Bel voor onderhoud' && co.foto === false, JSON.stringify(co.opmaak));
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAoAAAAGCAYAAAD68A/GAAAAFklEQVR42mP8z8Dwn4EIwDiqkL4KAZ0jBf3bV1p1AAAAAElFTkSuQmCC';
+    const teGroot = await api('POST', `/api/campagnes/${co.id}/foto`, { mime: 'image/png', dataBase64: Buffer.alloc(1600 * 1024, 1).toString('base64') }, ass);
+    const geenFoto = await api('POST', `/api/campagnes/${co.id}/foto`, { mime: 'application/pdf', dataBase64: png }, ass);
+    const fotoOk = await api('POST', `/api/campagnes/${co.id}/foto`, { mime: 'image/png', dataBase64: png }, ass);
+    const fotoTerug = await fetch(`${BASE}/api/campagnes/${co.id}/foto`, { headers: { cookie: ass } });
+    ok('eigen foto: te groot (413) en geen afbeelding (400) worden geweigerd met uitleg; een foto wordt bewaard en is op te halen', teGroot.status === 413 && geenFoto.status === 400 && fotoOk.status === 200 && fotoOk.json.foto === true && fotoTerug.status === 200 && /image\/png/.test(fotoTerug.headers.get('content-type') || ''), JSON.stringify({ g: teGroot.status, n: geenFoto.status, o: fotoOk.status, t: fotoTerug.status }));
+    ok('de foto en het voorbeeld zijn alleen voor kantoor (monteur 403, zonder inlog 401)', (await api('GET', `/api/campagnes/${co.id}/foto`, null, mon)).status === 403 && (await api('POST', '/api/campagnes/voorbeeld-html', { id: co.id }, mon)).status === 403 && (await api('GET', `/api/campagnes/${co.id}/foto`)).status === 401);
+    const vb = (await api('POST', '/api/campagnes/voorbeeld-html', { id: co.id, onderwerp: co.onderwerp, tekst: co.tekst, opmaak: co.opmaak }, ass)).json;
+    ok('voorbeeld: de opgemaakte mail met een voorbeeldnaam, de kop, de knop en de foto', /Beste Voorbeeldklant/.test(vb.html) && /Loopt uw pui nog licht\?/.test(vb.html) && /Bel voor onderhoud/.test(vb.html) && new RegExp(`/api/campagnes/${co.id}/foto`).test(vb.html) && /Voorbeeldstad/.test(vb.html), (vb.html || '').slice(0, 200));
+    const vbTekst = (await api('POST', '/api/campagnes/voorbeeld-html', { onderwerp: 'x', tekst: 'Beste {naam}', opmaak: { sjabloon: 'tekst' } }, ass)).json;
+    ok('voorbeeld bij "alleen tekst": geen HTML, wel de tekst', vbTekst.html === '' && /Beste Voorbeeldklant/.test(vbTekst.tekst));
+    mails.length = 0; enveloppen.length = 0;
+    await api('POST', `/api/campagnes/${co.id}/start`, {}, ass);
+    for (let i = 0; i < 30 && mails.length < 2; i++) await slaap(200);
+    const ruw = (mails.find((m) => /opmaak1@campagne\.test/i.test(m)) || mails[0] || '');
+    const mail = ruw.replace(/=\r?\n/g, '').replace(/=3D/g, '=').replace(/=C3=A9/g, 'é');
+    const klant1 = (await api('GET', '/api/customers', null, admin)).json.find((k) => k.email === 'opmaak1@campagne.test');
+    ok('de klant krijgt de OPGEMAAKTE mail: HTML met kop, naam, plaats, bel-knop en afmeldlink — én de platte tekst als terugval', mails.length === 2 && /Content-Type: text\/html/i.test(ruw) && /Content-Type: text\/plain/i.test(ruw) && /Loopt uw pui nog licht\?/.test(mail) && /Beste Opmaak Klant 1/.test(mail) && /Zeist/.test(mail) && /href="tel:/.test(mail) && new RegExp(`/afmelden/${klant1.id}/[0-9a-f]{24}`).test(mail), mail.slice(0, 300));
+    ok('de foto en het logo gaan als afbeelding IN de mail mee (geen link naar buiten)', /cid:kopfoto/.test(mail) && /Content-ID: <kopfoto>/i.test(ruw) && /cid:kslogo/.test(mail) && /Content-ID: <kslogo>/i.test(ruw), ruw.match(/Content-ID: [^\r\n]*/gi));
+    const naStart = await api('POST', `/api/campagnes/${co.id}/foto`, { mime: 'image/png', dataBase64: png }, ass);
+    ok('na het versturen is de foto niet meer te wijzigen (409)', naStart.status === 409 && (await api('DELETE', `/api/campagnes/${co.id}/foto`, null, ass)).status === 409);
+    // een campagne zonder sjabloon blijft de gewone mail
+    await api('POST', '/api/customers', { name: 'Gewoon Klant', email: 'gewoon@campagne.test', address: 'Dorpsweg 1, 3941 AA Doorn' }, admin);
+    const cg = (await api('POST', '/api/campagnes', { naam: 'Gewoon', onderwerp: 'Gewone mail', tekst: 'Beste {naam}', doelgroep: 'plaats', params: { plaats: 'Doorn' } }, ass)).json;
+    mails.length = 0;
+    await api('POST', `/api/campagnes/${cg.id}/start`, {}, ass);
+    for (let i = 0; i < 30 && mails.length < 1; i++) await slaap(200);
+    ok('zonder sjabloon ("alleen tekst") gaat de gewone mail uit, zonder kop of knop', cg.opmaak.sjabloon === 'tekst' && mails.length === 1 && !/<h1/.test(mails[0]) && !/cid:kopfoto/.test(mails[0]) && /afmelden/.test(mails[0].replace(/=\r?\n/g, '')));
+    const inst = (await api('POST', '/api/campagnes/instellingen', { whatsapp: '06 1234 5678' }, admin)).json;
+    ok('instellingen: het WhatsApp-nummer voor de knop wordt bewaard, de andere grenzen blijven staan', inst.whatsapp === '06 1234 5678' && inst.rustDagen === 0 && inst.perDag === 500, JSON.stringify(inst));
+  }
 } finally {
   proc.kill('SIGTERM'); smtp.close();
 }

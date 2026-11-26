@@ -409,6 +409,48 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   en in `AFVINKBAAR`/`startLijstVan`.
   Tests: start-test 32 (+14, zonder server), rollen-test 132 (+13), browser +19.
 
+- **CAMPAGNE MET OPMAAK: DRIE VASTE SJABLONEN (26 nov 2026, wens eigenaar "templates zoals in
+  MailerLite/Mailchimp, niet heel uitgebreid: 3 vaste — schuifpuien, kozijnonderhoud,
+  sloten/cilinders"; ALLEEN testomgeving tot zijn "ja"):** server/campagne-sjablonen.js (puur):
+  `SJABLONEN` = tekst (gewone mail) · schuifpui · kozijn · sloten, elk met kleur, kop,
+  onderwerp, tekst en knop. `bouwCampagneHtml()` maakt de mail: logo, gekleurde balk met kop,
+  optioneel een EIGEN FOTO, de tekst in alinea's, één knop, bedrijfsgegevens en de afmeldlink.
+  Tabellen met vaste stijlen (werkt in Gmail/Outlook/telefoon); ALLES wat de gebruiker typt wordt
+  ge-escaped. Geen vrij ontwerp. DE AI MAAKT GEEN AFBEELDINGEN (kan hij niet): hij kiest een
+  sjabloon uit de vaste lijst en schrijft kop, tekst en knoptekst (`campagneVoorstellenAI` →
+  `sjabloon/kop/knopTekst`, `campagneTekstAI({sjabloon})`); voorstellen uit vaste regels krijgen
+  `sjabloonVoorDoelgroep`. Campagne: `c.opmaak = {sjabloon, kop, knopTekst, knopSoort}`
+  (`leesOpmaak`; knop: bel · whatsapp · mail · site · geen — WhatsApp alleen als
+  `settings.campagnes.whatsapp` is ingevuld, venster "Grenzen aanpassen"), `c.foto` = bestand in
+  `DATA_DIR/campagne-fotos/` (bewust NIET in uploads: valt buiten het opruimen van bijlagen;
+  max 1,5 MB, het scherm verkleint naar 1200 px breed; alleen bij een concept te wijzigen).
+  `mailVoor(c, ontvanger)` → {text, html, attachments}: de platte tekst met afmeldregel gaat
+  altijd mee als terugval; foto en logo gaan IN de mail mee (cid:kopfoto / cid:kslogo), geen
+  link naar buiten. `sendMail({html})` gebruikt meegegeven HTML in plaats van de handtekening-
+  opmaak. ROUTES: GET /api/campagnes geeft `sjablonen` + `bedrijf`; POST /api/campagnes/
+  voorbeeld-html; POST/GET/DELETE /api/campagnes/:id/foto. SCHERM (openCampagneConcept): blok
+  Opmaak — `#cm-sjablonen [data-sj]`, `#cm-kop`, `#cm-knoptekst`, `#cm-knopsoort`, `#cm-foto`/
+  `#cm-fotobtn`/`#cm-fotoweg`, `#cm-vb-knop` → voorbeeld in `#cm-vb` (iframe zonder scripts,
+  Computer/Telefoon). Een sjabloon kiezen vult alleen velden die nog leeg zijn of nog de
+  standaardtekst van een sjabloon hebben (`isStandaard`). Tests: campagne-test 80 (+18),
+  browser +7.
+- **MEDEDELINGEN AAN HET TEAM (26 nov 2026, wens eigenaar "zelf een update of notificatie
+  toevoegen zoals 'Wat is er veranderd?', om iets aan het team te melden"; ALLEEN testomgeving):**
+  server/mededelingen.js, opslag `db().mededelingen`. De BEHEERDER (alleen hij) plaatst via de
+  knop "Mededeling aan team" op Start (`#mededelingBtn`, `openMededelingen`): titel, bericht,
+  voor wie (iedereen / kantoor / monteurs), optioneel "zichtbaar t/m" en "belangrijk". Het
+  bericht staat bij die mensen als balk `#mededelingBalk` BOVEN ELK SCHERM (de monteur begint
+  op zijn opdrachten) tot ze op **Gelezen** tikken; wie meldingen aan heeft krijgt ook een
+  push. De beheerder ziet per bericht "Gelezen door N van M: namen · nog niet: namen" en kan
+  intrekken. De pulse geeft `meded` (id's van de ongelezen berichten) mee, zodat de balk vanzelf
+  verschijnt en verdwijnt. Routes: GET /api/mededelingen ({mijn}, beheerder ook {alle}), POST
+  (admin), POST /:id/gelezen (alleen wie het aangaat, anders 403), DELETE /:id (admin =
+  intrekken). Tests: rollen-test 141 (+9), browser +6.
+- **Weekrapport op de telefoon (26 nov 2026, melding eigenaar "te breed"):** fout in Ontwerp 2
+  (alleen testomgeving): de kaarten in `.ov-raster` konden breder worden dan het scherm door de
+  tabel. Nu `min-width:0; max-width:100%` op de kaarten, tegels twee naast elkaar en per monteur
+  een blokje i.p.v. een tabel (`td[data-l]`). Browser +2.
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)
@@ -439,8 +481,8 @@ systeem nalopen op gebruikersfouten → getest → LIVE; (2) het echte ontwerp (
 het prototype) op de testomgeving; (3) pas daarna: E-MAILCAMPAGNESYSTEEM MET AI — de AI kan een
 complete campagne uitvoeren én doet voorstellen op basis van klantenbestand en geschiedenis
 (bouwt voort op de bestaande /api/campaign/send; idee 4 hoort hierbij).
-STAND 26 nov 2026: stap 1 staat LIVE; stap 2, stap 3 en het afvinken op Start staan op de
-testomgeving en wachten op het "ja" van de eigenaar.
+STAND 26 nov 2026: stap 1 staat LIVE; stap 2, stap 3, het afvinken op Start, de campagnesjablonen
+en de mededelingen staan op de testomgeving en wachten op het "ja" van de eigenaar.
 
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,

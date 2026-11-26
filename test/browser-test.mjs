@@ -2847,6 +2847,79 @@ clear();
 }
 noErr('Afvinken op Start');
 
+// ============================================================================================
+// 26 NOV 2026 (wensen eigenaar): campagne met een vast sjabloon + eigen foto + voorbeeld,
+// mededelingen aan het team, en het weekrapport dat op de telefoon te breed was.
+clear();
+{
+  await page.evaluate(() => { if (document.querySelector('#sluitVraag #sv-weg')) document.querySelector('#sluitVraag #sv-weg').click(); if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const dlgJa = (d) => d.accept().catch(() => {}); page.on('dialog', dlgJa);
+  // --- campagne: sjablonen ---
+  await page.evaluate(() => goView('campagnes')); await page.waitForSelector('#cmpLijst > *', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(500);
+  await page.click('#cmpNieuwBtn'); await page.waitForSelector('#cm-sjablonen .cmp-sj-knop', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(400);
+  const sjKeuze = await page.evaluate(() => ({ knoppen: [...document.querySelectorAll('#cm-sjablonen .cmp-sj-knop')].map((k) => k.dataset.sj).join(), aan: (document.querySelector('#cm-sjablonen .cmp-sj-knop.aan') || {}).dataset?.sj, velden: !document.querySelector('#cm-opmaak').hidden }));
+  ok('sjablonen: een nieuwe campagne biedt "alleen tekst" en de drie vaste sjablonen; standaard alleen tekst, zonder opmaakvelden', sjKeuze.knoppen === 'tekst,schuifpui,kozijn,sloten' && sjKeuze.aan === 'tekst' && !sjKeuze.velden, JSON.stringify(sjKeuze));
+  const perSj = [];
+  for (const key of ['schuifpui', 'kozijn', 'sloten']) {
+    await page.click(`#cm-sjablonen [data-sj="${key}"]`); await page.waitForTimeout(250);
+    const v = await page.evaluate(() => ({ o: document.querySelector('#cm-onderwerp').value, t: document.querySelector('#cm-tekst').value, kop: document.querySelector('#cm-kop').value, knop: document.querySelector('#cm-knoptekst').value, velden: !document.querySelector('#cm-opmaak').hidden }));
+    await page.click('#cm-vb-knop'); await page.waitForSelector('#cm-vb iframe', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(600);
+    const fr = page.frameLocator('#cm-vb iframe');
+    const h1 = await fr.locator('h1').textContent().catch(() => ''); const knop = (await fr.locator('a[href^="tel:"]').first().textContent().catch(() => '')).trim(); const afmeld = await fr.locator('a', { hasText: 'Meld u hier af' }).count().catch(() => 0);
+    perSj.push({ key, goed: v.velden && v.o.length > 5 && /Beste \{naam\}/.test(v.t) && !!v.kop && h1 === v.kop && knop === v.knop && afmeld === 1, v: { o: v.o, kop: v.kop, knop: v.knop }, h1, knop });
+  }
+  ok('sjablonen: elk sjabloon vult onderwerp, tekst, kop en knoptekst in, en het voorbeeld toont de mail met die kop, een bel-knop en de afmeldlink', perSj.every((x) => x.goed) && new Set(perSj.map((x) => x.h1)).size === 3, JSON.stringify(perSj));
+  await page.fill('#cm-tekst', 'Beste {naam},\n\nMijn eigen tekst voor de proef.'); await page.click('#cm-sjablonen [data-sj="schuifpui"]'); await page.waitForTimeout(250);
+  ok('sjablonen: wisselen van sjabloon overschrijft een zelf getypte tekst niet', (await page.inputValue('#cm-tekst')).includes('Mijn eigen tekst'));
+  // eigen foto (wordt in de browser verkleind) → zichtbaar in het voorbeeld
+  await page.setInputFiles('#cm-foto', { name: 'proef.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAGCAYAAAD68A/GAAAAFklEQVR42mP8z8Dwn4EIwDiqkL4KAZ0jBf3bV1p1AAAAAElFTkSuQmCC', 'base64') }); await page.waitForTimeout(2000);
+  const foto = await page.evaluate(() => ({ status: document.querySelector('#cm-fotostatus').textContent, weg: !document.querySelector('#cm-fotoweg').hidden }));
+  const fotoInVb = await page.frameLocator('#cm-vb iframe').locator('img[src*="/foto"]').evaluate((i) => i.complete && i.naturalWidth > 0).catch(() => false);
+  ok('sjablonen: een eigen foto toevoegen bewaart het concept en toont de foto in het voorbeeld', /staat een foto/.test(foto.status) && foto.weg && fotoInVb, JSON.stringify({ foto, fotoInVb }));
+  await page.click('#cm-vb-maat [data-vbm="tel"]'); await page.waitForTimeout(300);
+  ok('sjablonen: het voorbeeld is ook op telefoonbreedte te bekijken', (await page.evaluate(() => Math.round(document.querySelector('#cm-vb iframe').getBoundingClientRect().width))) === 375);
+  await page.click('#cm-save'); await page.waitForTimeout(1200);
+  const bewaard = await page.evaluate(async () => { const c = ((await (await fetch('/api/campagnes')).json()).campagnes || []).find((x) => /eigen tekst voor de proef/.test(x.tekst)); return c ? { id: c.id, opmaak: c.opmaak, foto: c.foto } : null; });
+  ok('sjablonen: opslaan bewaart het sjabloon, de kop, de knop en de foto bij de campagne', !!bewaard && bewaard.opmaak.sjabloon === 'schuifpui' && !!bewaard.opmaak.kop && !!bewaard.opmaak.knopTekst && bewaard.foto === true, JSON.stringify(bewaard));
+  if (bewaard) await page.evaluate((id) => fetch(`/api/campagnes/${id}`, { method: 'DELETE' }), bewaard.id);
+
+  // --- mededeling aan het team ---
+  await page.evaluate(() => goView('overview')); await page.waitForSelector('#mededelingBtn', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(700);
+  await page.click('#mededelingBtn'); await page.waitForSelector('#mdl-titel', { timeout: 8000 });
+  await page.fill('#mdl-titel', 'Proefmededeling: vrijdag om 15:00 dicht'); await page.fill('#mdl-tekst', 'Graag de bus <b>op tijd</b> terug.');
+  await page.click('#mdl-save'); await page.waitForTimeout(1300);
+  ok('mededeling: de beheerder plaatst een bericht via "Mededeling aan team"; hij ziet het zelf niet als balk', await page.evaluate(() => document.querySelector('#modalRoot').hidden && document.querySelector('#mededelingBalk').hidden));
+  const mm = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const mmFout = []; mm.on('pageerror', (e) => mmFout.push(e.message));
+  await mm.goto(BASE + '/login.html', { waitUntil: 'networkidle' });
+  await mm.fill('input[type=email], input[name=email], #email', 'bmonteur@keyservice.nl');
+  await mm.fill('input[type=password], input[name=password], #password', 'monteur123');
+  await Promise.all([mm.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}), mm.click('button[type=submit], button')]);
+  await mm.waitForSelector('.view:not([hidden])', { timeout: 10000 }).catch(() => {}); await mm.waitForTimeout(1500);
+  const balk = await mm.evaluate(() => { const b = document.querySelector('#mededelingBalk'); return { zichtbaar: !!b && !b.hidden && b.offsetParent !== null, tekst: b ? b.textContent : '', opmaak: !!(b && b.querySelector('.meded-tekst b')), breed: document.documentElement.scrollWidth, plaatsknop: !!document.querySelector('#mededelingBtn'), knop: (() => { const k = b && b.querySelector('[data-meded-gelezen]'); return k ? Math.round(k.getBoundingClientRect().height) : 0; })() }; });
+  ok('mededeling: de monteur ziet hem op de telefoon bovenaan zijn scherm (past binnen 390 px, knop Gelezen 40 px, getypte tekens worden geen opmaak); zelf plaatsen kan hij niet', balk.zichtbaar && /Proefmededeling/.test(balk.tekst) && /op tijd/.test(balk.tekst) && !balk.opmaak && balk.breed <= 392 && balk.knop >= 40 && !balk.plaatsknop, JSON.stringify(balk));
+  await mm.click('#mededelingBalk [data-meded-gelezen]'); await mm.waitForTimeout(1000);
+  ok('mededeling: na "Gelezen" is de balk weg, ook na opnieuw laden', (await mm.evaluate(() => document.querySelector('#mededelingBalk').hidden)) && (await mm.evaluate(async () => (await (await fetch('/api/mededelingen')).json()).mijn.length)) === 0);
+  await page.click('#mededelingBtn'); await page.waitForSelector('#mdl-lijst li', { timeout: 8000 }); await page.waitForTimeout(300);
+  const lezers = await page.evaluate(() => [...document.querySelectorAll('#mdl-lijst li')].find((li) => /Proefmededeling/.test(li.textContent))?.textContent || '');
+  ok('mededeling: de beheerder ziet wie het gelezen heeft (de monteur staat erbij) en wie nog niet', /Gelezen door \d+ van \d+/.test(lezers) && /Browser Monteur/.test(lezers.split('nog niet')[0]), lezers.slice(0, 260));
+  await page.evaluate(() => [...document.querySelectorAll('#mdl-lijst li')].find((li) => /Proefmededeling/.test(li.textContent)).querySelector('[data-mdl-weg]').click()); await page.waitForTimeout(1200);
+  ok('mededeling: intrekken zet hem op "ingetrokken"', /ingetrokken/.test(await page.evaluate(() => [...document.querySelectorAll('#mdl-lijst li')].find((li) => /Proefmededeling/.test(li.textContent))?.textContent || '')));
+  await page.evaluate(() => { modalSchoon(); closeModal(); });
+  ok('mededeling (telefoon): geen JS-fout', mmFout.length === 0, mmFout.join(' | '));
+  await mm.close();
+
+  // --- weekrapport op de telefoon: de kaart was breder dan het scherm ---
+  await page.setViewportSize({ width: 390, height: 844 }); await page.evaluate(() => goView('overview')); await page.waitForSelector('#ovWeekrapport .wr-kpis', { timeout: 10000 }).catch(() => {}); await page.waitForTimeout(600);
+  const wr = await page.evaluate(() => { const k = document.querySelector('#ovWeekrapport'); const r = k.getBoundingClientRect(); const breedste = [...k.querySelectorAll('#wr-body *')].reduce((m, e) => Math.max(m, e.getBoundingClientRect().right), 0); return { links: Math.round(r.left), rechts: Math.round(r.right), breedste: Math.round(breedste), pagina: document.documentElement.scrollWidth, kop: getComputedStyle(k.querySelector('.wr-tabel thead') || k).display, kolommen: getComputedStyle(k.querySelector('.wr-kpis')).gridTemplateColumns.split(' ').length }; });
+  ok('weekrapport (telefoon): de kaart en alles erin past binnen 390 px; de monteurs staan als blokjes (geen brede tabel), de tegels twee naast elkaar', wr.links >= 0 && wr.rechts <= 390 && wr.breedste <= wr.rechts && wr.pagina <= 392 && wr.kop === 'none' && wr.kolommen === 2, JSON.stringify(wr));
+  await page.setViewportSize({ width: 1440, height: 900 }); await page.waitForTimeout(400);
+  ok('weekrapport (pc): daar is het nog gewoon een tabel met kolomkoppen', (await page.evaluate(() => getComputedStyle(document.querySelector('#ovWeekrapport .wr-tabel thead')).display)) !== 'none');
+  page.off('dialog', dlgJa);
+}
+noErr('Sjablonen, mededelingen en weekrapport');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
