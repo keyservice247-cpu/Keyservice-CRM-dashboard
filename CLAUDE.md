@@ -451,6 +451,28 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   tabel. Nu `min-width:0; max-width:100%` op de kaarten, tegels twee naast elkaar en per monteur
   een blokje i.p.v. een tabel (`td[data-l]`). Browser +2.
 
+- **ONTVANGSTBEVESTIGING OOK VIA WHATSAPP (27 nov 2026, vraag eigenaar "automatische antwoorden
+  niet alleen via de mail maar ook via WhatsApp"; ALLEEN testomgeving tot zijn "ja"):** stand
+  vooraf: afspraakbevestiging, annulering, afspraakherinnering, review-verzoek en de bord-
+  follow-up gingen al óók via WhatsApp; de offerte-opvolging alleen als de klant geen e-mail
+  heeft; ALLEEN PER MAIL waren de ontvangstbevestiging en de betaalherinnering. Gebouwd: de
+  ontvangstbevestiging (`maybeSendWhatsappBevestiging` in autoreply.js) met een EIGEN schakelaar
+  `autoReply.whatsappEnabled` (standaard UIT) + tekst `autoReply.whatsappBody` (Instellingen →
+  Berichten aan klanten → kaart ontvangstbevestiging, `#ar-wa-enabled`/`#ar-wa-body`; een ouder
+  scherm dat de velden niet meestuurt zet ze niet uit). REGELS — NIET VERZWAKKEN: alleen bij
+  een echte NIEUWE aanvraag (review pending/auto_approved, geen dubbele binnenkomst, niet
+  teruggevonden), NOOIT op een groepsbericht, niet als de klant al een lopende opdracht heeft;
+  het nummer is bij een 1-op-1 appje het ECHTE afzendernummer (fromPhone) en bij het eigen
+  websiteformulier (`mailbox 'website-direct'`) het ingevulde nummer — een LOSSE E-MAIL krijgt
+  geen appje (het nummer in de tekst kan van iemand anders zijn, bv. een beheerder die voor een
+  huurder mailt); alleen een Nederlands mobiel nummer; hooguit één per nummer per uur
+  (outbox `by: 'ontvangstbevestiging'`). Het bericht gaat via de GEWONE wachtrij (snelheidsrem,
+  dubbelfilter, pauzeknop, officiële route) — geen eigen verzendpad. `message.autoRepliedWa` →
+  bij goedkeuren komt de bevestiging in het gesprek van de opdracht (`order.autoRepliedWa`).
+  Aangeroepen vanuit maybeSendAutoReply (mail/formulier/IMAP) en de twee WhatsApp-routes
+  (bridge + officiële webhook). NIET GEBOUWD (pas op verzoek): betaalherinnering via WhatsApp,
+  offerte-opvolging altijd óók via WhatsApp. Tests: scenarios 133 (+10), browser +3.
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)

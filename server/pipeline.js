@@ -437,6 +437,11 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
       });
       order.autoReplied = { at: origMsg.autoReplied.at };
     }
+    // Zelfde voor de bevestiging via WhatsApp (27 nov 2026).
+    if (origMsg.autoRepliedWa) {
+      order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, autoReply: true, sender: 'Keyservice (automatische bevestiging)', body: origMsg.autoRepliedWa.body, at: origMsg.autoRepliedWa.at });
+      order.autoRepliedWa = { at: origMsg.autoRepliedWa.at };
+    }
   }
   // Zichtbare SUGGESTIES op de kaart (niets is automatisch toegepast — de mens beslist).
   if (custSuggestions.length) {

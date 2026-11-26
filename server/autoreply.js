@@ -3,6 +3,7 @@
 import { db, id, now, saveSoon, logActivity } from './db.js';
 import { getAutoReply, getEmailSignature } from './settings.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
+import { matchPhone, senderPhoneFromText, findCustomerStrong } from './pipeline.js';
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 // Lopende kaart = niet afgerond/geannuleerd, niet in de prullenbak, niet ingeklapt.
@@ -12,7 +13,66 @@ export const klantInBehandeling = (customerId) => (db().orders || []).some((o) =
 export const klantInBehandelingBehalve = (customerId, behalveOrderId) => !!customerId && (db().orders || []).some((o) => o.customerId === customerId
   && o.id !== behalveOrderId && !o.archivedWeek && !['afgerond', 'geannuleerd'].includes(o.status));
 
+// ONTVANGSTBEVESTIGING OOK VIA WHATSAPP (27 nov 2026, wens eigenaar: "die automatische
+// antwoorden niet alleen via de mail, maar ook via WhatsApp"). Eigen schakelaar (standaard
+// UIT). Zelfde regels als de mail: alleen bij een echte NIEUWE aanvraag, nooit dubbel, niet als
+// de klant al een lopende opdracht heeft. Extra voor WhatsApp:
+//  - NOOIT op een groepsbericht (dat is een doorgestuurde opdracht, geen klant die ons appt);
+//  - het nummer is bij een 1-op-1 appje het ECHTE afzendernummer (nooit een nummer uit de
+//    tekst); bij het eigen websiteformulier het nummer dat de klant zelf invulde; een losse
+//    e-mail krijgt geen appje;
+//  - alleen een Nederlands mobiel nummer; hooguit één bevestiging per nummer per uur;
+//  - het bericht gaat via de GEWONE wachtrij (snelheidsrem, dubbelfilter, pauzeknop en de
+//    officiële route gelden dus ook hier) — er is geen eigen verzendpad.
+// Geeft het wachtrij-item terug, of null met de reden in het logboek van de server.
+const MOBIEL_NL = /^06\d{8}$/;
+export function maybeSendWhatsappBevestiging(result) {
+  const cfg = getAutoReply();
+  if (!cfg.whatsappEnabled) return null;
+  const review = result && result.review;
+  if (!review || result.duplicate) return null;
+  if (!['pending', 'auto_approved'].includes(review.status)) return null;
+  const msg = (db().messages || []).find((m) => m.id === review.messageId);
+  if (!msg || msg.autoRepliedWa || msg.teruggevonden) return null;
+  if (msg.group || review.group) return null;
+  // Een losse e-mail krijgt GEEN appje: het nummer zou daar uit de tekst komen en kan van iemand
+  // anders zijn (een beheerder die voor een huurder mailt). Alleen het eigen websiteformulier telt,
+  // want daar vult de klant zijn nummer zelf in.
+  if (review.channel !== 'whatsapp' && msg.mailbox !== 'website-direct') return null;
+  const ruw = review.channel === 'whatsapp' ? (msg.fromPhone || senderPhoneFromText(msg.body)) : ((review.suggestion || {}).customerPhone || '');
+  const tel = matchPhone(ruw);
+  if (!MOBIEL_NL.test(tel)) return null;
+  const uurGeleden = Date.now() - 3600000;
+  if ((db().outbox || []).some((x) => x.by === 'ontvangstbevestiging' && matchPhone(x.phone) === tel && new Date(x.createdAt).getTime() > uurGeleden)) return null;
+  const cust = findCustomerStrong({ phone: tel, email: '' });
+  if (cust && (review.mergedIntoOrder || klantInBehandelingBehalve(cust.id, review.orderId || null))) {
+    review.autoReplySkippedWa = 'klant al in behandeling (lopende opdracht)';
+    logActivity('systeem', 'ontvangstbevestiging via WhatsApp overgeslagen', 'klant heeft al een lopende opdracht');
+    saveSoon();
+    return null;
+  }
+  const body = cfg.whatsappBody;
+  const item = { id: id('out'), kind: 'whatsapp_customer', phone: tel, group: '__klant_dm__', text: body, orderId: review.orderId || undefined, status: 'queued', createdAt: now(), by: 'ontvangstbevestiging' };
+  db().outbox = db().outbox || [];
+  db().outbox.unshift(item);
+  msg.autoRepliedWa = { at: now(), to: tel, body };
+  // Is de opdracht al aangemaakt (automatisch goedgekeurd)? Dan meteen zichtbaar in het gesprek.
+  if (review.orderId) {
+    const order = (db().orders || []).find((o) => o.id === review.orderId);
+    if (order && !order.autoRepliedWa) {
+      order.thread = order.thread || [];
+      order.thread.push({ id: id('thr'), channel: 'whatsapp', outgoing: true, autoReply: true, sender: 'Keyservice (automatische bevestiging)', body, at: now(), outboxId: item.id });
+      order.autoRepliedWa = { at: now() };
+    }
+  }
+  logActivity('systeem', 'ontvangstbevestiging via WhatsApp klaargezet', 'nieuwe aanvraag');
+  saveSoon();
+  return item;
+}
+
 export async function maybeSendAutoReply(result) {
+  // WhatsApp heeft een eigen schakelaar en eigen regels; een fout daar raakt de mail nooit.
+  try { maybeSendWhatsappBevestiging(result); } catch (e) { console.error('[bevestiging] WhatsApp mislukt:', e.message); }
   const cfg = getAutoReply();
   if (!cfg.enabled) { console.log('[bevestiging] uit — ontvangstbevestiging staat niet aan'); return; }
   if (!smtpConfigured()) { console.log('[bevestiging] SMTP niet geconfigureerd — kan niet versturen'); return; }

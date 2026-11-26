@@ -69,7 +69,7 @@ import { koppelingenOverzicht } from './koppelingen.js';
 import { MERKEN, isMerk, merkVan, merkVanFactuur, merkNaam } from './merk.js';
 import { STANDAARD_REDENEN, isReden } from './annulering.js';
 import { takenLijst, nieuweTaak, werkTaakBij, zetStatus, sorteerTaken, filterTaken, vandaagLijst, zichtbaarVoor, dagenTot, seedTaken, isEigenaar, collegas, kantoor, gedeeldMetNamen, zetVolgorde } from './taken.js';
-import { maybeSendAutoReply, maybeSendConfirmationOnApprove } from './autoreply.js';
+import { maybeSendAutoReply, maybeSendConfirmationOnApprove, maybeSendWhatsappBevestiging } from './autoreply.js';
 import { startFollowUps } from './followup.js';
 import { sendBackupMail, startBackupMail } from './backup-mail.js';
 import { getPublicKey, addSubscription, removeSubscription, sendPush, pushNaarMonteur } from './push.js';
@@ -3590,6 +3590,8 @@ app.post('/api/ingest/whatsapp', checkIngestToken, async (req, res) => {
   });
   // Volautomatisch: DRS-opdracht direct goedkeuren + naar monteur (indien ingesteld).
   try { maybeIntakeAutoSend(result); } catch (e) { console.error('intake-autosend:', e.message); }
+  // Nieuwe aanvraag via een 1-op-1 appje → ontvangstbevestiging via WhatsApp (indien aan; nooit bij een groep).
+  try { maybeSendWhatsappBevestiging(result); } catch (e) { console.error('wa-bevestiging:', e.message); }
   // Drempel-auto-accept met trigger 'goedgekeurd': dezelfde dispatch als bij een
   // handmatige goedkeuring (maybeIntakeAutoSend dekt alleen trigger 'intake').
   try {
@@ -3685,7 +3687,7 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
       }
       // Zelfde weg als elk ander bericht: door de pipeline, dus alle lead-instroom-wetten
       // (klant-matching, dedup, filters) gelden onverkort.
-      await ingestMessage({
+      const uitkomst = await ingestMessage({
         channel: 'whatsapp',
         sender: m.sender,
         body: m.body || (attachments.length ? '(bijlage)' : ''),
@@ -3693,6 +3695,8 @@ app.post('/api/ingest/whatsapp/cloud', async (req, res) => {
         fromPhone: m.fromPhone,
         attachments,
       });
+      // Nieuwe aanvraag via de officiële route → ontvangstbevestiging via WhatsApp (indien aan).
+      try { maybeSendWhatsappBevestiging(uitkomst); } catch (e) { console.error('[wa-cloud] bevestiging:', e.message); }
     }
   } catch (e) { console.error('[wa-cloud] verwerken mislukt:', e.message); }
   // STATUS-UPDATES (9 aug 2026). "Verstuurd" bij Meta betekent alleen "aangenomen";
@@ -3958,6 +3962,9 @@ app.patch('/api/settings', requirePerm('settings'), (req, res) => {
       body: String(a.body || '').slice(0, 2000),
       // Niet meegestuurd → huidige waarde houden (oudere schermen kennen het veld niet).
       disclaimer: typeof a.disclaimer === 'string' ? a.disclaimer.trim().slice(0, 500) : (db().settings.autoReply || {}).disclaimer,
+      // Bevestiging via WhatsApp: niet meegestuurd (ouder scherm) → huidige waarde houden.
+      whatsappEnabled: typeof a.whatsappEnabled === 'boolean' ? a.whatsappEnabled : !!(db().settings.autoReply || {}).whatsappEnabled,
+      whatsappBody: typeof a.whatsappBody === 'string' ? a.whatsappBody.trim().slice(0, 600) : (db().settings.autoReply || {}).whatsappBody,
     };
   }
   if ('followUp' in b) {

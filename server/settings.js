@@ -529,6 +529,7 @@ export function getFollowUp() {
 }
 
 // Automatische ontvangstbevestiging (uit standaard). De gebruiker zet dit aan in Instellingen.
+export const DEFAULT_AUTOREPLY_WHATSAPP = 'Bedankt voor uw bericht aan Key Service 24/7. Wij hebben uw aanvraag ontvangen en nemen zo snel mogelijk contact met u op. Kunt u alvast een foto van de situatie en uw adres sturen? (Dit is een automatisch bericht.)';
 export const DEFAULT_AUTOREPLY = {
   enabled: false,
   subject: 'Bedankt voor uw aanvraag bij Keyservice',
@@ -554,6 +555,10 @@ export function getAutoReply() {
     body: a.body || DEFAULT_AUTOREPLY.body,
     // undefined = nog nooit ingesteld → standaardtekst; lege string = bewust uit.
     disclaimer: typeof a.disclaimer === 'string' ? a.disclaimer : DEFAULT_AUTOREPLY.disclaimer,
+    // ONTVANGSTBEVESTIGING OOK VIA WHATSAPP (27 nov 2026, wens eigenaar). Eigen schakelaar,
+    // standaard UIT: er verandert niets tot de beheerder hem aanzet.
+    whatsappEnabled: !!a.whatsappEnabled,
+    whatsappBody: String(a.whatsappBody || '').trim() || DEFAULT_AUTOREPLY_WHATSAPP,
   };
 }
 export const getAutoMailDisclaimer = () => getAutoReply().disclaimer;

@@ -647,6 +647,45 @@ const gd = await api('POST', '/api/google/sync-now');
 ok('zonder Google-koppeling: nette uitleg (geen crash)', gd.status === 400 && /niet verbonden/i.test(gd.json?.error || ''), JSON.stringify(gd));
 
 // ---------- Samenvatting ----------
+// ---------- Ontvangstbevestiging ook via WhatsApp (27 nov 2026, wens eigenaar) ----------
+console.log('\n== Ontvangstbevestiging ook via WhatsApp (eigen schakelaar, standaard UIT) ==');
+{
+  const bevestigingen = async () => (await outboxAll()).filter((x) => x.by === 'ontvangstbevestiging');
+  const voor = (await bevestigingen()).length;
+  const uit = await api('POST', '/api/ingest/whatsapp', { name: 'Proef Uit', body: 'Goedemiddag, mijn slot is kapot, kunnen jullie langskomen?\nTelefoon: +31611100001', fromPhone: '+31611100001', externalId: 'wab-uit' }, true);
+  ok('staat de schakelaar uit, dan gaat er géén appje (er verandert niets)', uit.json?.status === 'pending' && (await bevestigingen()).length === voor, JSON.stringify(uit.json));
+  const inst = (await api('GET', '/api/settings')).json.autoReply;
+  ok('instelling: standaard uit, met een standaardtekst', inst.whatsappEnabled === false && /automatisch bericht/i.test(inst.whatsappBody || ''), JSON.stringify(inst).slice(0, 200));
+  await api('PATCH', '/api/settings', { autoReply: { ...inst, whatsappEnabled: true, whatsappBody: 'Bedankt, wij nemen contact op. (Automatisch bericht.)' } });
+  const aan = await api('POST', '/api/ingest/whatsapp', { name: 'Proef Aan', body: 'Hallo, de cilinder van mijn voordeur draait door, kunt u helpen?\nTelefoon: +31611100002', fromPhone: '+31611100002', externalId: 'wab-aan' }, true);
+  const na = await bevestigingen();
+  const item = na.find((x) => /611100002/.test(x.phone || ''));
+  ok('nieuwe aanvraag via een 1-op-1 appje → één bevestiging in de gewone wachtrij, naar het ECHTE afzendernummer', aan.json?.status === 'pending' && !!item && item.kind === 'whatsapp_customer' && item.group === '__klant_dm__' && item.status === 'queued' && item.text === 'Bedankt, wij nemen contact op. (Automatisch bericht.)', JSON.stringify(item || aan.json));
+  await api('POST', '/api/ingest/whatsapp', { name: 'Proef Aan', body: 'Nog iets: het is de achterdeur.\nTelefoon: +31611100002', fromPhone: '+31611100002', externalId: 'wab-aan-2' }, true);
+  ok('een tweede appje van hetzelfde nummer binnen het uur krijgt geen tweede bevestiging', (await bevestigingen()).filter((x) => /611100002/.test(x.phone || '')).length === 1);
+  const vast = await api('POST', '/api/ingest/whatsapp', { name: 'Vast Nummer', body: 'Goedemorgen, kunt u een slot vervangen in Rhenen?\nTelefoon: +31317123456', fromPhone: '+31317123456', externalId: 'wab-vast' }, true);
+  ok('geen mobiel nummer (vaste lijn) → geen appje', vast.json?.status !== undefined && !(await bevestigingen()).some((x) => /317123456/.test(x.phone || '')));
+  const groep = await api('POST', '/api/ingest/whatsapp', { name: 'DRS Planning', group: 'Raf breda', body: 'Naam: Wab Groep\nAdres: Kerklaan 3\nWoonplaats: 4811 AB Breda\nTelefoon: 0611100003\nOpmerkingen: slot vervangen', externalId: 'wab-groep' }, true);
+  ok('een bericht uit een WhatsApp-GROEP krijgt nooit een bevestiging (ook niet met een 06 in de tekst)', groep.status === 200 && !(await bevestigingen()).some((x) => /611100003/.test(x.phone || '')));
+  const form = await api('POST', '/api/ingest/form?token=' + TOKEN, { name: 'Wab Formulier', phone: '06 111 000 04', email: 'wab-formulier@example.nl', city: 'Tiel', message: 'Schuifpui loopt zwaar, graag een afspraak', formType: 'offerte', site: 'schuifpuiservice.com' });
+  ok('aanvraag via het eigen websiteformulier met een 06 → ook een appje', form.json?.status === 'pending' && (await bevestigingen()).some((x) => /611100004/.test(x.phone || '')), JSON.stringify(form.json));
+  const mail = await api('POST', '/api/ingest/email', { from: 'Beheer Proef <beheer-wab@example.nl>', subject: 'Slot kapot bij huurder', text: 'Goedemiddag, bij onze huurder is het slot kapot. U kunt hem bellen op 0611100005. Adres: Dorpsstraat 1, 4001 AA Tiel.', externalId: 'wab-mail' }, true);
+  ok('een LOSSE e-mail krijgt geen appje (het nummer in de tekst kan van iemand anders zijn)', mail.status === 200 && !(await bevestigingen()).some((x) => /611100005/.test(x.phone || '')));
+  // klant met een lopende opdracht: geen "bedankt voor uw aanvraag"
+  const rv = ((await api('GET', '/api/reviews?status=pending&limit=500')).json.items || []).find((r) => /cilinder van mijn voordeur/.test(JSON.stringify(r)));
+  if (rv) {
+    const goed = await api('POST', `/api/reviews/${rv.id}/approve`, {});
+    const ord = (await orders()).find((o) => o.id === (goed.json?.order?.id || goed.json?.orderId));
+    ok('na goedkeuren staat de bevestiging in het gesprek van de opdracht', !!ord && (ord.thread || []).some((t) => t.channel === 'whatsapp' && t.outgoing && /automatische bevestiging/.test(t.sender || '')), JSON.stringify((ord || {}).thread || goed.json).slice(0, 300));
+  } else ok('de proefaanvraag staat in de inbox', false);
+  // oudere schermen sturen de nieuwe velden niet mee: dan blijven ze staan
+  const nu = (await api('GET', '/api/settings')).json.autoReply;
+  await api('PATCH', '/api/settings', { autoReply: { enabled: nu.enabled, subject: nu.subject, body: nu.body } });
+  const behouden = (await api('GET', '/api/settings')).json.autoReply;
+  ok('opslaan vanaf een ouder scherm (zonder de WhatsApp-velden) zet de schakelaar niet stil uit', behouden.whatsappEnabled === true && behouden.whatsappBody === 'Bedankt, wij nemen contact op. (Automatisch bericht.)', JSON.stringify(behouden).slice(0, 200));
+  await api('PATCH', '/api/settings', { autoReply: { ...behouden, whatsappEnabled: false } });
+}
+
 console.log(`\n========== RESULTAAT: ${passed} geslaagd, ${failed} gefaald ==========`);
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
 process.exit(0);

@@ -2920,6 +2920,28 @@ clear();
 }
 noErr('Sjablonen, mededelingen en weekrapport');
 
+// ============================================================================================
+// 27 NOV 2026 (wens eigenaar): de ontvangstbevestiging ook via WhatsApp — eigen schakelaar in
+// Instellingen → Berichten aan klanten, standaard uit.
+clear();
+{
+  await page.evaluate(() => { if (document.querySelector('#sluitVraag #sv-weg')) document.querySelector('#sluitVraag #sv-weg').click(); if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(() => { try { localStorage.setItem('ksInstellingenGroep', 'bericht'); } catch { /* geen opslag */ } return goView('settings'); });
+  await page.waitForSelector('#ar-wa-enabled', { timeout: 10000 }).catch(() => {}); await page.waitForTimeout(500);
+  const wab = await page.evaluate(() => { const v = document.querySelector('#ar-wa-enabled'); const t = document.querySelector('#ar-wa-body'); return { er: !!v && !!t, aan: !!v && v.checked, tekst: t ? t.value : '', inKaart: !!v && !!v.closest('.info-card').querySelector('#saveAutoReply'), binnen: !!v && !!v.closest('.inst-inhoud') }; });
+  ok('WhatsApp-bevestiging: de schakelaar staat in de kaart van de ontvangstbevestiging, standaard UIT, met een standaardtekst', wab.er && !wab.aan && /automatisch bericht/i.test(wab.tekst) && wab.inKaart && wab.binnen, JSON.stringify(wab));
+  await page.evaluate(() => { document.querySelector('#ar-wa-enabled').closest('.info-card').scrollIntoView({ block: 'center' }); });
+  await page.check('#ar-wa-enabled'); await page.fill('#ar-wa-body', 'Bedankt voor uw bericht. Wij bellen u zo snel mogelijk. (Automatisch bericht.)');
+  await page.click('#saveAutoReply'); await page.waitForTimeout(1200);
+  const bewaard = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).autoReply);
+  ok('WhatsApp-bevestiging: aanzetten + eigen tekst worden bewaard met de knop Opslaan van die kaart (de mailinstelling blijft zoals hij was)', bewaard.whatsappEnabled === true && /Wij bellen u/.test(bewaard.whatsappBody) && typeof bewaard.enabled === 'boolean' && !!bewaard.subject, JSON.stringify(bewaard).slice(0, 260));
+  await page.evaluate(async () => { const a = (await (await fetch('/api/settings')).json()).autoReply; await fetch('/api/settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ autoReply: { ...a, whatsappEnabled: false, whatsappBody: '' } }) }); });
+  await page.evaluate(() => goView('overview')); await page.waitForTimeout(600);
+  if (await page.$('#sluitVraag #sv-weg')) await page.click('#sluitVraag #sv-weg');
+}
+noErr('Ontvangstbevestiging via WhatsApp');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }

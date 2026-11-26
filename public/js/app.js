@@ -7035,6 +7035,10 @@ async function loadSettingsHtml(s) {
       <label>Bericht <textarea id="ar-body" rows="6">${esc(s.autoReply?.body || '')}</textarea></label>
       <label>Voetregel onder élke automatische klantmail <textarea id="ar-disclaimer" rows="3" placeholder="Leeg = geen voetregel">${esc(s.autoReply?.disclaimer ?? '')}</textarea></label>
       <div class="muted small" style="margin-top:-6px;margin-bottom:8px">Staat automatisch onder de ontvangstbevestiging, afspraakbevestiging, herinneringen, follow-ups, review-verzoeken, betaalherinneringen en offerte-opvolging. Zo weet een klant die al in behandeling is dat het een automatisch bericht is. Klanten met een lopende opdracht krijgen de ontvangstbevestiging sowieso niet meer.</div>
+      <div class="form-sec">Ook via WhatsApp</div>
+      <label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ar-wa-enabled" style="width:auto" ${s.autoReply?.whatsappEnabled ? 'checked' : ''}> Ontvangstbevestiging ook via WhatsApp sturen</label>
+      <label>WhatsApp-bericht <textarea id="ar-wa-body" rows="3" maxlength="600">${esc(s.autoReply?.whatsappBody || '')}</textarea></label>
+      <div class="muted small" style="margin-top:-6px;margin-bottom:8px">Gaat naar een nieuwe klant die ons zelf een appje stuurt, en naar wie via het websiteformulier een aanvraag doet en een 06-nummer invult. Een losse e-mail krijgt alleen de mail. Nooit bij een bericht uit een WhatsApp-groep, nooit als de klant al een lopende opdracht heeft, hooguit één keer per uur per nummer. Het bericht loopt via de gewone wachtrij.</div>
       <div style="margin-top:12px"><button class="btn btn-primary" id="saveAutoReply">Opslaan</button></div>
     </div>
     <div data-sg="bericht" class="info-card" style="margin-bottom:18px"> <h3>Automatische follow-up op offertes</h3>
@@ -7651,7 +7655,7 @@ async function loadSettingsHtml(s) {
     finally { btn.disabled = false; btn.textContent = old; }
   });
   $('#saveAutoReply').onclick = async () => {
-    const autoReply = { enabled: $('#ar-enabled').checked, subject: $('#ar-subject').value, body: $('#ar-body').value, disclaimer: $('#ar-disclaimer')?.value ?? '' };
+    const autoReply = { enabled: $('#ar-enabled').checked, subject: $('#ar-subject').value, body: $('#ar-body').value, disclaimer: $('#ar-disclaimer')?.value ?? '', whatsappEnabled: !!$('#ar-wa-enabled')?.checked, whatsappBody: $('#ar-wa-body')?.value ?? '' };
     try { await api('/api/settings', 'PATCH', { autoReply }); toast('Ontvangstbevestiging opgeslagen'); }
     catch (err) { toast(err.message, true); }
   };
