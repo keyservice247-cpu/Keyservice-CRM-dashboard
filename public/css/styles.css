@@ -2133,3 +2133,7 @@ table th { font-size: 12px; font-weight: 500; letter-spacing: .03em; color: var(
 
 /* Offerte online goedgekeurd door de klant (27 nov 2026) */
 .inv-akkoord { color: #1a7f4b; font-weight: 600; }
+.chip.chip-akkoord { color: #1a7f4b; background: #e6f4ec; border-color: #9fd3b4; font-weight: 600; }
+.ov-akkoord { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 4px; padding: 10px 12px; border-radius: 8px; background: #e6f4ec; border: 1px solid #9fd3b4; color: #14512f; font-size: 14px; line-height: 1.45; }
+.ov-akkoord svg { flex: 0 0 auto; margin-top: 2px; color: #1a7f4b; }
+

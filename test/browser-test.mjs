@@ -3,6 +3,7 @@
 // variable: bundles") — de test die de vorige bug had moeten vangen.
 import fs from 'node:fs';
 import { chromium } from 'playwright-core';
+import nodeCrypto from 'node:crypto';
 // De werkomgeving wisselt van Chromium-versie; /opt/pw-browsers/chromium wijst altijd naar de
 // geïnstalleerde. Het oude vaste pad blijft als terugval (of zet CHROME_PATH).
 const EXEC = [process.env.CHROME_PATH, '/opt/pw-browsers/chromium', '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'].find((p) => p && fs.existsSync(p));
@@ -2685,7 +2686,7 @@ clear();
   ok('campagnes: "Nu versturen" vraagt eerst met het aantal ontvangers; Annuleren = er gaat niets uit', nee.length === 1 && /versturen naar \d+/.test(nee[0]) && naNee.editor && naNee.status === 'concept', JSON.stringify({ nee, naNee }));
   await dlg(async () => { await page.click('#cm-nu'); await page.waitForSelector('.cmp-tegels', { timeout: 10000 }).catch(() => {}); }, true);
   const verloop = await page.evaluate(() => ({ tegels: document.querySelectorAll('.cmp-tegels > *').length, tekst: (document.querySelector('#modal') || {}).textContent || '' }));
-  ok('campagnes: na "ja" opent de voortgang (verstuurd · wacht nog · overgeslagen · mislukt · reacties · opdrachten); zonder mailinstelling staat er duidelijk "Proef"', verloop.tegels >= 6 && /verstuurd/.test(verloop.tekst) && /wacht nog/.test(verloop.tekst) && /reacties/.test(verloop.tekst) && /Proef/.test(verloop.tekst), JSON.stringify({ tegels: verloop.tegels, tekst: verloop.tekst.slice(0, 160) }));
+  ok('campagnes: na "ja" opent de voortgang (verstuurd · wacht nog · overgeslagen · mislukt · reacties · opdrachten); zonder mailinstelling staat er duidelijk "Proef"', verloop.tegels >= 6 && /verstuurd/.test(verloop.tekst) && /wacht nog/.test(verloop.tekst) && /reacties/.test(verloop.tekst) && (/Proef/.test(verloop.tekst) || /Gaat verder om 09:00 uur/.test(verloop.tekst)), JSON.stringify({ tegels: verloop.tegels, tekst: verloop.tekst.slice(0, 160) }));
   await page.click('#cv-close'); await page.waitForTimeout(700);
   const rij = await page.evaluate(() => ({ rijen: document.querySelectorAll('#cmpLijst .cmp-rij').length, tekst: (document.querySelector('#cmpLijst') || {}).textContent || '' }));
   ok('campagnes: de campagne staat daarna in de lijst met status en resultaat (verstuurd · reacties · nieuwe opdrachten)', rij.rijen === 1 && /Verstuurd|Bezig|Gepland/.test(rij.tekst) && /reacties/.test(rij.tekst) && /nieuwe opdrachten/.test(rij.tekst), rij.tekst.slice(0, 200));
@@ -3005,6 +3006,43 @@ clear();
   if (await page.$('#sluitVraag #sv-weg')) await page.click('#sluitVraag #sv-weg');
 }
 noErr('Akkoordknop in offertes');
+
+// 27 NOV 2026 (klacht eigenaar: "ik ging akkoord maar zie het nergens in het CRM terug"): een
+// online akkoord op een losse offerte geeft een NIEUWE opdracht, een rood punt bovenaan Start,
+// een groen label op de kaart en een balk in de opdracht en in de offerte.
+clear();
+{
+  const maak = await page.evaluate(async () => {
+    const j = (u, m, b) => fetch(u, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }).then((r) => r.json());
+    const k = await j('/api/customers', 'POST', { name: 'Akkoord Schermklant', email: 'scherm-akkoord@example.nl', phone: '0612344321', address: 'Kade 5, 3911 AA Rhenen' });
+    const r = await j('/api/invoices', 'POST', { customerId: k.id, type: 'offerte' }); const inv = r.invoice || r;
+    await j(`/api/invoices/${inv.id}`, 'PATCH', { lines: [{ description: 'Schuifpui afstellen', qty: 1, priceExcl: 100 }], btwPct: 21, note: '' });
+    await j(`/api/invoices/${inv.id}/status`, 'POST', { status: 'verzonden' });
+    return { id: inv.id, nummer: inv.number };
+  });
+  const sig = nodeCrypto.createHmac('sha256', 'test').update(`akkoord:${maak.id}`).digest('hex').slice(0, 24);
+  const akk = await page.evaluate(async ({ id, sig }) => { const r = await fetch(`/akkoord/${id}/${sig}`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'naam=' }); return { status: r.status, tekst: await r.text() }; }, { id: maak.id, sig });
+  ok('akkoord: de klantpagina bevestigt het akkoord', akk.status === 200 && /Bedankt, u bent akkoord/.test(akk.tekst), String(akk.status));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(() => { const p = document.querySelector('#overviewPanel'); if (p) p.dataset.skelet = ''; return goView('overview'); });
+  await page.waitForSelector('#eerstDoenBlok [data-eerst="akkoord"]', { timeout: 10000 }).catch(() => {}); await page.waitForTimeout(500);
+  const st = await page.evaluate(() => { const rijen = [...document.querySelectorAll('#eerstDoenBlok [data-eerst]')]; const r = rijen.find((x) => x.dataset.eerst === 'akkoord'); return { eerste: rijen[0]?.dataset.eerst, tekst: r ? r.textContent.replace(/\s+/g, ' ').trim() : '' }; });
+  ok('akkoord: bovenaan "Eerst doen" staat "… ging akkoord met offerte <nummer>"', st.eerste === 'akkoord' && st.tekst.includes('Akkoord Schermklant') && st.tekst.includes(maak.nummer) && /Plan de afspraak in/.test(st.tekst), JSON.stringify(st));
+  await page.click('#eerstDoenBlok [data-eerst="akkoord"]'); await page.waitForSelector('#ov-akkoord', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(400);
+  const ov = await page.evaluate(() => ({ titel: (document.querySelector('.ov-titel') || {}).textContent || '', balk: (document.querySelector('#ov-akkoord') || {}).textContent || '', zichtbaar: !!document.querySelector('#ov-akkoord')?.offsetParent, tab: document.querySelector('.ov-tab[aria-selected="true"]')?.dataset.ovtab, pdf: [...document.querySelectorAll('#modal a, #modal [data-att], #modal .att')].some((e) => /Offerte-/.test(e.textContent || e.getAttribute('href') || e.getAttribute('title') || '')) || /Offerte-OFF/.test(document.querySelector('#modal').innerHTML) }));
+  ok('akkoord: de tik opent de NIEUWE opdracht "Rhenen — Akkoord offerte <nummer>" met de groene balk en de offerte-PDF', ov.titel.includes('Rhenen — Akkoord offerte') && ov.titel.includes(maak.nummer) && ov.zichtbaar && /Klant ging online akkoord/.test(ov.balk) && /Plan de afspraak in/.test(ov.balk) && ov.pdf, JSON.stringify(ov));
+  ok('akkoord: de opdracht opent op het tabblad Gesprek (nieuw bericht van het systeem)', ov.tab === 'gesprek', String(ov.tab));
+  await page.evaluate(() => { modalSchoon(); closeModal(); return goView('board'); }); await page.waitForTimeout(900);
+  const kaart = await page.evaluate((nr) => { const k = [...document.querySelectorAll('#board .card')].find((c) => c.textContent.includes(`Akkoord offerte ${nr}`)); return { er: !!k, chip: !!k && !!k.querySelector('.chip-akkoord'), tekst: k ? (k.querySelector('.chip-akkoord') || {}).textContent : '' }; }, maak.nummer);
+  ok('akkoord: op het bord staat de kaart met het groene label "offerte akkoord"', kaart.er && kaart.chip && /offerte akkoord/.test(kaart.tekst), JSON.stringify(kaart));
+  await page.evaluate(() => goView('invoices')); await page.waitForSelector('#invFilter', { timeout: 8000 }); await page.waitForTimeout(500);
+  await page.selectOption('#invFilter', 'akkoord'); await page.waitForTimeout(500);
+  const fl = await page.evaluate((nr) => { const t = document.querySelector('#view-invoices').textContent; return { nummer: t.includes(nr), label: !!document.querySelector('#view-invoices .inv-akkoord') }; }, maak.nummer);
+  ok('akkoord: Facturen heeft het filter "Online akkoord door klant" en toont het label bij de offerte', fl.nummer && fl.label, JSON.stringify(fl));
+  await page.selectOption('#invFilter', 'all');
+  await page.evaluate(() => goView('overview')); await page.waitForTimeout(500);
+}
+noErr('Online akkoord zichtbaar in het CRM');
 
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();

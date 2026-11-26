@@ -1488,6 +1488,80 @@ function akkoordPaginaVoor(inv, staat, cfg) {
       <button type="submit" style="background:#1a7f4b;width:100%">Ja, ik ga akkoord met deze offerte</button>
       <p style="margin-top:12px;font-size:13px">Vragen of iets aanpassen? Reageer op ons bericht${contact}.</p></form>`);
 }
+// Een NIEUWE opdracht voor een online goedgekeurde offerte die niet bij een lopende opdracht
+// hoort: titel met "Akkoord offerte", klantgegevens, afgesproken werk, bedrag en de offerte-PDF.
+async function maakAkkoordOpdracht(inv, { oud = null, customer = {}, naam = '', wie = '' } = {}) {
+  const intake = {
+    name: String((oud && oud.intake && oud.intake.name) || customer.name || naam || '').slice(0, 120),
+    phone: String((oud && oud.intake && oud.intake.phone) || inv.sentToPhone || customer.phone || '').slice(0, 40),
+    email: String((oud && oud.intake && oud.intake.email) || customer.email || inv.sentTo || '').slice(0, 120),
+    address: String(inv.reparatieAdres || (oud && oud.intake && oud.intake.address) || customer.address || '').slice(0, 200),
+  };
+  const plaats = campagnes.plaatsUit(intake.address);
+  const regels = (inv.lines || []).map((l) => `- ${l.qty || 1}× ${String(l.description || '').trim()}`).filter((r) => r.length > 5);
+  const maker = inv.createdById ? (db().users || []).find((u) => u.id === inv.createdById) : null;
+  const order = {
+    id: id('ord'),
+    // Vaste werkafspraak: de titel begint met de plaatsnaam.
+    title: `${plaats ? `${plaats} — ` : ''}Akkoord offerte ${inv.number}`.slice(0, 160),
+    description: [`De klant ging op ${nlDatumTekst(inv.acceptedAt || Date.now())} online akkoord met offerte ${inv.number}.`, regels.length ? `\nAfgesproken werk:\n${regels.join('\n')}` : '', `\nTotaal: ${euroTekst(inv.totalIncl)} incl. btw.`, inv.note ? `\nOpmerking op de offerte: ${inv.note}` : ''].filter(Boolean).join(''),
+    status: normalizeStatus('open'),
+    source: 'Offerte akkoord (online)',
+    customerId: inv.customerId,
+    monteurId: (oud && oud.monteurId) || (maker && maker.role === 'monteur' && maker.monteurId) || null,
+    appointmentAt: null, appointmentEndAt: null, price: '', urgent: false, notes: '', messageId: null,
+    intake, thread: [], attachments: [],
+    ...(oud ? { vervolgOp: oud.id } : {}),
+    createdAt: now(), updatedAt: now(), statusSince: now(),
+  };
+  // De offerte zelf als PDF bij de opdracht (lukt dat niet, dan komt de opdracht er toch).
+  try {
+    const pdf = await buildInvoicePdf(inv, order, customer);
+    const saved = saveBuffer(pdf, { mime: 'application/pdf', filename: `Offerte-${inv.number}.pdf` });
+    if (saved) order.attachments = mergeAttachments([], [saved]);
+  } catch (e) { console.error('[akkoord-pdf]', e.message); }
+  db().orders.push(order);
+  inv.orderId = order.id; // de offerte (en het factuur-concept) hoort nu bij deze opdracht
+  logActivity('systeem', 'opdracht aangemaakt na online akkoord', `${order.title} — ${wie || naam || customer.name || ''}`);
+  return order;
+}
+// EENMALIG (27 nov 2026): offertes die al online zijn goedgekeurd vóórdat er een opdracht bij
+// werd aangemaakt, krijgen die alsnog (alleen van de laatste 30 dagen, alleen zonder lopende
+// opdracht). Zo staat ook de eerste proef van de eigenaar gewoon op het bord.
+async function akkoordInhaalslag() {
+  const s = db().settings; if (s._akkoordKaartV1) return;
+  s._akkoordKaartV1 = now();
+  let n = 0;
+  for (const inv of db().invoices || []) {
+    if (inv.type !== 'offerte' || inv.status !== 'goedgekeurd' || !inv.akkoordKlant || !inv.akkoordKlant.at) continue;
+    if (Date.now() - new Date(inv.akkoordKlant.at).getTime() > 30 * 86400000) continue;
+    const oud = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+    const customer = (db().customers || []).find((c) => c.id === inv.customerId) || {};
+    const wie = inv.akkoordKlant.naam || customer.name || 'de klant';
+    let order = oud && !oud.deletedAt && !oud.archivedWeek && !['afgerond', 'geannuleerd'].includes(oud.status) ? oud : null;
+    if (order && order.offerteAkkoord) continue;
+    if (!order) {
+      order = await maakAkkoordOpdracht(inv, { oud, customer, naam: inv.akkoordKlant.naam || '', wie });
+      const factuur = inv.convertedInvoiceId ? (db().invoices || []).find((x) => x.id === inv.convertedInvoiceId) : null;
+      if (factuur && !factuur.orderId) factuur.orderId = order.id;
+      order.invoiceId = (factuur && factuur.id) || inv.id;
+      order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: false, sender: 'Systeem', body: `${wie} ging online akkoord met offerte ${inv.number} (${euroTekst(inv.totalIncl)} incl. btw). Neem contact op om de afspraak in te plannen.`, at: inv.akkoordKlant.at });
+      order.customerReplied = true; order.unreadReplies = 1; order.lastCustomerReplyAt = inv.akkoordKlant.at;
+      n++;
+    }
+    order.offerteAkkoord = { invoiceId: inv.id, nummer: inv.number, at: inv.akkoordKlant.at, naam: inv.akkoordKlant.naam || '' };
+  }
+  if (n) logActivity('systeem', 'online goedgekeurde offertes alsnog als opdracht gezet', `${n}`);
+  saveSoon();
+}
+// Alleen voor de eigen test (bestaat niet op productie): de eenmalige inhaalslag opnieuw draaien.
+if (process.env.AKKOORD_TEST === '1' && demoLoginToegestaan()) {
+  app.post('/api/offerte-akkoord/inhaal-test', requireRole('admin'), async (req, res) => {
+    delete db().settings._akkoordKaartV1;
+    await akkoordInhaalslag();
+    res.json({ ok: true });
+  });
+}
 app.get('/akkoord/:id/:sig', (req, res) => {
   afmeldKop(res);
   const inv = akkoordToegang(String(req.params.id), String(req.params.sig));
@@ -1495,7 +1569,7 @@ app.get('/akkoord/:id/:sig', (req, res) => {
   const cfg = getInvoiceSettings();
   res.send(akkoordPaginaVoor(inv, akkoordStaat(inv, { quoteValidDays: cfg.quoteValidDays }), cfg));
 });
-app.post('/akkoord/:id/:sig', express.urlencoded({ extended: false, limit: '4kb' }), (req, res) => {
+app.post('/akkoord/:id/:sig', express.urlencoded({ extended: false, limit: '4kb' }), async (req, res) => {
   afmeldKop(res);
   const inv = akkoordToegang(String(req.params.id), String(req.params.sig));
   if (!inv) return res.status(404).send(afmeldPagina(...AKKOORD_FOUT));
@@ -1504,32 +1578,45 @@ app.post('/akkoord/:id/:sig', express.urlencoded({ extended: false, limit: '4kb'
   if (staat !== 'open') return res.send(akkoordPaginaVoor(inv, staat, cfg)); // al akkoord = gewoon de bevestiging
   const naam = String((req.body && req.body.naam) || '').replace(/[\r\n<>]/g, ' ').trim().slice(0, 80);
   const customer = (db().customers || []).find((c) => c.id === inv.customerId) || {};
+  // Meteen vastleggen (vóór het eerste wachtmoment): twee keer snel tikken keurt maar één keer goed.
   inv.status = 'goedgekeurd';
   inv.acceptedAt = now();
   inv.akkoordKlant = { at: inv.acceptedAt, via: 'link', naam };
   const wie = naam || customer.name || 'de klant';
   logActivity('klant', 'offerte goedgekeurd via de akkoordknop', `${inv.number} — ${wie}`);
-  let autoInvoice = null;
-  if (cfg.autoInvoiceOnAccept !== false) {
-    try { autoInvoice = autoConvertQuoteToInvoice(inv, 'klant (akkoordknop)'); } catch (e) { console.error('[akkoord-factuur]', e.message); }
-  }
-  // Klaarstaande herinneringen voor deze offerte zijn nu overbodig.
+  // GEEN HERINNERINGEN MEER (wens eigenaar 27 nov): klaarstaande opvolgberichten voor deze
+  // offerte worden ingetrokken. Nieuwe komen er niet: een goedgekeurde offerte is "niet meer
+  // open" voor de offerte-herinnering, en de opvolging op het bord slaat een besliste offerte over.
   for (const it of db().outbox || []) {
     if (it.status !== 'queued' || !['offerte-opvolging', 'follow-up'].includes(it.by)) continue;
     if (it.invoiceRef !== inv.id && !(inv.orderId && it.orderId === inv.orderId)) continue;
     it.status = 'failed'; it.lastResult = 'ingetrokken: klant ging online akkoord met de offerte'; it.ingetrokken = true;
   }
-  const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
-  if (order) {
-    order.thread = order.thread || [];
-    order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: false, sender: 'Systeem', body: `${wie} ging online akkoord met offerte ${inv.number} (${euroTekst(inv.totalIncl)} incl. btw).${autoInvoice ? ` Factuur-concept ${autoInvoice.number} staat klaar.` : ''} Neem contact op om in te plannen.`, at: now() });
-    order.customerReplied = true;
-    order.unreadReplies = (order.unreadReplies || 0) + 1;
-    order.lastCustomerReplyAt = now();
-    order.updatedAt = now();
-    if (order.monteurId) pushNaarMonteur(order, { title: 'Offerte goedgekeurd', body: `${order.title} — ${wie} ging akkoord` });
+  // WAAR ZIE JE HET TERUG? (wens eigenaar 27 nov: "ik zie het nergens in het CRM terug")
+  //  - hangt de offerte aan een LOPENDE opdracht: daar komt een bericht van het systeem in het
+  //    gesprek, met de badge "nieuw bericht" — zoals bij elke reactie van een klant;
+  //  - anders (losse offerte, of de opdracht is al afgerond/geannuleerd/weg): er komt een NIEUWE
+  //    opdracht in de eerste kolom, met "Akkoord offerte" in de titel, de klantgegevens, wat er
+  //    is afgesproken en de offerte als PDF.
+  const oud = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+  const lopend = !!oud && !oud.deletedAt && !oud.archivedWeek && !['afgerond', 'geannuleerd'].includes(oud.status);
+  let order = lopend ? oud : null;
+  const bericht = (extra = '') => `${wie} ging online akkoord met offerte ${inv.number} (${euroTekst(inv.totalIncl)} incl. btw).${extra} Neem contact op om de afspraak in te plannen.`;
+  if (!order) order = await maakAkkoordOpdracht(inv, { oud, customer, naam, wie });
+  let autoInvoice = null;
+  if (cfg.autoInvoiceOnAccept !== false) {
+    try { autoInvoice = autoConvertQuoteToInvoice(inv, 'klant (akkoordknop)'); } catch (e) { console.error('[akkoord-factuur]', e.message); }
   }
-  sendPush({ title: `Offerte ${inv.number} goedgekeurd`, body: `${wie} ging online akkoord (${euroTekst(inv.totalIncl)} incl. btw). Plan de werkzaamheden in.`, url: order ? `/?open=${order.id}` : '/', tag: `akkoord-${inv.id}` }).catch(() => {});
+  if (!order.invoiceId) order.invoiceId = (autoInvoice && autoInvoice.id) || inv.id;
+  order.thread = order.thread || [];
+  order.thread.push({ id: id('thr'), channel: 'systeem', outgoing: false, sender: 'Systeem', body: bericht(autoInvoice ? ` Factuur-concept ${autoInvoice.number} staat klaar.` : ''), at: now() });
+  order.customerReplied = true;
+  order.unreadReplies = (order.unreadReplies || 0) + 1;
+  order.lastCustomerReplyAt = now();
+  order.offerteAkkoord = { invoiceId: inv.id, nummer: inv.number, at: inv.acceptedAt, naam };
+  order.updatedAt = now();
+  if (order.monteurId) pushNaarMonteur(order, { title: 'Offerte goedgekeurd', body: `${order.title} — ${wie} ging akkoord` });
+  sendPush({ title: `Offerte ${inv.number} goedgekeurd`, body: `${wie} ging online akkoord (${euroTekst(inv.totalIncl)} incl. btw). ${lopend ? 'Het staat in de opdracht.' : 'Er staat een nieuwe opdracht klaar.'} Plan de afspraak in.`, url: `/?open=${order.id}`, tag: `akkoord-${inv.id}` }).catch(() => {});
   saveSoon();
   res.send(afmeldPagina('Bedankt, u bent akkoord!', `Wij hebben uw akkoord op offerte ${escHtml(inv.number)} ontvangen. Wij nemen zo snel mogelijk contact met u op om de werkzaamheden in te plannen.`));
 });
@@ -3157,6 +3244,25 @@ function wachtVoorStart() {
 // ALLES WAAR START UIT BESTAAT, per onderdeel met een `afId` (25 nov 2026, zie start-af.js).
 // Ongefilterd: de route haalt eruit wat is afgevinkt, en de afvink-route gebruikt dezelfde
 // lijsten om te weten wat er NU is (alleen dat kan worden afgevinkt).
+// Offertes waar de klant via de akkoordknop "ja" op zei en die nog niet zijn ingepland
+// (27 nov 2026, eigenaar: "ik ging akkoord maar zie het nergens in het CRM terug"). Weg zodra
+// er een afspraak staat (op de opdracht of een andere opdracht van dezelfde klant), de opdracht
+// is afgerond/geannuleerd, of na 30 dagen. Afvinken op Start kan ook.
+function akkoordNogInTePlannen(nu = Date.now()) {
+  const uit = [];
+  const klanten = new Map((db().customers || []).map((c) => [c.id, c]));
+  for (const inv of db().invoices || []) {
+    if (inv.type !== 'offerte' || inv.status !== 'goedgekeurd' || !inv.akkoordKlant || !inv.akkoordKlant.at) continue;
+    const at = new Date(inv.akkoordKlant.at).getTime();
+    if (!Number.isFinite(at) || nu - at > 30 * 86400000) continue;
+    const order = inv.orderId ? db().orders.find((o) => o.id === inv.orderId) : null;
+    if (order && (order.deletedAt || ['afspraak_ingepland', 'afgerond', 'geannuleerd'].includes(order.status))) continue;
+    const alGepland = (db().orders || []).some((o) => !o.deletedAt && o.customerId && o.customerId === inv.customerId && o.appointmentAt && new Date(o.appointmentAt).getTime() > at - 3600000 && o.updatedAt && new Date(o.updatedAt).getTime() >= at);
+    if (alGepland) continue;
+    uit.push({ id: inv.id, afId: inv.id, orderId: order && !order.deletedAt ? order.id : '', nummer: inv.number || '', klant: inv.akkoordKlant.naam || (klanten.get(inv.customerId) || {}).name || '', title: inv.number || '' });
+  }
+  return uit;
+}
 function startOnderdelen(user) {
   // MONTEUR ziet alleen zijn eigen werk (browser-audit 16 sep): voorheen kreeg hij
   // bedrijfsbrede KPI's, "te controleren" van een inbox waar hij niet in mag en het
@@ -3200,11 +3306,12 @@ function startOnderdelen(user) {
     drs: monteur ? [] : drsTeMeldenLijst(),
     onvolledig: active.filter((o) => o.customerIncomplete && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status)).map(kort),
     campagneConcepten: monteur ? [] : campagnes.wachtendeAutoConcepten(),
+    akkoordOffertes: monteur ? [] : akkoordNogInTePlannen(),
   };
 }
 // Welke lijst hoort bij welke afvink-sleutel.
 const startLijstVan = (o, sleutel) => ({ inbox: o.pending, wacht: o.wacht, reactie: o.repliedList, afspraakGeweest: o.afspraakGeweest, offertes: o.staleQuotes,
-  factureren: o.teFactureren, verlopen: o.verlopen, drs: o.drs, onvolledig: o.onvolledig, campagne: o.campagneConcepten, afspraakVandaag: o.apptToday })[sleutel] || null;
+  factureren: o.teFactureren, verlopen: o.verlopen, drs: o.drs, onvolledig: o.onvolledig, campagne: o.campagneConcepten, akkoord: o.akkoordOffertes, afspraakVandaag: o.apptToday })[sleutel] || null;
 
 app.get('/api/overview', requireAuth, (req, res) => {
   const od = startOnderdelen(req.user);
@@ -3229,7 +3336,7 @@ app.get('/api/overview', requireAuth, (req, res) => {
       monteur, nu: Date.now(),
       pending: od.pending, wacht: od.wacht,
       reacties: od.repliedList, afspraakGeweest: od.afspraakGeweest, offertesStil: od.staleQuotes,
-      teFactureren: od.teFactureren, verlopenFacturen: od.verlopen, drsTeMelden: od.drs, onvolledig: od.onvolledig, campagneConcepten: od.campagneConcepten,
+      teFactureren: od.teFactureren, verlopenFacturen: od.verlopen, drsTeMelden: od.drs, onvolledig: od.onvolledig, campagneConcepten: od.campagneConcepten, akkoordOffertes: od.akkoordOffertes,
       bridge: { ingesteld: !!last && !TEST, stilMin: ageSec == null ? 0 : Math.floor(ageSec / 60) },
       koppelFouten: monteur ? [] : (() => { try { return koppelingenOverzicht().regels.filter((r) => r.stand === 'fout' && r.sleutel !== 'waGroep').map((r) => ({ sleutel: r.sleutel, naam: r.naam, uitleg: r.uitleg })); } catch { return []; } })(),
       afgevinkt,
@@ -3267,7 +3374,7 @@ app.get('/api/overview', requireAuth, (req, res) => {
 // factuur of het gesprek zelf verandert niets. Het scherm stuurt de id's mee van wat het liet
 // zien; alleen wat er NU echt is wordt onthouden (iets dat intussen binnenkwam blijft staan).
 const START_NAAM = { inbox: 'nieuwe aanvragen', wacht: 'klanten die wachten op antwoord', reactie: 'klantreacties', afspraakGeweest: 'afspraken die zijn geweest', offertes: 'offertes die stilliggen',
-  factureren: 'afgeronde opdrachten zonder factuur', verlopen: 'facturen over de betaaltermijn', drs: 'DRS-opdrachten nog te melden', onvolledig: 'opdrachten zonder klantnaam', campagne: 'campagne-concepten om na te lezen', afspraakVandaag: 'afspraken van vandaag', dag: 'regels uit het dagoverzicht' };
+  factureren: 'afgeronde opdrachten zonder factuur', verlopen: 'facturen over de betaaltermijn', drs: 'DRS-opdrachten nog te melden', onvolledig: 'opdrachten zonder klantnaam', campagne: 'campagne-concepten om na te lezen', akkoord: 'offertes waar de klant online akkoord op gaf', afspraakVandaag: 'afspraken van vandaag', dag: 'regels uit het dagoverzicht' };
 app.post('/api/start/afvinken', requireAuth, (req, res) => {
   const sleutel = String(req.body?.sleutel || '');
   if (!magSleutel(req.user, sleutel)) return res.status(sleutel.startsWith('koppeling:') || sleutel === 'bridge' ? 400 : 403).json({ error: sleutel.startsWith('koppeling:') || sleutel === 'bridge' ? 'Een koppeling die niet werkt kun je niet afvinken: de melding verdwijnt vanzelf zodra hij weer werkt.' : 'Dit onderdeel kun je niet afvinken.' });
@@ -7660,6 +7767,7 @@ app.listen(PORT, () => {
       if (r && r.concept) sendPush({ title: 'Campagne staat klaar om na te lezen', body: `${r.aantal} klanten zijn toe aan onderhoud van hun schuifpui. Er gaat niets uit zonder jouw klik.`, url: '/', tag: 'campagne-onderhoud' }).catch(() => {});
     } catch (e) { console.error('[campagne-onderhoud]', e.message); }
   };
+  setTimeout(() => { akkoordInhaalslag().catch((e) => console.error('[akkoord-inhaal]', e.message)); }, 15 * 1000);
   setTimeout(onderhoudRonde, 90 * 1000);
   setInterval(onderhoudRonde, 60 * 60 * 1000);
   // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.

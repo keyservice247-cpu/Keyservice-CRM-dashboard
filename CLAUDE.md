@@ -584,6 +584,35 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   test/offerte-akkoord-test.mjs (30; start zelf nep-SMTP 2661 + server 3161), browser +4.
   Live gezet 27 nov 2026 met de schakelaar UIT. Tests: 34 serversuites 1.785 + browser 542 +
   browser-rechten 23 = 2.350, 0 fouten.
+  WAAR ZIE JE EEN AKKOORD TERUG (27 nov 2026 avond, klacht eigenaar na zijn eigen proef: "ik ging
+  akkoord maar zie het nergens in het CRM terug; er moet een opdrachtkaart komen met 'akkoord
+  offerte' in de titel, en bij een lopende klant een melding als nieuw bericht van het systeem;
+  en geen herinnering meer na een akkoord"):
+  (a) Offerte hangt aan een LOPENDE opdracht (niet afgerond/geannuleerd/prullenbak/ingeklapt) →
+  systeembericht in het gesprek + badge "nieuw bericht" (customerReplied/unreadReplies), de
+  opdracht opent op het tabblad Gesprek. De status verandert niet.
+  (b) ANDERS (losse offerte, of de opdracht is al afgehandeld) → `maakAkkoordOpdracht()` maakt een
+  NIEUWE opdracht in de eerste kolom: titel "<Plaats> — Akkoord offerte <nummer>", bron "Offerte
+  akkoord (online)", intake (naam/telefoon/e-mail/adres; reparatielocatie van de offerte gaat
+  voor), omschrijving = afgesproken werk + totaal, de offerte als PDF-bijlage, `vervolgOp` als er
+  een oude opdracht was, monteur = die van de oude opdracht of de monteur die de offerte maakte.
+  De offerte (`inv.orderId`) en het factuur-concept hangen daarna aan de nieuwe opdracht. Er
+  wordt NIET automatisch naar een monteur gestuurd en geen afspraak gezet: een mens plant in.
+  (c) Overal zichtbaar: `order.offerteAkkoord {invoiceId, nummer, at, naam}` → groen label
+  "offerte akkoord" op de kaart (`.chip-akkoord`) en balk `#ov-akkoord` in de opdracht; balk
+  `#inv-akkoord` in de offerte; Facturen-filter "Online akkoord door klant"; ROOD werkpunt
+  `akkoord` BOVENAAN "Eerst doen" ("<klant> ging akkoord met offerte <nr> — plan de afspraak in";
+  `akkoordNogInTePlannen()`: weg zodra de opdracht op afspraak/afgerond/geannuleerd staat, na
+  30 dagen, of afgevinkt; één = opent de opdracht, meer = Facturen met het filter).
+  (d) GEEN HERINNERING NA AKKOORD: klaarstaande opvolgberichten worden ingetrokken; een
+  goedgekeurde offerte is niet meer "open" voor de offerte-herinnering (ook de handmatige knop
+  geeft 400) en de bord-opvolging slaat een besliste offerte over.
+  (e) EENMALIG bij het opstarten (`akkoordInhaalslag`, `settings._akkoordKaartV1`): offertes die
+  al online waren goedgekeurd (≤ 30 d) zonder lopende opdracht krijgen alsnog hun opdracht.
+  Testhaak alleen met de demo-login: `AKKOORD_TEST=1` → POST /api/offerte-akkoord/inhaal-test.
+  Tests: offerte-akkoord-test 46 (+16), browser +6. De campagne-proefcheck in de browsertest is
+  tijd-onafhankelijk gemaakt (na 20:00 zegt het scherm terecht "Gaat verder om 09:00 uur").
+  Stand: 34 serversuites 1.801 + browser 549 + browser-rechten 23 = 2.373, 0 fouten.
 
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen

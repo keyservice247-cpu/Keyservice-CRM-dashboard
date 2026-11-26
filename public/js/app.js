@@ -1791,6 +1791,7 @@ async function eerstDoenGa(p) {
   const ga = p.ga;
   try {
     if (ga.open) { markSeen(ga.open); await openOrderVers(ga.open); return; }
+    if (ga.factuur) { await openStandaloneInvoice(ga.factuur); return; }
     if (ga.actie === 'drsrapport') { await openDrsRapport(); return; }
     if (ga.actie === 'koppelstatus') { await openKoppelStatus(); return; }
     if (ga.col) { state.boardTab = ga.col; state._focusCol = ga.col; }
@@ -2797,6 +2798,7 @@ function cardHTML(o) {
   else if (o.snoozeAt) meta.push(`<span class="chip" title="Opvolg-herinnering ingesteld">${icon('clock', 13)} ${fmtDate(o.snoozeAt)}</span>`);
   if (o.attachments && o.attachments.length) meta.push(`<span class="chip">${icon('paperclip', 13)} ${o.attachments.length}</span>`);
   if (o.autoReplied) meta.push(`<span class="chip chip-ack" title="Automatische ontvangstbevestiging verstuurd">${icon('mail', 12)} bevestigd</span>`);
+  if (o.offerteAkkoord) meta.push(`<span class="chip chip-akkoord" title="De klant tikte op ${esc(fmtDateShort(o.offerteAkkoord.at))} op de akkoordknop van offerte ${esc(o.offerteAkkoord.nummer || '')}${o.offerteAkkoord.naam ? ` (${esc(o.offerteAkkoord.naam)})` : ''}">${icon('check', 12)} offerte akkoord</span>`);
   // Suggesties (lead-instroom wetten): het systeem voegt nooit zelf samen of wijzigt
   // nooit zelf klantgegevens — deze chips vragen om een menselijke beslissing.
   if (o.mergeSuggestion) meta.push(`<span class="chip chip-sug" title="Mogelijk zelfde opdracht als een open opdracht van deze klant — open de opdracht om samen te voegen of te negeren">${icon('merge', 13)} dubbel?</span>`);
@@ -3135,6 +3137,7 @@ function ovKopHTML(o, { canWrite, isMonteur, kv, stap }) {
         ${o.monteur && o.monteur.name ? `<span class="ov-chip ov-chip-stil">${icon('user', 12)} ${esc(o.monteur.name)}</span>` : ''}
         ${afspraak ? `<span class="ov-chip ov-chip-stil">${icon('calendar', 12)} ${esc(afspraak)}</span>` : ''}
       </div>
+      ${o.offerteAkkoord ? `<div class="ov-akkoord" id="ov-akkoord">${icon('check', 15)}<span><strong>Klant ging online akkoord</strong> met offerte ${esc(o.offerteAkkoord.nummer || '')} op ${esc(fmtDateShort(o.offerteAkkoord.at))}${o.offerteAkkoord.naam ? ` (${esc(o.offerteAkkoord.naam)})` : ''}.${['afspraak_ingepland', 'afgerond', 'geannuleerd'].includes(o.status) ? '' : ' Plan de afspraak in.'}</span></div>` : ''}
       <div class="ov-klant">
         <strong>${esc(naam)}</strong>
         ${tel ? `<a href="tel:${esc(String(tel).replace(/\s+/g, ''))}" class="ov-klant-link">${icon('phone', 13)} ${esc(tel)}</a>` : ''}
@@ -5214,6 +5217,7 @@ function renderInvoiceEditor(ctx) {
   modal(`
     <h2>${icon('mail', 16)} ${woord} — ${esc(customer.name || ctx.contextTitle || '')}</h2>
     <p class="muted small">${inv.number ? `Nummer <strong>${esc(inv.number)}</strong> · status: <strong>${esc(stLabel)}</strong>${inv.sentTo ? ` · verstuurd naar ${esc(inv.sentTo)}` : ''}` : `Nieuw${isQuote ? ' concept' : ''} — het ${woord.toLowerCase()}nummer wordt bij opslaan toegekend.`} Prijzen voer je <strong>EXCL. btw</strong> in; de btw komt erbovenop.${locked ? ' <strong>Dit document is vergrendeld.</strong>' : ''}</p>
+    ${inv.akkoordKlant ? `<div class="ov-akkoord" id="inv-akkoord">${icon('check', 15)}<span><strong>Klant ging online akkoord</strong> op ${esc(fmtDateShort(inv.akkoordKlant.at))}${inv.akkoordKlant.naam ? ` (${esc(inv.akkoordKlant.naam)})` : ''} — via de knop in de mail of het appje.</span></div>` : ''}
     ${locked && magCorrigeren ? `<div class="inv-corr-rij"><span class="muted small">Zit er een fout in? Je kunt deze factuur corrigeren; het nummer blijft hetzelfde.</span><button type="button" class="btn btn-sm" id="inv-corr" data-geen-focus>${icon('edit', 13)} Corrigeren</button></div>` : ''}
     ${corr ? `<div class="inv-corr-melding" id="inv-corr-melding"><strong>Je corrigeert deze factuur. Het nummer blijft ${esc(inv.number || '')}.</strong><span class="muted small">Reden: ${esc(corr.reden)}. Status, betaaldatum en verzenddatum blijven staan; op de PDF komt "Gecorrigeerde versie". Stuur de factuur na het opslaan opnieuw naar de klant.</span></div>` : ''}
     ${!corr && inv.gecorrigeerdAt ? `<div class="inv-gecorr-regel muted small" id="inv-gecorr">Gecorrigeerd op ${esc(fmtDateShort(inv.gecorrigeerdAt))}${laatsteCorr ? `${laatsteCorr.door ? ' door ' + esc(laatsteCorr.door) : ''}${laatsteCorr.reden ? ' — ' + esc(laatsteCorr.reden) : ''}` : ''}${(inv.correcties || []).length > 1 ? ` (${inv.correcties.length} correcties)` : ''}</div>` : ''}
@@ -6118,6 +6122,7 @@ function renderInvoices() {
   else if (f === 'verlopen') items = all.filter((i) => isOverdue(i) && !isOudOpen(i));
   else if (f === 'oud') items = all.filter(isOudOpen);
   else if (f === 'vastgepind') items = all.filter((i) => i.vastgepind);
+  else if (f === 'akkoord') items = all.filter((i) => i.akkoordKlant);
   else if (f !== 'all') items = all.filter((i) => i.status === f);
   // Vastgepinde bovenaan (laatst vastgepind eerst); de rest houdt de gewone volgorde.
   const pinAt = (i) => (i.vastgepind ? String(i.vastgepind.at || '1') : '');
