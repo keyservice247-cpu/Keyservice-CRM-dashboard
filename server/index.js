@@ -61,7 +61,8 @@ import {
 } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken, wachtOpAntwoordDagen, voorbeeldTekst } from './gesprekken.js';
-import { eerstDoenLijst } from './eerst-doen.js';
+import { eerstDoenLijst, zonderAfgevinkt, afIdVan } from './eerst-doen.js';
+import { afgevinktVoor, infoVoor, vinkAf, zetTerug, magSleutel, wachtId, zonderAfgevinkteWachtenden, DAG as START_DAG } from './start-af.js';
 import { koppelingenOverzicht } from './koppelingen.js';
 import { MERKEN, isMerk, merkVan, merkVanFactuur, merkNaam } from './merk.js';
 import { STANDAARD_REDENEN, isReden } from './annulering.js';
@@ -2987,71 +2988,106 @@ function dagoverzichtZonderGeld(payload) {
 let _wachtStart = { sleutel: '', lijst: [] };
 function wachtVoorStart() {
   const sleutel = `${changeVersion()}|${Math.floor(Date.now() / 300000)}`;
-  if (_wachtStart.sleutel !== sleutel) _wachtStart = { sleutel, lijst: onbeantwoordeGesprekken(2).map((w) => ({ naam: w.naam, at: w.at })) };
+  // afId = gesprek + tijdstip van het bericht: schrijft de klant later opnieuw, dan is dat een nieuw onderdeel.
+  if (_wachtStart.sleutel !== sleutel) _wachtStart = { sleutel, lijst: onbeantwoordeGesprekken(2).map((w) => ({ naam: w.naam, at: w.at, afId: wachtId(w) })) };
   return _wachtStart.lijst;
 }
-app.get('/api/overview', requireAuth, (req, res) => {
+// ALLES WAAR START UIT BESTAAT, per onderdeel met een `afId` (25 nov 2026, zie start-af.js).
+// Ongefilterd: de route haalt eruit wat is afgevinkt, en de afvink-route gebruikt dezelfde
+// lijsten om te weten wat er NU is (alleen dat kan worden afgevinkt).
+function startOnderdelen(user) {
   // MONTEUR ziet alleen zijn eigen werk (browser-audit 16 sep): voorheen kreeg hij
   // bedrijfsbrede KPI's, "te controleren" van een inbox waar hij niet in mag en het
   // logboek van zijn collega's.
-  const monteur = req.user.role === 'monteur';
-  const active = db().orders.filter((o) => !o.archivedWeek && (!monteur || (o.monteurId && o.monteurId === req.user.monteurId)));
-  const labels = getStatusLabels();
+  const monteur = user.role === 'monteur';
+  const active = db().orders.filter((o) => !o.archivedWeek && (!monteur || (o.monteurId && o.monteurId === user.monteurId)));
   const custMap = new Map((db().customers || []).map((c) => [c.id, c]));
   const custName = (o) => (custMap.get(o.customerId) || {}).name || '';
   const startTodayMs = amsMidnightMs();
   const endToday = startTodayMs + 86400000;
-  const wk = weekBounds();
   const threeDays = Date.now() - 3 * 86400000;
-
   const isToday = (d) => { const t = new Date(d).getTime(); return t >= startTodayMs && t < endToday; };
   const apptToday = active.filter((o) => o.appointmentAt && isToday(o.appointmentAt) && !['afgerond', 'geannuleerd'].includes(o.status))
     .sort((a, b) => new Date(a.appointmentAt) - new Date(b.appointmentAt))
-    .map((o) => ({ id: o.id, title: o.title, at: o.appointmentAt, customer: custName(o) }));
-  const repliedList = active.filter((o) => o.customerReplied).map((o) => ({ id: o.id, title: o.title, customer: custName(o) }));
+    .map((o) => ({ id: o.id, title: o.title, at: o.appointmentAt, customer: custName(o), afId: `${o.id}|${o.appointmentAt}` }));
+  // Een klant die later OPNIEUW reageert is een nieuw onderdeel (het tijdstip zit in de afId).
+  const repliedList = active.filter((o) => o.customerReplied).map((o) => ({ id: o.id, title: o.title, customer: custName(o), afId: `${o.id}|${o.lastCustomerReplyAt || ''}` }));
   const staleQuotes = active.filter((o) => o.status === 'offerte_verzonden' && !o.customerReplied && new Date(o.updatedAt).getTime() < threeDays)
     .map((o) => ({ id: o.id, title: o.title, customer: custName(o) }));
-
-  const last = db().settings.whatsappLastSeen || null;
-  const ageSec = last ? (Date.now() - new Date(last).getTime()) / 1000 : null;
-
   // EERST DOEN: één werklijst bovenaan Start (zie eerst-doen.js). Alles hieronder bestond al
   // als los getal of losse lijst; hier komt het samen, per rol.
   const kort = (o) => ({ id: o.id, title: o.title || '' });
-  const afspraakGeweest = active.filter((o) => o.appointmentAt && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status) && new Date(o.appointmentAt).getTime() < startTodayMs).map(kort);
-  let verlopenFacturen = 0;
+  // Wordt de afspraak verzet en verloopt die opnieuw, dan is dat een nieuw onderdeel.
+  const afspraakGeweest = active.filter((o) => o.appointmentAt && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status) && new Date(o.appointmentAt).getTime() < startTodayMs)
+    .map((o) => ({ ...kort(o), afId: `${o.id}|${o.appointmentAt}` }));
+  const verlopen = [];
   if (!monteur) {
     const payDays = getInvoiceSettings().paymentDays || 7;
     const tweeMaanden = new Date(); tweeMaanden.setMonth(tweeMaanden.getMonth() - 2);
     for (const i of db().invoices || []) {
       if (i.type === 'offerte' || i.status !== 'verzonden' || !i.sentAt) continue;
       if (new Date(i.sentAt).getTime() < tweeMaanden.getTime()) continue; // zelfde grens als de teller op Facturen
-      if (new Date(betaalTermijnStart(i)).getTime() + payDays * 86400000 < Date.now()) verlopenFacturen++;
+      if (new Date(betaalTermijnStart(i)).getTime() + payDays * 86400000 < Date.now()) verlopen.push({ afId: i.id });
     }
   }
-  let eerstDoen = [];
+  return {
+    monteur, active, apptToday, repliedList, staleQuotes, afspraakGeweest, verlopen,
+    pending: monteur ? [] : db().reviews.filter((r) => r.status === 'pending').map((r) => ({ afId: r.id, createdAt: r.createdAt })),
+    wacht: monteur ? [] : wachtVoorStart(),
+    teFactureren: nogTeFacturerenOrders(user).list.map(kort),
+    drs: monteur ? [] : drsTeMeldenLijst(),
+    onvolledig: active.filter((o) => o.customerIncomplete && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status)).map(kort),
+  };
+}
+// Welke lijst hoort bij welke afvink-sleutel.
+const startLijstVan = (o, sleutel) => ({ inbox: o.pending, wacht: o.wacht, reactie: o.repliedList, afspraakGeweest: o.afspraakGeweest, offertes: o.staleQuotes,
+  factureren: o.teFactureren, verlopen: o.verlopen, drs: o.drs, onvolledig: o.onvolledig, afspraakVandaag: o.apptToday })[sleutel] || null;
+
+app.get('/api/overview', requireAuth, (req, res) => {
+  const od = startOnderdelen(req.user);
+  const { monteur, active } = od;
+  const labels = getStatusLabels();
+  const startTodayMs = amsMidnightMs();
+  const endToday = startTodayMs + 86400000;
+  const wk = weekBounds();
+  const isToday = (d) => { const t = new Date(d).getTime(); return t >= startTodayMs && t < endToday; };
+  // Wat op Start is afgevinkt telt in de lijsten niet mee (de tegels blijven de echte aantallen).
+  const afgevinkt = afgevinktVoor(req.user);
+  const apptToday = zonderAfgevinkt(od.apptToday, afgevinkt, 'afspraakVandaag');
+  const repliedList = zonderAfgevinkt(od.repliedList, afgevinkt, 'reactie');
+  const staleQuotes = zonderAfgevinkt(od.staleQuotes, afgevinkt, 'offertes');
+
+  const last = db().settings.whatsappLastSeen || null;
+  const ageSec = last ? (Date.now() - new Date(last).getTime()) / 1000 : null;
+
+  let eerstDoen = []; let eerstDoenAf = [];
   try {
-    eerstDoen = eerstDoenLijst({
+    const invoer = {
       monteur, nu: Date.now(),
-      pending: monteur ? [] : db().reviews.filter((r) => r.status === 'pending').map((r) => ({ createdAt: r.createdAt })),
-      wacht: monteur ? [] : wachtVoorStart(),
-      reacties: repliedList, afspraakGeweest, offertesStil: staleQuotes,
-      teFactureren: nogTeFacturerenOrders(req.user).list.map(kort),
-      verlopenFacturen, drsTeMelden: monteur ? 0 : drsTeMeldenTeller(),
-      onvolledig: active.filter((o) => o.customerIncomplete && !o.deletedAt && !['afgerond', 'geannuleerd'].includes(o.status)).map(kort),
+      pending: od.pending, wacht: od.wacht,
+      reacties: od.repliedList, afspraakGeweest: od.afspraakGeweest, offertesStil: od.staleQuotes,
+      teFactureren: od.teFactureren, verlopenFacturen: od.verlopen, drsTeMelden: od.drs, onvolledig: od.onvolledig,
       bridge: { ingesteld: !!last && !TEST, stilMin: ageSec == null ? 0 : Math.floor(ageSec / 60) },
       koppelFouten: monteur ? [] : (() => { try { return koppelingenOverzicht().regels.filter((r) => r.stand === 'fout' && r.sleutel !== 'waGroep').map((r) => ({ sleutel: r.sleutel, naam: r.naam, uitleg: r.uitleg })); } catch { return []; } })(),
-    });
+      afgevinkt,
+    };
+    eerstDoen = eerstDoenLijst(invoer);
+    // Wat is afgevinkt en er nog steeds is: zo kan het scherm het laten zien en terugzetten.
+    eerstDoenAf = eerstDoenLijst({ ...invoer, alleenAfgevinkt: true }).map((p) => ({ sleutel: p.sleutel, titel: p.titel, aantal: p.aantal, ...(infoVoor(req.user, p.sleutel) || {}) }));
+    const vandaagAf = zonderAfgevinkt(od.apptToday, afgevinkt, 'afspraakVandaag', true).length;
+    if (vandaagAf) eerstDoenAf.push({ sleutel: 'afspraakVandaag', titel: vandaagAf === 1 ? '1 afspraak van vandaag' : `${vandaagAf} afspraken van vandaag`, aantal: vandaagAf, ...(infoVoor(req.user, 'afspraakVandaag') || {}) });
   } catch (err) { console.error('  [start] werklijst mislukt:', err.message); }
 
   res.json({
-    eerstDoen,
+    eerstDoen, eerstDoenAf,
+    // De afgevinkte regels van "Jouw dag in één oogopslag" (het scherm maakt de sleutels zelf).
+    dagAf: monteur ? [] : [...(afgevinkt[START_DAG] || [])],
     kpis: {
       nieuwVandaag: active.filter((o) => isToday(o.createdAt)).length,
       teControleren: monteur ? 0 : db().reviews.filter((r) => r.status === 'pending').length,
       openOffertes: active.filter((o) => o.status === 'offerte_verzonden').length,
-      afsprakenVandaag: apptToday.length,
-      klantReacties: repliedList.length,
+      afsprakenVandaag: od.apptToday.length,
+      klantReacties: od.repliedList.length,
       // Op het ECHTE afrondmoment (completedAt) — updatedAt schuift op door elke
       // aanraking (notitie, badge) en trok oude kaarten terug "deze week" in.
       afgerondDezeWeek: db().orders.filter((o) => (!monteur || (o.monteurId && o.monteurId === req.user.monteurId)) && o.status === 'afgerond' && new Date(o.completedAt || o.updatedAt).getTime() >= wk.start && new Date(o.completedAt || o.updatedAt).getTime() < wk.end).length,
@@ -3062,6 +3098,33 @@ app.get('/api/overview', requireAuth, (req, res) => {
     byStatus: getStatusKeys().map((k) => ({ key: k, label: labels[k], count: active.filter((o) => o.status === k).length })),
     activity: monteur ? [] : (db().activity || []).filter((a) => geldMag(req) || !GELD_ACTIE_RE.test(`${a.action} ${a.detail}`)).slice(0, 8).map((a) => ({ actor: a.actorName, action: a.action, detail: a.detail, at: a.at })),
   });
+});
+
+// AFVINKEN OP START (25 nov 2026, zie start-af.js): haalt iets alleen van Start — aan de opdracht,
+// factuur of het gesprek zelf verandert niets. Het scherm stuurt de id's mee van wat het liet
+// zien; alleen wat er NU echt is wordt onthouden (iets dat intussen binnenkwam blijft staan).
+const START_NAAM = { inbox: 'nieuwe aanvragen', wacht: 'klanten die wachten op antwoord', reactie: 'klantreacties', afspraakGeweest: 'afspraken die zijn geweest', offertes: 'offertes die stilliggen',
+  factureren: 'afgeronde opdrachten zonder factuur', verlopen: 'facturen over de betaaltermijn', drs: 'DRS-opdrachten nog te melden', onvolledig: 'opdrachten zonder klantnaam', afspraakVandaag: 'afspraken van vandaag', dag: 'regels uit het dagoverzicht' };
+app.post('/api/start/afvinken', requireAuth, (req, res) => {
+  const sleutel = String(req.body?.sleutel || '');
+  if (!magSleutel(req.user, sleutel)) return res.status(sleutel.startsWith('koppeling:') || sleutel === 'bridge' ? 400 : 403).json({ error: sleutel.startsWith('koppeling:') || sleutel === 'bridge' ? 'Een koppeling die niet werkt kun je niet afvinken: de melding verdwijnt vanzelf zodra hij weer werkt.' : 'Dit onderdeel kun je niet afvinken.' });
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.slice(0, 3000).map((x) => String(x)) : [];
+  if (!ids.length) return res.status(400).json({ error: 'Niets om af te vinken.' });
+  let geldig = null;
+  if (sleutel !== START_DAG) {
+    const lijst = startLijstVan(startOnderdelen(req.user), sleutel) || [];
+    geldig = new Set(lijst.map((x, i) => afIdVan(x, i)));
+  }
+  const n = vinkAf(req.user, sleutel, ids, geldig);
+  if (n) logActivity(req.user.name, 'Start: afgevinkt', `${n} × ${START_NAAM[sleutel] || sleutel}`);
+  res.json({ ok: true, afgevinkt: n });
+});
+app.post('/api/start/terugzetten', requireAuth, (req, res) => {
+  const sleutel = String(req.body?.sleutel || '');
+  if (!magSleutel(req.user, sleutel)) return res.status(403).json({ error: 'Dit onderdeel kun je niet terugzetten.' });
+  const n = zetTerug(req.user, sleutel, Array.isArray(req.body?.ids) ? req.body.ids.slice(0, 3000).map((x) => String(x)) : null);
+  if (n) logActivity(req.user.name, 'Start: teruggezet', `${n} × ${START_NAAM[sleutel] || sleutel}`);
+  res.json({ ok: true, terug: n });
 });
 
 // Status van de WhatsApp-bridge: draait hij nog? (geen seintje in 3 min = stil)
@@ -3214,7 +3277,12 @@ app.get('/api/chats/onbeantwoord', requireRole('admin', 'assistent'), (req, res)
   // uren=0 toegestaan (alles zonder antwoord) — nodig voor de regressietest.
   const q = Number(req.query.uren);
   const uren = Number.isFinite(q) && q >= 0 ? q : 2;
-  res.json(onbeantwoordeGesprekken(uren));
+  const lijst = onbeantwoordeGesprekken(uren);
+  // Voor het blok op START (start=1): wie daar als punt "klanten wachten op antwoord" is
+  // afgevinkt, staat ook niet meer in dit blok — anders lijkt het vinkje niet gewerkt te hebben.
+  // In Berichten (zonder start=1) staan ze er gewoon nog.
+  if (req.query.start !== '1') return res.json(lijst);
+  res.json(zonderAfgevinkteWachtenden(lijst, afgevinktVoor(req.user)));
 });
 // "Afgehandeld" (16 sep 2026): een klantbericht dat geen antwoord (meer) nodig heeft
 // ("wij gaan niet op uw offerte in", "bedankt") uit het blok halen zonder iets te
@@ -3223,6 +3291,8 @@ app.post('/api/chats/:id/afgehandeld', requireRole('admin', 'assistent'), (req, 
   const cid = String(req.params.id || '').slice(0, 80);
   if (!cid) return res.status(400).json({ error: 'Geen gesprek' });
   const marks = { ...(db().settings._wachtAfgehandeld || {}) };
+  // {terug:true} = toch niet afgehandeld (Ongedaan maken): de markering weg.
+  if (req.body && req.body.terug) { delete marks[cid]; db().settings._wachtAfgehandeld = marks; saveSoon(); return res.json({ ok: true, terug: true }); }
   marks[cid] = now();
   // Nooit eindeloos laten groeien: markeringen ouder dan 90 dagen weg.
   const grens = Date.now() - 90 * 86400000;
@@ -6452,15 +6522,17 @@ app.get('/api/pulse', requireAuth, (req, res) => {
     drsTeMelden: ['admin', 'assistent'].includes(req.user.role) ? drsTeMeldenTeller() : 0,
   });
 });
-let _drsTellerCache = { sleutel: '', n: 0 };
-function drsTeMeldenTeller() {
+let _drsTellerCache = { sleutel: '', lijst: [] };
+// De DRS-opdrachten die nog gemeld moeten worden (als onderdelen, voor Start); de teller is de lengte.
+function drsTeMeldenLijst() {
   const sleutel = `${changeVersion()}|${new Date().toISOString().slice(0, 13)}`;
   if (_drsTellerCache.sleutel !== sleutel) {
-    let n = 0; try { n = nogTeMelden({ dagen: 30 }).length; } catch { /* 0 */ }
-    _drsTellerCache = { sleutel, n };
+    let lijst = []; try { lijst = nogTeMelden({ dagen: 30 }).map((o) => ({ afId: `${o.id}|${o.status}` })); } catch { /* leeg */ }
+    _drsTellerCache = { sleutel, lijst };
   }
-  return _drsTellerCache.n;
+  return _drsTellerCache.lijst;
 }
+function drsTeMeldenTeller() { return drsTeMeldenLijst().length; }
 
 // Pulse-tellers gememoriseerd (28 sep 2026, audit server#4): de pulse komt elke 5 s
 // van elk open scherm en las daarbij ALTIJD de reviews- en berichtenlijst. Elke lees-

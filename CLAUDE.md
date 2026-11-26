@@ -359,6 +359,56 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   schakelaar werkt alleen met de demo-login en heft dan het tijdvenster op),
   campagne-ai-test (15, zonder server, fetch onderschept), browser 493 (+13).
 
+- **AFVINKEN OP START (25–26 nov 2026, wens eigenaar bij een schermfoto van "Eerst doen": "dit
+  soort dingen en 'jouw dag in één oogopslag' moeten we af kunnen vinken of weg swipen als ze het
+  hebben gedaan"; ALLEEN op de testomgeving tot zijn "ja"):** elke regel op Start heeft een rond
+  vinkje (`.af-knop`) en is op de telefoon weg te vegen (`data-veeg`, 90 px naar links of rechts).
+  VASTE AFSPRAKEN (server/start-af.js — niet verzwakken):
+  (1) Afvinken haalt iets ALLEEN VAN START. Aan de opdracht, factuur, klant of het gesprek
+  verandert niets; op zijn eigen plek (bord, inbox, Facturen, Berichten) staat alles nog. De
+  tegels (`kpis`) blijven de echte aantallen.
+  (2) Onthouden PER ONDERDEEL (welke opdracht/factuur/gesprek): `eerstDoenLijst` geeft elk
+  werkpunt `afvinkbaar` + `ids` mee (`afIdVan`: `afId`, anders `id`). Komt er iets NIEUWS bij, dan
+  staat het punt er weer — met alleen het nieuwe ("140 zonder factuur" afgevinkt → nummer 141
+  geeft "1 afgeronde opdracht zonder factuur"). In de afId zit waar nodig een tijdstip, zodat
+  een herhaling een nieuw onderdeel is: klantreactie `order|lastCustomerReplyAt`, afspraak
+  `order|appointmentAt`, wachtende klant `chat|at`, DRS `order|status`.
+  (3) Het KANTOOR (beheerder + assistente) deelt één lijst (`scopeVan` = 'kantoor'): vinkt de
+  één af, dan is het ook bij de ander weg. Een monteur heeft zijn eigen (`m:<monteurId>`) en mag
+  alleen zijn eigen soort punten afvinken (`MONTEUR_SLEUTELS`).
+  (4) Alles is terug te zetten: melding "Ongedaan maken", en onder de lijst "N afgevinkt ·
+  bekijken" → per punt wie/wanneer + Terugzetten (`eerstDoenAf` in GET /api/overview).
+  (5) Een KAPOTTE KOPPELING (`bridge`, `koppeling:*`) is NOOIT af te vinken: geen vinkje, de
+  route geeft 400 met uitleg; de melding verdwijnt pas als de koppeling weer werkt.
+  OPSLAG: `settings._startAf[scope][sleutel] = { items: {id: tijdstip}, at, door }`. Alleen wat
+  er NU is wordt onthouden (de route rekent de geldige id's zelf uit via `startOnderdelen(user)`
+  — dezelfde functie die GET /api/overview voedt); wat is opgelost wordt bij het volgende
+  vinkje vergeten. ROUTES (ingelogd): POST /api/start/afvinken {sleutel, ids} en POST
+  /api/start/terugzetten {sleutel, ids?}; beide in het logboek ("Start: afgevinkt").
+  WAT IS AF TE VINKEN: (a) elk werkpunt van "Eerst doen" (`AFVINKBAAR`: inbox, wacht, reactie,
+  afspraakGeweest, offertes, factureren, verlopen, drs, onvolledig); (b) elke regel van "Jouw dag
+  in één oogopslag" — acties, beantwoorden, kansen, let op, en ook de regels zonder AI. Sleutel
+  'dag'; het scherm maakt per regel een sleutel uit de tekst (`dagSleutel`), dus een regel met
+  een andere tekst (ander aantal, nieuwe scan) staat er weer; een vinkje verloopt na 14 dagen;
+  GET /api/overview geeft `dagAf` mee; (c) de lijstjes rechts per regel: Afspraken vandaag
+  (sleutel `afspraakVandaag`), Klant heeft gereageerd (`reactie`), Offerte blijft liggen
+  (`offertes`) — hetzelfde geheugen als het punt in "Eerst doen"; (d) "Vandaag — taken": het
+  vinkje zet de TAAK ZELF op klaar (bestaande POST /api/taken/:id/klaar; dat is geen
+  Start-vinkje maar echt afronden), met Ongedaan maken; (e) "Wacht op antwoord": wegvegen =
+  de bestaande knop Afgehandeld, nu ook terug te draaien (POST /api/chats/:id/afgehandeld
+  {terug:true}). Is het PUNT "klanten wachten op antwoord" afgevinkt, dan laat het blok op Start
+  die klanten ook weg (GET /api/chats/onbeantwoord?start=1 → `zonderAfgevinkteWachtenden`); in
+  Berichten (zonder start=1) staan ze er gewoon nog.
+  SCHERM (app.js): `afKnop`, `eerstDoenHTML(lijst, af)`, `eerstAfHTML`, `startVinkAf`,
+  `startAfKlik` (één plek voor elk vinkje en elke Terugzetten-knop), `taakKlaarOpStart`,
+  `bindStartVeeg` (één luisteraar op `#overviewPanel`; tijdens een veeg wordt Start niet
+  hertekend: `window._startVeeg` → `_ovNaVeeg`; een kort veegje of omlaag scrollen doet niets),
+  `tekenDagoverzicht` (bewaart `window._dayovData`, verborgen regels als `[data-dag-af-id]`).
+  EEN NIEUWE REGEL OP START krijgt `data-veeg` + een `.af-knop` en loopt via `startAfKlik`;
+  een nieuw werkpunt in eerst-doen.js hoort in `onderdelen` (dan is het vanzelf af te vinken)
+  en in `AFVINKBAAR`/`startLijstVan`.
+  Tests: start-test 32 (+14, zonder server), rollen-test 132 (+13), browser +19.
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)
@@ -389,8 +439,8 @@ systeem nalopen op gebruikersfouten → getest → LIVE; (2) het echte ontwerp (
 het prototype) op de testomgeving; (3) pas daarna: E-MAILCAMPAGNESYSTEEM MET AI — de AI kan een
 complete campagne uitvoeren én doet voorstellen op basis van klantenbestand en geschiedenis
 (bouwt voort op de bestaande /api/campaign/send; idee 4 hoort hierbij).
-STAND 25 nov 2026: stap 1 staat LIVE, stap 2 en stap 3 staan op de testomgeving en wachten op het
-"ja" van de eigenaar.
+STAND 26 nov 2026: stap 1 staat LIVE; stap 2, stap 3 en het afvinken op Start staan op de
+testomgeving en wachten op het "ja" van de eigenaar.
 
 ## Stack & hosting
 - **Backend:** Node.js + Express (`server/`). **Opslag = SQLite** (`data/db.sqlite`,

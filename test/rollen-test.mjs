@@ -393,6 +393,76 @@ console.log('\n== Start: werklijst "Eerst doen" per rol (24 nov 2026) ==');
   await login('monteurlos@keyservice.nl', 'monteur123');
   const m3 = await api('GET', '/api/overview');
   ok('monteur zonder koppeling: lege werklijst (niets van anderen)', m3.status === 200 && (m3.json?.eerstDoen || []).length === 0, JSON.stringify(m3.json?.eerstDoen));
+  // AFVINKEN OP START (25 nov 2026, wens eigenaar): weg van Start tot er iets nieuws bij komt;
+  // het kantoor deelt één lijst, de monteur heeft zijn eigen; een kapotte koppeling kan niet.
+  {
+    const punt = (lijst, k) => (lijst || []).find((x) => x.sleutel === k);
+    cookie = adminCookie;
+    const voor = (await api('GET', '/api/overview')).json;
+    const ag = punt(voor.eerstDoen, 'afspraakGeweest');
+    ok('elk werkpunt is af te vinken en draagt de id\'s van zijn onderdelen', !!ag && ag.afvinkbaar === true && Array.isArray(ag.ids) && ag.ids.length === ag.aantal && voor.eerstDoen.filter((x) => !x.sleutel.startsWith('koppeling:') && x.sleutel !== 'bridge').every((x) => x.afvinkbaar && x.ids.length === x.aantal), JSON.stringify(voor.eerstDoen.map((x) => [x.sleutel, x.afvinkbaar, (x.ids || []).length, x.aantal])));
+    await login('assistente@keyservice.nl', 'assist123');
+    const af = await api('POST', '/api/start/afvinken', { sleutel: 'afspraakGeweest', ids: ag.ids });
+    const naAss = (await api('GET', '/api/overview')).json;
+    cookie = adminCookie;
+    const naAdm = (await api('GET', '/api/overview')).json;
+    ok('de assistente vinkt af → het punt is weg, ook bij de beheerder (het kantoor deelt één lijst)', af.status === 200 && af.json.afgevinkt === ag.ids.length && !punt(naAss.eerstDoen, 'afspraakGeweest') && !punt(naAdm.eerstDoen, 'afspraakGeweest'), JSON.stringify({ af: af.json, a: naAdm.eerstDoen.map((x) => x.sleutel) }));
+    const afInfo = punt(naAdm.eerstDoenAf, 'afspraakGeweest');
+    ok('wat is afgevinkt staat apart, met wie en wanneer (voor Terugzetten)', !!afInfo && afInfo.aantal === ag.ids.length && /Assist/i.test(afInfo.door || '') && !!afInfo.at, JSON.stringify(naAdm.eerstDoenAf));
+    await login('monteurzelf@keyservice.nl', 'monteur123');
+    const mNa = (await api('GET', '/api/overview')).json;
+    ok('de monteur ziet zijn eigen punt nog: het vinkje van kantoor raakt zijn lijst niet', !!punt(mNa.eerstDoen, 'afspraakGeweest'), mNa.eerstDoen.map((x) => x.sleutel).join());
+    const mAf = await api('POST', '/api/start/afvinken', { sleutel: 'afspraakGeweest', ids: punt(mNa.eerstDoen, 'afspraakGeweest').ids });
+    const mInbox = await api('POST', '/api/start/afvinken', { sleutel: 'inbox', ids: ['x'] });
+    ok('de monteur vinkt zijn eigen punt af; een kantoorpunt (inbox) mag hij niet (403)', mAf.status === 200 && mAf.json.afgevinkt >= 1 && !punt((await api('GET', '/api/overview')).json.eerstDoen, 'afspraakGeweest') && mInbox.status === 403, JSON.stringify({ m: mAf.json, i: mInbox.status }));
+    await api('POST', '/api/start/terugzetten', { sleutel: 'afspraakGeweest' });
+    cookie = adminCookie;
+    // iets NIEUWS: een tweede opdracht met een afspraak die geweest is → het punt staat er weer, met alleen de nieuwe
+    const oN = await api('POST', '/api/orders', { customerName: 'Werklijst Nieuw', customerPhone: '0612777082', title: 'Ede — tweede werklijstproef', status: 'afspraak_ingepland', appointmentAt: `${gDag}T14:00`, appointmentEndAt: `${gDag}T15:00` });
+    const metNieuw = punt((await api('GET', '/api/overview')).json.eerstDoen, 'afspraakGeweest');
+    ok('komt er iets NIEUWS bij, dan staat het punt er weer — met alleen het nieuwe', !!metNieuw && metNieuw.aantal === 1 && metNieuw.ids.length === 1 && metNieuw.ids[0].startsWith(oN.json.id) && metNieuw.ga.open === oN.json.id, JSON.stringify(metNieuw));
+    // de opdracht zelf is niet aangeraakt
+    const ordNa = (await api('GET', `/api/orders/${oE.json.id}`)).json;
+    ok('afvinken verandert niets aan de opdracht zelf (status en afspraak staan er nog)', ordNa.status === 'afspraak_ingepland' && !!ordNa.appointmentAt, JSON.stringify({ s: ordNa.status }));
+    const onzin = await api('POST', '/api/start/afvinken', { sleutel: 'afspraakGeweest', ids: ['bestaat-niet', '<script>alert(1)</script>'] });
+    const koppel = await api('POST', '/api/start/afvinken', { sleutel: 'koppeling:mailUit', ids: ['x'] });
+    const brug = await api('POST', '/api/start/afvinken', { sleutel: 'bridge', ids: ['x'] });
+    ok('onbekende id\'s worden genegeerd; een kapotte koppeling is niet af te vinken (400 met uitleg)', onzin.status === 200 && onzin.json.afgevinkt === 0 && koppel.status === 400 && brug.status === 400 && /koppeling/i.test(koppel.json.error || ''), JSON.stringify({ o: onzin.json, k: koppel.status, b: brug.status }));
+    const terug = await api('POST', '/api/start/terugzetten', { sleutel: 'afspraakGeweest' });
+    const naTerug = punt((await api('GET', '/api/overview')).json.eerstDoen, 'afspraakGeweest');
+    ok('terugzetten: alles staat er weer', terug.status === 200 && terug.json.terug === ag.ids.length && !!naTerug && naTerug.aantal === ag.ids.length + 1, JSON.stringify({ t: terug.json, n: naTerug && naTerug.aantal }));
+    // regels uit "Jouw dag in één oogopslag": het scherm maakt de sleutel, het kantoor deelt ze
+    const dagAf = await api('POST', '/api/start/afvinken', { sleutel: 'dag', ids: ['dag:a:1abc9', 'niet goed !!'] });
+    await login('assistente@keyservice.nl', 'assist123');
+    const dagBijAss = (await api('GET', '/api/overview')).json.dagAf || [];
+    await login('monteurzelf@keyservice.nl', 'monteur123');
+    const dagMont = await api('POST', '/api/start/afvinken', { sleutel: 'dag', ids: ['dag:a:1abc9'] });
+    const dagBijMont = (await api('GET', '/api/overview')).json.dagAf || [];
+    cookie = adminCookie;
+    ok('dagoverzicht: een afgevinkte regel geldt voor het hele kantoor; de monteur heeft er niets mee (403, lege lijst)', dagAf.status === 200 && dagAf.json.afgevinkt === 1 && dagBijAss.join() === 'dag:a:1abc9' && dagMont.status === 403 && dagBijMont.length === 0, JSON.stringify({ d: dagAf.json, a: dagBijAss, m: dagMont.status }));
+    await api('POST', '/api/start/terugzetten', { sleutel: 'dag' });
+    // de tegels op Start blijven de ECHTE aantallen; het lijstje volgt het vinkje
+    const oV = await api('POST', '/api/orders', { customerName: 'Werklijst Vandaag', customerPhone: '0612777083', title: 'Ede — afspraak van vandaag', status: 'afspraak_ingepland', appointmentAt: new Date().toISOString() });
+    const lijstVoor = (await api('GET', '/api/overview')).json;
+    {
+      const eerste = (lijstVoor.apptToday || []).find((x) => x.id === oV.json?.id) || {};
+      await api('POST', '/api/start/afvinken', { sleutel: 'afspraakVandaag', ids: [eerste.afId] });
+      const lijstNa = (await api('GET', '/api/overview')).json;
+      ok('lijstje "Afspraken vandaag": één regel afvinken haalt die regel weg; de tegel blijft het echte aantal', lijstNa.apptToday.length === lijstVoor.apptToday.length - 1 && lijstNa.kpis.afsprakenVandaag === lijstVoor.kpis.afsprakenVandaag && (lijstNa.eerstDoenAf || []).some((x) => x.sleutel === 'afspraakVandaag'), JSON.stringify({ v: lijstVoor.apptToday.length, n: lijstNa.apptToday.length }));
+      await api('POST', '/api/start/terugzetten', { sleutel: 'afspraakVandaag' });
+      if (oV.json?.id) await api('PATCH', `/api/orders/${oV.json.id}`, { status: 'afgerond', note: 'klaar' });
+    }
+    // Het blok "Wacht op antwoord" op Start (start=1) laat wie als punt is afgevinkt weg; zonder vinkje is het dezelfde lijst.
+    {
+      const metStart = await api('GET', '/api/chats/onbeantwoord?uren=0&start=1');
+      const zonder = await api('GET', '/api/chats/onbeantwoord?uren=0');
+      ok('het blok "Wacht op antwoord" voor Start geeft zonder vinkjes dezelfde lijst als Berichten', metStart.status === 200 && Array.isArray(metStart.json) && metStart.json.length === zonder.json.length, JSON.stringify({ s: metStart.status, a: (metStart.json || []).length, b: (zonder.json || []).length }));
+    }
+    // "Afgehandeld" bij Wacht op antwoord is terug te draaien (nodig voor Ongedaan maken)
+    const wachtTerug = await api('POST', '/api/chats/tel:0612999001/afgehandeld', { terug: true });
+    ok('"Afgehandeld" bij Wacht op antwoord kan worden teruggedraaid', wachtTerug.status === 200 && wachtTerug.json.terug === true);
+    if (oN.json?.id) await api('PATCH', `/api/orders/${oN.json.id}`, { status: 'afgerond', note: 'klaar' });
+  }
   cookie = adminCookie;
   if (oE.json?.id) await api('PATCH', `/api/orders/${oE.json.id}`, { status: 'afgerond', note: 'klaar' });
 }

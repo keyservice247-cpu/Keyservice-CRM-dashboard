@@ -15,6 +15,23 @@ export function duurTekst(ms) {
 
 const ERNST_VOLGORDE = { rood: 0, oranje: 1, grijs: 2 };
 
+// AFVINKEN (25 nov 2026, wens eigenaar: "dit soort dingen moeten we af kunnen vinken of weg
+// swipen als ze het hebben gedaan"). Een punt bestaat uit losse ONDERDELEN (opdrachten, facturen,
+// gesprekken). Wat is afgevinkt wordt PER ONDERDEEL onthouden (`afgevinkt[sleutel]` = de id's):
+//  - afgevinkte onderdelen tellen niet meer mee; is er niets over, dan is het punt weg;
+//  - komt er iets NIEUWS bij, dan staat het punt er weer — met alleen het nieuwe;
+//  - een kapotte koppeling is NOOIT af te vinken: die verdwijnt pas als hij weer werkt.
+// Een onderdeel heet `afId` (anders `id`); een kaal getal telt als zoveel naamloze onderdelen.
+/** De sleutels die af te vinken zijn (de route controleert hiertegen). */
+export const AFVINKBAAR = ['inbox', 'wacht', 'reactie', 'afspraakGeweest', 'offertes', 'factureren', 'verlopen', 'drs', 'onvolledig'];
+export const afIdVan = (x, i = 0) => String((x && (x.afId || x.id)) || `#${i}`);
+const alsLijst = (v) => (Array.isArray(v) ? v : Array.from({ length: Math.max(0, Number(v) || 0) }, () => ({})));
+const isAf = (afgevinkt, sleutel, id) => { const set = afgevinkt && afgevinkt[sleutel]; return !!set && (set instanceof Set ? set.has(id) : Array.isArray(set) ? set.includes(id) : Object.prototype.hasOwnProperty.call(set, id)); };
+/** Een lijst zonder (of juist met alleen) de afgevinkte onderdelen. */
+export function zonderAfgevinkt(lijst, afgevinkt, sleutel, alleenAf = false) {
+  return alsLijst(lijst).filter((x, i) => isAf(afgevinkt, sleutel, afIdVan(x, i)) === alleenAf);
+}
+
 /**
  * @param {object} in_
  * @param {boolean} in_.monteur            ingelogd als monteur (ziet alleen eigen werk)
@@ -30,19 +47,38 @@ const ERNST_VOLGORDE = { rood: 0, oranje: 1, grijs: 2 };
  * @param {Array}   in_.onvolledig         opdrachten zonder klantnaam [{id, title}]
  * @param {object}  in_.bridge             {ingesteld, stilMin} van de WhatsApp-bridge
  * @param {Array}   in_.koppelFouten       andere koppelingen die niet werken [{sleutel, naam, uitleg}]
+ * @param {object}  in_.afgevinkt          {sleutel: id's} — wat is afgevinkt (zie AFVINKEN hierboven)
+ * @param {boolean} in_.alleenAfgevinkt    geef juist de AFGEVINKTE punten terug (voor "Terugzetten")
  */
 export function eerstDoenLijst(in_) {
-  const { monteur = false, nu = Date.now(), pending = [], wacht = [], reacties = [], afspraakGeweest = [], offertesStil = [],
-    teFactureren = [], verlopenFacturen = 0, drsTeMelden = 0, onvolledig = [], bridge = null, koppelFouten = [] } = in_ || {};
+  const { monteur = false, nu = Date.now(), bridge = null, koppelFouten = [], afgevinkt = null, alleenAfgevinkt = false } = in_ || {};
+  const kies = (sleutel, lijst) => zonderAfgevinkt(lijst, afgevinkt, sleutel, alleenAfgevinkt);
+  const pending = kies('inbox', (in_ || {}).pending || []);
+  const wacht = kies('wacht', (in_ || {}).wacht || []);
+  const reacties = kies('reactie', (in_ || {}).reacties || []);
+  const afspraakGeweest = kies('afspraakGeweest', (in_ || {}).afspraakGeweest || []);
+  const offertesStil = kies('offertes', (in_ || {}).offertesStil || []);
+  const teFactureren = kies('factureren', (in_ || {}).teFactureren || []);
+  const verlopen = kies('verlopen', (in_ || {}).verlopenFacturen || 0);
+  const drs = kies('drs', (in_ || {}).drsTeMelden || 0);
+  const onvolledig = kies('onvolledig', (in_ || {}).onvolledig || []);
+  const verlopenFacturen = verlopen.length; const drsTeMelden = drs.length;
+  const onderdelen = { inbox: pending, wacht, reactie: reacties, afspraakGeweest, offertes: offertesStil, factureren: teFactureren, verlopen, drs, onvolledig };
   const uit = [];
-  const zet = (p) => { if (p.aantal > 0) uit.push(p); };
+  const zet = (p) => {
+    if (!(p.aantal > 0)) return;
+    const lijst = onderdelen[p.sleutel];
+    // Af te vinken = elk punt dat uit onderdelen bestaat; de id's gaan mee zodat het scherm
+    // precies afvinkt wat het liet zien (iets dat intussen binnenkomt blijft staan).
+    uit.push(lijst ? { ...p, afvinkbaar: true, ids: lijst.map((x, i) => afIdVan(x, i)) } : { ...p, afvinkbaar: false });
+  };
   const mv = (n, een, meer) => (n === 1 ? een : meer.replace('{n}', String(n)));
   // Eén opdracht → meteen die opdracht openen; meer → naar de plek waar ze staan.
   const naar = (lijst, anders) => (lijst.length === 1 && lijst[0].id ? { open: lijst[0].id } : anders);
   const eerste = (lijst) => (lijst[0] && lijst[0].title ? String(lijst[0].title).slice(0, 80) : '');
   const oudste = (lijst, veld) => lijst.reduce((m, x) => { const t = new Date(x[veld] || 0).getTime(); return t && t < m ? t : m; }, nu);
 
-  if (!monteur) {
+  if (!monteur && !alleenAfgevinkt) {
     if (bridge && bridge.ingesteld && bridge.stilMin >= 15) {
       zet({ sleutel: 'bridge', ernst: 'rood', aantal: 1, titel: 'WhatsApp-groepen komen niet binnen',
         uitleg: `De koppeling met de groepen is ${duurTekst(bridge.stilMin * 60000)} stil. Opdrachten uit de groep kunnen ontbreken.`,
@@ -52,6 +88,8 @@ export function eerstDoenLijst(in_) {
     for (const k of koppelFouten || []) {
       zet({ sleutel: `koppeling:${k.sleutel}`, ernst: 'rood', aantal: 1, titel: `${k.naam} werkt niet`, uitleg: String(k.uitleg || '').slice(0, 160), knop: 'Bekijken', ga: { actie: 'koppelstatus' } });
     }
+  }
+  if (!monteur) {
     zet({ sleutel: 'inbox', ernst: 'rood', aantal: pending.length,
       titel: mv(pending.length, '1 nieuwe aanvraag beoordelen', '{n} nieuwe aanvragen beoordelen'),
       uitleg: pending.length ? `Oudste wacht ${duurTekst(nu - oudste(pending, 'createdAt'))}` : '',

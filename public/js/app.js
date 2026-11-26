@@ -1172,6 +1172,7 @@ async function openTaakModal(id) {
 // tekent dan zonder wachten — geen verspringen meer, 28 sep 2026).
 async function vulTakenVandaag(vooraf) {
   let el = $('#takenVandaagBlok'); if (!el) return;
+  if (window._startVeeg) { window._ovNaVeeg = true; return; }
   let lijst = vooraf;
   if (lijst === undefined) { try { lijst = await api('/api/taken/vandaag'); } catch { return; } el = $('#takenVandaagBlok'); if (!el) return; }
   const badge = $('#takenBadge'); if (badge) { const n = Array.isArray(lijst) ? lijst.length : 0; badge.textContent = n; badge.hidden = !n; }
@@ -1181,14 +1182,15 @@ async function vulTakenVandaag(vooraf) {
   window._lastTakenBlokHtml = takenBlokHtml;
   el.innerHTML = `<div class="info-card ov-blok">
     <h3 style="margin:0 0 6px">${icon('list', 15)} Vandaag — taken (${lijst.length})</h3>
-    <ul class="ov-list">${lijst.map((t) => `<li data-taak="${esc(t.id)}"><strong>${esc(t.titel)}</strong> <span class="muted">· ${TAAK_URG[t.urgentie] || t.urgentie}${t.dagen !== null && t.dagen !== undefined ? ` · ${t.dagen < 0 ? Math.abs(t.dagen) + ' dagen te laat' : t.dagen === 0 ? 'vandaag' : 'nog ' + t.dagen + ' dagen'}` : ''}</span></li>`).join('')}</ul></div>`;
-  $$('li[data-taak]', el).forEach((li) => li.onclick = () => goView('taken'));
+    <ul class="ov-list">${lijst.map((t) => `<li data-taak="${esc(t.id)}" class="ov-af-rij" data-veeg><span class="ov-af-tekst"><strong>${esc(t.titel)}</strong> <span class="muted">· ${TAAK_URG[t.urgentie] || t.urgentie}${t.dagen !== null && t.dagen !== undefined ? ` · ${t.dagen < 0 ? Math.abs(t.dagen) + ' dagen te laat' : t.dagen === 0 ? 'vandaag' : 'nog ' + t.dagen + ' dagen'}` : ''}</span></span>${afKnop(`data-taak-klaar="${esc(t.id)}"`, 'Taak klaar — afvinken')}</li>`).join('')}</ul></div>`;
+  $$('li[data-taak]', el).forEach((li) => li.onclick = (e) => { if (e.target.closest('.af-knop')) return; goView('taken'); });
 }
 // Onbeantwoorde klantvragen op Start (punt 10).
 async function vulOnbeantwoord(vooraf) {
   let el = $('#onbeantwoordBlok'); if (!el) return;
+  if (window._startVeeg) { window._ovNaVeeg = true; return; }
   let lijst = vooraf;
-  if (lijst === undefined) { try { lijst = await api('/api/chats/onbeantwoord?uren=2'); } catch { return; } el = $('#onbeantwoordBlok'); if (!el) return; }
+  if (lijst === undefined) { try { lijst = await api('/api/chats/onbeantwoord?uren=2&start=1'); } catch { return; } el = $('#onbeantwoordBlok'); if (!el) return; }
   if (!Array.isArray(lijst) || !lijst.length) { el.innerHTML = ''; window._lastWachtHtml = ''; return; }
   const wachtVinger = JSON.stringify([window._wachtAlles, lijst.map((x) => [x.chatId, x.urenWachtend, x.tekst, x.kaart?.status])]);
   if (wachtVinger === window._lastWachtHtml && el.children.length) return;
@@ -1201,7 +1203,7 @@ async function vulOnbeantwoord(vooraf) {
   el.innerHTML = `<div class="info-card" style="margin-bottom:18px;border-left:4px solid var(--danger)">
     <h3 style="margin:0 0 6px">${icon('message', 15)} Wacht op antwoord (${lijst.length})</h3>
     <div class="muted small" style="margin-bottom:8px">Laatste klantbericht zonder antwoord van ons, langer dan 2 uur geleden. Geen antwoord nodig? Tik op <strong>Afgehandeld</strong>. Ouder dan de ingestelde termijn valt vanzelf af (Instellingen → Werkwijze).</div>
-    <ul class="ov-list wacht-lijst">${toon.map((x) => `<li data-chat="${esc(x.chatId)}">
+    <ul class="ov-list wacht-lijst">${toon.map((x) => `<li data-chat="${esc(x.chatId)}" data-veeg>
       <div style="display:flex;gap:8px;align-items:flex-start">
         <div style="flex:1;min-width:0"><strong>${esc(x.naam)}</strong> <span class="muted">· ${wacht(x)} · ${esc(x.kanaal === 'email' ? 'e-mail' : 'WhatsApp')}</span>${x.kaart ? `<br><span class="chip" style="font-size:10px;padding:1px 7px;margin-top:3px" title="${esc(x.kaart.title)}">${icon('tag', 10)} ${esc(x.kaart.title.slice(0, 40))} · ${esc(statusLabel(x.kaart.status))}</span>` : ''}<br><span class="muted small">${esc(x.tekst)}</span></div>
         <button type="button" class="btn btn-sm wacht-klaar" data-chat="${esc(x.chatId)}" title="Uit de lijst halen — er wordt niets verstuurd">Afgehandeld</button>
@@ -1211,7 +1213,12 @@ async function vulOnbeantwoord(vooraf) {
   $$('.wacht-klaar', el).forEach((b) => b.onclick = async (e) => {
     e.stopPropagation();
     b.disabled = true;
-    try { await api(`/api/chats/${encodeURIComponent(b.dataset.chat)}/afgehandeld`, 'POST'); b.closest('li')?.remove(); toast('Afgehandeld — uit de lijst gehaald'); vulOnbeantwoord(); }
+    const cid = b.dataset.chat;
+    try {
+      await api(`/api/chats/${encodeURIComponent(cid)}/afgehandeld`, 'POST'); b.closest('li')?.remove();
+      toastUndo('Afgehandeld — uit de lijst gehaald', async () => { await api(`/api/chats/${encodeURIComponent(cid)}/afgehandeld`, 'POST', { terug: true }); window._lastWachtHtml = ''; await vulOnbeantwoord(); if (state.view === 'overview') loadOverview().catch(() => {}); });
+      vulOnbeantwoord();
+    }
     catch (err) { toast(err.message, true); b.disabled = false; }
   });
   const alles = $('#wachtAlles'); if (alles) alles.onclick = () => { window._wachtAlles = !window._wachtAlles; vulOnbeantwoord(); };
@@ -1586,6 +1593,7 @@ const _ovDelen = {};              // laatst getekende HTML per dynamisch blok
 let _ovDagAt = 0, _ovWeekAt = 0;  // wanneer dagoverzicht/weekrapport voor het laatst zijn opgehaald
 function zetOvDeel(id, html) {
   const el = document.getElementById(id);
+  if (window._startVeeg) { window._ovNaVeeg = true; return; }   // niet onder de vinger vandaan hertekenen
   if (!el || (_ovDelen[id] === html && el.childNodes.length)) return;
   _ovDelen[id] = html;
   el.innerHTML = html;
@@ -1616,6 +1624,7 @@ function nieuwPunten() {
     ['Start in twee kolommen', 'Links wat je moet doen (Eerst doen, dagoverzicht, weekrapport), rechts vandaag (taken, afspraken, wie wacht op antwoord).'],
     ['Opdrachten: snel filteren', 'Boven het bord staan knoppen: Klant reageerde, Spoed, DRS, Eigen en Ligt stil. De keuzelijsten zijn er nog. De knoppen (Status-scan, DRS-rapport, Plak opdracht …) staan rechtsboven naast "+ Nieuwe opdracht".'],
     ['Inbox: lijst en bericht', 'Links de lijst, rechts het gekozen bericht met alle velden. Het vinkje voor bulk-acties staat in de lijst. Op de telefoon staat alles nog onder elkaar.'],
+    ['Nieuw: afvinken op Start', 'Elke regel op Start heeft een vinkje (op de telefoon: wegvegen). Afgevinkt is weg van Start tot er iets nieuws bij komt; de opdracht of factuur zelf verandert niet. Terugzetten kan via "Ongedaan maken" of "afgevinkt · bekijken".'],
     ['Nieuw: Campagnes', 'E-mail naar bestaande klanten, onder Klanten & geld. Laat campagnes voorstellen, kies een doelgroep, lees de tekst na en verstuur of plan in. Er gaat niets uit zonder jouw klik, en je ziet daarna hoeveel reacties en opdrachten het opleverde.'],
     ['Menu', 'E-mail en WhatsApp staan niet meer los in het menu: het zijn de knoppen Alle · E-mail · WhatsApp boven het bord bij Opdrachten.'],
     ['Start: Eerst doen', 'Bovenaan staat één lijst met wat er nu moet gebeuren, het belangrijkste eerst. Een tik brengt je naar de juiste plek.'],
@@ -1654,18 +1663,111 @@ document.addEventListener('click', (e) => {
   const k = e.target.closest('[data-nieuw]'); if (!k) return;
   if (k.dataset.nieuw === 'weg') nieuwSluit(); else openWatIsNieuw();
 });
-function eerstDoenHTML(lijst) {
-  if (!lijst.length) return `<div class="info-card eerst-doen eerst-leeg"><div class="eerst-kop"><h3>Eerst doen</h3></div><div class="eerst-niets">${icon('check', 16)} Niets dat op je wacht. Alles is bij.</div></div>`;
+// AFVINKEN OP START (25 nov 2026, wens eigenaar): elk punt heeft een vinkje en is op de telefoon
+// weg te vegen. Dat haalt het alleen van Start (de opdracht/factuur zelf verandert niet), het
+// komt terug zodra er iets nieuws bij komt, en het is terug te zetten (melding + "N afgevinkt").
+const afKnop = (attrs, titel) => `<button type="button" class="af-knop" ${attrs} title="${esc(titel)}" aria-label="${esc(titel)}">${icon('check', 15)}</button>`;
+function eerstAfHTML(af) {
+  if (!af || !af.length) return '';
+  const open = !!window._eerstAfOpen;
+  return `<div class="eerst-af">
+    <button type="button" class="eerst-af-toon" id="eerstAfToon" aria-expanded="${open}">${icon('check', 12)} ${af.length} afgevinkt · ${open ? 'verbergen' : 'bekijken'}</button>
+    ${open ? `<ul class="eerst-af-lijst">${af.map((p) => `<li><span class="eerst-af-tekst">${esc(p.titel)}${p.door || p.at ? ` <span class="muted small">· ${esc([p.door, p.at ? fmtDateShort(p.at) : ''].filter(Boolean).join(', '))}</span>` : ''}</span><button type="button" class="btn btn-sm" data-af-terug="${esc(p.sleutel)}">Terugzetten</button></li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+function eerstDoenHTML(lijst, af = []) {
+  if (!lijst.length) return `<div class="info-card eerst-doen eerst-leeg"><div class="eerst-kop"><h3>Eerst doen</h3></div><div class="eerst-niets">${icon('check', 16)} Niets dat op je wacht. Alles is bij.</div>${eerstAfHTML(af)}</div>`;
   return `<div class="info-card eerst-doen">
     <div class="eerst-kop"><h3>Eerst doen</h3><span class="muted small">${lijst.length} ${lijst.length === 1 ? 'punt' : 'punten'} · belangrijkste bovenaan</span></div>
     <ul class="eerst-lijst">${lijst.map((p) => `
-      <li><button type="button" class="eerst-rij" data-eerst="${esc(p.sleutel)}">
+      <li class="eerst-item"${p.afvinkbaar ? ' data-veeg' : ''}><button type="button" class="eerst-rij" data-eerst="${esc(p.sleutel)}">
         <span class="eerst-stip eerst-${esc(p.ernst)}" aria-hidden="true"></span>
         <span class="eerst-midden"><strong>${esc(p.titel)}</strong>${p.uitleg ? `<span class="muted small">${esc(p.uitleg)}</span>` : ''}</span>
         <span class="btn btn-sm eerst-knop">${esc(p.knop || 'Bekijken')}</span>
-      </button></li>`).join('')}
-    </ul></div>`;
+      </button>${p.afvinkbaar ? afKnop(`data-af="${esc(p.sleutel)}"`, 'Afvinken: gedaan of niet nodig. Verdwijnt van Start tot er iets nieuws bij komt.') : ''}</li>`).join('')}
+    </ul>${eerstAfHTML(af)}</div>`;
 }
+// Eén plek voor het afvinken zelf: de regel schuift weg, de server onthoudt het, en de melding
+// heeft "Ongedaan maken". Mislukt het, dan staat de regel er gewoon weer.
+async function startVinkAf(sleutel, ids, rij, tekst) {
+  ids = (ids || []).filter(Boolean);
+  if (!ids.length || (rij && rij.dataset.afBezig)) return;
+  if (rij) { rij.dataset.afBezig = '1'; rij.classList.add('af-weg'); }
+  try {
+    await api('/api/start/afvinken', 'POST', { sleutel, ids });
+    if (sleutel === 'dag') { if (!state._dagAf) state._dagAf = new Set(); ids.forEach((x) => state._dagAf.add(x)); }
+    toastUndo(tekst || 'Afgevinkt — weg van Start', async () => { await api('/api/start/terugzetten', 'POST', { sleutel, ids }); if (sleutel === 'dag' && state._dagAf) ids.forEach((x) => state._dagAf.delete(x)); await startNaAf(); });
+  } catch (err) {
+    toast(err.message, true);
+    if (rij && rij.isConnected) { rij.classList.remove('af-weg'); delete rij.dataset.afBezig; }
+  }
+  await startNaAf();
+}
+async function startNaAf() {
+  if (window._dayovData) { window._lastDayovHtml = ''; tekenDagoverzicht(window._dayovData); }
+  if (state.view === 'overview') await loadOverview().catch(() => {});
+}
+// Klik op een vinkje of op "Terugzetten" (ook aangeroepen na een veeg). true = afgehandeld.
+function startAfKlik(doel) {
+  const terug = doel.closest('[data-af-terug]');
+  if (terug) { eenKeer(terug, async () => { try { await api('/api/start/terugzetten', 'POST', { sleutel: terug.dataset.afTerug }); toast('Teruggezet op Start'); } catch (err) { toast(err.message, true); } await startNaAf(); }); return true; }
+  if (doel.closest('#eerstAfToon')) { window._eerstAfOpen = !window._eerstAfOpen; _ovDelen.eerstDoenBlok = ''; zetOvDeel('eerstDoenBlok', eerstDoenHTML(state._eerstDoen || [], state._eerstDoenAf || [])); return true; }
+  if (doel.closest('#dagAfTerug')) { const ids = [...$$('#dayov-body [data-dag-af-id]')].map((x) => x.dataset.dagAfId).filter((x) => state._dagAf && state._dagAf.has(x)); eenKeer(doel.closest('#dagAfTerug'), async () => { try { await api('/api/start/terugzetten', 'POST', { sleutel: 'dag', ids }); ids.forEach((x) => state._dagAf.delete(x)); toast('Teruggezet'); } catch (err) { toast(err.message, true); } await startNaAf(); }); return true; }
+  const k = doel.closest('.af-knop'); if (!k) return false;
+  const rij = k.closest('[data-veeg]') || k.parentElement;
+  if (k.dataset.af) {                       // een punt van Eerst doen, of één regel uit een lijstje
+    const punt = (state._eerstDoen || []).find((p) => p.sleutel === k.dataset.af);
+    const ids = k.dataset.afId ? [k.dataset.afId] : (punt ? punt.ids : []);
+    startVinkAf(k.dataset.af, ids, rij, k.dataset.afId ? 'Afgevinkt — weg van Start' : `Afgevinkt: ${punt ? punt.titel : ''}`);
+  } else if (k.dataset.dagAf) startVinkAf('dag', [k.dataset.dagAf], rij, 'Afgevinkt');
+  else if (k.dataset.taakKlaar) taakKlaarOpStart(k.dataset.taakKlaar, rij);
+  return true;
+}
+async function taakKlaarOpStart(tid, rij) {
+  if (rij && rij.dataset.afBezig) return;
+  if (rij) { rij.dataset.afBezig = '1'; rij.classList.add('af-weg'); }
+  try {
+    await api(`/api/taken/${encodeURIComponent(tid)}/klaar`, 'POST', { klaar: true });
+    toastUndo('Taak afgevinkt', async () => { await api(`/api/taken/${encodeURIComponent(tid)}/klaar`, 'POST', { klaar: false }); window._lastTakenBlokHtml = ''; await vulTakenVandaag(); });
+  } catch (err) { toast(err.message, true); if (rij && rij.isConnected) { rij.classList.remove('af-weg'); delete rij.dataset.afBezig; } }
+  window._lastTakenBlokHtml = ''; await vulTakenVandaag();
+}
+// WEGVEGEN (telefoon): een regel met `data-veeg` naar links of rechts vegen = het vinkje van die
+// regel. Eén luisteraar op het hele Start-scherm, zodat hij het vervangen van een blok overleeft.
+// Tijdens het vegen wordt Start niet ververst (anders verdwijnt de regel onder je vinger).
+function bindStartVeeg(panel) {
+  if (panel._veegGebonden) return; panel._veegGebonden = true;
+  let rij = null, x0 = 0, y0 = 0, dx = 0, beslist = false, horiz = false;
+  const klaar = () => { window._startVeeg = false; window._dragging = false; window._dragSinds = 0; if (window._ovNaVeeg) { window._ovNaVeeg = false; if (state.view === 'overview') loadOverview().catch(() => {}); } };
+  panel.addEventListener('touchstart', (e) => {
+    const r = e.target.closest('[data-veeg]'); if (!r || !panel.contains(r) || e.touches.length !== 1 || r.dataset.afBezig) return;
+    const t = e.touches[0]; rij = r; x0 = t.clientX; y0 = t.clientY; dx = 0; beslist = false; horiz = false; r.style.transition = '';
+  }, { passive: true });
+  panel.addEventListener('touchmove', (e) => {
+    if (!rij) return;
+    const t = e.touches[0]; dx = t.clientX - x0; const dy = t.clientY - y0;
+    if (!beslist && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) { beslist = true; horiz = Math.abs(dx) > Math.abs(dy) * 1.3; if (horiz) { window._startVeeg = true; window._dragging = true; window._dragSinds = Date.now(); } else rij = null; }
+    if (rij && horiz) { e.preventDefault(); rij.style.transform = `translateX(${dx}px)`; rij.style.opacity = String(Math.max(0.35, 1 - Math.abs(dx) / 320)); }
+  }, { passive: false });
+  const eind = (afbreken) => {
+    const r = rij; rij = null; if (!r) return;
+    const ver = !afbreken && horiz && Math.abs(dx) >= 90;
+    r.style.transition = 'transform .16s ease, opacity .16s ease';
+    if (ver) {
+      r.dataset.geveegd = '1'; setTimeout(() => { delete r.dataset.geveegd; }, 500);
+      r.style.transform = `translateX(${dx > 0 ? 110 : -110}%)`; r.style.opacity = '0';
+      klaar();
+      const knop = r.querySelector('.af-knop, .wacht-klaar');
+      if (knop && knop.classList.contains('wacht-klaar')) knop.click(); else if (knop) startAfKlik(knop);
+    } else { r.style.transform = ''; r.style.opacity = ''; if (horiz) { r.dataset.geveegd = '1'; setTimeout(() => { delete r.dataset.geveegd; }, 350); } klaar(); }
+  };
+  panel.addEventListener('touchend', () => eind(false));
+  panel.addEventListener('touchcancel', () => eind(true));
+  // Een veeg is geen tik: de klik die sommige telefoons erna nog sturen doet niets.
+  panel.addEventListener('click', (e) => { const g = e.target.closest('[data-geveegd]'); if (g && !e.target.closest('.af-knop, .wacht-klaar')) { e.stopPropagation(); e.preventDefault(); } }, true);
+}
+// Sleutel van één regel uit "Jouw dag in één oogopslag" (dezelfde tekst = dezelfde sleutel).
+function dagSleutel(soort, tekst) { const t = String(tekst || ''); let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) >>> 0; return `dag:${soort}:${h.toString(36)}${t.length.toString(36)}`; }
 async function eerstDoenGa(p) {
   if (!p || !p.ga) return;
   const ga = p.ga;
@@ -1688,7 +1790,7 @@ async function loadOverview() {
   const [d, taken, wacht, formulieren] = await Promise.all([
     api('/api/overview'),
     kantoor ? api('/api/taken/vandaag').catch(() => null) : null,
-    kantoor ? api('/api/chats/onbeantwoord?uren=2').catch(() => null) : null,
+    kantoor ? api('/api/chats/onbeantwoord?uren=2&start=1').catch(() => null) : null,
     kantoor ? api('/api/formulieren/status').catch(() => null) : null,
   ]);
   const k = d.kpis;
@@ -1734,6 +1836,7 @@ async function loadOverview() {
     _ovDagAt = 0; _ovWeekAt = 0;
     // Eén gedelegeerde klik voor alle tegels/lijsten — overleeft het vervangen van een blok.
     panel.onclick = async (e) => {
+      if (startAfKlik(e.target)) return;      // vinkje, "N afgevinkt" of "Terugzetten"
       const ed = e.target.closest('[data-eerst]');
       if (ed && panel.contains(ed)) { eerstDoenGa((state._eerstDoen || []).find((p) => p.sleutel === ed.dataset.eerst)); return; }
       const go = e.target.closest('[data-go]');
@@ -1750,6 +1853,7 @@ async function loadOverview() {
       }
     };
     initGlobalSearch();
+    bindStartVeeg(panel);
     const rf = $('#dayov-refresh');
     if (rf) rf.onclick = async () => { rf.disabled = true; rf.textContent = 'Scannen…'; await laadDagoverzicht(true); rf.disabled = false; rf.innerHTML = `${icon('refresh', 13)} Ververs`; };
     const wo = $('#wr-offset');
@@ -1757,11 +1861,18 @@ async function loadOverview() {
   }
   const card = (num, label, view, cls = '', col = '') => `<button class="kpi-card ${cls}" data-go="${view}"${col ? ` data-col="${esc(col)}"` : ''}><span class="kpi-num">${num}</span><span class="kpi-label">${esc(label)}</span></button>`;
   const wa = d.whatsapp || {};
-  const list = (arr, empty) => arr.length
-    ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
+  // Elke regel in de lijstjes heeft een vinkje (`sleutel` = waar het bij hoort, zie start-af.js).
+  const list = (arr, empty, sleutel = '') => arr.length
+    ? `<ul class="ov-list">${arr.slice(0, 6).map((o) => `<li data-open="${o.id}" class="ov-af-rij"${sleutel ? ' data-veeg' : ''}><span class="ov-af-tekst">${esc(o.title)}${o.at ? ` <span class="muted">· ${fmtDate(o.at)}</span>` : ''}${o.customer ? ` <span class="muted">· ${esc(o.customer)}</span>` : ''}</span>${sleutel ? afKnop(`data-af="${sleutel}" data-af-id="${esc(o.afId || o.id)}"`, 'Afvinken — verdwijnt van Start') : ''}</li>`).join('')}${arr.length > 6 ? `<li class="muted small">+ ${arr.length - 6} meer…</li>` : ''}</ul>`
     : `<div class="muted small">${empty}</div>`;
   state._eerstDoen = Array.isArray(d.eerstDoen) ? d.eerstDoen : [];
-  zetOvDeel('eerstDoenBlok', eerstDoenHTML(state._eerstDoen));
+  state._eerstDoenAf = Array.isArray(d.eerstDoenAf) ? d.eerstDoenAf : [];
+  // Regels uit het dagoverzicht die (door wie dan ook op kantoor) zijn afgevinkt.
+  const dagAfNu = Array.isArray(d.dagAf) ? d.dagAf : [];
+  const dagAfAnders = !state._dagAf || state._dagAf.size !== dagAfNu.length || dagAfNu.some((x) => !state._dagAf.has(x));
+  state._dagAf = new Set(dagAfNu);
+  if (dagAfAnders && window._dayovData) { window._lastDayovHtml = ''; tekenDagoverzicht(window._dayovData); }
+  zetOvDeel('eerstDoenBlok', eerstDoenHTML(state._eerstDoen, state._eerstDoenAf));
   zetOvDeel('ovKpis', `
       ${card(k.teControleren, 'Te controleren', 'inbox', k.teControleren ? 'kpi-attn' : '')}
       ${card(k.klantReacties, 'Klant reageerde', 'board', k.klantReacties ? 'kpi-attn' : '')}
@@ -1771,9 +1882,9 @@ async function loadOverview() {
       ${card(k.afgerondDezeWeek, 'Afgerond deze week', 'board', '', 'afgerond')}
       ${card(k.actief, 'Actieve opdrachten', 'board')}`);
   zetOvDeel('ovLijsten', `
-      <div class="info-card"><h3>Afspraken vandaag</h3>${list(d.apptToday, 'Geen afspraken vandaag.')}</div>
-      <div class="info-card"><h3>Klant heeft gereageerd</h3>${list(d.repliedList, 'Niemand op dit moment.')}</div>
-      <div class="info-card"><h3>Offerte blijft liggen (3+ dagen)</h3>${list(d.staleQuotes, 'Niets blijft liggen.')}</div>`);
+      <div class="info-card"><h3>Afspraken vandaag</h3>${list(d.apptToday, 'Geen afspraken vandaag.', 'afspraakVandaag')}</div>
+      <div class="info-card"><h3>Klant heeft gereageerd</h3>${list(d.repliedList, 'Niemand op dit moment.', 'reactie')}</div>
+      <div class="info-card"><h3>Offerte blijft liggen (3+ dagen)</h3>${list(d.staleQuotes, 'Niets blijft liggen.', 'offertes')}</div>`);
   zetOvDeel('ovVerdeling', `
       <div class="info-card"><h3>Verdeling over kolommen</h3><div class="ov-bars">${d.byStatus.map((s) => `<div class="ov-bar" data-go="board" data-col="${esc(s.key)}"><span class="column-dot" style="background:${esc(statusColor(s.key))}"></span><span class="ov-bar-label">${esc(s.label)}</span><span class="ov-bar-count">${s.count}</span></div>`).join('')}</div></div>
       <div class="info-card"><h3>WhatsApp & recente activiteit</h3>
@@ -1794,28 +1905,41 @@ async function loadOverview() {
 // ---------- AI-dagoverzicht (1x per dag gegenereerd, Ververs forceert) ----------
 function tekenDagoverzicht(d) {
   const body = $('#dayov-body'); if (!body) return;
+  if (window._startVeeg) { window._ovNaVeeg = true; return; }
+  window._dayovData = d;   // bewaard: na afvinken/terugzetten opnieuw tekenen zonder nieuwe AI-scan
   const meta = $('#dayov-meta');
   if (meta && d.at) meta.textContent = `${d.engine ? `${modelNaam(d.engine)}${d.terugvalVan ? ` (i.p.v. ${modelNaam(d.terugvalVan)})` : ''} · ` : ''}gemaakt ${fmtDate(d.at)}`;
   const viewOf = { inbox: 'inbox', opdrachten: 'board', facturen: 'invoices', agenda: 'agenda', klanten: 'customers' };
   const prioDot = { hoog: '#ef4444', middel: '#f59e0b', laag: '#10b981' };
+  // AFVINKEN (25 nov 2026): elke regel heeft een vinkje / is weg te vegen. Afgevinkt = verborgen
+  // (voor het hele kantoor), terug te zetten met de regel onderaan. Dezelfde tekst = dezelfde sleutel.
+  const af = state._dagAf || new Set();
+  let verborgen = 0;
+  const regel = (soort, sleutelTekst, binnen, extra = '') => {
+    const k = dagSleutel(soort, sleutelTekst);
+    if (af.has(k)) { verborgen++; return `<span hidden data-dag-af-id="${esc(k)}"></span>`; }
+    return `<div class="dag-rij${extra ? ' ' + extra : ''}" data-veeg data-dag-af-id="${esc(k)}"><div class="dag-rij-tekst">${binnen}</div>${afKnop(`data-dag-af="${esc(k)}"`, 'Afvinken — gedaan of niet nodig')}</div>`;
+  };
   let html;
   if (d.data) {
     const a = d.data;
-    html = `
-      ${a.kop ? `<div style="font-size:15.5px;color:var(--ink);font-weight:600;line-height:1.45;margin-bottom:10px">${esc(a.kop)}</div>` : ''}
-      ${(a.acties || []).length ? `<div>${a.acties.map((x) => `
+    const acties = (a.acties || []).map((x) => regel('a', `${x.titel}|${x.waarom || ''}`, `
         <div class="dayov-act" data-go2="${esc(viewOf[x.waar] || 'board')}" style="display:flex;gap:9px;align-items:flex-start;padding:7px 8px;margin:2px -8px;border-radius:8px;cursor:pointer">
           <span style="width:9px;height:9px;border-radius:50%;background:${prioDot[x.prio] || prioDot.middel};margin-top:5px;flex:none"></span>
           <span style="color:var(--ink)"><strong>${esc(x.titel)}</strong>${x.waarom ? ` <span class="muted">— ${esc(x.waarom)}</span>` : ''}</span>
-        </div>`).join('')}</div>` : '<div class="muted small">Geen acties — alles loopt.</div>'}
+        </div>`));
+    const actiesOver = (a.acties || []).length - acties.filter((x) => x.startsWith('<span hidden')).length;
+    html = `
+      ${a.kop ? `<div style="font-size:15.5px;color:var(--ink);font-weight:600;line-height:1.45;margin-bottom:10px">${esc(a.kop)}</div>` : ''}
+      ${(a.acties || []).length ? `<div>${acties.join('')}${actiesOver ? '' : '<div class="muted small">Alle acties afgevinkt.</div>'}</div>` : '<div class="muted small">Geen acties — alles loopt.</div>'}
       ${(a.beantwoorden || []).length ? `
       <div style="margin-top:10px"><div class="small" style="font-weight:600;color:var(--accent);margin-bottom:4px">${icon('reply', 12)} Beantwoorden vandaag</div>
-        ${a.beantwoorden.map((b) => `<div class="muted small" style="padding:2px 0">${b.kanaal === 'whatsapp' ? icon('whatsapp', 11) : icon('mail', 11)} <strong style="color:var(--ink)">${esc(b.wie || 'Onbekend')}</strong>${b.waarover ? ` — ${esc(b.waarover)}` : ''}${b.urgent ? ' <span style="color:#ef4444;font-weight:700">· urgent</span>' : ''}</div>`).join('')}
+        ${a.beantwoorden.map((b) => regel('b', `${b.wie || ''}|${b.waarover || ''}`, `<div class="muted small" style="padding:2px 0">${b.kanaal === 'whatsapp' ? icon('whatsapp', 11) : icon('mail', 11)} <strong style="color:var(--ink)">${esc(b.wie || 'Onbekend')}</strong>${b.waarover ? ` — ${esc(b.waarover)}` : ''}${b.urgent ? ' <span style="color:#ef4444;font-weight:700">· urgent</span>' : ''}</div>`)).join('')}
       </div>` : ''}
       ${(a.kansen || []).length || (a.risicos || []).length ? `
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px">
-        ${(a.kansen || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#0d7a43;margin-bottom:4px">Kansen</div>${a.kansen.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}
-        ${(a.risicos || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#b45309;margin-bottom:4px">Let op</div>${a.risicos.map((k) => `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`).join('')}</div>` : ''}
+        ${(a.kansen || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#0d7a43;margin-bottom:4px">Kansen</div>${a.kansen.map((k) => regel('k', k, `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`)).join('')}</div>` : ''}
+        ${(a.risicos || []).length ? `<div style="flex:1;min-width:220px"><div class="small" style="font-weight:600;color:#b45309;margin-bottom:4px">Let op</div>${a.risicos.map((k) => regel('r', k, `<div class="muted small" style="padding:2px 0">• ${esc(k)}</div>`)).join('')}</div>` : ''}
       </div>` : ''}`;
   } else {
     // Zonder AI: de feiten netjes tonen — nooit een leeg of kapot blok.
@@ -1826,10 +1950,11 @@ function tekenDagoverzicht(d) {
       f.unanswered ? `${f.unanswered} klantreactie(s) onbeantwoord` : '',
       f.overdueCount ? `${f.overdueCount} factuur/facturen verlopen` : '',
     ].filter(Boolean);
-    html = `${rows.map((r) => `<div style="padding:2px 0">• ${esc(r)}</div>`).join('')}<div class="muted small" style="margin-top:8px">${d.error === 'geen-ai'
+    html = `${rows.map((r) => regel('f', r, `<div style="padding:2px 0">• ${esc(r)}</div>`)).join('')}<div class="muted small" style="margin-top:8px">${d.error === 'geen-ai'
       ? 'Zet de AI aan (ANTHROPIC_API_KEY) voor het volledige dagoverzicht met acties, kansen en risico’s.'
       : `AI-scan lukte niet: <strong>${esc(d.error || 'onbekende fout')}</strong> — klik op Ververs om het opnieuw te proberen.`}</div>`;
   }
+  if (verborgen) html += `<div class="eerst-af dag-af"><button type="button" class="eerst-af-toon" id="dagAfTerug">${icon('check', 12)} ${verborgen} afgevinkt · terugzetten</button></div>`;
   body.classList.remove('dayov-laden');
   if (html === window._lastDayovHtml && body.childNodes.length) return; // niets veranderd: niet hertekenen
   window._lastDayovHtml = html;

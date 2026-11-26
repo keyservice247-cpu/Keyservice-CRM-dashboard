@@ -2726,6 +2726,127 @@ clear();
 }
 noErr('Campagnes');
 
+// ============================================================================================
+// AFVINKEN OP START (25 nov 2026, wens eigenaar: "dit soort dingen en 'jouw dag in één oogopslag'
+// moeten we af kunnen vinken of weg swipen"). Elk punt heeft een vinkje; op de telefoon is het weg
+// te vegen. Weg van Start tot er iets nieuws bij komt, en altijd terug te zetten.
+clear();
+{
+  const zetAllesTerug = (pg) => pg.evaluate(async () => { for (const k of ['inbox', 'wacht', 'reactie', 'afspraakGeweest', 'offertes', 'factureren', 'verlopen', 'drs', 'onvolledig', 'afspraakVandaag', 'dag']) await fetch('/api/start/terugzetten', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sleutel: k }) }); });
+  const punten = (pg) => pg.evaluate(() => [...document.querySelectorAll('#eerstDoenBlok .eerst-item')].map((li) => ({ t: li.querySelector('strong').textContent, af: !!li.querySelector('.af-knop'), sleutel: li.querySelector('[data-eerst]').dataset.eerst })));
+  await page.evaluate(() => { if (document.querySelector('#sluitVraag #sv-weg')) document.querySelector('#sluitVraag #sv-weg').click(); if (!document.querySelector('#modalRoot').hidden) { modalSchoon(); closeModal(); } });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // zeker iets om af te vinken: een aanvraag in de inbox, een taak voor vandaag en een afspraak van vandaag
+  await page.evaluate(async () => {
+    const j = (p, b) => fetch(p, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ingest-token': 'test123' }, body: JSON.stringify(b) });
+    await j('/api/ingest/email', { from: 'Afvink Proef <afvink-proef@voorbeeld.test>', subject: 'Slot vervangen', text: 'Goedemiddag, kunt u ons slot vervangen? Naam: Afvink Proef, tel 0610000071, Proeflaan 1, 3911 AA Rhenen', externalId: 'afvink-proef-' + Date.now() });
+    await j('/api/taken', { titel: 'Afvinkproef op Start', urgentie: 'hoog', categorie: 'zakelijk', deadline: new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' }) });
+    await j('/api/orders', { customerName: 'Afvink Vandaag', customerPhone: '0610000072', title: 'Rhenen — afspraak van vandaag (afvinkproef)', status: 'afspraak_ingepland', appointmentAt: new Date().toISOString() });
+  });
+  await zetAllesTerug(page);
+  await page.evaluate(() => goView('overview')); await page.waitForSelector('#eerstDoenBlok .eerst-item', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(1300);
+  const voor = await punten(page);
+  ok('afvinken: elk werkpunt van "Eerst doen" heeft een vinkje (een kapotte koppeling niet)', voor.length >= 1 && voor.every((p) => p.af === !(p.sleutel === 'bridge' || p.sleutel.startsWith('koppeling:'))), JSON.stringify(voor));
+  const eerste = voor.find((p) => p.af);
+  await page.locator(`#eerstDoenBlok .eerst-item .af-knop[data-af="${eerste.sleutel}"]`).click(); await page.waitForTimeout(1300);
+  const na = await page.evaluate(() => ({ titels: [...document.querySelectorAll('#eerstDoenBlok .eerst-item strong')].map((x) => x.textContent), toast: document.querySelector('#toast').textContent, regel: (document.querySelector('#eerstAfToon') || {}).textContent || '', view: state.view }));
+  ok('afvinken: een klik op het vinkje haalt het punt van Start (je blijft op Start), met "Ongedaan maken" en de regel "1 afgevinkt"', !na.titels.includes(eerste.t) && /Ongedaan maken/.test(na.toast) && /1 afgevinkt/.test(na.regel) && na.view === 'overview', JSON.stringify(na));
+  await page.click('#toast .toast-undo'); await page.waitForTimeout(1300);
+  ok('afvinken: "Ongedaan maken" zet het punt terug', (await punten(page)).some((p) => p.t === eerste.t));
+  await page.locator(`#eerstDoenBlok .eerst-item .af-knop[data-af="${eerste.sleutel}"]`).click(); await page.waitForTimeout(1100);
+  await page.click('#eerstAfToon'); await page.waitForTimeout(300);
+  const afLijst = await page.evaluate(() => [...document.querySelectorAll('.eerst-af-lijst li')].map((li) => ({ t: li.querySelector('.eerst-af-tekst').textContent, knop: !!li.querySelector('[data-af-terug]') })));
+  ok('afvinken: "afgevinkt · bekijken" laat zien wat is afgevinkt, door wie, met een knop Terugzetten', afLijst.length === 1 && afLijst[0].knop && afLijst[0].t.includes(eerste.t) && /Admin|Beheerder|Abdel/i.test(afLijst[0].t), JSON.stringify(afLijst));
+  // de pulse hertekent Start: de open lijst en het vinkje blijven staan
+  await page.evaluate(() => loadOverview()); await page.waitForTimeout(700);
+  ok('afvinken: na een verversing is het punt nog steeds weg en staat de lijst nog open', !(await punten(page)).some((p) => p.t === eerste.t) && (await page.locator('.eerst-af-lijst li').count()) === 1);
+  await page.click('.eerst-af-lijst [data-af-terug]'); await page.waitForTimeout(1300);
+  ok('afvinken: Terugzetten in die lijst zet het punt terug op Start', (await punten(page)).some((p) => p.t === eerste.t) && !(await page.$('#eerstAfToon')));
+  // een klik op de regel zelf doet nog wat hij deed (naar de juiste plek), het vinkje niet
+  const inboxPunt = (await punten(page)).find((p) => p.sleutel === 'inbox');
+  if (inboxPunt) {
+    await page.click('#eerstDoenBlok [data-eerst="inbox"]'); await page.waitForTimeout(900);
+    ok('afvinken: een klik op de regel zelf gaat nog gewoon naar de inbox', (await page.evaluate(() => state.view)) === 'inbox');
+    await page.evaluate(() => goView('overview')); await page.waitForSelector('#eerstDoenBlok .eerst-item'); await page.waitForTimeout(900);
+  }
+  // "Jouw dag in één oogopslag": elke regel heeft een vinkje
+  await page.waitForSelector('#dayov-body .dag-rij', { timeout: 15000 }).catch(() => {});
+  const dag = await page.evaluate(() => ({ rijen: document.querySelectorAll('#dayov-body .dag-rij').length, knoppen: document.querySelectorAll('#dayov-body .dag-rij .af-knop').length }));
+  ok('afvinken: elke regel van "Jouw dag in één oogopslag" heeft een vinkje', dag.rijen >= 1 && dag.knoppen === dag.rijen, JSON.stringify(dag));
+  if (dag.rijen) {
+    await page.locator('#dayov-body .dag-rij .af-knop').first().click(); await page.waitForTimeout(1100);
+    const d2 = await page.evaluate(() => ({ rijen: document.querySelectorAll('#dayov-body .dag-rij').length, terug: (document.querySelector('#dagAfTerug') || {}).textContent || '' }));
+    ok('afvinken: een regel van het dagoverzicht afvinken haalt hem weg, met "1 afgevinkt · terugzetten"', d2.rijen === dag.rijen - 1 && /1 afgevinkt/.test(d2.terug), JSON.stringify(d2));
+    await page.evaluate(() => loadOverview()); await page.waitForTimeout(700);
+    ok('afvinken: de regel blijft weg na een verversing (onthouden op de server, voor het hele kantoor)', (await page.locator('#dayov-body .dag-rij').count()) === dag.rijen - 1 && (await page.evaluate(async () => ((await (await fetch('/api/overview')).json()).dagAf || []).length)) === 1);
+    await page.click('#dagAfTerug'); await page.waitForTimeout(1100);
+    ok('afvinken: "terugzetten" brengt de regel van het dagoverzicht terug', (await page.locator('#dayov-body .dag-rij').count()) === dag.rijen);
+  }
+  // taken van vandaag: het vinkje = de taak is klaar (met Ongedaan maken)
+  const taakId = await page.evaluate(() => { const li = [...document.querySelectorAll('#takenVandaagBlok li[data-taak]')].find((x) => /Afvinkproef/.test(x.textContent)); return li ? li.dataset.taak : ''; });
+  if (taakId) {
+    await page.click(`#takenVandaagBlok li[data-taak="${taakId}"] .af-knop`); await page.waitForTimeout(1200);
+    const taak = await page.evaluate(async (id) => ({ klaar: [].concat(await (await fetch('/api/taken')).json()).find((t) => t.id === id)?.status, inLijst: !!document.querySelector(`#takenVandaagBlok li[data-taak="${id}"]`), view: state.view, toast: document.querySelector('#toast').textContent }), taakId);
+    ok('afvinken: het vinkje bij een taak van vandaag zet de taak op klaar (je blijft op Start), met "Ongedaan maken"', taak.klaar === 'klaar' && !taak.inLijst && taak.view === 'overview' && /Ongedaan maken/.test(taak.toast), JSON.stringify(taak));
+    await page.click('#toast .toast-undo'); await page.waitForTimeout(1200);
+    ok('afvinken: "Ongedaan maken" zet de taak weer open', await page.evaluate(async (id) => [].concat(await (await fetch('/api/taken')).json()).find((t) => t.id === id)?.status !== 'klaar', taakId));
+    await page.evaluate((id) => fetch(`/api/taken/${id}`, { method: 'DELETE' }), taakId);
+  } else ok('afvinken: de proeftaak staat bij "Vandaag — taken"', false, 'taak niet gevonden in het blok');
+  // de lijstjes rechts: per regel een vinkje; de tegel blijft het echte aantal
+  const lij = await page.evaluate(() => { const li = [...document.querySelectorAll('#ovLijsten li.ov-af-rij')].find((x) => /afvinkproef/.test(x.textContent)); return { id: li ? li.dataset.open : '', knop: !!(li && li.querySelector('.af-knop')), tegel: [...document.querySelectorAll('#ovKpis .kpi-card')].find((k) => /Afspraken vandaag/.test(k.textContent))?.querySelector('.kpi-num').textContent }; });
+  if (lij.id) {
+    await page.click(`#ovLijsten li[data-open="${lij.id}"] .af-knop`); await page.waitForTimeout(1200);
+    const l2 = await page.evaluate((id) => ({ weg: !document.querySelector(`#ovLijsten li[data-open="${id}"]`), modal: !document.querySelector('#modalRoot').hidden, tegel: [...document.querySelectorAll('#ovKpis .kpi-card')].find((k) => /Afspraken vandaag/.test(k.textContent))?.querySelector('.kpi-num').textContent, af: (document.querySelector('#eerstAfToon') || {}).textContent || '' }), lij.id);
+    ok('afvinken: een regel in "Afspraken vandaag" afvinken haalt alleen die regel weg (de opdracht opent niet, de tegel blijft het echte aantal)', lij.knop && l2.weg && !l2.modal && l2.tegel === lij.tegel && /afgevinkt/.test(l2.af), JSON.stringify({ lij, l2 }));
+  } else ok('afvinken: de proefafspraak staat bij "Afspraken vandaag"', false, 'afspraak niet gevonden');
+  await zetAllesTerug(page);
+
+  // --- telefoon: wegvegen ---
+  const vp = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const vpFout = []; vp.on('pageerror', (e) => vpFout.push(e.message));
+  await vp.goto(BASE + '/login.html', { waitUntil: 'networkidle' });
+  await vp.fill('input[type=email], input[name=email], #email', 'admin@keyservice.nl');
+  await vp.fill('input[type=password], input[name=password], #password', 'admin123');
+  await Promise.all([vp.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}), vp.click('button[type=submit], button')]);
+  await vp.waitForSelector('.view:not([hidden])', { timeout: 10000 }).catch(() => {}); await vp.waitForTimeout(1000);
+  await vp.evaluate(() => { const h = document.getElementById('pushHint'); if (h) h.hidden = true; showView('overview'); });
+  await vp.waitForSelector('#eerstDoenBlok .eerst-item[data-veeg]', { timeout: 8000 }).catch(() => {}); await vp.waitForTimeout(1200);
+  const veeg = (sel, dx, dy = 0) => vp.evaluate(({ sel, dx, dy }) => { const el = document.querySelector(sel); const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const mk = (type, cx, cy) => { const touch = new Touch({ identifier: 1, target: el, clientX: cx, clientY: cy }); el.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches: type === 'touchend' ? [] : [touch], changedTouches: [touch] })); };
+    mk('touchstart', x, y); for (let i = 1; i <= 8; i++) mk('touchmove', x + (dx * i) / 8, y + (dy * i) / 8); mk('touchend', x + dx, y + dy); }, { sel, dx, dy });
+  const telVoor = await punten(vp);
+  const doel = telVoor.find((p) => p.af);
+  const rijSel = `#eerstDoenBlok .eerst-item[data-veeg] [data-eerst="${doel.sleutel}"]`;
+  await veeg(rijSel, -45); await vp.waitForTimeout(500);
+  await veeg(rijSel, 20, 160); await vp.waitForTimeout(500);
+  const telKort = await vp.evaluate(() => ({ n: document.querySelectorAll('#eerstDoenBlok .eerst-item').length, view: state.view, vlag: !!window._dragging }));
+  ok('afvinken (telefoon): een kort veegje of omlaag scrollen doet niets — de regel staat er nog, je bent nog op Start', telKort.n === telVoor.length && telKort.view === 'overview' && !telKort.vlag, JSON.stringify(telKort));
+  await veeg(rijSel, -170); await vp.waitForTimeout(1400);
+  const telNa = await vp.evaluate(() => ({ titels: [...document.querySelectorAll('#eerstDoenBlok .eerst-item strong')].map((x) => x.textContent), toast: document.querySelector('#toast').textContent, view: state.view, vlag: !!window._dragging }));
+  ok('afvinken (telefoon): een regel wegvegen = afgevinkt, met "Ongedaan maken"; je blijft op Start en het scherm ververst daarna weer gewoon', !telNa.titels.includes(doel.t) && /Ongedaan maken/.test(telNa.toast) && telNa.view === 'overview' && !telNa.vlag, JSON.stringify(telNa));
+  await vp.click('#toast .toast-undo'); await vp.waitForTimeout(1300);
+  const telMaat = await vp.evaluate(() => { const k = document.querySelector('#eerstDoenBlok .af-knop').getBoundingClientRect(); return { breed: document.documentElement.scrollWidth, knop: Math.round(k.width), rechts: Math.round(k.right), terug: [...document.querySelectorAll('#eerstDoenBlok .eerst-item strong')].length }; });
+  ok('afvinken (telefoon): na "Ongedaan maken" staat de regel er weer; het vinkje is 40 px en alles past binnen 390 px', telMaat.terug === telVoor.length && telMaat.knop >= 40 && telMaat.rechts <= 390 && telMaat.breed <= 392, JSON.stringify(telMaat));
+  // wacht op antwoord: wegvegen = Afgehandeld (als er iemand wacht)
+  const wachtId = await vp.evaluate(() => { const li = document.querySelector('#onbeantwoordBlok li[data-veeg]'); return li ? li.dataset.chat : ''; });
+  if (wachtId) {
+    await veeg(`#onbeantwoordBlok li[data-chat="${wachtId}"]`, 180); await vp.waitForTimeout(1400);
+    const w = await vp.evaluate((id) => ({ weg: !document.querySelector(`#onbeantwoordBlok li[data-chat="${id}"]`), toast: document.querySelector('#toast').textContent, view: state.view }), wachtId);
+    ok('afvinken (telefoon): bij "Wacht op antwoord" is wegvegen hetzelfde als Afgehandeld, met "Ongedaan maken"', w.weg && /Ongedaan maken/.test(w.toast) && w.view === 'overview', JSON.stringify(w));
+    await vp.click('#toast .toast-undo'); await vp.waitForTimeout(1300);
+    ok('afvinken (telefoon): "Ongedaan maken" zet de wachtende klant terug in de lijst', await vp.evaluate((id) => !!document.querySelector(`#onbeantwoordBlok li[data-chat="${id}"]`), wachtId));
+  }
+  ok('afvinken (telefoon): geen JS-fout', vpFout.length === 0, vpFout.join(' | '));
+  await vp.close();
+  // opruimen
+  await page.evaluate(async () => {
+    const o = (await (await fetch('/api/orders')).json()).find((x) => /afvinkproef/.test(x.title || '')); if (o) await fetch(`/api/orders/${o.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'afgerond', note: 'proef klaar' }) });
+    const d = await fetch('/api/reviews?status=pending&limit=500').then((r) => r.json()); for (const r of (d.items || d)) if (/Afvink Proef/.test(JSON.stringify(r))) await fetch(`/api/reviews/${r.id}/reject`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  });
+  await zetAllesTerug(page);
+}
+noErr('Afvinken op Start');
+
 console.log(`\n========== BROWSER: ${pass} geslaagd, ${fail} gefaald ==========`);
 await browser.close();
 if (bad.length) { console.log('Gefaald:', bad.join(' | ')); process.exit(1); }
