@@ -27,6 +27,11 @@ const meta = http.createServer((req, res) => {
   let body = ''; req.on('data', (c) => { body += c; });
   req.on('end', () => {
     res.setHeader('content-type', 'application/json');
+    // Media ophalen (foto's die een klant stuurt): eerst het adres, dan het bestand zelf.
+    const mediaBestand = req.url.match(/^\/media\/([\w-]+)$/);
+    if (req.method === 'GET' && mediaBestand) { res.setHeader('content-type', 'image/jpeg'); res.end(Buffer.from(`nep-foto-${mediaBestand[1]}-${'x'.repeat(200)}`)); return; }
+    const mediaId = req.url.match(/^\/(foto[\w-]+)$/);
+    if (req.method === 'GET' && mediaId) { res.end(JSON.stringify({ url: `http://127.0.0.1:${META}/media/${mediaId[1]}`, mime_type: 'image/jpeg' })); return; }
     if (req.method !== 'POST' || !/\/messages$/.test(req.url)) { res.end(JSON.stringify({ data: [] })); return; }
     let json = {}; try { json = JSON.parse(body); } catch { /* leeg */ }
     if (metaStuk) { res.statusCode = 500; res.end(JSON.stringify({ error: { message: 'nagebootste storing bij Meta', code: 131000 } })); return; }
@@ -185,6 +190,40 @@ try {
   await api('POST', '/api/whatsapp/automatisch', { soort: 'review', aan: true });
   const r1 = await api('POST', `/api/invoices/${f.id}/review-request`, {});
   ok('knop AAN: review-verzoek gaat als appje (ook zonder mailinstelling)', r1.status === 200 && (await heleWachtrij()).some((o) => o.by === 'review-verzoek' && o.phone === '0612340001'), JSON.stringify(r1.json).slice(0, 200));
+
+  console.log('\n== Foto\'s van de klant komen op de opdracht (28 nov 2026) ==');
+  const webhook = async (bericht) => {
+    const b = JSON.stringify({ object: 'whatsapp_business_account', entry: [{ id: '1', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { phone_number_id: 'PID' }, contacts: [{ profile: { name: bericht.naam || 'Foto Klant' }, wa_id: bericht.from }], messages: [{ from: bericht.from, id: bericht.id, timestamp: String(Math.floor(Date.now() / 1000)), ...(bericht.foto ? { type: 'image', image: { id: bericht.foto, mime_type: 'image/jpeg' } } : { type: 'text', text: { body: bericht.tekst } }) }] } }] }] });
+    return fetch(`${BASE}/api/ingest/whatsapp/cloud`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': 'sha256=' + crypto.createHmac('sha256', SECRET).update(b).digest('hex') }, body: b });
+  };
+  const haalOrder = async (oid) => { const j = (await api('GET', `/api/orders/${oid}`)).json; return j.order || j; };
+  // Klant stuurt zijn vraag en daarna drie foto's — er bestaat nog GEEN opdracht.
+  await webhook({ from: '31612347777', id: 'wamid.F0', tekst: 'Goedemiddag, mijn schuifpui klemt en sluit niet meer. Kunt u langskomen? Kamperlaan 5, 3911 AA Rhenen' });
+  await slaap(700);
+  for (const n of [1, 2, 3]) { await webhook({ from: '31612347777', id: `wamid.F${n}`, foto: `foto${n}` }); await slaap(500); }
+  await slaap(600);
+  const revs = ((await api('GET', '/api/reviews?limit=80')).json.items || []);
+  const vraag = revs.find((r) => /schuifpui klemt/.test(JSON.stringify(r)));
+  ok('de vraag van de klant staat in de inbox', !!vraag, JSON.stringify(revs.map((r) => r.status)).slice(0, 200));
+  const goed = await api('POST', `/api/reviews/${vraag.id}/approve`, {});
+  const oFoto = await haalOrder(goed.json?.order?.id || goed.json?.orderId || goed.json?.id);
+  ok('goedkeuren: de drie foto\'s die de klant al had gestuurd staan op de opdracht (tabblad Foto\'s)', goed.status === 200 && (oFoto.attachments || []).length === 3 && oFoto.attachments.every((a) => /image/.test(a.mime || '')), JSON.stringify({ s: goed.status, n: (oFoto.attachments || []).length }));
+  ok('en ze staan in het gesprek van de opdracht, op volgorde', (oFoto.thread || []).filter((t) => (t.attachments || []).length).length === 3 && (oFoto.thread || []).every((t, i, arr) => !i || String(arr[i - 1].at || '') <= String(t.at || '')));
+  await webhook({ from: '31612347777', id: 'wamid.F4', foto: 'foto4' }); await slaap(900);
+  ok('een foto NA het aanmaken komt er ook bij (bestond al)', ((await haalOrder(oFoto.id)).attachments || []).length === 4);
+  // Handmatig aangemaakte opdracht voor een klant die al foto's had geappt.
+  for (const n of [5, 6]) { await webhook({ from: '31612348888', id: `wamid.G${n}`, foto: `foto${n}`, naam: 'Hand Klant' }); await slaap(500); }
+  const hand = (await api('POST', '/api/orders', { customerName: 'Hand Klant', customerPhone: '0612348888', title: 'Rhenen — met de hand aangemaakt' })).json;
+  ok('opdracht met de hand aangemaakt: de eerder geappte foto\'s staan er meteen op', ((await haalOrder(hand.id)).attachments || []).length === 2);
+  ok('foto\'s van een ANDER nummer komen er niet bij', !((await haalOrder(hand.id)).attachments || []).some((a) => (oFoto.attachments || []).some((b) => b.file === a.file)));
+  // Inhaalslag: opdracht bestond al zonder telefoonnummer; het nummer komt er later bij.
+  for (const n of [7, 8]) { await webhook({ from: '31612349999', id: `wamid.H${n}`, foto: `foto${n}`, naam: 'Inhaal Klant' }); await slaap(500); }
+  const inh = (await api('POST', '/api/orders', { customerName: 'Inhaal Klant', title: 'Rhenen — inhaalslag' })).json;
+  await api('PATCH', `/api/customers/${inh.customerId}`, { phone: '0612349999' });
+  ok('uitgangspunt inhaalslag: de opdracht heeft nog geen foto\'s', ((await haalOrder(inh.id)).attachments || []).length === 0);
+  const ih = await api('POST', '/api/whatsapp/test-fotos-inhaal', {});
+  ok('eenmalige inhaalslag zet de twee foto\'s alsnog op de lopende opdracht', ih.status === 200 && ih.json.fotos === 2 && ((await haalOrder(inh.id)).attachments || []).length === 2, JSON.stringify(ih.json));
+  ok('nog een keer draaien voegt niets dubbel toe', (await api('POST', '/api/whatsapp/test-fotos-inhaal', {})).json.fotos === 0 && ((await haalOrder(inh.id)).attachments || []).length === 2 && ((await haalOrder(oFoto.id)).attachments || []).length === 4);
 
   console.log('\n== Rechten ==');
   const lm = await login('ahmed@keyservice.nl', 'ahmed123');

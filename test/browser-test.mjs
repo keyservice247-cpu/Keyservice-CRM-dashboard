@@ -2867,10 +2867,16 @@ clear();
     const v = await page.evaluate(() => ({ o: document.querySelector('#cm-onderwerp').value, t: document.querySelector('#cm-tekst').value, kop: document.querySelector('#cm-kop').value, knop: document.querySelector('#cm-knoptekst').value, velden: !document.querySelector('#cm-opmaak').hidden }));
     await page.click('#cm-vb-knop'); await page.waitForSelector('#cm-vb iframe', { timeout: 8000 }).catch(() => {}); await page.waitForTimeout(600);
     const fr = page.frameLocator('#cm-vb iframe');
-    const h1 = await fr.locator('h1').textContent().catch(() => ''); const knop = (await fr.locator('a[href^="tel:"]').first().textContent().catch(() => '')).trim(); const afmeld = await fr.locator('a', { hasText: 'Meld u hier af' }).count().catch(() => 0);
+    const h1 = await fr.locator('h1').textContent().catch(() => ''); const knop = (await fr.locator('a[href="#"], a[href^="tel:"]').first().textContent().catch(() => '')).trim(); const afmeld = await fr.locator('a', { hasText: 'Meld u hier af' }).count().catch(() => 0);
     perSj.push({ key, goed: v.velden && v.o.length > 5 && /Beste \{naam\}/.test(v.t) && !!v.kop && h1 === v.kop && knop === v.knop && afmeld === 1, v: { o: v.o, kop: v.kop, knop: v.knop }, h1, knop });
   }
-  ok('sjablonen: elk sjabloon vult onderwerp, tekst, kop en knoptekst in, en het voorbeeld toont de mail met die kop, een bel-knop en de afmeldlink', perSj.every((x) => x.goed) && new Set(perSj.map((x) => x.h1)).size === 3, JSON.stringify(perSj));
+  ok('sjablonen: elk sjabloon vult onderwerp, tekst, kop en knoptekst in, en het voorbeeld toont de mail met die kop, de knop en de afmeldlink', perSj.every((x) => x.goed) && new Set(perSj.map((x) => x.h1)).size === 3, JSON.stringify(perSj));
+  // KNOP "AANVRAAG" (28 nov 2026): standaard maakt de knop een opdracht in het CRM; bellen kan nog steeds.
+  const ks = await page.evaluate(() => ({ nu: document.querySelector('#cm-knopsoort').value, keuzes: [...document.querySelectorAll('#cm-knopsoort option')].map((o) => o.value).join(), tekst: (document.querySelector('#cm-knopsoort option[value="aanvraag"]') || {}).textContent || '' }));
+  await page.selectOption('#cm-knopsoort', 'bel'); await page.click('#cm-vb-knop'); await page.waitForTimeout(900);
+  const belKnop = await page.frameLocator('#cm-vb iframe').locator('a[href^="tel:"]').count().catch(() => 0);
+  await page.selectOption('#cm-knopsoort', 'aanvraag');
+  ok('campagneknop: standaard "klant vraagt contact aan → opdracht in het CRM"; bellen, mailen, website en geen knop zijn nog te kiezen', ks.nu === 'aanvraag' && /^aanvraag,bel,/.test(ks.keuzes) && /geen$/.test(ks.keuzes) && /opdracht in het CRM/.test(ks.tekst) && belKnop === 1, JSON.stringify({ ...ks, belKnop }));
   await page.fill('#cm-tekst', 'Beste {naam},\n\nMijn eigen tekst voor de proef.'); await page.click('#cm-sjablonen [data-sj="schuifpui"]'); await page.waitForTimeout(250);
   ok('sjablonen: wisselen van sjabloon overschrijft een zelf getypte tekst niet', (await page.inputValue('#cm-tekst')).includes('Mijn eigen tekst'));
   // eigen foto (wordt in de browser verkleind) → zichtbaar in het voorbeeld

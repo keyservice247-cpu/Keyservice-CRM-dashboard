@@ -28,7 +28,7 @@ import { klantvriendelijkMoment, nlDag } from './tijdvenster.js';
 import { sendMail, smtpConfigured } from './connectors/email-smtp.js';
 import { nooitKlantMail } from './pipeline.js';
 import { TEST, demoLoginToegestaan } from './omgeving.js';
-import { getHtmlSignature } from './settings.js';
+import { getHtmlSignature, firstStatusKey } from './settings.js';
 import { leesOpmaak, bouwCampagneHtml, sjabloonVan, knopDoel, SJABLONEN } from './campagne-sjablonen.js';
 
 export const STANDAARD_INSTELLINGEN = { rustDagen: 30, perDag: 200, perRonde: 8, pauzeMs: 2500 };
@@ -281,7 +281,77 @@ export function klikLink(campagneId, customerId) {
 export function knopDoelVan(c) {
   const opmaak = leesOpmaak(c.opmaak);
   if (opmaak.sjabloon === 'tekst' || opmaak.knopSoort === 'geen') return '';
+  if (opmaak.knopSoort === 'aanvraag') return 'aanvraag';
   return knopDoel(opmaak.knopSoort, bedrijfVoorMail(), c.onderwerp);
+}
+export const knopSoortVan = (c) => { const o = leesOpmaak(c.opmaak); return o.sjabloon === 'tekst' ? 'geen' : o.knopSoort; };
+/** Adres voor de knop in een voorbeeld-, test- of proefmail met de knop "aanvraag" (geen klant). */
+export const proefKlikLink = () => `${String(process.env.APP_URL || 'https://keyservice-crm.onrender.com').replace(/\/+$/, '')}/k/proef`;
+
+/**
+ * AANVRAAG VIA DE KNOP IN EEN CAMPAGNEMAIL (28 nov 2026, wens eigenaar: "de knop moet een
+ * opdrachtkaart maken met alle gegevens en de bron"). De klant tikt op de knop, bevestigt op een
+ * korte pagina (de link openen alleen doet niets — mailscanners openen links uit zichzelf) en er
+ * staat een NIEUWE opdracht in de eerste kolom: klantgegevens, de campagne als bron, wat de klant
+ * erbij schreef. Eén opdracht per klant per campagne; nog een keer tikken maakt geen tweede.
+ * De link is ondertekend per klant (harde identificator). Er gaat niets naar een monteur en er
+ * wordt geen afspraak gezet: een mens pakt het op. Geeft null bij een ongeldige link.
+ */
+/**
+ * De aanvraag die deze ontvanger al via de knop deed en die nog "loopt": de opdracht staat nog
+ * open, of is korter dan een dag geleden gemaakt (dubbel tikken). Is die opdracht afgehandeld of
+ * weggegooid en tikt de klant later nog eens op de knop in dezelfde mail, dan is dat een NIEUWE
+ * aanvraag — anders zou hij "Bedankt" zien terwijl er in het CRM niets gebeurt.
+ */
+function lopendeAanvraag(o, nu = Date.now()) {
+  if (!o || !o.aanvraagOrderId) return null;
+  const order = (db().orders || []).find((x) => x.id === o.aanvraagOrderId && !x.deletedAt);
+  if (!order) return null;
+  const open = !order.archivedWeek && !['afgerond', 'geannuleerd'].includes(order.status);
+  return open || nu - ms(order.createdAt) < DAG ? order : null;
+}
+export function maakCampagneAanvraag(campagneId, customerId, sig, { opmerking = '', nu = Date.now() } = {}) {
+  const goed = klikSig(campagneId, customerId);
+  const a = Buffer.from(String(sig || '')); const b = Buffer.from(goed);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const c = vindCampagne(campagneId);
+  const klant = (db().customers || []).find((k) => k.id === customerId);
+  if (!c || !klant) return null;
+  const o = (c.ontvangers || []).find((x) => x.customerId === customerId && x.status === 'verstuurd');
+  if (!o) return null;
+  if (!o.klikAt) o.klikAt = new Date(nu).toISOString();
+  const al = lopendeAanvraag(o, nu);
+  if (al) return { order: al, bestaand: true, klant, campagne: c };
+  const opmaak = leesOpmaak(c.opmaak);
+  const tekst = String(opmerking || '').replace(/\r/g, '').trim().slice(0, 600);
+  const open = (db().orders || []).filter((x) => x.customerId === klant.id && !x.deletedAt && !x.archivedWeek && !['afgerond', 'geannuleerd'].includes(x.status))
+    .sort((p, q) => String(q.updatedAt || q.createdAt || '').localeCompare(String(p.updatedAt || p.createdAt || '')))[0];
+  const plaats = plaatsUit(klant.address);
+  const wat = opmaak.kop || c.onderwerp || c.naam;
+  const order = {
+    id: id('ord'),
+    // Vaste werkafspraak: de titel begint met de plaatsnaam.
+    title: `${plaats ? `${plaats} — ` : ''}Aanvraag via campagne: ${wat}`.slice(0, 160),
+    description: [`De klant tikte op de knop "${opmaak.knopTekst || 'aanvraag'}" in de campagnemail "${c.naam}".`, tekst ? `\nDe klant schreef erbij:\n${tekst}` : '', '\nNeem contact op om een afspraak te maken.'].join(''),
+    status: firstStatusKey(),
+    source: 'Campagne (e-mail)',
+    customerId: klant.id, monteurId: null,
+    appointmentAt: null, appointmentEndAt: null, price: '', urgent: false, notes: '', messageId: null,
+    intake: { name: String(klant.name || '').slice(0, 120), phone: String(klant.phone || '').slice(0, 40), email: String(klant.email || '').slice(0, 120), address: String(klant.address || '').slice(0, 200) },
+    campagneAanvraag: { campagneId: c.id, naam: c.naam, at: new Date(nu).toISOString() },
+    // Lead-instroom Regel 1: heeft de klant al een lopende opdracht, dan een voorstel om samen te
+    // voegen — een mens beslist.
+    mergeSuggestion: open ? { orderId: open.id, title: open.title, at: now() } : undefined,
+    thread: [{ id: id('thr'), channel: 'systeem', outgoing: false, sender: 'Systeem', body: `${klant.name || 'De klant'} vroeg via de campagnemail "${c.naam}" om contact (knop "${opmaak.knopTekst || 'aanvraag'}").${tekst ? ` Bericht van de klant: ${tekst}` : ''}`, at: now() }],
+    attachments: [],
+    customerReplied: true, unreadReplies: 1, lastCustomerReplyAt: now(),
+    createdAt: now(), updatedAt: now(), statusSince: now(),
+  };
+  db().orders.push(order);
+  o.aanvraagOrderId = order.id; o.aanvraagAt = order.createdAt;
+  logActivity('klant', 'aanvraag via campagneknop', `${order.title} — ${klant.name || ''}`);
+  saveSoon();
+  return { order, bestaand: false, klant, campagne: c };
 }
 /**
  * Een klik op de knop. Geeft { doel, knopTekst } terug (ook als de klik niet meetelt), of null
@@ -300,7 +370,7 @@ export function registreerKlik(campagneId, customerId, sig, { nu = Date.now(), m
     if (!o.klikAt) o.klikAt = new Date(nu).toISOString();
     o.klikken = (o.klikken || 0) + 1; telt = true; saveSoonQuiet();
   }
-  return { doel, knopTekst: leesOpmaak(c.opmaak).knopTekst || 'Verder', telt, bedrijf: bedrijfVoorMail() };
+  return { doel, soort: knopSoortVan(c), knopTekst: leesOpmaak(c.opmaak).knopTekst || 'Verder', telt, bedrijf: bedrijfVoorMail(), campagneNaam: c.naam, kop: leesOpmaak(c.opmaak).kop || c.onderwerp || '', alAangevraagd: !!lopendeAanvraag(o, nu) };
 }
 
 export const voetTekst = (customerId) => `\n\nU ontvangt deze e-mail omdat u klant bent (geweest) van Key Service 24/7. Liever geen e-mails meer? Meld u af via ${afmeldLink(customerId)} of antwoord met "afmelden".`;
@@ -317,7 +387,7 @@ export function campagneUitvoer(c, { metOntvangers = false } = {}) {
     proef: !!c.proef, melding: c.melding || '',
     opmaak: leesOpmaak(c.opmaak), foto: !!(c.foto && c.foto.file),
   };
-  if (metOntvangers) uit.ontvangers = o.map((x) => ({ naam: x.naam, email: x.email, plaats: x.plaats || '', status: x.status, at: x.at || null, fout: x.fout || '', klik: !!x.klikAt }));
+  if (metOntvangers) uit.ontvangers = o.map((x) => ({ naam: x.naam, email: x.email, plaats: x.plaats || '', status: x.status, at: x.at || null, fout: x.fout || '', klik: !!x.klikAt, aanvraag: x.aanvraagOrderId || '' }));
   return uit;
 }
 
@@ -400,7 +470,9 @@ export function mailVoor(c, o, { voorbeeld = false } = {}) {
     afmeldUrl: o.customerId ? afmeldLink(o.customerId) : (voorbeeld ? '#' : ''),
     logoSrc: voorbeeld ? '/img/logo-factuur.png' : 'cid:kslogo',
     // Klikteller: alleen in de echte mail aan een klant, niet in het voorbeeld of een testmail.
-    knopUrl: !voorbeeld && o.customerId && c.id ? klikLink(c.id, o.customerId) : '',
+    // Bij de knop "aanvraag" is er altijd een adres nodig: in het voorbeeld een leeg anker, in een
+    // test- of proefmail (geen klant) een pagina die uitlegt wat er bij een echte klant gebeurt.
+    knopUrl: !voorbeeld && o.customerId && c.id ? klikLink(c.id, o.customerId) : (opmaak.knopSoort === 'aanvraag' ? (voorbeeld ? '#' : proefKlikLink()) : ''),
     fotoSrc: heeftFoto ? (voorbeeld ? `/api/campagnes/${c.id}/foto?v=${encodeURIComponent((c.foto && c.foto.at) || '')}` : 'cid:kopfoto') : '',
   });
   const attachments = heeftFoto && !voorbeeld ? [{ filename: `foto.${path.extname(pad).slice(1) || 'jpg'}`, path: pad, cid: 'kopfoto', contentDisposition: 'inline' }] : [];
@@ -594,7 +666,8 @@ export function campagneResultaat(c, { metGeld = false, nu = Date.now() } = {}) 
   const afgemeld = verstuurd.filter((o) => { const k = klantOp.get(o.customerId); return k && k.campaignOptOut && ms(k.campaignOptOutAt) >= ms(o.at); }).length;
   // Kliks op de knop (alleen bij een opgemaakte mail mét knop; anders null = niet te meten).
   const kliks = knopDoelVan(c) ? verstuurd.filter((o) => o.klikAt).length : null;
-  const uit = { verstuurd: verstuurd.length, reacties: reageerders.size, opdrachten, afgemeld, kliks, dagenGeleden: c.klaarOp ? Math.floor((nu - ms(c.klaarOp)) / DAG) : null };
+  const aanvragen = knopSoortVan(c) === 'aanvraag' ? verstuurd.filter((o) => o.aanvraagOrderId).length : null;
+  const uit = { verstuurd: verstuurd.length, reacties: reageerders.size, opdrachten, afgemeld, kliks, aanvragen, dagenGeleden: c.klaarOp ? Math.floor((nu - ms(c.klaarOp)) / DAG) : null };
   if (metGeld) uit.omzet = Math.round(omzet * 100) / 100;
   return uit;
 }

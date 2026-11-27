@@ -4533,7 +4533,7 @@ function openCampagneConcept(c) {
     <div id="cm-opmaak" hidden>
       <label>Kop bovenaan de mail <input id="cm-kop" maxlength="90" value="${esc((nu.opmaak || {}).kop || '')}" placeholder="bv. Loopt uw schuifpui nog soepel?"></label>
       <div class="row"><label>Tekst op de knop <input id="cm-knoptekst" maxlength="40" value="${esc((nu.opmaak || {}).knopTekst || '')}"></label>
-        <label>Wat doet de knop <select id="cm-knopsoort">${[['bel', `Belt ons${(d.bedrijf || {}).telefoon ? ` (${(d.bedrijf || {}).telefoon})` : ''}`], ...((d.bedrijf || {}).whatsapp ? [['whatsapp', 'Stuurt ons een WhatsApp']] : []), ['mail', 'Mailt ons'], ['site', 'Opent de website'], ['geen', 'Geen knop']].map(([k, l]) => `<option value="${k}" ${k === ((nu.opmaak || {}).knopSoort || 'bel') ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
+        <label>Wat doet de knop <select id="cm-knopsoort">${[['aanvraag', 'Klant vraagt contact aan → nieuwe opdracht in het CRM'], ['bel', `Belt ons${(d.bedrijf || {}).telefoon ? ` (${(d.bedrijf || {}).telefoon})` : ''}`], ...((d.bedrijf || {}).whatsapp ? [['whatsapp', 'Stuurt ons een WhatsApp']] : []), ['mail', 'Mailt ons'], ['site', 'Opent de website'], ['geen', 'Geen knop']].map(([k, l]) => `<option value="${k}" ${k === ((nu.opmaak || {}).knopSoort || 'aanvraag') ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
       <div class="cmp-foto" data-geen-wijziging><input type="file" id="cm-foto" accept="image/jpeg,image/png,image/webp,image/*" hidden>
         <button type="button" class="btn btn-sm" id="cm-fotobtn">${icon('image', 13)} Eigen foto bovenaan…</button>
         <span class="muted small" id="cm-fotostatus">${c && c.foto ? 'Er staat een foto bovenaan de mail.' : 'Optioneel. Bijvoorbeeld een foto van jullie werk.'}</span>
@@ -4702,6 +4702,7 @@ function openCampagneVerloop(c) {
       <div><strong>${c.verstuurd}</strong><span>verstuurd</span></div><div><strong>${c.wacht}</strong><span>wacht nog</span></div>
       <div><strong>${c.overgeslagen}</strong><span>overgeslagen</span></div><div><strong>${c.mislukt}</strong><span>mislukt</span></div>
       ${r.kliks != null ? `<div title="Hoeveel ontvangers op de knop in de mail tikten. Bij benadering: een virusscanner die de link uit zichzelf opent telt niet mee."><strong id="cv-kliks">${r.kliks}</strong><span>klikten op de knop</span></div>` : ''}
+      ${r.aanvragen != null ? `<div title="Hoeveel ontvangers via de knop om contact vroegen. Elke aanvraag staat als opdracht op het bord (bron: Campagne)."><strong id="cv-aanvragen">${r.aanvragen}</strong><span>aanvragen via de knop</span></div>` : ''}
       <div><strong>${r.reacties ?? 0}</strong><span>reacties (14 d)</span></div><div><strong>${r.opdrachten ?? 0}</strong><span>nieuwe opdrachten (30 d)</span></div>
       ${'omzet' in r ? `<div class="cv-geld"><strong>€ ${Number(r.omzet || 0).toFixed(0)}</strong><span>omzet excl. btw</span></div>` : ''}
     </div>

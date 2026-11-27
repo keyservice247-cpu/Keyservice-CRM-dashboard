@@ -252,6 +252,51 @@ export function withRelations(order, maps) {
     merkInfo: merkVan(order), annuleerInfo: order.status === 'geannuleerd' ? redenVan(order) : null };
 }
 
+// FOTO'S DIE DE KLANT AL HAD GESTUURD KOMEN OP DE OPDRACHT (28 nov 2026, klacht eigenaar: "een
+// klant had foto's gestuurd via WhatsApp maar in de opdracht staan ze niet"). Oorzaak: een appje
+// van een klant hangt alleen vanzelf aan een opdracht als die opdracht er AL is. Stuurt de klant
+// zijn vraag en vijf foto's achter elkaar, dan bestaat de opdracht nog niet: de foto's bleven als
+// losse berichten in Berichten staan en kwamen er nooit op.
+// Regels (vast, geen AI): alleen 1-op-1 WhatsApp, alleen van het ECHTE afzendernummer dat bij deze
+// opdracht hoort (intake-nummer of klantnummer — harde identificator, Regel 2), alleen berichten
+// met een bijlage, vanaf 24 uur vóór het aanmaken van de opdracht. Een foto die al op een andere
+// opdracht staat blijft daar. De klant en de opdracht zelf veranderen verder niet.
+export function neemLosseFotosMee(order, { door = 'systeem' } = {}) {
+  if (!order || order.deletedAt) return 0;
+  const customer = (db().customers || []).find((c) => c.id === order.customerId) || {};
+  const nummers = new Set([matchPhone((order.intake && order.intake.phone) || ''), matchPhone(customer.phone || '')].filter((n) => n && n.length >= 9));
+  if (!nummers.size) return 0;
+  const vanaf = new Date(order.createdAt || Date.now()).getTime() - 24 * 3600000;
+  const elders = new Set();
+  for (const o of db().orders || []) if (o.id !== order.id) for (const a of o.attachments || []) if (a && a.file) elders.add(a.file);
+  const reviewVan = new Map((db().reviews || []).map((r) => [r.messageId, r]));
+  let erbij = 0;
+  for (const m of db().messages || []) {
+    if (m.channel !== 'whatsapp' || m.group || !(m.attachments || []).length) continue;
+    if (new Date(m.receivedAt || 0).getTime() < vanaf) continue;
+    if (!nummers.has(matchPhone(m.fromPhone || senderPhoneFromText(m.body) || ''))) continue;
+    const rev = reviewVan.get(m.id);
+    if (rev && rev.orderId && rev.orderId !== order.id) continue;      // hoort bij een andere opdracht
+    const nieuw = m.attachments.filter((a) => a && a.file && !elders.has(a.file));
+    if (!nieuw.length) continue;
+    const voor = (order.attachments || []).length;
+    order.attachments = mergeAttachments(order.attachments || [], nieuw);
+    const n = order.attachments.length - voor;
+    if (!n) continue;                                                   // stond er al op
+    erbij += n;
+    order.thread = order.thread || [];
+    order.thread.push({ id: id('thr'), channel: 'whatsapp', sender: m.sender || '', subject: '', body: m.body || '(bijlage)', at: m.receivedAt, attachments: nieuw, uitLosBericht: m.id });
+    // Stond het losse bericht nog te wachten in de inbox? Dan is het hiermee afgehandeld.
+    if (rev && !rev.orderId && rev.status === 'pending') { rev.status = 'approved'; rev.orderId = order.id; rev.mergedIntoOrder = order.id; rev.reviewedBy = door; rev.reviewedAt = now(); rev.meegenomen = true; }
+  }
+  if (erbij) {
+    order.thread.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+    logActivity(door, "foto's van de klant bij de opdracht gezet", `${order.title}: ${erbij} uit eerdere WhatsApp-berichten`);
+    saveSoon();
+  }
+  return erbij;
+}
+
 // Maak van een (goedgekeurde) review een echte opdracht + klant.
 export function applyReview(review, { actorName, overrides = {}, auto = false }) {
   const s = review.suggestion;
@@ -374,6 +419,7 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
     logActivity(actorName, 'aanvraag automatisch samengevoegd', `${customer.name || 'klant'}: ${openOrder.title} (binnen ${mergeWindowH}u)`);
     sendPush({ title: 'Aanvraag samengevoegd', body: `${customer.name || 'Klant'}: extra aanvraag toegevoegd aan "${openOrder.title}"`, url: '/' }).catch(() => {});
     pushNaarMonteur(openOrder, { title: 'Extra aanvraag van je klant', body: `${customer.name || 'Klant'}: toegevoegd aan "${openOrder.title}"` });
+    try { neemLosseFotosMee(openOrder, { door: actorName }); } catch (e) { console.error('[losse-fotos]', e.message); }
     saveSoon();
     return openOrder;
   }
@@ -470,6 +516,8 @@ export function applyReview(review, { actorName, overrides = {}, auto = false })
   review.correctedStatus = (humanPicked && normalizeStatus(overrides.status) !== normalizeStatus(aiThought)) ? status : null;
   review.reviewedBy = actorName;
   review.reviewedAt = now();
+  // Foto's die dezelfde klant vlak daarvoor los had geappt horen ook op deze opdracht.
+  try { neemLosseFotosMee(order, { door: actorName }); } catch (e) { console.error('[losse-fotos]', e.message); }
 
   // Mens heeft de AI-categorie GECORRIGEERD -> dit is het sterkste leersignaal.
   // Sla het op zodat de AI het de volgende keer meeneemt.

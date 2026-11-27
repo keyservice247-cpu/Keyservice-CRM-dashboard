@@ -28,6 +28,7 @@ export function bronVan(o, msgById) {
   if ((o.originGroup && isWhatsappOrderGroup(o.originGroup)) || /\bdrs\b/.test(src)) return 'DRS-groep';
   const m = o.messageId && msgById ? msgById.get(o.messageId) : null;
   if (/website/.test(src) || (m && (/website/i.test(m.mailbox || '') || /^nieuwe aanvraag via de website/i.test(m.body || '')))) return 'Website';
+  if (/campagne/.test(src)) return 'Campagne';
   if (/e-?mail/.test(src)) return 'E-mail';
   if (/whatsapp/.test(src)) return 'WhatsApp (1-op-1)';
   if (/telefoon/.test(src)) return 'Telefoon';

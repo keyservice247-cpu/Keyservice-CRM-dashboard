@@ -625,6 +625,48 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   de browser) hadden steeds precies één opdracht in de prullenbak. Test: rollen-test 144 (+2: drie
   opdrachten in de prullenbak, rood op de oude code).
 
+- **FOTO'S VAN DE KLANT OP DE OPDRACHT (28 nov 2026, klacht eigenaar "klant stuurde foto's via
+  WhatsApp, maar in de opdracht staan ze niet"):** OORZAAK: een appje hangt alleen aan een opdracht
+  als die opdracht er al is. Stuurt de klant zijn foto's samen met (of vlak na) zijn eerste vraag,
+  dan zijn dat LOSSE berichten: zichtbaar in Berichten, niet in de opdracht. FIX:
+  `neemLosseFotosMee(order)` (pipeline.js) — bij goedkeuren (nieuwe opdracht én zelfde-moment-
+  samenvoeging in `applyReview`) en bij een handmatige opdracht (POST /api/orders) gaan de foto's
+  uit losse 1-op-1 WhatsApp-berichten mee: bijlagen op de opdracht (ontdubbeld via
+  `mergeAttachments`) + het bericht in het gesprek (`uitLosBericht`); een nog wachtend inbox-bericht
+  met alleen foto's wordt afgehandeld (`meegenomen`). REGELS (WET 2 blijft): alleen het ECHTE
+  afzendernummer (`fromPhone`, nooit een nummer uit de tekst, nooit een groep) dat gelijk is aan het
+  nummer van de opdracht of de klant; alleen berichten vanaf 24 uur vóór de opdracht; niets wat al
+  bij een andere opdracht hoort. EENMALIG bij het opstarten (`losseFotosInhaalslag`,
+  `settings._losseFotosV1`): lopende opdrachten krijgen de foto's die er al lagen. Testhaak (alleen
+  demo-login, `WA_ROUTE_TEST=1`): POST /api/whatsapp/test-fotos-inhaal. Test: whatsapp-route-test
+  47 (+9). Vóór de inhaalslag maakt de server eerst een back-up.
+  LES (28 nov): bij het vervangen van de /k-route haalde een script per ongeluk 157 regels weg
+  (o.a. `akkoordInhaalslag`) — `node --check` zag niets, de server crashte pas na 15 s; de volledige
+  testronde ving het op vóór de commit. REGEL: na een blokvervanging altijd `git diff --stat`
+  nalopen op onverwachte verwijderde regels.
+- **CAMPAGNEKNOP = AANVRAAG IN HET CRM (28 nov 2026, wens eigenaar "die knop 'plan onderhoud' moet
+  een opdrachtkaart maken met alle gegevens en bron"):** nieuw knopsoort `aanvraag`
+  (`KNOP_SOORTEN`), STANDAARD bij de drie sjablonen en in het scherm (`#cm-knopsoort`: "Klant
+  vraagt contact aan → nieuwe opdracht in het CRM"; bellen/WhatsApp/mailen/website/geen blijven te
+  kiezen). De knop in de mail is de ondertekende link `/k/<campagne>/<klant>/<sig>`: OPENEN (GET)
+  toont alleen een pagina met één knop "Ja, neem contact met mij op" + een optioneel
+  opmerkingenveld (mailscanners openen links vanzelf — NIET terugzetten naar aanmaken op GET); de
+  KNOP (POST) roept `maakCampagneAanvraag()` aan: NIEUWE opdracht in de eerste kolom, titel
+  "<Plaats> — Aanvraag via campagne: <kop>", bron "Campagne (e-mail)" (Cijfers/conversie: bron
+  "Campagne"), `order.intake` = naam/telefoon/e-mail/adres van de klant, de opmerking in de
+  omschrijving, `order.campagneAanvraag {campagneId, naam, at}`, systeemregel in het gesprek,
+  "klant reageerde" (bord-badge + Start) en een push naar kantoor. Geen monteur, geen afspraak, niets
+  naar een groep: een mens plant in. Heeft de klant al een lopende opdracht → tóch een nieuwe
+  opdracht + `mergeSuggestion` (Lead-instroom Regel 1: een mens voegt samen). Eén aanvraag per
+  klant per campagne zolang die opdracht loopt (dubbel tikken = "Bedankt", niets dubbel); is de
+  opdracht afgehandeld en tikt de klant meer dan een dag later weer, dan is dat een nieuwe aanvraag
+  (`lopendeAanvraag`). Voorbeeld in het scherm: knop zonder link; testmail en proefmail: knop naar
+  `/k/proef` (uitleg, er gebeurt niets). Uitslag: `campagneResultaat.aanvragen` (null bij een andere
+  knop), tegel "aanvragen via de knop", `ontvangers[].aanvraag`. Testhaak: `x-test-later: dag`
+  (twee dagen later; alleen met CAMPAGNE_TEST=1 + demo-login). Campagnes staan op de live-site nog
+  steeds UIT tot de eigenaar ze aanzet. Tests: campagne-test 122 (+18), browser +1.
+  Stand 28 nov 2026: 34 serversuites 1.830 + browser 550 + browser-rechten 23 = 2.403, 0 fouten.
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)

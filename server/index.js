@@ -60,8 +60,7 @@ import { amsterdamParts, amsMidnightMs, weekBounds } from './week.js';
 import {
   autoApproveThreshold, upsertCustomer, withRelations, applyReview, ingestMessage, buildMaps,
   findCustomerStrong, senderPhoneFromText, matchPhone, queueCrmWhatsappAlert,
-  nooitKlantMail,
-} from './pipeline.js';
+  nooitKlantMail, neemLosseFotosMee } from './pipeline.js';
 import { startEmailPoller, appendSentMail } from './connectors/email-imap.js';
 import { onbeantwoordeGesprekken, wachtOpAntwoordDagen, voorbeeldTekst } from './gesprekken.js';
 import { eerstDoenLijst, zonderAfgevinkt, afIdVan } from './eerst-doen.js';
@@ -1459,12 +1458,36 @@ const AFMELD_FOUT = ['Deze link werkt niet', 'De afmeldlink is niet geldig of ni
 // KLIKTELLER (27 nov 2026): de knop in een campagnemail komt hier langs. De klik wordt bij die
 // ontvanger genoteerd en de klant gaat meteen door naar het echte doel (bellen, WhatsApp, mail
 // of de website). Geen inlog; de link is ondertekend. Werkt ook als Campagnes later uit staan.
-app.all('/k/:cid/:kid/:sig', (req, res) => {
+// Knop "aanvraag" in een voorbeeld-, test- of proefmail (er is dan geen klant): uitleg.
+app.get('/k/proef', (req, res) => {
+  afmeldKop(res);
+  res.send(afmeldPagina('Dit is een proef', 'Bij een echte klant opent deze knop een korte pagina: "Ja, neem contact met mij op". Tikt de klant daarop, dan staat er in het CRM een nieuwe opdracht klaar met zijn gegevens en de campagne als bron. In deze proefmail gebeurt er niets.'));
+});
+app.all('/k/:cid/:kid/:sig', express.urlencoded({ extended: false, limit: '8kb' }), (req, res) => {
   afmeldKop(res);
   const geldig = /^[\w-]{3,80}$/.test(String(req.params.cid || '')) && /^[\w-]{3,80}$/.test(String(req.params.kid || '')) && /^[0-9a-f]{24}$/.test(String(req.params.sig || ''));
   // Alleen in de eigen test: doen alsof de klik een minuut later komt (anders 61 s wachten).
-  const later = process.env.CAMPAGNE_TEST === '1' && demoLoginToegestaan() && req.get('x-test-later') ? 61000 : 0;
+  // ('dag' = twee dagen later, voor "de klant tikt later nog eens op de knop".)
+  const later = process.env.CAMPAGNE_TEST === '1' && demoLoginToegestaan() && req.get('x-test-later') ? (req.get('x-test-later') === 'dag' ? 2 * 86400000 : 61000) : 0;
   const r = geldig ? campagnes.registreerKlik(String(req.params.cid), String(req.params.kid), String(req.params.sig), { methode: req.method, agent: req.get('user-agent') || '', nu: Date.now() + later }) : null;
+  // KNOP "AANVRAAG" (28 nov 2026): de link openen toont een korte bevestigingspagina; pas de knop
+  // daarop (POST) zet de aanvraag als opdracht in het CRM.
+  if (r && r.soort === 'aanvraag') {
+    const pad = `/k/${encodeURIComponent(req.params.cid)}/${encodeURIComponent(req.params.kid)}/${req.params.sig}`;
+    const bedankt = () => afmeldPagina('Bedankt, wij nemen contact met u op', `Uw aanvraag is bij ons binnen. Wij bellen of mailen u zo snel mogelijk om een afspraak te maken.${r.bedrijf.telefoon ? ` Liever zelf bellen? ${escHtml(r.bedrijf.telefoon)}.` : ''}`);
+    if (req.method === 'POST') {
+      const uit = campagnes.maakCampagneAanvraag(String(req.params.cid), String(req.params.kid), String(req.params.sig), { opmerking: req.body && req.body.opmerking, nu: Date.now() + later });
+      if (!uit) return res.status(404).send(afmeldPagina('Deze link werkt niet', 'De link is niet geldig of niet compleet. Antwoord op de e-mail, dan helpen wij u verder.'));
+      if (!uit.bestaand) sendPush({ title: 'Aanvraag via campagne', body: `${uit.klant.name || 'Een klant'} vroeg via "${uit.campagne.naam}" om contact. Er staat een nieuwe opdracht klaar.`, url: `/?open=${uit.order.id}`, tag: `cmp-aanvraag-${uit.order.id}` }).catch(() => {});
+      return res.send(bedankt());
+    }
+    if (req.method !== 'GET') return res.status(204).end();
+    if (r.alAangevraagd) return res.send(bedankt());
+    return res.send(afmeldPagina(escHtml(r.kop || r.knopTekst), 'Zullen wij contact met u opnemen om een afspraak te maken? Bevestig dat hieronder. U zit nergens aan vast.',
+      `<form method="post" action="${pad}">
+        <label style="display:block;margin-top:18px;font-size:14px;color:#4a5466">Wilt u iets doorgeven? (optioneel — bijvoorbeeld wanneer het u past)<textarea name="opmerking" maxlength="600" rows="3" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;font:inherit;padding:10px;border:1px solid #c9d0db;border-radius:8px"></textarea></label>
+        <button type="submit" style="width:100%">Ja, neem contact met mij op</button></form>`));
+  }
   if (!r || !r.doel) return res.status(r ? 200 : 404).send(afmeldPagina(r ? 'Neem contact met ons op' : 'Deze link werkt niet', r ? `Bel ons op ${escHtml(r.bedrijf.telefoon || '')} of antwoord op de e-mail, dan helpen wij u verder.` : 'De link is niet geldig of niet compleet. Antwoord op de e-mail, dan helpen wij u verder.'));
   if (req.method !== 'GET') return res.status(204).end();
   const doel = escHtml(r.doel);
@@ -2276,6 +2299,8 @@ app.post('/api/orders', requireAuth, requireKaartMaken, (req, res) => {
     order.intake = { name: String(b.customerName || '').slice(0, 120), phone: String(b.customerPhone || '').slice(0, 40), email: String(b.customerEmail || '').slice(0, 120), address: String(b.customerAddress || '').slice(0, 200) };
   }
   db().orders.push(order);
+  // Had deze klant al foto's geappt (bv. vóór je de opdracht met de hand aanmaakte)? Die horen erbij.
+  try { neemLosseFotosMee(order, { door: req.user.name }); } catch (e) { console.error('[losse-fotos]', e.message); }
   logActivity(req.user.name, zelf ? 'opdracht zelf aangemaakt (monteur)' : 'opdracht aangemaakt', order.title);
   saveSoon();
   if (order.appointmentAt) {
@@ -3247,6 +3272,19 @@ function wachtVoorStart() {
 // ALLES WAAR START UIT BESTAAT, per onderdeel met een `afId` (25 nov 2026, zie start-af.js).
 // Ongefilterd: de route haalt eruit wat is afgevinkt, en de afvink-route gebruikt dezelfde
 // lijsten om te weten wat er NU is (alleen dat kan worden afgevinkt).
+function losseFotosInhaalslag({ opnieuw = false } = {}) {
+  const st = db().settings; if (st._losseFotosV1 && !opnieuw) return { al: true };
+  st._losseFotosV1 = now();
+  let opdrachten = 0; let fotos = 0;
+  for (const o of db().orders || []) {
+    if (o.deletedAt || o.archivedWeek || ['afgerond', 'geannuleerd'].includes(o.status)) continue;
+    const n = neemLosseFotosMee(o, { door: 'systeem (inhaalslag)' });
+    if (n) { opdrachten++; fotos += n; }
+  }
+  if (fotos) logActivity('systeem', "foto's alsnog bij opdrachten gezet", `${fotos} bij ${opdrachten} lopende opdracht(en)`);
+  saveSoon();
+  return { opdrachten, fotos };
+}
 // Offertes waar de klant via de akkoordknop "ja" op zei en die nog niet zijn ingepland
 // (27 nov 2026, eigenaar: "ik ging akkoord maar zie het nergens in het CRM terug"). Weg zodra
 // er een afspraak staat (op de opdracht of een andere opdracht van dezelfde klant), de opdracht
@@ -3469,6 +3507,7 @@ if (process.env.WA_ROUTE_TEST === '1' && demoLoginToegestaan()) {
     outboxOnderhoud();
     res.json({ ok: true });
   });
+  app.post('/api/whatsapp/test-fotos-inhaal', requireRole('admin'), (req, res) => res.json(losseFotosInhaalslag({ opnieuw: true })));
 }
 const whatsappAutoUit = () => ({ lijst: WHATSAPP_AUTO, stand: getWhatsappAuto(), kan: !klantWhatsappBlokkade(), blokkade: klantWhatsappBlokkade() });
 app.get('/api/whatsapp/automatisch', requirePerm('settings'), (req, res) => res.json(whatsappAutoUit()));
@@ -7771,6 +7810,14 @@ app.listen(PORT, () => {
     } catch (e) { console.error('[campagne-onderhoud]', e.message); }
   };
   setTimeout(() => { akkoordInhaalslag().catch((e) => console.error('[akkoord-inhaal]', e.message)); }, 15 * 1000);
+  // EENMALIG (28 nov 2026): lopende opdrachten krijgen alsnog de foto's die hun klant los had
+  // geappt voordat de opdracht bestond (stonden wel in Berichten, niet in de opdracht).
+  // Eerst een back-up (terugzetten: Instellingen → Systeem & back-ups → Back-up terugzetten).
+  setTimeout(async () => {
+    if (db().settings._losseFotosV1) return;
+    try { await backupNowAsync('voor foto-inhaalslag'); } catch (e) { console.error('[fotos-inhaal] back-up', e.message); }
+    try { losseFotosInhaalslag(); } catch (e) { console.error('[fotos-inhaal]', e.message); }
+  }, 25 * 1000);
   setTimeout(onderhoudRonde, 90 * 1000);
   setInterval(onderhoudRonde, 60 * 60 * 1000);
   // Officiële WhatsApp (uitgaand, klant-DM). Doet niets zolang de koppeling uit staat.

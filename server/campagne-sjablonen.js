@@ -15,22 +15,26 @@ export const SJABLONEN = [
     kleur: '#1f4e9c', zacht: '#eef3fb', kop: 'Loopt uw schuifpui nog soepel?',
     onderwerp: 'Een onderhoudsbeurt voor uw schuifpui',
     tekst: 'Beste {naam},\n\nEen schuifpui die elk jaar even wordt nagekeken en gesmeerd, blijft licht lopen en goed sluiten. Dat voorkomt tocht, slijtage aan de loopwagens en dure reparaties.\n\nWilt u dat wij langskomen voor een onderhoudsbeurt? Bel ons of antwoord op deze e-mail, dan plannen we een moment dat u past.',
-    knopTekst: 'Plan een onderhoudsbeurt', knopSoort: 'bel' },
+    knopTekst: 'Plan een onderhoudsbeurt', knopSoort: 'aanvraag' },
   { key: 'kozijn', naam: 'Kozijnonderhoud', uitleg: 'Groene kop. Voor onderhoud van kozijnen, ramen en deuren: afstellen, smeren, tochtstrips.',
     kleur: '#2f6f4f', zacht: '#edf6f1', kop: 'Klemt er een raam of deur?',
     onderwerp: 'Onderhoud voor uw kozijnen, ramen en deuren',
     tekst: 'Beste {naam},\n\nRamen en deuren die klemmen, tochten of niet meer goed sluiten, zijn meestal met een onderhoudsbeurt weer in orde: hang- en sluitwerk afstellen, smeren en waar nodig de tochtstrips vervangen.\n\nZullen wij uw kozijnen een keer nalopen? Bel ons of antwoord op deze e-mail voor een afspraak.',
-    knopTekst: 'Maak een afspraak', knopSoort: 'bel' },
+    knopTekst: 'Maak een afspraak', knopSoort: 'aanvraag' },
   { key: 'sloten', naam: 'Sloten & cilinders', uitleg: 'Donkere kop met geel accent. Voor sloten, cilinders en inbraakpreventie.',
     kleur: '#1b2330', zacht: '#f6f4ea', accent: '#f2b705', kop: 'Zijn uw sloten nog veilig genoeg?',
     onderwerp: 'Zijn uw sloten nog veilig genoeg?',
     tekst: 'Beste {naam},\n\nEen goed slot met een SKG-keurmerk maakt het een inbreker een stuk lastiger. Oudere cilinders zijn vaak binnen een minuut open; een nieuwe cilinder met kerntrekbeveiliging is snel geplaatst.\n\nWij kijken graag vrijblijvend met u mee of uw sloten nog voldoen. Bel ons of antwoord op deze e-mail.',
-    knopTekst: 'Laat uw sloten nakijken', knopSoort: 'bel' },
+    knopTekst: 'Laat uw sloten nakijken', knopSoort: 'aanvraag' },
 ];
 const OP_KEY = new Map(SJABLONEN.map((s) => [s.key, s]));
 export const isSjabloon = (key) => OP_KEY.has(key);
 export const sjabloonVan = (key) => OP_KEY.get(key) || OP_KEY.get('tekst');
-export const KNOP_SOORTEN = ['bel', 'whatsapp', 'mail', 'site', 'geen'];
+// 'aanvraag' (28 nov 2026, wens eigenaar): de knop zet een AANVRAAG in het CRM — de klant komt op
+// een korte bevestigingspagina, tikt op "Ja" en er staat een opdracht klaar met zijn gegevens en
+// de campagne als bron. Dit is de standaard van de drie sjablonen; bellen/WhatsApp/mail/site
+// blijven te kiezen.
+export const KNOP_SOORTEN = ['aanvraag', 'bel', 'whatsapp', 'mail', 'site', 'geen'];
 
 /** Welk sjabloon past bij een doelgroep (voor de voorstellen uit vaste regels). */
 export const sjabloonVoorDoelgroep = (doelgroep) => (['schuifpui', 'onderhoud'].includes(doelgroep) ? 'schuifpui' : doelgroep === 'sloten' ? 'sloten' : 'tekst');
@@ -80,7 +84,8 @@ export function bouwCampagneHtml(in_) {
   const sj = sjabloonVan(opmaak.sjabloon);
   if (sj.key === 'tekst') return '';
   const kop = esc(opmaak.kop || sj.kop);
-  const doel = knopDoel(opmaak.knopSoort || sj.knopSoort, bedrijf, onderwerp);
+  // Bij 'aanvraag' is er geen los doel: de knop gaat altijd via de link van het CRM (knopUrl).
+  const doel = (opmaak.knopSoort || sj.knopSoort) === 'aanvraag' ? knopUrl : knopDoel(opmaak.knopSoort || sj.knopSoort, bedrijf, onderwerp);
   const knopTekst = esc(opmaak.knopTekst || sj.knopTekst);
   const knopKleur = sj.accent || sj.kleur; const knopInkt = sj.accent ? '#1b2330' : '#ffffff';
   const knop = doel && (opmaak.knopSoort || sj.knopSoort) !== 'geen' ? `

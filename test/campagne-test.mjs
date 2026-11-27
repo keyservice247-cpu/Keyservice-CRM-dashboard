@@ -96,10 +96,12 @@ const DIR = mkdtempSync(join(tmpdir(), 'crm-campagne-'));
 {
   const bedrijf = { naam: 'Key Service 24/7', telefoon: '085 060 2359', email: 'info@voorbeeld.test', website: 'www.voorbeeld.test', whatsapp: '' };
   ok('opmaak: vier keuzes — alleen tekst en de drie vaste sjablonen (schuifpuien, kozijnonderhoud, sloten & cilinders), elk met kop, tekst en knop', SJABLONEN.map((x) => x.key).join() === 'tekst,schuifpui,kozijn,sloten' && SJABLONEN.slice(1).every((x) => x.kop && x.onderwerp && /\{naam\}/.test(x.tekst) && x.knopTekst && x.kleur));
-  ok('opmaak: een onbekend sjabloon wordt "alleen tekst"; lege kop/knop krijgen de standaard van het sjabloon', leesOpmaak({ sjabloon: 'iets-anders', kop: 'x' }).sjabloon === 'tekst' && !('kop' in leesOpmaak({ sjabloon: 'tekst', kop: 'x' })) && leesOpmaak({ sjabloon: 'kozijn' }).kop === SJABLONEN[2].kop && leesOpmaak({ sjabloon: 'sloten', knopSoort: 'raar' }).knopSoort === 'bel');
-  const html = bouwCampagneHtml({ opmaak: leesOpmaak({ sjabloon: 'schuifpui', kop: 'Kop <b>met</b> haakjes' }), onderwerp: 'Proef', tekst: 'Beste Jan,\n\nRegel één\nregel twee <script>alert(1)</script>', bedrijf, afmeldUrl: 'https://voorbeeld.test/afmelden/k1/abc', logoSrc: 'cid:kslogo', fotoSrc: 'cid:kopfoto' });
+  ok('opmaak: een onbekend sjabloon wordt "alleen tekst"; lege kop/knop krijgen de standaard van het sjabloon', leesOpmaak({ sjabloon: 'iets-anders', kop: 'x' }).sjabloon === 'tekst' && !('kop' in leesOpmaak({ sjabloon: 'tekst', kop: 'x' })) && leesOpmaak({ sjabloon: 'kozijn' }).kop === SJABLONEN[2].kop && leesOpmaak({ sjabloon: 'sloten', knopSoort: 'raar' }).knopSoort === 'aanvraag' && leesOpmaak({ sjabloon: 'sloten', knopSoort: 'bel' }).knopSoort === 'bel');
+  const html = bouwCampagneHtml({ opmaak: leesOpmaak({ sjabloon: 'schuifpui', kop: 'Kop <b>met</b> haakjes', knopSoort: 'bel' }), onderwerp: 'Proef', tekst: 'Beste Jan,\n\nRegel één\nregel twee <script>alert(1)</script>', bedrijf, afmeldUrl: 'https://voorbeeld.test/afmelden/k1/abc', logoSrc: 'cid:kslogo', fotoSrc: 'cid:kopfoto' });
   ok('opmaak: de mail heeft logo, kop, foto, tekst in alinea\'s, een bel-knop, de bedrijfsgegevens en de afmeldlink', /cid:kslogo/.test(html) && /<h1[^>]*>Kop/.test(html) && /cid:kopfoto/.test(html) && /Regel één<br>regel twee/.test(html) && /href="tel:0850602359"/.test(html) && /085 060 2359/.test(html) && /href="https:\/\/voorbeeld\.test\/afmelden\/k1\/abc"/.test(html));
   ok('opmaak: wat de gebruiker typt kan nooit opmaak of code worden (alles ge-escaped)', !/<script>/.test(html) && /&lt;script&gt;/.test(html) && !/<b>met<\/b>/.test(html));
+  const htmlA = (knopUrl) => bouwCampagneHtml({ opmaak: leesOpmaak({ sjabloon: 'schuifpui' }), tekst: 'x', bedrijf, knopUrl }).replace(/<a href="[^"]*afmelden[^"]*"/, '');
+  ok('opmaak: de knop "aanvraag" gaat alleen naar de meegegeven link van die klant — zonder link staat er geen knop (nooit stiekem bellen)', /href="https:\/\/voorbeeld\.test\/k\/c1\/k1\/abc"/.test(htmlA('https://voorbeeld.test/k/c1/k1/abc')) && !/href="tel:/.test(htmlA('https://voorbeeld.test/k/c1/k1/abc')) && !/<a href/.test(htmlA('')));
   ok('opmaak: "alleen tekst" geeft geen HTML (de gewone mail met handtekening)', bouwCampagneHtml({ opmaak: { sjabloon: 'tekst' }, tekst: 'x', bedrijf }) === '');
   ok('opmaak: de knop — bellen, mailen, website; WhatsApp alleen met een ingesteld nummer (06 → 316…); zonder doel geen knop', knopDoel('bel', bedrijf) === 'tel:0850602359' && /^mailto:info@voorbeeld\.test\?subject=/.test(knopDoel('mail', bedrijf, 'Proef')) && knopDoel('site', bedrijf) === 'https://www.voorbeeld.test' && knopDoel('whatsapp', bedrijf) === '' && knopDoel('whatsapp', { whatsapp: '06 12345678' }) === 'https://wa.me/31612345678'
     && !/<a href/.test(bouwCampagneHtml({ opmaak: leesOpmaak({ sjabloon: 'sloten', knopSoort: 'geen' }), tekst: 'x', bedrijf }).replace(/<a href="[^"]*afmelden[^"]*"/, '')) && !/wa\.me/.test(bouwCampagneHtml({ opmaak: leesOpmaak({ sjabloon: 'sloten', knopSoort: 'whatsapp' }), tekst: 'x', bedrijf })));
@@ -345,7 +347,7 @@ try {
     const overzicht = (await api('GET', '/api/campagnes', null, ass)).json;
     ok('het scherm krijgt de sjablonen en de bedrijfsgegevens voor onder de mail', (overzicht.sjablonen || []).length === 4 && !!overzicht.bedrijf && !!overzicht.bedrijf.naam, JSON.stringify((overzicht.sjablonen || []).map((x) => x.key)));
     for (let i = 1; i <= 2; i++) await api('POST', '/api/customers', { name: `Opmaak Klant ${i}`, email: `opmaak${i}@campagne.test`, address: `Singel ${i}, 3701 AA Zeist` }, admin);
-    const co = (await api('POST', '/api/campagnes', { naam: 'Opmaak', onderwerp: 'Een onderhoudsbeurt voor uw schuifpui', tekst: 'Beste {naam},\n\nUw schuifpui in {plaats} verdient onderhoud.', doelgroep: 'plaats', params: { plaats: 'Zeist' }, opmaak: { sjabloon: 'schuifpui', kop: 'Loopt uw pui nog licht?', knopTekst: 'Bel voor onderhoud' } }, ass)).json;
+    const co = (await api('POST', '/api/campagnes', { naam: 'Opmaak', onderwerp: 'Een onderhoudsbeurt voor uw schuifpui', tekst: 'Beste {naam},\n\nUw schuifpui in {plaats} verdient onderhoud.', doelgroep: 'plaats', params: { plaats: 'Zeist' }, opmaak: { sjabloon: 'schuifpui', kop: 'Loopt uw pui nog licht?', knopTekst: 'Bel voor onderhoud', knopSoort: 'bel' } }, ass)).json;
     ok('een campagne onthoudt het sjabloon, de kop en de knoptekst', co.opmaak && co.opmaak.sjabloon === 'schuifpui' && co.opmaak.kop === 'Loopt uw pui nog licht?' && co.opmaak.knopTekst === 'Bel voor onderhoud' && co.foto === false, JSON.stringify(co.opmaak));
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAoAAAAGCAYAAAD68A/GAAAAFklEQVR42mP8z8Dwn4EIwDiqkL4KAZ0jBf3bV1p1AAAAAElFTkSuQmCC';
     const teGroot = await api('POST', `/api/campagnes/${co.id}/foto`, { mime: 'image/png', dataBase64: Buffer.alloc(1600 * 1024, 1).toString('base64') }, ass);
@@ -398,6 +400,62 @@ try {
     const vbKlik = (await api('POST', '/api/campagnes/voorbeeld-html', { id: co.id, onderwerp: co.onderwerp, tekst: co.tekst, opmaak: co.opmaak }, ass)).json;
     ok('in het voorbeeld in het scherm zit geen klik-link (alleen in de echte mail)', !/\/k\//.test(vbKlik.html) && /href="tel:/.test(vbKlik.html));
 
+    // ---------- KNOP "AANVRAAG" (28 nov 2026) ----------
+    console.log('\n== Knop "aanvraag": een tik op de knop wordt een opdracht in het CRM ==');
+    const ka = [];
+    for (let i = 1; i <= 3; i++) ka.push((await api('POST', '/api/customers', { name: `Aanvraag Klant ${i}`, email: `aanvraag${i}@campagne.test`, phone: `06 5550 010${i}`, address: `Kerkpad ${i}, 3981 AA Bunnik` }, admin)).json);
+    const lopend = (await api('POST', '/api/orders', { customerId: ka[1].id, title: 'Bunnik — slot klemt' }, admin)).json;
+    const ca = (await api('POST', '/api/campagnes', { naam: 'Onderhoud najaar', onderwerp: 'Tijd voor onderhoud', tekst: 'Beste {naam}', doelgroep: 'plaats', params: { plaats: 'Bunnik' }, opmaak: { sjabloon: 'schuifpui', kop: 'Plan een onderhoudsbeurt', knopTekst: 'Plan onderhoud' } }, ass)).json;
+    ok('een sjabloon zet de knop standaard op "aanvraag in het CRM"', ca.opmaak.knopSoort === 'aanvraag', JSON.stringify(ca.opmaak));
+    const vbA = (await api('POST', '/api/campagnes/voorbeeld-html', { id: ca.id, onderwerp: ca.onderwerp, tekst: ca.tekst, opmaak: ca.opmaak }, ass)).json;
+    ok('voorbeeld: de knop staat erin, zonder echte link (geen klant, dus ook geen aanvraag)', /Plan onderhoud/.test(vbA.html) && !/\/k\//.test(vbA.html) && !/href="tel:/.test(vbA.html));
+    mails.length = 0;
+    await api('POST', `/api/campagnes/${ca.id}/test`, { naar: 'baas@campagne.test' }, ass);
+    for (let i = 0; i < 30 && mails.length < 1; i++) await slaap(200);
+    const testMailA = (mails[0] || '').replace(/=\r?\n/g, '').replace(/=3D/g, '=');
+    const proefPagina = await fetch(`${BASE}/k/proef`);
+    ok('testmail: de knop gaat naar een uitlegpagina (/k/proef), nooit naar de aanvraag van een klant', mails.length === 1 && /\/k\/proef/.test(testMailA) && !new RegExp(`/k/${ca.id}/`).test(testMailA) && proefPagina.status === 200 && /Dit is een proef/.test(await proefPagina.text()), testMailA.match(/\/k\/[^"\s]*/g));
+    mails.length = 0;
+    await api('POST', `/api/campagnes/${ca.id}/start`, {}, ass);
+    for (let i = 0; i < 40 && mails.length < 3; i++) await slaap(200);
+    const alleA = mails.map((m) => m.replace(/=\r?\n/g, '').replace(/=3D/g, '=')).join('\n');
+    const padVan = (k) => (alleA.match(new RegExp(`/k/${ca.id}/${k.id}/[0-9a-f]{24}`)) || [''])[0];
+    const pad1 = padVan(ka[0]); const pad2 = padVan(ka[1]); const pad3 = padVan(ka[2]);
+    const campagneOrders = async () => (await api('GET', '/api/orders', null, admin)).json.filter((o) => /^Campagne/.test(o.source || ''));
+    ok('elke klant krijgt zijn eigen ondertekende link in de knop', mails.length === 3 && !!pad1 && !!pad2 && !!pad3 && pad1 !== pad2, JSON.stringify([pad1, pad2, pad3]));
+    const later = { ...mens, 'x-test-later': '1' };
+    const g1 = await fetch(BASE + pad1, { headers: later }); const g1html = await g1.text();
+    ok('de link OPENEN toont alleen een bevestigingspagina met één knop — er wordt niets aangemaakt en niet doorgestuurd', g1.status === 200 && /<form method="post"/.test(g1html) && /Ja, neem contact met mij op/.test(g1html) && /Plan een onderhoudsbeurt/.test(g1html) && !/http-equiv="refresh"/.test(g1html) && (await campagneOrders()).length === 0, g1html.slice(0, 200));
+    await fetch(BASE + pad1, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; Barracuda Link Scanner)', 'x-test-later': '1' } });
+    await fetch(BASE + pad1, { method: 'HEAD', headers: later });
+    ok('een virusscanner of mailprogramma dat de link opent maakt geen opdracht', (await campagneOrders()).length === 0 && (await uitslag(ca.id)).resultaat.aanvragen === 0);
+    const formulier = (velden) => ({ method: 'POST', headers: { ...later, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(velden).toString() });
+    const p1 = await fetch(BASE + pad1, formulier({ opmerking: 'Liefst op een dinsdag. <b>dank</b>' })); const p1html = await p1.text();
+    const na1 = await campagneOrders(); const o1 = na1[0] || {};
+    ok('de knop op die pagina zet een NIEUWE OPDRACHT in het CRM: plaats vooraan in de titel, bron "Campagne", de klant gekoppeld', p1.status === 200 && /Bedankt/.test(p1html) && na1.length === 1 && /^Bunnik — Aanvraag via campagne: Plan een onderhoudsbeurt/.test(o1.title) && o1.source === 'Campagne (e-mail)' && o1.customerId === ka[0].id, JSON.stringify({ s: p1.status, n: na1.length, t: o1.title, b: o1.source }));
+    ok('alle gegevens staan op de opdracht: naam, telefoon, e-mail en adres van de klant, de campagne en wat de klant erbij schreef', o1.intake && o1.intake.name === 'Aanvraag Klant 1' && /5550/.test(o1.intake.phone) && o1.intake.email === 'aanvraag1@campagne.test' && /Kerkpad 1/.test(o1.intake.address) && /Onderhoud najaar/.test(o1.description) && /Liefst op een dinsdag/.test(o1.description) && o1.campagneAanvraag && o1.campagneAanvraag.campagneId === ca.id, JSON.stringify(o1.intake));
+    const kolommen = (await api('GET', '/api/me', null, admin)).json.meta.statuses || [];
+    ok('de opdracht staat in de eerste kolom met "klant reageerde", zonder monteur en zonder afspraak: een mens plant in', o1.status === (kolommen[0] || {}).key && o1.customerReplied === true && !o1.monteurId && !o1.appointmentAt, JSON.stringify({ st: o1.status, k: (kolommen[0] || {}).key }));
+    const p1b = await fetch(BASE + pad1, formulier({ opmerking: 'nog een keer' }));
+    const g1b = await (await fetch(BASE + pad1, { headers: later })).text();
+    ok('twee keer tikken geeft één opdracht; de pagina zegt daarna meteen "Bedankt"', p1b.status === 200 && (await campagneOrders()).length === 1 && /Bedankt/.test(g1b) && !/<form/.test(g1b));
+    await fetch(BASE + pad2, formulier({}));
+    const o2 = (await campagneOrders()).find((o) => o.customerId === ka[1].id) || {};
+    const lopendNa = (await api('GET', `/api/orders/${lopend.id}`, null, admin)).json;
+    ok('heeft de klant al een lopende opdracht, dan komt er een nieuwe opdracht met een voorstel om samen te voegen — de lopende opdracht verandert niet', !!o2.id && o2.mergeSuggestion && o2.mergeSuggestion.orderId === lopend.id && lopendNa.status === lopend.status && lopendNa.title === lopend.title, JSON.stringify(o2.mergeSuggestion));
+    const fout3 = await fetch(BASE + pad3.replace(/[0-9a-f]{24}$/, 'b'.repeat(24)), formulier({}));
+    ok('een geknoeide link maakt niets aan (404)', fout3.status === 404 && (await campagneOrders()).length === 2);
+    const uitA = await uitslag(ca.id);
+    ok('de uitslag van de campagne telt de aanvragen en laat per ontvanger zien wie het was', uitA.resultaat.aanvragen === 2 && uitA.ontvangers.filter((o) => o.aanvraag).length === 2 && uitA.ontvangers.find((o) => o.email === 'aanvraag3@campagne.test').aanvraag === '', JSON.stringify(uitA.resultaat));
+    ok('een campagne met een bel-knop meet geen aanvragen (null) en stuurt nog steeds door naar bellen', (await uitslag(co.id)).resultaat.aanvragen === null && /url=tel:/.test(await (await fetch(BASE + klikPad, { headers: later })).text()));
+    await api('PATCH', `/api/orders/${o1.id}`, { status: 'geannuleerd', notes: 'test' }, admin);
+    await fetch(BASE + pad1, formulier({}));
+    ok('meteen na het afhandelen nog eens tikken (zelfde dag) geeft geen tweede opdracht', (await campagneOrders()).filter((o) => o.customerId === ka[0].id).length === 1);
+    const dagLater = { method: 'POST', headers: { ...mens, 'x-test-later': 'dag', 'content-type': 'application/x-www-form-urlencoded' }, body: '' };
+    await fetch(BASE + pad1, dagLater);
+    ok('is die opdracht afgehandeld en tikt de klant dagen later weer op de knop, dan is dat een NIEUWE aanvraag (hij ziet nooit "Bedankt" terwijl er niets gebeurt)', (await campagneOrders()).filter((o) => o.customerId === ka[0].id).length === 2);
+    ok('de monteur ziet deze opdrachten niet (ze zijn nog van niemand)', !(await api('GET', '/api/orders', null, mon)).json.some((o) => /^Campagne/.test(o.source || '')));
+
     // ---------- JAARLIJKSE ONDERHOUDSHERINNERING ----------
     console.log('\n== Jaarlijkse onderhoudsherinnering: een concept, nooit vanzelf versturen ==');
     for (let i = 1; i <= 3; i++) {
@@ -426,7 +484,7 @@ try {
     const proefOk = await api('POST', '/api/campagnes/proefmail', { naar: 'baas@campagne.test' }, admin);
     for (let i = 0; i < 30 && mails.length < 1; i++) await slaap(200);
     const proefMail = (mails[0] || '').replace(/=\r?\n/g, '').replace(/=3D/g, '=');
-    ok('proefmail aan jezelf: opgemaakte mail met [PROEF], zonder klik- of afmeldlink van een klant; ongeldig adres → 400; assistente 403', proefFout.status === 400 && proefOk.status === 200 && mails.length === 1 && /\[PROEF\]/.test(proefMail) && /Content-Type: text\/html/i.test(proefMail) && !/\/k\//.test(proefMail) && !/\/afmelden\//.test(proefMail) && (await api('POST', '/api/campagnes/proefmail', { naar: 'x@campagne.test' }, ass)).status === 403, JSON.stringify([proefFout.status, proefOk.status, mails.length]));
+    ok('proefmail aan jezelf: opgemaakte mail met [PROEF], zonder klik- of afmeldlink van een klant; ongeldig adres → 400; assistente 403', proefFout.status === 400 && proefOk.status === 200 && mails.length === 1 && /\[PROEF\]/.test(proefMail) && /Content-Type: text\/html/i.test(proefMail) && !/\/k\/(?!proef)/.test(proefMail) && !/\/afmelden\//.test(proefMail) && (await api('POST', '/api/campagnes/proefmail', { naar: 'x@campagne.test' }, ass)).status === 403, JSON.stringify([proefFout.status, proefOk.status, mails.length]));
     const uit = await api('POST', '/api/campagnes/aan', { aan: false }, admin);
     const lijstUit = await api('GET', '/api/campagnes', null, ass);
     ok('UIT: het scherm en elke campagne-route weigeren (403), ook voor de beheerder', uit.status === 200 && uit.json.aan === false && lijstUit.status === 403 && lijstUit.json.uit === true && (await api('GET', '/api/campagnes', null, admin)).status === 403 && (await api('POST', '/api/campagnes', { naam: 'x' }, admin)).status === 403 && (await api('POST', `/api/campagnes/${cg.id}/start`, {}, admin)).status === 403);
