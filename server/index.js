@@ -2652,7 +2652,10 @@ app.delete('/api/orders/:id', requirePerm('deleteOrders'), (req, res) => {
 
 // Prullenbak bekijken
 app.get('/api/trash', requirePerm('deleteOrders'), (req, res) => {
-  res.json(db().trash.map(withRelations));
+  // LET OP: niet `.map(withRelations)` — map geeft het volgnummer mee als tweede argument, en
+  // withRelations ziet dat als zijn opzoektabel. Met één opdracht ging het goed (nummer 0), vanaf
+  // de tweede crashte de hele prullenbak ("Cannot read properties of undefined (reading 'get')").
+  res.json(db().trash.map((o) => withRelations(o)));
 });
 
 // Opdracht terughalen uit de prullenbak

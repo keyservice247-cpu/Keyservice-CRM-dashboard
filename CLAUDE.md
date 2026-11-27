@@ -614,6 +614,17 @@ eigenaar 23 nov: de roadmap uitvoeren, ALLES EERST OP DE TESTOMGEVING, `main` pa
   tijd-onafhankelijk gemaakt (na 20:00 zegt het scherm terecht "Gaat verder om 09:00 uur").
   Stand: 34 serversuites 1.801 + browser 549 + browser-rechten 23 = 2.373, 0 fouten.
 
+- **PRULLENBAK LEEG EN FOUTMELDING (28 nov 2026, klacht eigenaar "prullenbak werkt NIET, elke
+  opdracht die ik verwijder komt er niet in" + schermfoto "Cannot read properties of undefined
+  (reading 'get')"):** OORZAAK: GET /api/trash deed `db().trash.map(withRelations)`. `map` geeft
+  het volgnummer als tweede argument mee en `withRelations(order, maps)` (sinds 18 aug) ziet dat
+  als zijn opzoektabel: bij nummer 0 ging het goed, vanaf de TWEEDE opdracht in de prullenbak
+  crashte de hele lijst (500) en bleef het scherm leeg. Er is niets kwijtgeraakt: de opdrachten
+  stonden er al die tijd in. FIX: `.map((o) => withRelations(o))`. REGEL: geef een functie met
+  een optioneel tweede argument NOOIT kaal aan `.map`. LES: de tests (en mijn eerdere controle in
+  de browser) hadden steeds precies één opdracht in de prullenbak. Test: rollen-test 144 (+2: drie
+  opdrachten in de prullenbak, rood op de oude code).
+
 ## AI-IDEEËN DIE DE EIGENAAR AANSPREKEN (24 nov 2026 — bewaren, nog NIET bouwen)
 Eigenaar: "dit zijn veel betere ideeën, onthouden". Eerdere voorstellen over typwerk besparen
 (concept-antwoord in de inbox, factuurregels voorstellen, "vat samen", vragen in gewone taal)

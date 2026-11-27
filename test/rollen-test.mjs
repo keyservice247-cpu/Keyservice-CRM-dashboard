@@ -111,6 +111,18 @@ await api('DELETE', `/api/orders/${k2id}`);
 ok('definitief verwijderen (admin)', (await api('DELETE', `/api/trash/${k2id}`)).status === 200);
 trash = (await api('GET', '/api/trash')).json || [];
 ok('is echt weg', !trash.some((o) => o.id === k2id));
+// MEER DAN ÉÉN in de prullenbak (27 nov 2026, klacht eigenaar "elke opdracht die ik verwijder komt
+// niet in mijn prullenbak"): de lijst crashte vanaf de tweede opdracht en bleef dan leeg.
+{
+  const ids = [];
+  for (let i = 1; i <= 3; i++) ids.push((await api('POST', '/api/orders', { customerName: `Prullenbak Meer ${i}`, customerPhone: `069990000${i}`, title: `Vught — prullenbak ${i}` })).json.id);
+  for (const oid of ids) await api('DELETE', `/api/orders/${oid}`);
+  const meer = await api('GET', '/api/trash');
+  ok('prullenbak met DRIE opdrachten: de lijst laadt (200) en toont ze alle drie, met klantnaam', meer.status === 200 && ids.every((oid) => (meer.json || []).some((o) => o.id === oid && o.customer && /Prullenbak Meer/.test(o.customer.name))), `${meer.status} ${JSON.stringify(meer.json).slice(0, 160)}`);
+  ok('terughalen uit een volle prullenbak werkt', (await api('POST', `/api/trash/${ids[1]}/restore`)).status === 200 && ((await api('GET', '/api/orders')).json || []).some((o) => o.id === ids[1]));
+  for (const oid of [ids[0], ids[2]]) await api('DELETE', `/api/trash/${oid}`);
+  await api('DELETE', `/api/orders/${ids[1]}`); await api('DELETE', `/api/trash/${ids[1]}`);
+}
 // Samenvoegen: bron gaat naar de prullenbak, andere klant vereist force.
 const a = await api('POST', '/api/orders', { customerName: 'Merge A', customerPhone: '0655555551', title: 'A' });
 const b = await api('POST', '/api/orders', { customerName: 'Merge B', customerPhone: '0655555552', title: 'B' });
